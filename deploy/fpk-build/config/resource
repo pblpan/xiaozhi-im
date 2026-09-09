@@ -1,0 +1,20 @@
+{
+  "docker-project": {
+    "projects": [
+      {
+        "name": "xiaozhi-im",
+        "path": "docker"
+      }
+    ]
+  },
+  "data-share": {
+    "shares": [
+      {
+        "name": "xiaozhi-im"
+      },
+      {
+        "name": "xiaozhi-im/data"
+      }
+    ]
+  }
+}

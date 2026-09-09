@@ -1,0 +1,13 @@
+#!/bin/bash
+# 安装前：清理同名旧容器/旧网络，确保 3602 端口空闲（支持从旧裸容器升级）
+set +e
+for c in xiaozhi-im xiaozhi_im xiaozhi-im-server; do
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+    docker stop "$c" 2>/dev/null
+    docker rm -f "$c" 2>/dev/null
+    echo "[xiaozhi-im] 已清理旧容器 $c"
+  fi
+done
+docker network rm xiaozhi-im_default 2>/dev/null
+docker network rm xiaozhi_im_default 2>/dev/null
+exit 0

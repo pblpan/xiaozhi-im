@@ -1,0 +1,17 @@
+#!/bin/bash
+# 升级回调：复用数据与密钥 -> 释放端口 -> 启动新版本
+set +e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/_xiaozhi_common.sh"
+
+xiaozhi_detect_share
+xiaozhi_env
+xiaozhi_cleanup
+xiaozhi_up
+
+echo ""
+echo "========================================="
+echo "  小智IM 已升级！"
+echo "  管理后台: http://<飞牛IP>:3602/admin"
+echo "========================================="
+exit 0

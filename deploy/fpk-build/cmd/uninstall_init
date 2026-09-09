@@ -1,0 +1,11 @@
+#!/bin/bash
+# 卸载前：停止并移除容器（数据保留在共享目录）
+set +e
+for c in xiaozhi-im xiaozhi_im xiaozhi-im-server; do
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+    docker stop "$c" 2>/dev/null
+    docker rm -f "$c" 2>/dev/null
+  fi
+done
+docker network rm xiaozhi-im_default 2>/dev/null
+exit 0

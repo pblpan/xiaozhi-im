@@ -1,0 +1,27 @@
+name: xiaozhi-im
+
+services:
+  xiaozhi-im:
+    image: node:22-slim
+    container_name: xiaozhi-im
+    restart: unless-stopped
+    ports:
+      - "3602:3602"
+    environment:
+      - PORT=3602
+      - NODE_ENV=production
+      # 数据落在飞牛自动创建的共享目录（config/resource 的 data-share 声明）
+      - DATA_DIR=/data
+      - DB_PATH=/data/xiaozhi-im.db
+      - JWT_SECRET=${JWT_SECRET:-xiaozhi-im-change-me-secret}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - MAX_FILE_MB=${MAX_FILE_MB:-50}
+    volumes:
+      # 1) 持久化数据（DB + 上传文件），路径由安装回调写入 docker/.env
+      - ${XIAOZHI_DATA_DIR}:/data
+      # 2) 应用代码：fpk 解包到 TRIM_APPDEST 后挂载 src 进容器（含预打包 node_modules.tar.gz）
+      - ${TRIM_APPDEST}/src:/app
+    working_dir: /app
+    # 惰性解压依赖：仅当 node_modules 不存在时解压一次，之后可反复重启不丢依赖
+    command: sh -c "cd /app && ([ -d node_modules ] || tar xzf node_modules.tar.gz) && node src/index.js"

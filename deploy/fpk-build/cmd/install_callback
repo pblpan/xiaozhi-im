@@ -1,0 +1,19 @@
+#!/bin/bash
+# 安装回调：建数据目录 -> 生成密钥 -> 清理旧容器释放端口 -> 启动
+set +e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/_xiaozhi_common.sh"
+
+xiaozhi_detect_share
+xiaozhi_env
+xiaozhi_cleanup
+xiaozhi_up
+
+echo ""
+echo "========================================="
+echo "  小智IM 已启动！"
+echo "  管理后台: http://<飞牛IP>:3602/admin"
+echo "  默认账号: admin / admin123"
+echo "  首次登录后请及时修改密码"
+echo "========================================="
+exit 0

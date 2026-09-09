@@ -1,0 +1,11 @@
+[
+  {
+    "stepTitle": "升级完成 · 小智IM",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "小智IM 已完成升级。<br><br>• 历史消息、账号、上传文件均已保留<br>• 管理后台：<b>http://飞牛IP:3602/admin</b><br>• 如页面显示异常请强制刷新（Ctrl+F5）"
+      }
+    ]
+  }
+]

@@ -1,9 +1,0 @@
-# 小智 IM 服务端配置（运行时可被环境变量覆盖）
-server:
-  port: 3602
-  max_file_mb: 50
-admin:
-  username: admin
-  password: admin123   # 部署后请修改
-storage:
-  data_dir: /data
