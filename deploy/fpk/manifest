@@ -1,0 +1,9 @@
+# 飞牛 FnOS fpk 清单（无后缀，字段名以 fnpack 实际要求为准，可微调）
+appid=xiaozhi-im
+name=小智IM
+version=0.1.0
+description=自研即时通讯服务端，私有化部署，数据存自己服务器
+type=docker
+arch=arm64,amd64
+icon=ICON.png
+main=cmd/start.sh

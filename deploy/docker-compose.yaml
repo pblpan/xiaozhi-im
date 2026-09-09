@@ -1,0 +1,15 @@
+services:
+  xiaozhi-im:
+    image: xiaozhi-im-server:0.1.0
+    container_name: xiaozhi-im
+    restart: unless-stopped
+    ports:
+      - "3602:3602"
+    environment:
+      - PORT=3602
+      - JWT_SECRET=${JWT_SECRET:-change-me-xiaozhi-im}
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - MAX_FILE_MB=50
+    volumes:
+      - ./data:/data
