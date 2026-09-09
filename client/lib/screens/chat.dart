@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
+import 'package:xiaozhi_im_client/core/media.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/widgets/bubble.dart';
@@ -70,21 +71,44 @@ class _ChatScreenState extends State<ChatScreen> {
     final files = await FilePicker.pickFiles();
     if (files.isEmpty) return;
     final picked = files.first;
-    if (picked.path == null) return;
+    final path = picked.path;
+    if (path == null) return;
     setState(() => _busy = true);
     try {
-      final f = File(picked.path!);
-      final up = await ImApi().upload(f);
-      final kind = (up['mime'] ?? '').startsWith('image') ? 'image' : 'file';
-      final m = await ImApi().sendMessage(widget.conv.id, kind, up['name'], up['id']);
+      final orig = File(path);
+      final origLen = await orig.length();
+      final toUpload = await Media.prepareForUpload(orig); // 内网原图 / 外网压缩
+      final up = await ImApi().upload(toUpload);
+
+      final name = (up['name'] ?? path).toString();
+      final isImg = (up['mime'] ?? '').toString().startsWith('image') ||
+          Media.isImagePath(name) ||
+          Media.isImagePath(path);
+      // 图片消息存 /files/xxx 访问路径，文件消息存原始文件名
+      final content = isImg ? (up['url'] ?? name).toString() : name;
+
+      final m = await ImApi().sendMessage(
+          widget.conv.id, isImg ? 'image' : 'file', content, up['id']);
       setState(() => _msgs.add(Message.fromJson(m)));
       _scroll();
+
+      if (mounted && toUpload.path != orig.path) {
+        final newLen = await toUpload.length();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('已压缩上传（${_kb(origLen)} → ${_kb(newLen)}）'),
+          duration: const Duration(seconds: 2),
+        ));
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('发送失败: $e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  static String _kb(int b) => b > 1024 * 1024
+      ? '${(b / 1024 / 1024).toStringAsFixed(1)}MB'
+      : '${(b / 1024).toStringAsFixed(0)}KB';
 
   @override
   Widget build(BuildContext context) => Scaffold(

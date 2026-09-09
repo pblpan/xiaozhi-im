@@ -15,25 +15,44 @@ class MessageBubble extends StatelessWidget {
     this.baseUrl = '',
   });
 
+  String get _displayName {
+    final raw = msg.fileName ?? msg.content ?? '文件';
+    final i = raw.lastIndexOf('/');
+    return i < 0 ? raw : raw.substring(i + 1);
+  }
+
   @override
   Widget build(BuildContext context) {
     final align = mine ? CrossAxisAlignment.end : CrossAxisAlignment.start;
-    Widget body;
-    if (msg.kind == 'image' && msg.fileId != null) {
-      body = Image.network('$baseUrl/files/${msg.content}', width: 200);
-    } else if (msg.kind == 'file') {
-      body = Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(color: Colors.blueGrey, borderRadius: BorderRadius.circular(8)),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.insert_drive_file),
-            const SizedBox(width: 8),
-            Text(msg.content ?? '文件', style: const TextStyle(color: Colors.white)),
-          ],
+    final Widget body;
+
+    final imgPath = msg.imagePath;
+    if (imgPath != null) {
+      final url = '$baseUrl$imgPath';
+      body = GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => _FullScreenImage(url: url)),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.network(
+            url,
+            width: 200,
+            fit: BoxFit.cover,
+            loadingBuilder: (c, child, progress) {
+              if (progress == null) return child;
+              return const SizedBox(
+                width: 200,
+                height: 150,
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              );
+            },
+            errorBuilder: (_, __, ___) => _fileChip(Icons.broken_image, '图片加载失败'),
+          ),
         ),
       );
+    } else if (msg.kind == 'file') {
+      body = _fileChip(Icons.insert_drive_file, _displayName);
     } else {
       body = Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -58,4 +77,49 @@ class MessageBubble extends StatelessWidget {
       ],
     );
   }
+
+  Widget _fileChip(IconData icon, String label) => Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(color: Colors.blueGrey, borderRadius: BorderRadius.circular(8)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                label,
+                style: const TextStyle(color: Colors.white),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _FullScreenImage extends StatelessWidget {
+  final String url;
+  const _FullScreenImage({required this.url});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          iconTheme: const IconThemeData(color: Colors.white),
+        ),
+        body: Center(
+          child: InteractiveViewer(
+            maxScale: 5,
+            child: Image.network(
+              url,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) =>
+                  const Text('图片加载失败', style: TextStyle(color: Colors.white)),
+            ),
+          ),
+        ),
+      );
 }

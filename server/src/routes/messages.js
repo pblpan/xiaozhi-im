@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const db = require('../db');
 const { verifyToken } = require('../auth');
-const { sendMessage } = require('../chat');
+const { sendMessage, withFileInfo } = require('../chat');
 
 function uidOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -55,7 +55,7 @@ router.get('/:id/messages', (req, res) => {
   if (!db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id=? AND user_id=?').get(cid, uid))
     return res.status(403).json({ error: 'forbidden' });
   const rows = db.prepare('SELECT * FROM messages WHERE conversation_id=? AND deleted=0 ORDER BY id ASC LIMIT 200').all(cid);
-  res.json(rows);
+  res.json(rows.map(withFileInfo));
 });
 
 // 发送消息（REST 路径；服务端落库并实时广播）

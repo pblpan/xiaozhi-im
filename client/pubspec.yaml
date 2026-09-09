@@ -1,7 +1,7 @@
 name: xiaozhi_im_client
 description: 小智 IM 客户端 (Windows + Android)
 publish_to: 'none'
-version: 0.1.0+4
+version: 0.1.0+5
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -13,6 +13,7 @@ dependencies:
   web_socket_channel: ^3.0.0
   shared_preferences: ^2.2.0
   file_picker: ^12.2.0
+  image: ^4.2.0
   intl: ^0.19.0
 
 dev_dependencies:

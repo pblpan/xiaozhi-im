@@ -59,6 +59,9 @@ class Message {
   final String kind; // text | image | file | emoji
   final String? content;
   final int? fileId;
+  final String? fileUrl; // 服务端 join 出的 /files/xxx 访问地址
+  final String? fileName;
+  final int? fileSize;
   final int createdAt;
 
   const Message({
@@ -68,6 +71,9 @@ class Message {
     required this.kind,
     this.content,
     this.fileId,
+    this.fileUrl,
+    this.fileName,
+    this.fileSize,
     required this.createdAt,
   });
 
@@ -78,6 +84,18 @@ class Message {
         kind: m['kind'],
         content: m['content'],
         fileId: m['file_id'],
+        fileUrl: m['file_url'],
+        fileName: m['file_name'],
+        fileSize: m['file_size'],
         createdAt: m['created_at'],
       );
+
+  /// 图片可显示的地址（baseUrl 由调用方拼）
+  String? get imagePath {
+    if (kind != 'image') return null;
+    if (fileUrl != null && fileUrl!.isNotEmpty) return fileUrl;
+    // 兼容：老数据 content 存的是 /files/xxx
+    if (content != null && content!.startsWith('/files/')) return content;
+    return null;
+  }
 }
