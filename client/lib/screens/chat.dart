@@ -67,11 +67,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _attach() async {
-    final res = await FilePicker.platform.pickFiles();
-    if (res == null || res.files.single.path == null) return;
+    final files = await FilePicker.pickFiles();
+    if (files.isEmpty) return;
+    final picked = files.first;
+    if (picked.path == null) return;
     setState(() => _busy = true);
     try {
-      final f = File(res.files.single.path!);
+      final f = File(picked.path!);
       final up = await ImApi().upload(f);
       final kind = (up['mime'] ?? '').startsWith('image') ? 'image' : 'file';
       final m = await ImApi().sendMessage(widget.conv.id, kind, up['name'], up['id']);
