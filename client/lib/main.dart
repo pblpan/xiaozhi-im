@@ -1,9 +1,26 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'api.dart';
 import 'core/storage.dart';
+import 'core/theme.dart';
 import 'screens/login.dart';
 import 'screens/conversations.dart';
+import 'widgets/avatar.dart';
 
-void main() => runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isAndroid) {
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      systemNavigationBarColor: AppColors.bg,
+      systemNavigationBarIconBrightness: Brightness.light,
+    ));
+  }
+  await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
+  runApp(const MyApp());
+}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -11,13 +28,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: '小智 IM',
-        theme: ThemeData.dark().copyWith(
-          primaryColor: const Color(0xFF5865F2),
-          colorScheme: ColorScheme.dark(
-            primary: const Color(0xFF5865F2),
-            secondary: const Color(0xFF5865F2),
-          ),
-        ),
+        theme: AppTheme.dark(),
         home: const AuthGate(),
         debugShowCheckedModeBanner: false,
       );
@@ -39,13 +50,28 @@ class _AuthGateState extends State<AuthGate> {
 
   Future<void> _check() async {
     final t = await Storage.getToken();
-    setState(() => _has = t != null && t.isNotEmpty);
+    if (mounted) setState(() => _has = t != null && t.isNotEmpty);
   }
 
   @override
   Widget build(BuildContext context) {
     if (_has == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              BrandLogo(size: 64),
+              SizedBox(height: 20),
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ],
+          ),
+        ),
+      );
     }
     return _has! ? const ConversationsScreen() : const LoginScreen();
   }

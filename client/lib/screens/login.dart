@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
+import 'package:xiaozhi_im_client/core/config.dart';
+import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/screens/register.dart';
 import 'package:xiaozhi_im_client/screens/conversations.dart';
+import 'package:xiaozhi_im_client/widgets/avatar.dart';
+import 'package:xiaozhi_im_client/widgets/gradient_button.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -13,10 +17,26 @@ class _LoginScreenState extends State<LoginScreen> {
   final _u = TextEditingController();
   final _p = TextEditingController();
   bool _load = false;
+  bool _obscure = true;
   String? _err;
 
+  @override
+  void dispose() {
+    _u.dispose();
+    _p.dispose();
+    super.dispose();
+  }
+
   void _login() async {
-    setState(() => _load = true);
+    if (_u.text.trim().isEmpty || _p.text.isEmpty) {
+      setState(() => _err = '请填写账号和密码');
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _load = true;
+      _err = null;
+    });
     try {
       await ImApi().login(_u.text.trim(), _p.text);
       if (mounted) {
@@ -24,7 +44,10 @@ class _LoginScreenState extends State<LoginScreen> {
             MaterialPageRoute(builder: (_) => const ConversationsScreen()));
       }
     } catch (e) {
-      if (mounted) setState(() => _err = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) {
+        setState(
+            () => _err = e.toString().replaceFirst('Exception: ', ''));
+      }
     } finally {
       if (mounted) setState(() => _load = false);
     }
@@ -32,57 +55,137 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        body: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 340),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('小智 IM', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 6),
-                    const Text('登录到你的私有通讯', style: TextStyle(color: Colors.grey)),
-                    const SizedBox(height: 20),
-                    if (_err != null)
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(8),
-                        color: Colors.red.withValues(alpha: 0.15),
-                        child: Text(_err!, style: const TextStyle(color: Colors.redAccent)),
+        body: Container(
+          decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 380),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(28, 34, 28, 26),
+                  decoration: BoxDecoration(
+                    color: AppColors.bgElevated,
+                    borderRadius: BorderRadius.circular(AppRadii.xl),
+                    border: Border.all(color: AppColors.border),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.35),
+                        blurRadius: 40,
+                        offset: const Offset(0, 18),
                       ),
-                    TextField(
-                      controller: _u,
-                      decoration: const InputDecoration(labelText: '账号', border: OutlineInputBorder()),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _p,
-                      obscureText: true,
-                      decoration: const InputDecoration(labelText: '密码', border: OutlineInputBorder()),
-                      onSubmitted: (_) => _login(),
-                    ),
-                    const SizedBox(height: 18),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Center(child: BrandLogo(size: 68)),
+                      const SizedBox(height: 20),
+                      const Center(
+                        child: Text('小智 IM',
+                            style: TextStyle(
+                                fontSize: 25,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 1)),
+                      ),
+                      const SizedBox(height: 6),
+                      const Center(
+                        child: Text('登录到你的私有通讯',
+                            style: TextStyle(
+                                color: AppColors.textSub, fontSize: 13.5)),
+                      ),
+                      const SizedBox(height: 26),
+                      if (_err != null) _errorBox(_err!),
+                      TextField(
+                        controller: _u,
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(
+                          hintText: '账号',
+                          prefixIcon: Icon(Icons.person_outline_rounded,
+                              size: 20, color: AppColors.textWeak),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _p,
+                        obscureText: _obscure,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _login(),
+                        decoration: InputDecoration(
+                          hintText: '密码',
+                          prefixIcon: const Icon(Icons.lock_outline_rounded,
+                              size: 20, color: AppColors.textWeak),
+                          suffixIcon: IconButton(
+                            onPressed: () =>
+                                setState(() => _obscure = !_obscure),
+                            icon: Icon(
+                              _obscure
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                              size: 19,
+                              color: AppColors.textWeak,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      GradientButton(
+                        text: '登 录',
+                        loading: _load,
                         onPressed: _load ? null : _login,
-                        child: _load
-                            ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Text('登录'),
                       ),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => const RegisterScreen())),
-                      child: const Text('没有账号？注册'),
-                    ),
-                  ],
+                      const SizedBox(height: 14),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('还没有账号？',
+                              style: TextStyle(
+                                  color: AppColors.textWeak, fontSize: 13.5)),
+                          TextButton(
+                            onPressed: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) => const RegisterScreen())),
+                            child: const Text('立即注册'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      const Center(
+                        child: Text(
+                          '服务地址 ${Config.baseUrl}',
+                          style: const TextStyle(
+                              color: AppColors.textWeak, fontSize: 11.5),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
+        ),
+      );
+
+  Widget _errorBox(String msg) => Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.danger.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(AppRadii.sm),
+          border: Border.all(color: AppColors.danger.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.error_outline, size: 17, color: AppColors.danger),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(msg,
+                  style: const TextStyle(
+                      color: AppColors.danger, fontSize: 13)),
+            ),
+          ],
         ),
       );
 }

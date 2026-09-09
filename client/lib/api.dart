@@ -13,6 +13,15 @@ class ImApi {
   String? _token;
   void setToken(String t) => _token = t;
 
+  bool get hasToken => _token != null && _token!.isNotEmpty;
+
+  /// App 冷启动时从本地存储恢复登录态，否则后续请求都会 401。
+  Future<void> restore() async {
+    _token = await Storage.getToken();
+  }
+
+  void clearToken() => _token = null;
+
   Map<String, String> get _h => {
         'Content-Type': 'application/json',
         if (_token != null) 'Authorization': 'Bearer $_token',
