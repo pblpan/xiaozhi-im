@@ -578,7 +578,16 @@ function fmtBytes(b) {
   return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-onMounted(() => { if (token.value) loadAll(); });
+function bindUnauthorized() {
+  window.addEventListener('xz-unauthorized', () => {
+    token.value = '';
+  });
+}
+
+onMounted(() => {
+  bindUnauthorized();
+  if (token.value) loadAll();
+});
 </script>
 
 <style>
