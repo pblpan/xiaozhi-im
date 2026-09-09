@@ -171,18 +171,38 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 6),
                       GestureDetector(
                         onTap: _openServer,
-                        child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: AppColors.brand.withValues(alpha: 0.08),
+                            borderRadius:
+                                BorderRadius.circular(AppRadii.sm),
+                          ),
                           child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                '${Config.baseUrl}${Config.isCustom ? ' · 自定义' : ''}',
-                                style: const TextStyle(
-                                    color: AppColors.textWeak, fontSize: 11.5),
+                              Icon(
+                                _modeIcon(Config.mode),
+                                size: 12,
+                                color: AppColors.brand,
+                              ),
+                              const SizedBox(width: 5),
+                              Flexible(
+                                child: Text(
+                                  _modeText(),
+                                  style: const TextStyle(
+                                    color: AppColors.brand,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                               const SizedBox(width: 4),
                               const Icon(Icons.edit_rounded,
-                                  size: 11, color: AppColors.textWeak),
+                                  size: 11, color: AppColors.brand),
                             ],
                           ),
                         ),
@@ -216,4 +236,27 @@ class _LoginScreenState extends State<LoginScreen> {
           ],
         ),
       );
+
+  IconData _modeIcon(String mode) {
+    switch (mode) {
+      case Config.modeLan:
+        return Icons.wifi_rounded;
+      case Config.modeWan:
+        return Icons.public_rounded;
+      default:
+        return Icons.auto_mode_rounded;
+    }
+  }
+
+  String _modeText() {
+    final url = Config.baseUrl;
+    switch (Config.mode) {
+      case Config.modeLan:
+        return '内网 · $url';
+      case Config.modeWan:
+        return '外网 · $url';
+      default:
+        return '自动 · $url';
+    }
+  }
 }
