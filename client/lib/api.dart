@@ -44,6 +44,20 @@ class ImApi {
     return _handle(r);
   }
 
+  /// 测试某个服务器地址是否可用（GET /api/health，不需要登录）。
+  /// 返回提示文案用的结果 map；不通则抛异常。
+  static Future<Map<String, dynamic>> testServer(String url) async {
+    final u = Config.normalize(url);
+    if (u.isEmpty) throw Exception('请填写服务器地址');
+    final uri = Uri.tryParse('$u/api/health');
+    if (uri == null) throw Exception('地址格式不正确');
+    final r = await http.get(uri).timeout(const Duration(seconds: 6));
+    if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
+    final b = jsonDecode(r.body);
+    if (b is! Map) throw Exception('返回格式不正确');
+    return {'ok': b['ok'] == true, 'ts': b['ts']};
+  }
+
   // ---- 认证 ----
   Future<Map<String, dynamic>> login(String u, String p) async {
     final d = await _post('/auth/login', {'username': u, 'password': p});

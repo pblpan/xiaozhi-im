@@ -6,6 +6,7 @@ import 'package:xiaozhi_im_client/screens/register.dart';
 import 'package:xiaozhi_im_client/screens/conversations.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/gradient_button.dart';
+import 'package:xiaozhi_im_client/widgets/server_settings.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -25,6 +26,11 @@ class _LoginScreenState extends State<LoginScreen> {
     _u.dispose();
     _p.dispose();
     super.dispose();
+  }
+
+  Future<void> _openServer() async {
+    final changed = await showServerSettings(context);
+    if (changed == true && mounted) setState(() {});
   }
 
   void _login() async {
@@ -55,6 +61,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          actions: [
+            IconButton(
+              tooltip: '服务器设置',
+              onPressed: _openServer,
+              icon: const Icon(Icons.settings_rounded),
+            ),
+            const SizedBox(width: 6),
+          ],
+        ),
         body: Container(
           decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
           child: Center(
@@ -152,11 +169,22 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ),
                       const SizedBox(height: 6),
-                      const Center(
-                        child: Text(
-                          '服务地址 ${Config.baseUrl}',
-                          style: const TextStyle(
-                              color: AppColors.textWeak, fontSize: 11.5),
+                      GestureDetector(
+                        onTap: _openServer,
+                        child: Center(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '${Config.baseUrl}${Config.isCustom ? ' · 自定义' : ''}',
+                                style: const TextStyle(
+                                    color: AppColors.textWeak, fontSize: 11.5),
+                              ),
+                              const SizedBox(width: 4),
+                              const Icon(Icons.edit_rounded,
+                                  size: 11, color: AppColors.textWeak),
+                            ],
+                          ),
                         ),
                       ),
                     ],

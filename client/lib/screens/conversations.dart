@@ -9,6 +9,7 @@ import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/screens/chat.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
+import 'package:xiaozhi_im_client/widgets/server_settings.dart';
 
 class ConversationsScreen extends StatefulWidget {
   const ConversationsScreen({super.key});
@@ -83,6 +84,19 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       e.toString().replaceFirst('Exception: ', '');
 
   void _logout() async {
+    await Storage.clear();
+    ImApi().clearToken();
+    SocketService().disconnect();
+    if (mounted) {
+      Navigator.pushReplacement(
+          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+    }
+  }
+
+  /// 修改服务器地址：换地址后旧 token 失效，回到登录页
+  Future<void> _openServer() async {
+    final changed = await showServerSettings(context);
+    if (changed != true) return;
     await Storage.clear();
     ImApi().clearToken();
     SocketService().disconnect();
@@ -480,6 +494,22 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             ],
           ),
           actions: [
+            ValueListenableBuilder<ConnState>(
+              valueListenable: SocketService().state,
+              builder: (_, s, __) {
+                final (color, tip) = switch (s) {
+                  ConnState.online => (AppColors.online, '实时连接正常（点击重连）'),
+                  ConnState.connecting => (AppColors.brand, '正在连接…'),
+                  ConnState.offline => (AppColors.danger, '连接已断开（点击重连）'),
+                  _ => (AppColors.textWeak, '未连接'),
+                };
+                return IconButton(
+                  tooltip: tip,
+                  onPressed: () => SocketService().reconnect(),
+                  icon: Icon(Icons.circle, size: 11, color: color),
+                );
+              },
+            ),
             IconButton(
               tooltip: '发起聊天',
               onPressed: _openAdd,
@@ -489,6 +519,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               icon: const Icon(Icons.more_vert_rounded),
               onSelected: (v) {
                 if (v == 'refresh') _load();
+                if (v == 'server') _openServer();
                 if (v == 'logout') _logout();
               },
               itemBuilder: (_) => const [
@@ -498,6 +529,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       Icon(Icons.refresh_rounded, size: 19),
                       SizedBox(width: 10),
                       Text('刷新列表')
+                    ])),
+                PopupMenuItem(
+                    value: 'server',
+                    child: Row(children: [
+                      Icon(Icons.dns_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('服务器设置')
                     ])),
                 PopupMenuItem(
                     value: 'logout',

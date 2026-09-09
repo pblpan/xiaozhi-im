@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api.dart';
+import 'core/settings.dart';
 import 'core/storage.dart';
 import 'core/theme.dart';
 import 'screens/login.dart';
@@ -18,6 +19,7 @@ void main() async {
       systemNavigationBarIconBrightness: Brightness.light,
     ));
   }
+  await Settings.load(); // 载入用户自定义的服务器地址
   await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
   runApp(const MyApp());
 }
