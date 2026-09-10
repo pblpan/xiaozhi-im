@@ -13,7 +13,7 @@
   <el-container v-else style="height:100vh">
     <el-aside width="200px" class="aside">
       <div class="logo">小智 IM</div>
-      <el-menu :default-active="tab" @select="tab = $event" background-color="#1f2d3d" text-color="#c0c4cc" active-text-color="#409eff">
+      <el-menu :default-active="tab" @select="tab = $event" background-color="#0F2620" text-color="#c0c4cc" active-text-color="#10B981">
         <el-menu-item index="dashboard">仪表盘</el-menu-item>
         <el-menu-item index="users">用户管理</el-menu-item>
         <el-menu-item index="groups">群组管理</el-menu-item>
@@ -594,12 +594,12 @@ onMounted(() => {
 body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .login-wrap { height: 100vh; display: flex; align-items: center; justify-content: center; background: #f0f2f5; }
 .login-card { width: 340px; }
-.aside { background: #1f2d3d; display: flex; flex-direction: column; }
+.aside { background: #0F2620; display: flex; flex-direction: column; }
 .logo { color: #fff; font-size: 20px; font-weight: 700; text-align: center; padding: 18px 0; }
 .aside-foot { margin-top: auto; padding: 12px; color: #8a8f99; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
 .hdr { background: #fff; border-bottom: 1px solid #ebeef5; display: flex; align-items: center; font-weight: 600; }
 .stat { text-align: center; }
-.stat-num { font-size: 28px; font-weight: 700; color: #409eff; }
+.stat-num { font-size: 28px; font-weight: 700; color: #10B981; }
 .stat-label { color: #909399; margin-top: 6px; }
 .page-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .el-menu { border-right: none !important; }

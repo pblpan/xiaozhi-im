@@ -1,0 +1,20 @@
+/* ============================================================
+   小智IM 管理后台主题 — 青绿系
+   与客户端 v0.1.8 保持同一套品牌色，覆盖 Element Plus 默认蓝 #409eff，
+   避免与米聊 / QQ / 钉钉 / 飞书的蓝色系撞色。
+   色阶由 #10B981 按 Element Plus 规则与白/黑混合算出。
+   ============================================================ */
+:root {
+  --el-color-primary: #10B981;
+  --el-color-primary-rgb: 16, 185, 129;
+
+  /* 与白色混合（light-N 表示主色占比 N0%） */
+  --el-color-primary-light-3: #B7EAD9;
+  --el-color-primary-light-5: #88DCC0;
+  --el-color-primary-light-7: #58CEA7;
+  --el-color-primary-light-8: #40C79A;
+  --el-color-primary-light-9: #28C08E;
+
+  /* 与黑色混合 */
+  --el-color-primary-dark-2: #0D9467;
+}
