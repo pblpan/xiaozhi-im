@@ -1,8 +1,28 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'core/config.dart';
 import 'core/storage.dart';
+
+/// REST 异常（带 HTTP 状态码）。
+/// 上层据此区分：401（token 失效，清 token 跳登录）vs 网络异常（连接/超时/5xx）。
+class ApiException implements Exception {
+  /// HTTP 状态码；null 表示底层网络/连接错误（SocketException / TimeoutException）
+  final int? status;
+  final String message;
+  const ApiException(this.message, {this.status});
+
+  bool get isUnauthorized => status == 401;
+  bool get isForbidden => status == 403;
+  /// 网络层失败 / 服务端故障（5xx）—— 上层应引导切服务器或重试，不要当作账号问题
+  bool get isNetwork => status == null || status! >= 500;
+  /// 业务错误（4xx 非 401/403）：账号不对、参数错、被踢等，给原文案
+  bool get isBiz => status != null && status! >= 400 && status! < 500;
+
+  @override
+  String toString() => message;
+}
 
 /// REST API 封装（与服务端 SPEC 一致）
 class ImApi {
@@ -27,47 +47,80 @@ class ImApi {
         if (_token != null) 'Authorization': 'Bearer $_token',
       };
 
+  /// 包一层 http 调用，统一把底层网络异常包装成 ApiException(status: null)
+  Future<http.Response> _send(Future<http.Response> Function() fn) async {
+    try {
+      return await fn().timeout(const Duration(seconds: 15));
+    } on SocketException catch (e) {
+      throw ApiException('无法连接服务器（${e.osError?.message ?? e.message}）');
+    } on TimeoutException {
+      throw const ApiException('连接超时，请检查网络或切换服务器');
+    } on http.ClientException catch (e) {
+      throw ApiException('网络异常：${e.message}');
+    } on HandshakeException catch (e) {
+      throw ApiException('TLS 握手失败：${e.message}');
+    } on HttpException catch (e) {
+      throw ApiException('HTTP 异常：${e.message}');
+    } on FormatException catch (e) {
+      throw ApiException('响应解析失败：${e.message}');
+    }
+  }
+
   dynamic _handle(http.Response r) {
-    final body = jsonDecode(r.body);
-    if (r.statusCode >= 200 && r.statusCode < 300) return body;
-    throw Exception(body is Map ? (body['error'] ?? '请求失败') : '请求失败');
+    if (r.statusCode >= 200 && r.statusCode < 300) {
+      if (r.body.isEmpty) return null;
+      try {
+        return jsonDecode(r.body);
+      } catch (_) {
+        return null;
+      }
+    }
+    String msg;
+    try {
+      final body = jsonDecode(r.body);
+      msg = body is Map ? (body['error']?.toString() ?? '请求失败') : '请求失败';
+    } catch (_) {
+      msg = '请求失败 (HTTP ${r.statusCode})';
+    }
+    throw ApiException(msg, status: r.statusCode);
   }
 
-  Future<dynamic> _post(String p, Map<String, dynamic> b) async {
-    final r = await http.post(Uri.parse('${Config.baseUrl}/api$p'),
-        headers: _h, body: jsonEncode(b));
-    return _handle(r);
-  }
+  Future<dynamic> _post(String p, Map<String, dynamic> b) async =>
+      _handle(await _send(() => http.post(Uri.parse('${Config.baseUrl}/api$p'),
+          headers: _h, body: jsonEncode(b))));
 
-  Future<dynamic> _patch(String p, Map<String, dynamic> b) async {
-    final r = await http.patch(Uri.parse('${Config.baseUrl}/api$p'),
-        headers: _h, body: jsonEncode(b));
-    return _handle(r);
-  }
+  Future<dynamic> _patch(String p, Map<String, dynamic> b) async =>
+      _handle(await _send(() => http.patch(Uri.parse('${Config.baseUrl}/api$p'),
+          headers: _h, body: jsonEncode(b))));
 
-  Future<dynamic> _get(String p) async {
-    final r = await http.get(Uri.parse('${Config.baseUrl}/api$p'), headers: _h);
-    return _handle(r);
-  }
+  Future<dynamic> _get(String p) async =>
+      _handle(await _send(
+          () => http.get(Uri.parse('${Config.baseUrl}/api$p'), headers: _h)));
 
-  Future<dynamic> _delete(String p) async {
-    final r =
-        await http.delete(Uri.parse('${Config.baseUrl}/api$p'), headers: _h);
-    return _handle(r);
-  }
+  Future<dynamic> _delete(String p) async =>
+      _handle(await _send(() =>
+          http.delete(Uri.parse('${Config.baseUrl}/api$p'), headers: _h)));
 
   /// 测试某个服务器地址是否可用（GET /api/health，不需要登录）。
-  /// 返回提示文案用的结果 map；不通则抛异常。
+  /// 返回提示文案用的结果 map；不通则抛 ApiException（status=null 表示连接失败）。
   static Future<Map<String, dynamic>> testServer(String url) async {
     final u = Config.normalize(url);
-    if (u.isEmpty) throw Exception('请填写服务器地址');
+    if (u.isEmpty) throw const ApiException('请填写服务器地址');
     final uri = Uri.tryParse('$u/api/health');
-    if (uri == null) throw Exception('地址格式不正确');
-    final r = await http.get(uri).timeout(const Duration(seconds: 6));
-    if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
-    final b = jsonDecode(r.body);
-    if (b is! Map) throw Exception('返回格式不正确');
-    return {'ok': b['ok'] == true, 'ts': b['ts']};
+    if (uri == null) throw const ApiException('地址格式不正确');
+    try {
+      final r = await http.get(uri).timeout(const Duration(seconds: 6));
+      if (r.statusCode != 200) {
+        throw ApiException('HTTP ${r.statusCode}', status: r.statusCode);
+      }
+      final b = jsonDecode(r.body);
+      if (b is! Map) throw const ApiException('返回格式不正确');
+      return {'ok': b['ok'] == true, 'ts': b['ts']};
+    } on TimeoutException {
+      throw const ApiException('连接超时');
+    } on SocketException catch (e) {
+      throw ApiException('无法连接：${e.osError?.message ?? e.message}');
+    }
   }
 
   // ---- 认证 ----

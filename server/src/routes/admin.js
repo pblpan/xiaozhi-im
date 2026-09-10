@@ -4,6 +4,7 @@ const path = require('path');
 const db = require('../db');
 const config = require('../config');
 const { verifyToken, hashPassword, verifyPassword } = require('../auth');
+const pkg = require('../../package.json');
 
 function adminOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -35,6 +36,7 @@ router.get('/stats', (req, res) => {
     hooks_in: c('SELECT COUNT(*) c FROM incoming_hooks WHERE revoked=0'),
     hooks_out: c('SELECT COUNT(*) c FROM outgoing_hooks WHERE active=1'),
     deliveries_failed: c('SELECT COUNT(*) c FROM webhook_deliveries WHERE ok=0'),
+    pubkeys: c('SELECT COUNT(*) c FROM public_keys WHERE revoked=0'),
   });
 });
 
@@ -56,6 +58,7 @@ router.get('/info', (req, res) => {
       } catch { return 0; }
     })(),
     node: process.version,
+    version: pkg.version,
   });
 });
 

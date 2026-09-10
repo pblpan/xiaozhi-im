@@ -20,6 +20,8 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _load = false;
   bool _obscure = true;
   String? _err;
+  /// 最近一次登录异常的原始对象，用于决定要不要显示"切换服务器"按钮
+  ApiException? _lastErr;
 
   @override
   void dispose() {
@@ -42,6 +44,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _load = true;
       _err = null;
+      _lastErr = null;
     });
     try {
       await ImApi().login(_u.text.trim(), _p.text);
@@ -51,8 +54,10 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       if (mounted) {
-        setState(
-            () => _err = e.toString().replaceFirst('Exception: ', ''));
+        setState(() {
+          _err = e.toString().replaceFirst('Exception: ', '');
+          _lastErr = e is ApiException ? e : null;
+        });
       }
     } finally {
       if (mounted) setState(() => _load = false);
@@ -113,7 +118,24 @@ class _LoginScreenState extends State<LoginScreen> {
                                 color: AppColors.textSub, fontSize: 13.5)),
                       ),
                       const SizedBox(height: 26),
-                      if (_err != null) _errorBox(_err!),
+                      if (_err != null) ...[
+                        _errorBox(_err!),
+                        if (_lastErr != null && _lastErr!.isNetwork) ...[
+                          const SizedBox(height: 10),
+                          Center(
+                            child: TextButton.icon(
+                              onPressed: _openServer,
+                              icon: const Icon(Icons.dns_rounded, size: 16),
+                              label: const Text('切换服务器 →'),
+                              style: TextButton.styleFrom(
+                                foregroundColor: AppColors.brand,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 6),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                       TextField(
                         controller: _u,
                         textInputAction: TextInputAction.next,

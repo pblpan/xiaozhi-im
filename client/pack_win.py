@@ -11,7 +11,8 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, 'build', 'windows', 'x64', 'runner', 'Release')
 OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-    os.path.expanduser('~'), 'Desktop', '小智IM-Windows-v0.4.1.zip')
+    'D:', os.sep, 'Users', 'pblpa', 'Desktop', '小智 IM',
+    '小智IM-Windows-v0.4.2.zip')
 
 
 def main():

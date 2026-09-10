@@ -316,4 +316,107 @@ router.post('/deliveries/:id/retry', (req, res) => {
   res.json({ ok: true, id, note: '已重新投递' });
 });
 
+/* ==================== 公钥接入 ==================== */
+
+const crypto = require('crypto');
+
+function newKeyId() {
+  return [...crypto.randomBytes(6)].map((b) =>
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[b % 62]).join('');
+}
+
+function fingerprintOf(pem) {
+  const der = Buffer.from(
+    pem.replace(/-----BEGIN [^-]+-----/g, '')
+       .replace(/-----END [^-]+-----/g, '')
+       .replace(/\s+/g, ''), 'base64');
+  return 'sha256:' + crypto.createHash('sha256').update(der).digest('hex');
+}
+
+function parsePublicKey(pem) {
+  const key = crypto.createPublicKey(pem);
+  const detail = key.asymmetricKeyDetails || {};
+  const type = key.asymmetricKeyType;
+  let algo;
+  if (type === 'ec') {
+    const nc = detail.namedCurve || '';
+    if (nc === 'prime256v1' || nc === 'P-256' || nc === '1.2.840.10045.3.1.7') algo = 'ECDSA-SHA256';
+    else throw new Error(`暂不支持的椭圆曲线：${nc}（推荐 P-256 / prime256v1）`);
+  } else if (type === 'rsa') {
+    algo = 'RSA-SHA256';
+  } else {
+    throw new Error(`暂不支持的密钥类型：${type}（支持 RSA / EC P-256）`);
+  }
+  return { key, algo };
+}
+
+router.get('/publickeys', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const rows = db.prepare(`SELECT id, key_id, name, algorithm, fingerprint, created_at, last_used_at, revoked
+    FROM public_keys ORDER BY id DESC LIMIT 500`).all();
+  res.json(rows.map((r) => ({ ...r, revoked: !!r.revoked })));
+});
+
+router.post('/publickeys', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const { name, publicKey } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: '请填用途名' });
+  if (!publicKey || !publicKey.includes('BEGIN')) return res.status(400).json({ error: '请粘贴 PEM 格式的公钥（含 BEGIN/END 标记）' });
+  let parsed;
+  try { parsed = parsePublicKey(publicKey); }
+  catch (e) { return res.status(400).json({ error: '公钥解析失败：' + e.message }); }
+  let keyId;
+  for (let i = 0; i < 10; i++) {
+    keyId = newKeyId();
+    const ex = db.prepare('SELECT 1 FROM public_keys WHERE key_id=?').get(keyId);
+    if (!ex) break;
+    keyId = null;
+  }
+  if (!keyId) return res.status(500).json({ error: 'key_id 分配失败，请重试' });
+  const fp = fingerprintOf(publicKey);
+  const r = db.prepare(`INSERT INTO public_keys (key_id, name, public_key, algorithm, fingerprint, created_at)
+    VALUES (?,?,?,?,?,?)`).run(keyId, name.trim(), publicKey.trim(), parsed.algo, fp, Date.now());
+  res.json({
+    id: r.lastInsertRowid, key_id: keyId, name: name.trim(),
+    algorithm: parsed.algo, fingerprint: fp, created_at: Date.now(),
+  });
+});
+
+router.delete('/publickeys/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const r = db.prepare('DELETE FROM public_keys WHERE id=?').run(Number(req.params.id));
+  res.json({ ok: true, deleted: r.changes });
+});
+
+router.post('/publickeys/:id/revoke', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const revoked = (req.body || {}).revoked !== false;
+  const r = db.prepare('UPDATE public_keys SET revoked=? WHERE id=?').run(revoked ? 1 : 0, Number(req.params.id));
+  res.json({ ok: true, revoked, changes: r.changes });
+});
+
+/** 验签测试：客户粘贴 body 原文 + signature(base64)，服务端用公钥验签 */
+router.post('/publickeys/:id/test', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT * FROM public_keys WHERE id=?').get(id);
+  if (!row) return res.status(404).json({ error: '公钥不存在' });
+  const { body, signature, algorithm } = req.body || {};
+  if (typeof body !== 'string' || !signature) return res.status(400).json({ error: '请提供 body(字符串原文) 和 signature(base64 签名)' });
+  try {
+    const verifier = crypto.createVerify(algorithm || row.algorithm);
+    verifier.update(body);
+    verifier.end();
+    const ok = verifier.verify(row.public_key, Buffer.from(signature, 'base64'));
+    if (ok) {
+      db.prepare('UPDATE public_keys SET last_used_at=? WHERE id=?').run(Date.now(), id);
+      res.json({ ok: true, note: '验签通过 ✅' });
+    } else {
+      res.json({ ok: false, error: '签名不匹配（公钥 / 算法 / body 之一不一致）' });
+    }
+  } catch (e) {
+    res.status(400).json({ ok: false, error: '验签失败：' + e.message });
+  }
+});
+
 module.exports = router;

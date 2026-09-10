@@ -139,6 +139,20 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_deliveries_retry ON webhook_deliveries (ok, next_retry_at);
 CREATE INDEX IF NOT EXISTS idx_deliveries_hook ON webhook_deliveries (hook_id, id DESC);
+
+-- 公钥接入：外部系统提交公钥，IM 用公钥验签（替代/补充 HMAC 共享密钥）
+CREATE TABLE IF NOT EXISTS public_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key_id TEXT UNIQUE NOT NULL,            -- 短 ID，对外用
+  name TEXT NOT NULL,                     -- 用途名（人看）
+  public_key TEXT NOT NULL,               -- PEM 格式公钥
+  algorithm TEXT NOT NULL,                -- 'RSA-SHA256' / 'ECDSA-SHA256'
+  fingerprint TEXT NOT NULL,              -- 公钥 SHA-256 指纹
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL DEFAULT 0,
+  revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pubkeys_keyid ON public_keys (key_id);
 `);
 
 // ---- 幂等迁移（老库升级时不重建表）----

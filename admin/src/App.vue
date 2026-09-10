@@ -30,7 +30,10 @@
     </el-aside>
 
     <el-container>
-      <el-header class="hdr">小智 IM · 服务端可视化管理</el-header>
+      <el-header class="hdr">
+        <span>小智 IM · 服务端可视化管理</span>
+        <el-tag v-if="info.version" type="success" effect="plain" size="small">v{{ info.version }}</el-tag>
+      </el-header>
       <el-main>
         <!-- 仪表盘 -->
         <div v-if="tab === 'dashboard'">
@@ -401,14 +404,63 @@
                 <el-table-column label="时间" width="160">
                   <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
                 </el-table-column>
-                <el-table-column label="操作" width="90">
-                  <template #default="{ row }">
-                    <el-button size="small" @click="retryDelivery(row)">重发</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-tab-pane>
-          </el-tabs>
+              <el-table-column label="操作" width="90">
+                <template #default="{ row }">
+                  <el-button size="small" @click="retryDelivery(row)">重发</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+
+          <!-- ===== 公钥接入 ===== -->
+          <el-tab-pane label="公钥接入" name="pubkeys">
+            <el-alert type="info" :closable="false" style="margin-bottom:12px">
+              <template #title>
+                外部系统用<b>私钥签名</b>请求，IM 用你提交的公钥验签。比 HMAC 共享密钥更安全：
+                私钥不出对方机器，公钥丢了也只影响这一个对接点。
+              </template>
+            </el-alert>
+            <div class="page-bar">
+              <el-button type="primary" @click="openPubkeyDialog()">添加公钥</el-button>
+              <span class="hint">支持 RSA / 椭圆曲线 P-256。生成命令（RSA 2048 为例）：
+                <code class="mono">openssl genrsa -out priv.pem 2048 &amp;&amp; openssl rsa -in priv.pem -pubout -out pub.pem</code>
+              </span>
+            </div>
+            <el-table :data="pubkeys" border stripe>
+              <el-table-column prop="id" label="ID" width="70" />
+              <el-table-column prop="key_id" label="公钥 ID" width="160">
+                <template #default="{ row }">
+                  <code class="mono">{{ row.key_id }}</code>
+                </template>
+              </el-table-column>
+              <el-table-column prop="name" label="用途" width="160" />
+              <el-table-column prop="algorithm" label="算法" width="140" />
+              <el-table-column label="指纹" min-width="280" show-overflow-tooltip>
+                <template #default="{ row }"><code class="mono">{{ row.fingerprint }}</code></template>
+              </el-table-column>
+              <el-table-column label="创建时间" width="170">
+                <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+              </el-table-column>
+              <el-table-column label="最近使用" width="160">
+                <template #default="{ row }">{{ row.last_used_at ? fmtTime(row.last_used_at) : '未使用' }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="90">
+                <template #default="{ row }">
+                  <el-tag v-if="row.revoked" size="small" type="danger">已停用</el-tag>
+                  <el-tag v-else size="small" type="success">正常</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="260">
+                <template #default="{ row }">
+                  <el-button size="small" @click="openPubkeyTestDialog(row)">验签测试</el-button>
+                  <el-button size="small" @click="togglePubkey(row)">{{ row.revoked ? '启用' : '停用' }}</el-button>
+                  <el-button size="small" type="danger" @click="delPubkey(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-if="!pubkeys.length" description="还没有公钥，点「添加公钥」开始对接" />
+          </el-tab-pane>
+        </el-tabs>
         </div>
 
         <!-- 系统设置 -->
@@ -444,6 +496,7 @@
                   <el-descriptions-item label="磁盘占用">{{ fmtBytes(info.files_disk_bytes) }}</el-descriptions-item>
                   <el-descriptions-item label="单文件上限">{{ info.max_file_mb }} MB</el-descriptions-item>
                   <el-descriptions-item label="Node 版本">{{ info.node }}</el-descriptions-item>
+                  <el-descriptions-item label="服务端版本">{{ info.version || '—' }}</el-descriptions-item>
                 </el-descriptions>
               </el-card>
             </el-col>
@@ -452,195 +505,357 @@
       </el-main>
     </el-container>
 
-    <!-- 用户编辑对话框 -->
-    <el-dialog v-model="userDlg" :title="userForm.id ? '编辑用户' : '新建用户'" width="480px">
-      <el-form :model="userForm" label-width="80px">
-        <el-form-item label="账号">
-          <el-input v-model="userForm.username" :disabled="!!userForm.id" placeholder="登录账号（创建后不可改）" />
-        </el-form-item>
-        <el-form-item label="昵称">
-          <el-input v-model="userForm.nickname" placeholder="显示昵称" />
-        </el-form-item>
-        <el-form-item label="角色">
-          <el-radio-group v-model="userForm.role">
-            <el-radio value="user">普通用户</el-radio>
-            <el-radio value="admin">管理员</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item :label="userForm.id ? '重置密码' : '密码'">
-          <el-input v-model="userForm.password" type="password" show-password
-                    :placeholder="userForm.id ? '留空表示不修改' : '至少 6 位'" />
-        </el-form-item>
-      </el-form>
+    <!-- 用户编辑向导：2 步（基本信息 / 密码） -->
+    <el-dialog v-model="userDlg" :title="userForm.id ? '编辑用户' : '新建用户'" width="480px" @close="userStep=0">
+      <el-steps :active="userStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="基本信息" />
+        <el-step title="密码" />
+      </el-steps>
+      <div v-show="userStep === 0">
+        <el-form :model="userForm" label-width="80px">
+          <el-form-item label="账号">
+            <el-input v-model="userForm.username" :disabled="!!userForm.id" placeholder="登录账号（创建后不可改）" />
+          </el-form-item>
+          <el-form-item label="昵称">
+            <el-input v-model="userForm.nickname" placeholder="显示昵称" />
+          </el-form-item>
+          <el-form-item label="角色">
+            <el-radio-group v-model="userForm.role">
+              <el-radio value="user">普通用户</el-radio>
+              <el-radio value="admin">管理员</el-radio>
+            </el-radio-group>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="userStep === 1">
+        <el-form :model="userForm" label-width="80px">
+          <el-form-item :label="userForm.id ? '重置密码' : '密码'">
+            <el-input v-model="userForm.password" type="password" show-password
+                      :placeholder="userForm.id ? '留空表示不修改' : '至少 6 位'" />
+            <div class="hint" style="margin-top:4px">{{ userForm.id ? '编辑时留空表示不修改' : '密码至少 6 位，建议字母+数字组合' }}</div>
+          </el-form-item>
+        </el-form>
+      </div>
       <template #footer>
-        <el-button @click="userDlg = false">取消</el-button>
-        <el-button type="primary" :loading="userDlgBusy" @click="saveUser">保存</el-button>
+        <el-button v-if="userStep > 0" @click="userStep--">上一步</el-button>
+        <el-button v-if="userStep < 1" type="primary" @click="userStep++">下一步</el-button>
+        <el-button v-if="userStep === 1" type="primary" :loading="userDlgBusy" @click="saveUser">保存</el-button>
+        <el-button v-if="userStep === 0" @click="userDlg = false">取消</el-button>
       </template>
     </el-dialog>
 
-    <!-- 群组编辑对话框 -->
-    <el-dialog v-model="groupDlg" :title="groupForm.id ? '编辑群组' : '新建群组'" width="560px">
-      <el-form :model="groupForm" label-width="90px">
-        <el-form-item label="群名">
-          <el-input v-model="groupForm.name" placeholder="群组名称" />
-        </el-form-item>
-        <el-form-item label="群主">
-          <el-select v-model="groupForm.owner_id" filterable placeholder="选择群主" style="width:100%">
-            <el-option v-for="u in users" :key="u.id" :label="`${u.username} (${u.nickname || ''})`" :value="u.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="成员">
-          <el-select v-model="groupForm.member_ids" multiple filterable collapse-tags collapse-tags-tooltip
-                     placeholder="选择成员（可多选）" style="width:100%">
-            <el-option v-for="u in users" :key="u.id" :label="`${u.username} (${u.nickname || ''})`" :value="u.id" />
-          </el-select>
-        </el-form-item>
-        <p style="color:#909399;font-size:12px;margin:0 0 0 90px">
-          * 创建时群主自动加入成员列表；编辑时改动成员会同步会话成员。
-        </p>
-      </el-form>
+    <!-- 群组编辑向导：2 步（基本信息 / 成员） -->
+    <el-dialog v-model="groupDlg" :title="groupForm.id ? '编辑群组' : '新建群组'" width="560px" @close="groupStep=0">
+      <el-steps :active="groupStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="基本信息" />
+        <el-step title="成员" />
+      </el-steps>
+      <div v-show="groupStep === 0">
+        <el-form :model="groupForm" label-width="90px">
+          <el-form-item label="群名">
+            <el-input v-model="groupForm.name" placeholder="群组名称" />
+          </el-form-item>
+          <el-form-item label="群主">
+            <el-select v-model="groupForm.owner_id" filterable placeholder="选择群主" style="width:100%">
+              <el-option v-for="u in users" :key="u.id" :label="`${u.username} (${u.nickname || ''})`" :value="u.id" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="groupStep === 1">
+        <el-form :model="groupForm" label-width="90px">
+          <el-form-item label="成员">
+            <el-select v-model="groupForm.member_ids" multiple filterable collapse-tags collapse-tags-tooltip
+                       placeholder="选择成员（可多选）" style="width:100%">
+              <el-option v-for="u in users" :key="u.id" :label="`${u.username} (${u.nickname || ''})`" :value="u.id" />
+            </el-select>
+            <div class="hint" style="margin-top:6px">
+              * 创建时群主自动加入成员列表；编辑时改动成员会同步会话成员。
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
       <template #footer>
-        <el-button @click="groupDlg = false">取消</el-button>
-        <el-button type="primary" :loading="groupDlgBusy" @click="saveGroup">保存</el-button>
+        <el-button v-if="groupStep > 0" @click="groupStep--">上一步</el-button>
+        <el-button v-if="groupStep < 1" type="primary" @click="groupStep++">下一步</el-button>
+        <el-button v-if="groupStep === 1" type="primary" :loading="groupDlgBusy" @click="saveGroup">保存</el-button>
+        <el-button v-if="groupStep === 0" @click="groupDlg = false">取消</el-button>
       </template>
     </el-dialog>
 
-    <!-- 机器人编辑 -->
-    <el-dialog v-model="botDlg" title="新建机器人" width="520px">
-      <el-form :model="botForm" label-width="100px">
-        <el-form-item label="名称">
-          <el-input v-model="botForm.name" placeholder="如：工厂助手、库存预警" maxlength="32" show-word-limit />
-        </el-form-item>
-        <el-form-item label="加入会话">
-          <el-select v-model="botForm.conversationId" filterable clearable placeholder="可稍后再加（选填）" style="width:100%">
-            <el-option v-for="c in intMeta.conversations" :key="c.id"
-                       :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
-                       :value="c.id" />
-          </el-select>
-        </el-form-item>
-        <p class="hint" style="margin:0 0 0 100px">机器人创建后无法登录，只能通过 Webhook / API 令牌发言。</p>
-      </el-form>
+    <!-- 机器人新建向导：2 步（名称 / 可选加入会话） -->
+    <el-dialog v-model="botDlg" title="新建机器人" width="520px" @close="botStep=0">
+      <el-steps :active="botStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="名称" />
+        <el-step title="加入会话（可选）" />
+      </el-steps>
+      <div v-show="botStep === 0">
+        <el-form :model="botForm" label-width="100px">
+          <el-form-item label="名称">
+            <el-input v-model="botForm.name" placeholder="如：工厂助手、库存预警" maxlength="32" show-word-limit />
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="botStep === 1">
+        <el-form :model="botForm" label-width="100px">
+          <el-form-item label="加入会话">
+            <el-select v-model="botForm.conversationId" filterable clearable placeholder="可稍后再加（选填）" style="width:100%">
+              <el-option v-for="c in intMeta.conversations" :key="c.id"
+                         :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
+                         :value="c.id" />
+            </el-select>
+          </el-form-item>
+          <p class="hint" style="margin:0 0 0 100px">机器人创建后无法登录，只能通过 Webhook / API 令牌发言。</p>
+        </el-form>
+      </div>
       <template #footer>
-        <el-button @click="botDlg = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="saveBot">创建</el-button>
+        <el-button v-if="botStep > 0" @click="botStep--">上一步</el-button>
+        <el-button v-if="botStep < 1" type="primary" @click="botStep++">下一步</el-button>
+        <el-button v-if="botStep === 1" type="primary" :loading="busy" @click="saveBot">创建</el-button>
+        <el-button v-if="botStep === 0" @click="botDlg = false">取消</el-button>
       </template>
     </el-dialog>
 
-    <!-- 机器人加入会话 -->
-    <el-dialog v-model="botConvDlg" :title="`把「${botConvForm.name}」加入会话`" width="520px">
-      <el-select v-model="botConvForm.conversationId" filterable placeholder="选择会话" style="width:100%">
-        <el-option v-for="c in intMeta.conversations" :key="c.id"
-                   :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
-                   :value="c.id" />
-      </el-select>
+    <!-- 机器人加入会话向导：1 步 -->
+    <el-dialog v-model="botConvDlg" :title="`把「${botConvForm.name}」加入会话`" width="520px" @close="botConvStep=0">
+      <el-steps :active="botConvStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="选择会话" />
+      </el-steps>
+      <div v-show="botConvStep === 0">
+        <el-select v-model="botConvForm.conversationId" filterable placeholder="选择会话" style="width:100%">
+          <el-option v-for="c in intMeta.conversations" :key="c.id"
+                     :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
+                     :value="c.id" />
+        </el-select>
+      </div>
       <template #footer>
         <el-button @click="botConvDlg = false">取消</el-button>
         <el-button type="primary" :loading="busy" @click="saveBotConv">加入</el-button>
       </template>
     </el-dialog>
 
-    <!-- 令牌编辑 -->
-    <el-dialog v-model="tokenDlg" title="发放 API 令牌" width="600px">
-      <el-form :model="tokenForm" label-width="100px">
-        <el-form-item label="用途">
-          <el-input v-model="tokenForm.name" placeholder="如：工厂V2、门店报表脚本" maxlength="64" />
-        </el-form-item>
-        <el-form-item label="身份">
-          <el-select v-model="tokenForm.userId" filterable placeholder="以谁的身份行事" style="width:100%">
-            <el-option v-for="u in identityOptions" :key="u.id"
-                       :label="`${u.is_bot ? '🤖 ' : ''}${u.nickname || u.username}（${u.username}）`" :value="u.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="权限">
-          <el-checkbox-group v-model="tokenForm.scopes">
-            <el-checkbox v-for="s in intMeta.scopes" :key="s.name" :value="s.name" style="display:block;margin:2px 0">
-              <code class="mono">{{ s.name }}</code> — {{ s.desc }}
-            </el-checkbox>
-          </el-checkbox-group>
-        </el-form-item>
-        <el-form-item label="有效期">
-          <el-input-number v-model="tokenForm.days" :min="0" :max="3650" />
-          <span class="hint" style="margin-left:8px">天（0 = 永不过期）</span>
-        </el-form-item>
-      </el-form>
-      <el-alert v-if="newToken" type="success" :closable="false" style="margin-top:6px">
-        <template #title>
-          令牌已生成，<b>只显示这一次</b>，请立刻复制保存：
-          <div style="margin-top:6px">
-            <code class="mono">{{ newToken }}</code>
-            <el-button size="small" text type="primary" @click="copy(newToken)">复制</el-button>
-          </div>
-        </template>
-      </el-alert>
+    <!-- 令牌发放向导：3 步（基本信息 / 权限 / 完成） -->
+    <el-dialog v-model="tokenDlg" title="发放 API 令牌" width="600px" @close="tokenStep=0">
+      <el-steps :active="tokenStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="基本信息" />
+        <el-step title="权限" />
+        <el-step title="完成" />
+      </el-steps>
+      <div v-show="tokenStep === 0">
+        <el-form :model="tokenForm" label-width="100px">
+          <el-form-item label="用途">
+            <el-input v-model="tokenForm.name" placeholder="如：工厂V2、门店报表脚本" maxlength="64" />
+          </el-form-item>
+          <el-form-item label="身份">
+            <el-select v-model="tokenForm.userId" filterable placeholder="以谁的身份行事" style="width:100%">
+              <el-option v-for="u in identityOptions" :key="u.id"
+                         :label="`${u.is_bot ? '🤖 ' : ''}${u.nickname || u.username}（${u.username}）`" :value="u.id" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="tokenStep === 1">
+        <el-form :model="tokenForm" label-width="100px">
+          <el-form-item label="权限">
+            <el-checkbox-group v-model="tokenForm.scopes">
+              <el-checkbox v-for="s in intMeta.scopes" :key="s.name" :value="s.name" style="display:block;margin:2px 0">
+                <code class="mono">{{ s.name }}</code> — {{ s.desc }}
+              </el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item label="有效期">
+            <el-input-number v-model="tokenForm.days" :min="0" :max="3650" />
+            <span class="hint" style="margin-left:8px">天（0 = 永不过期）</span>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="tokenStep === 2" v-if="newToken">
+        <el-result icon="success" title="令牌已生成">
+          <template #sub-title>
+            <div style="text-align:left;margin-top:6px">
+              <p><b>只显示这一次</b>，请立刻复制保存：</p>
+              <p><code class="mono" style="word-break:break-all">{{ newToken }}</code></p>
+              <el-button size="small" type="primary" @click="copy(newToken)">复制令牌</el-button>
+            </div>
+          </template>
+        </el-result>
+      </div>
       <template #footer>
-        <el-button @click="tokenDlg = false">关闭</el-button>
-        <el-button type="primary" :loading="busy" @click="saveToken">生成令牌</el-button>
+        <el-button v-if="tokenStep > 0 && tokenStep < 2" @click="tokenStep--">上一步</el-button>
+        <el-button v-if="tokenStep === 0" type="primary" @click="tokenStep++">下一步</el-button>
+        <el-button v-if="tokenStep === 1" type="primary" :loading="busy" @click="saveToken">生成令牌</el-button>
+        <el-button v-if="tokenStep === 2" type="primary" @click="tokenDlg = false">完成</el-button>
+        <el-button v-if="tokenStep === 0" @click="tokenDlg = false">取消</el-button>
       </template>
     </el-dialog>
 
-    <!-- 入站 Webhook 编辑 -->
-    <el-dialog v-model="incomingDlg" title="新建推送地址" width="560px">
-      <el-form :model="incomingForm" label-width="100px">
-        <el-form-item label="用途">
-          <el-input v-model="incomingForm.name" placeholder="如：库存预警、销售日报" maxlength="64" />
-        </el-form-item>
-        <el-form-item label="机器人">
-          <el-select v-model="incomingForm.botId" filterable placeholder="以哪个机器人身份发言" style="width:100%">
-            <el-option v-for="b in bots" :key="b.id" :label="`${b.nickname}（${b.username}）`" :value="b.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="推到会话">
-          <el-select v-model="incomingForm.conversationId" filterable placeholder="选择群或单聊" style="width:100%">
-            <el-option v-for="c in intMeta.conversations" :key="c.id"
-                       :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
-                       :value="c.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="签名校验">
-          <el-switch v-model="incomingForm.signed" />
-          <span class="hint" style="margin-left:10px">开启后请求必须带 HMAC-SHA256 签名，地址外泄也无法被冒用</span>
-        </el-form-item>
-      </el-form>
+    <!-- 入站推送向导：2 步（用途 / 目标） -->
+    <el-dialog v-model="incomingDlg" title="新建推送地址" width="560px" @close="incomingStep=0">
+      <el-steps :active="incomingStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="用途" />
+        <el-step title="目标" />
+      </el-steps>
+      <div v-show="incomingStep === 0">
+        <el-form :model="incomingForm" label-width="100px">
+          <el-form-item label="用途">
+            <el-input v-model="incomingForm.name" placeholder="如：库存预警、销售日报" maxlength="64" />
+          </el-form-item>
+          <el-form-item label="机器人">
+            <el-select v-model="incomingForm.botId" filterable placeholder="以哪个机器人身份发言" style="width:100%">
+              <el-option v-for="b in bots" :key="b.id" :label="`${b.nickname}（${b.username}）`" :value="b.id" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="incomingStep === 1">
+        <el-form :model="incomingForm" label-width="100px">
+          <el-form-item label="推到会话">
+            <el-select v-model="incomingForm.conversationId" filterable placeholder="选择群或单聊" style="width:100%">
+              <el-option v-for="c in intMeta.conversations" :key="c.id"
+                         :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
+                         :value="c.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="签名校验">
+            <el-switch v-model="incomingForm.signed" />
+            <span class="hint" style="margin-left:10px">开启后请求必须带 HMAC-SHA256 签名，地址外泄也无法被冒用</span>
+          </el-form-item>
+        </el-form>
+      </div>
       <template #footer>
-        <el-button @click="incomingDlg = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="saveIncoming">创建</el-button>
+        <el-button v-if="incomingStep > 0" @click="incomingStep--">上一步</el-button>
+        <el-button v-if="incomingStep < 1" type="primary" @click="incomingStep++">下一步</el-button>
+        <el-button v-if="incomingStep === 1" type="primary" :loading="busy" @click="saveIncoming">创建</el-button>
+        <el-button v-if="incomingStep === 0" @click="incomingDlg = false">取消</el-button>
       </template>
     </el-dialog>
 
-    <!-- 出站 Webhook 编辑 -->
-    <el-dialog v-model="outgoingDlg" title="新建事件订阅" width="600px">
-      <el-form :model="outgoingForm" label-width="100px">
-        <el-form-item label="用途">
-          <el-input v-model="outgoingForm.name" placeholder="如：工厂V2 回调" maxlength="64" />
+    <!-- 出站事件订阅向导：3 步（基本信息 / 事件+范围 / 完成） -->
+    <el-dialog v-model="outgoingDlg" title="新建事件订阅" width="600px" @close="outgoingStep=0; outgoingSecret=''">
+      <el-steps :active="outgoingStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="基本信息" />
+        <el-step title="事件" />
+        <el-step title="完成" />
+      </el-steps>
+      <div v-show="outgoingStep === 0">
+        <el-form :model="outgoingForm" label-width="100px">
+          <el-form-item label="用途">
+            <el-input v-model="outgoingForm.name" placeholder="如：工厂V2 回调" maxlength="64" />
+          </el-form-item>
+          <el-form-item label="回调地址">
+            <el-input v-model="outgoingForm.url" placeholder="https://你的系统/api/xiaozhi/hook" />
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="outgoingStep === 1">
+        <el-form :model="outgoingForm" label-width="100px">
+          <el-form-item label="订阅事件">
+            <el-checkbox-group v-model="outgoingForm.events">
+              <el-checkbox v-for="e in intMeta.events" :key="e.name" :value="e.name" style="display:block;margin:2px 0">
+                <code class="mono">{{ e.name }}</code> — {{ e.desc }}
+              </el-checkbox>
+            </el-checkbox-group>
+            <span class="hint">一个都不勾 = 订阅全部事件</span>
+          </el-form-item>
+          <el-form-item label="监听范围">
+            <el-select v-model="outgoingForm.conversationId" filterable clearable placeholder="全部会话" style="width:100%">
+              <el-option v-for="c in intMeta.conversations" :key="c.id"
+                         :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
+                         :value="c.id" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="outgoingStep === 2" v-if="outgoingSecret">
+        <el-result icon="success" title="订阅已创建">
+          <template #sub-title>
+            <div style="text-align:left;margin-top:6px">
+              <p>请求头会带 <code class="mono">X-Xiaozhi-Signature: sha256=&lt;HMAC(body, secret)&gt;</code>，用下方密钥验签：</p>
+              <p><b>签名密钥</b>：<code class="mono" style="word-break:break-all">{{ outgoingSecret }}</code></p>
+              <el-button size="small" type="primary" @click="copy(outgoingSecret)">复制密钥</el-button>
+              <p class="hint" style="margin-top:8px">密钥只在创建时显示一次，请立刻保存；后续可在列表里点「换密钥」重新生成。</p>
+            </div>
+          </template>
+        </el-result>
+      </div>
+      <template #footer>
+        <el-button v-if="outgoingStep > 0 && outgoingStep < 2" @click="outgoingStep--">上一步</el-button>
+        <el-button v-if="outgoingStep < 1" type="primary" @click="outgoingStep++">下一步</el-button>
+        <el-button v-if="outgoingStep === 1" type="primary" :loading="busy" @click="saveOutgoing">创建</el-button>
+        <el-button v-if="outgoingStep === 2" type="primary" @click="outgoingDlg = false">完成</el-button>
+        <el-button v-if="outgoingStep === 0" @click="outgoingDlg = false">取消</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 公钥接入向导：3 步（用途 → 粘贴公钥 → 完成） -->
+    <el-dialog v-model="pubkeyDlg" :title="pubkeyStep === 2 ? '公钥已添加' : '添加公钥'" width="640px" @close="closePubkeyDialog">
+      <el-steps :active="pubkeyStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="用途" />
+        <el-step title="粘贴公钥" />
+        <el-step title="完成" />
+      </el-steps>
+      <div v-show="pubkeyStep === 0">
+        <el-form label-width="80px">
+          <el-form-item label="用途名">
+            <el-input v-model="pubkeyForm.name" placeholder="如：工厂V2 库存预警" maxlength="64" show-word-limit />
+            <div class="hint" style="margin-top:4px">给你自己看的标识，不会出现在调用里</div>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="pubkeyStep === 1">
+        <el-form label-width="100px">
+          <el-form-item label="公钥">
+            <el-input v-model="pubkeyForm.publicKey" type="textarea" :rows="10"
+                      placeholder="-----BEGIN PUBLIC KEY-----&#10;...&#10;-----END PUBLIC KEY-----" />
+            <div class="hint" style="margin-top:4px">支持 RSA / 椭圆曲线 P-256（PEM 格式）</div>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="pubkeyStep === 2" v-if="pubkeyCreated">
+        <el-result icon="success" title="公钥已成功添加">
+          <template #sub-title>
+            <div style="text-align:left;margin-top:6px">
+              <p>用途：<b>{{ pubkeyCreated.name }}</b></p>
+              <p>公钥 ID：<code class="mono">{{ pubkeyCreated.key_id }}</code>（调用时用作 URL 路径）</p>
+              <p>算法：<code class="mono">{{ pubkeyCreated.algorithm }}</code></p>
+              <p>指纹：<code class="mono">{{ pubkeyCreated.fingerprint }}</code></p>
+            </div>
+          </template>
+        </el-result>
+      </div>
+      <template #footer>
+        <el-button v-if="pubkeyStep > 0 && pubkeyStep < 2" @click="pubkeyStep--">上一步</el-button>
+        <el-button v-if="pubkeyStep === 0" type="primary" @click="savePubkey">下一步</el-button>
+        <el-button v-if="pubkeyStep === 1" type="primary" :loading="busy" @click="savePubkey">提交</el-button>
+        <el-button v-if="pubkeyStep === 2" type="primary" @click="closePubkeyDialog">完成</el-button>
+        <el-button v-if="pubkeyStep === 0" @click="closePubkeyDialog">取消</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 公钥验签测试 -->
+    <el-dialog v-model="pubkeyTestDlg" :title="`验签测试 — ${pubkeyTestForm.name}`" width="640px">
+      <el-alert type="info" :closable="false" style="margin-bottom:12px">
+        <template #title>
+          把你用<b>私钥签过的 body 原文</b>和<b>base64 编码的签名</b>粘到下面，IM 立即用你提交的公钥验签。
+          算法默认 <code class="mono">{{ pubkeyTestForm.algorithm }}</code>。
+        </template>
+      </el-alert>
+      <el-form label-width="80px">
+        <el-form-item label="body">
+          <el-input v-model="pubkeyTestForm.body" type="textarea" :rows="6" placeholder="原文" />
         </el-form-item>
-        <el-form-item label="回调地址">
-          <el-input v-model="outgoingForm.url" placeholder="https://你的系统/api/xiaozhi/hook" />
-        </el-form-item>
-        <el-form-item label="订阅事件">
-          <el-checkbox-group v-model="outgoingForm.events">
-            <el-checkbox v-for="e in intMeta.events" :key="e.name" :value="e.name" style="display:block;margin:2px 0">
-              <code class="mono">{{ e.name }}</code> — {{ e.desc }}
-            </el-checkbox>
-          </el-checkbox-group>
-          <span class="hint">一个都不勾 = 订阅全部事件</span>
-        </el-form-item>
-        <el-form-item label="监听范围">
-          <el-select v-model="outgoingForm.conversationId" filterable clearable placeholder="全部会话" style="width:100%">
-            <el-option v-for="c in intMeta.conversations" :key="c.id"
-                       :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
-                       :value="c.id" />
-          </el-select>
+        <el-form-item label="signature">
+          <el-input v-model="pubkeyTestForm.signature" placeholder="base64 字符串" />
         </el-form-item>
       </el-form>
-      <el-alert type="info" :closable="false">
+      <el-alert v-if="pubkeyTestForm.result" :type="pubkeyTestForm.result.ok ? 'success' : 'error'" :closable="false">
         <template #title>
-          请求头会带 <code class="mono">X-Xiaozhi-Signature: sha256=&lt;HMAC(body, secret)&gt;</code>，
-          用同一密钥验签即可确认来源。密钥创建后在列表里点「换密钥」可轮换。
+          {{ pubkeyTestForm.result.ok ? '✅ 验签通过' : '❌ ' + (pubkeyTestForm.result.error || '验签失败') }}
         </template>
       </el-alert>
       <template #footer>
-        <el-button @click="outgoingDlg = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="saveOutgoing">创建</el-button>
+        <el-button @click="pubkeyTestDlg = false">关闭</el-button>
+        <el-button type="primary" :loading="busy" @click="runPubkeyTest">验签</el-button>
       </template>
     </el-dialog>
   </el-container>
@@ -679,6 +894,7 @@ const cards = [
   { key: 'bots', label: '机器人' },
   { key: 'hooks_in', label: '入站推送' },
   { key: 'hooks_out', label: '事件订阅' },
+  { key: 'pubkeys', label: '公钥接入' },
 ];
 
 async function login() {
@@ -780,12 +996,14 @@ const filteredUsers = computed(() => {
 const userDlg = ref(false);
 const userDlgBusy = ref(false);
 const userForm = ref({ id: null, username: '', nickname: '', role: 'user', password: '' });
+const userStep = ref(0);
 function openUserDialog(row) {
   if (row) {
     userForm.value = { id: row.id, username: row.username, nickname: row.nickname || '', role: row.role, password: '' };
   } else {
     userForm.value = { id: null, username: '', nickname: '', role: 'user', password: '' };
   }
+  userStep.value = 0;
   userDlg.value = true;
 }
 async function saveUser() {
@@ -838,6 +1056,7 @@ async function delUser(row) {
 const groupDlg = ref(false);
 const groupDlgBusy = ref(false);
 const groupForm = ref({ id: null, name: '', owner_id: null, member_ids: [] });
+const groupStep = ref(0);
 async function openGroupDialog(row) {
   if (!users.value.length) await loadUsers();
   if (row) {
@@ -846,6 +1065,7 @@ async function openGroupDialog(row) {
   } else {
     groupForm.value = { id: null, name: '', owner_id: null, member_ids: [] };
   }
+  groupStep.value = 0;
   groupDlg.value = true;
 }
 async function saveGroup() {
@@ -962,6 +1182,18 @@ const incomingDlg = ref(false);
 const incomingForm = ref({ name: '', botId: null, conversationId: null, signed: false });
 const outgoingDlg = ref(false);
 const outgoingForm = ref({ name: '', url: '', events: [], conversationId: null });
+const pubkeys = ref([]);
+const pubkeyDlg = ref(false);
+const pubkeyForm = ref({ name: '', publicKey: '' });
+const pubkeyStep = ref(0);                  // 0=用途 1=粘贴公钥 2=创建成功
+const pubkeyCreated = ref(null);            // 创建后回显 key_id / fingerprint
+const pubkeyTestDlg = ref(false);
+const pubkeyTestForm = ref({ id: null, name: '', algorithm: '', body: '', signature: '', result: '' });
+const botStep = ref(0);
+const botConvStep = ref(0);
+const tokenStep = ref(0);
+const incomingStep = ref(0);
+const outgoingStep = ref(0);
 
 /** 身份下拉：机器人排前面（对接一般以机器人身份发言），再接真人用户 */
 const identityOptions = computed(() => [
@@ -996,7 +1228,7 @@ async function loadDeliveries() {
 
 async function loadIntegrations() {
   try {
-    await Promise.all([loadMeta(), loadBots(), loadTokens(), loadIncoming(), loadOutgoing(), loadDeliveries()]);
+    await Promise.all([loadMeta(), loadBots(), loadTokens(), loadIncoming(), loadOutgoing(), loadDeliveries(), loadPubkeys()]);
   } catch (e) {
     ElMessage.error('加载集成配置失败：' + (e.response?.data?.error || e.message));
   }
@@ -1010,10 +1242,13 @@ async function loadIntTab() {
     else if (intTab.value === 'incoming') { await Promise.all([loadMeta(), loadBots()]); await loadIncoming(); }
     else if (intTab.value === 'outgoing') { await loadMeta(); await loadOutgoing(); }
     else if (intTab.value === 'deliveries') await loadDeliveries();
+    else if (intTab.value === 'pubkeys') await loadPubkeys();
   } catch (e) {
     ElMessage.error(e.response?.data?.error || e.message);
   }
 }
+
+async function loadPubkeys() { pubkeys.value = (await api.get('/admin/integrations/publickeys')).data; }
 
 function openBotDialog() {
   botForm.value = { name: '', conversationId: null };
@@ -1080,6 +1315,7 @@ async function saveToken() {
       expiresAt: f.days > 0 ? Date.now() + f.days * 86400000 : 0,
     });
     newToken.value = data.token;
+    tokenStep.value = 2;
     await loadTokens();
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '生成失败');
@@ -1172,8 +1408,9 @@ async function saveOutgoing() {
   busy.value = true;
   try {
     const { data } = await api.post('/admin/integrations/outgoing', f);
-    ElMessage.success(`订阅已创建，签名密钥：${data.secret}`);
-    outgoingDlg.value = false;
+    outgoingSecret.value = data.secret;
+    outgoingStep.value = 2;
+    ElMessage.success('订阅已创建');
     await loadOutgoing();
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '创建失败');
@@ -1217,6 +1454,68 @@ async function retryDelivery(row) {
     ElMessage.success('已重新投递');
     setTimeout(loadDeliveries, 900);
   } catch (e) { ElMessage.error(e.response?.data?.error || '重发失败'); }
+}
+
+/* ====== 公钥接入 ====== */
+function openPubkeyDialog() {
+  pubkeyForm.value = { name: '', publicKey: '' };
+  pubkeyStep.value = 0;
+  pubkeyCreated.value = null;
+  pubkeyDlg.value = true;
+}
+async function savePubkey() {
+  const f = pubkeyForm.value;
+  if (pubkeyStep.value === 0) {
+    if (!f.name.trim()) return ElMessage.warning('请填用途名');
+    pubkeyStep.value = 1;
+    return;
+  }
+  if (pubkeyStep.value === 1) {
+    if (!f.publicKey.includes('BEGIN')) return ElMessage.warning('请粘贴 PEM 格式的公钥（含 BEGIN/END 标记）');
+    busy.value = true;
+    try {
+      const { data } = await api.post('/admin/integrations/publickeys', { name: f.name.trim(), publicKey: f.publicKey });
+      pubkeyCreated.value = data;
+      pubkeyStep.value = 2;
+      await loadPubkeys();
+    } catch (e) { ElMessage.error(e.response?.data?.error || '提交失败'); }
+    finally { busy.value = false; }
+  }
+}
+function closePubkeyDialog() { pubkeyDlg.value = false; }
+async function delPubkey(row) {
+  try { await ElMessageBox.confirm(`删除公钥「${row.name}」（${row.key_id}）？使用它的对接点会立即失效。`, '确认删除', { type: 'warning' }); }
+  catch { return; }
+  try {
+    await api.delete(`/admin/integrations/publickeys/${row.id}`);
+    ElMessage.success('已删除');
+    await loadPubkeys();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '删除失败'); }
+}
+async function togglePubkey(row) {
+  try {
+    await api.post(`/admin/integrations/publickeys/${row.id}/revoke`, { revoked: !row.revoked });
+    ElMessage.success(row.revoked ? '已启用' : '已停用');
+    await loadPubkeys();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '操作失败'); }
+}
+function openPubkeyTestDialog(row) {
+  pubkeyTestForm.value = { id: row.id, name: row.name, algorithm: row.algorithm, body: '', signature: '', result: '' };
+  pubkeyTestDlg.value = true;
+}
+async function runPubkeyTest() {
+  const f = pubkeyTestForm.value;
+  if (!f.body || !f.signature) return ElMessage.warning('请填 body 和 signature');
+  try {
+    const { data } = await api.post(`/admin/integrations/publickeys/${f.id}/test`,
+      { body: f.body, signature: f.signature, algorithm: f.algorithm });
+    f.result = data;
+    if (data.ok) ElMessage.success('验签通过');
+    else ElMessage.warning('验签失败：' + (data.error || ''));
+  } catch (e) {
+    f.result = { ok: false, error: e.response?.data?.error || e.message };
+    ElMessage.error('请求失败');
+  }
 }
 
 /* ====== Settings ====== */
@@ -1273,7 +1572,7 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .aside { background: #0F2620; display: flex; flex-direction: column; }
 .logo { color: #fff; font-size: 20px; font-weight: 700; text-align: center; padding: 18px 0; }
 .aside-foot { margin-top: auto; padding: 12px; color: #8a8f99; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
-.hdr { background: #fff; border-bottom: 1px solid #ebeef5; display: flex; align-items: center; font-weight: 600; }
+.hdr { background: #fff; border-bottom: 1px solid #ebeef5; display: flex; align-items: center; justify-content: space-between; font-weight: 600; }
 .stat { text-align: center; }
 .stat-num { font-size: 28px; font-weight: 700; color: #10B981; }
 .stat-label { color: #909399; margin-top: 6px; }

@@ -25,6 +25,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   int _myId = 0;
   bool _loading = true;
   String? _error;
+  ApiException? _lastErr; // 最近一次错误的原始异常，UI 据此切换文案/按钮
   String _q = '';
   final _qCtrl = TextEditingController();
 
@@ -44,6 +45,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _lastErr = null;
     });
     try {
       final me = await ImApi().me();
@@ -52,7 +54,25 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       await _load();
       SocketService().stream.listen(_onEvent);
     } catch (e) {
-      if (mounted) setState(() => _error = _msg(e));
+      // 401 → token 失效，清掉回到登录页（不让用户卡错误循环）
+      if (e is ApiException && e.isUnauthorized) {
+        if (!mounted) return;
+        await Storage.clear();
+        ImApi().clearToken();
+        SocketService().disconnect();
+        if (mounted) {
+          Navigator.pushReplacement(
+              context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+        }
+        return;
+      }
+      // 其它（网络/超时/服务端错）：给用户自救了，避免被"重试"死循环卡住
+      if (mounted) {
+        setState(() {
+          _error = _msg(e);
+          _lastErr = e is ApiException ? e : null;
+        });
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -116,6 +136,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const LoginScreen()));
     }
+  }
+
+  /// 错误态里的"切换服务器"入口——保留会话，地址变了就地重试。
+  /// 同台服务端换域名/IP 不影响 token；如果换到完全不同的服务端，
+  /// _init() 会再次触发 401 分支自动跳登录。
+  Future<void> _openServerAndRetry() async {
+    final changed = await showServerSettings(context);
+    if (changed != true) return;
+    // showServerSettings 内部已经 resolveNow()，刷新 currentUrl
+    await SocketService().reconnect();
+    await _init();
   }
 
   Future<void> _openChat(Conversation cv) async {
@@ -510,29 +541,68 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)));
     }
     if (_error != null) {
+      final isNetwork =
+          _lastErr is ApiException && (_lastErr as ApiException).isNetwork;
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.cloud_off_rounded,
-                  size: 42, color: AppColors.textWeak),
+              Icon(
+                isNetwork
+                    ? Icons.cloud_off_rounded
+                    : Icons.error_outline_rounded,
+                size: 42,
+                color: AppColors.textWeak,
+              ),
               const SizedBox(height: 12),
               Text(_error!,
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
-              const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: _init,
-                icon: const Icon(Icons.refresh_rounded, size: 18),
-                label: const Text('重试'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.brand,
-                  side: const BorderSide(color: AppColors.brand),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadii.md)),
+              const SizedBox(height: 18),
+              // 主按钮：重试（同设置不变的情况下也能好转——比如对端刚重启）
+              SizedBox(
+                width: 200,
+                child: OutlinedButton.icon(
+                  onPressed: _init,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('重试'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.brand,
+                    side: const BorderSide(color: AppColors.brand),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.md)),
+                  ),
                 ),
+              ),
+              const SizedBox(height: 8),
+              // 次按钮：直接打开服务器设置（卡死用户的救命口）
+              SizedBox(
+                width: 200,
+                child: TextButton.icon(
+                  onPressed: _openServerAndRetry,
+                  icon: const Icon(Icons.dns_rounded, size: 17),
+                  label: const Text('切换服务器'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.textSub,
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.md)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              // 退出登录（小字链接）
+              TextButton(
+                onPressed: _logout,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.danger,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                ),
+                child: const Text('退出登录', style: TextStyle(fontSize: 12.5)),
               ),
             ],
           ),
