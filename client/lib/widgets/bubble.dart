@@ -12,6 +12,12 @@ class MessageBubble extends StatelessWidget {
   final String baseUrl;
   final bool showTime;
 
+  /// 长按气泡（由聊天页弹「复制 / 编辑 / 撤回」菜单）
+  final VoidCallback? onLongPress;
+
+  /// 已读回执标签：'已读' / '未读' / null（不显示）
+  final String? readLabel;
+
   const MessageBubble({
     super.key,
     required this.msg,
@@ -19,6 +25,8 @@ class MessageBubble extends StatelessWidget {
     this.senderName,
     this.baseUrl = '',
     this.showTime = false,
+    this.onLongPress,
+    this.readLabel,
   });
 
   String get _displayName {
@@ -36,8 +44,31 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
+  /// 撤回提示：不显示气泡，只在中间显示一行灰字
+  Widget _recalled() => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceHi.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(AppRadii.pill),
+            ),
+            child: Text(
+              mine ? '你撤回了一条消息' : '${senderName ?? '对方'} 撤回了一条消息',
+              style: const TextStyle(
+                  fontSize: 11.5,
+                  color: AppColors.textWeak,
+                  fontStyle: FontStyle.italic),
+            ),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
+    if (msg.deleted) return _recalled();
+
     final name = senderName ?? '对方';
     final imgPath = msg.imagePath;
 
@@ -49,6 +80,8 @@ class MessageBubble extends StatelessWidget {
     } else {
       body = _textBubble(context);
     }
+
+    final hasMeta = showTime || msg.edited || readLabel != null;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
@@ -86,13 +119,41 @@ class MessageBubble extends StatelessWidget {
               ],
             ],
           ),
-          if (showTime)
+          if (hasMeta)
             Padding(
               padding: EdgeInsets.only(
                   top: 5, left: mine ? 0 : 42, right: mine ? 42 : 0),
-              child: Text(TimeFmt.hhmm(msg.createdAt),
-                  style: const TextStyle(
-                      fontSize: 11, color: AppColors.textWeak)),
+              child: Row(
+                mainAxisAlignment:
+                    mine ? MainAxisAlignment.end : MainAxisAlignment.start,
+                children: [
+                  if (msg.edited) ...[
+                    const Text('已编辑',
+                        style: TextStyle(
+                            fontSize: 11, color: AppColors.textWeak)),
+                    const SizedBox(width: 6),
+                  ],
+                  if (readLabel != null) ...[
+                    Text(
+                      readLabel!,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: readLabel == '已读'
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                        color: readLabel == '已读'
+                            ? AppColors.brand
+                            : AppColors.textWeak,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  if (showTime)
+                    Text(TimeFmt.hhmm(msg.createdAt),
+                        style: const TextStyle(
+                            fontSize: 11, color: AppColors.textWeak)),
+                ],
+              ),
             ),
         ],
       ),
@@ -102,7 +163,7 @@ class MessageBubble extends StatelessWidget {
   Widget _textBubble(BuildContext context) {
     final text = msg.content ?? '';
     return GestureDetector(
-      onLongPress: () => _copy(context),
+      onLongPress: onLongPress ?? () => _copy(context),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
@@ -131,6 +192,7 @@ class MessageBubble extends StatelessWidget {
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => FullScreenImage(url: url)),
         ),
+        onLongPress: onLongPress ?? () => _copy(context),
         child: Hero(
           tag: url,
           child: ClipRRect(
@@ -161,7 +223,7 @@ class MessageBubble extends StatelessWidget {
                 errorBuilder: (_, __, ___) => const SizedBox(
                   width: 210,
                   height: 130,
-                  child: const Column(
+                  child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(Icons.broken_image_outlined,
@@ -182,7 +244,7 @@ class MessageBubble extends StatelessWidget {
   Widget _fileCard(BuildContext context) {
     final size = msg.fileSize == null ? '' : TimeFmt.size(msg.fileSize!);
     return GestureDetector(
-      onLongPress: () => _copy(context),
+      onLongPress: onLongPress ?? () => _copy(context),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(

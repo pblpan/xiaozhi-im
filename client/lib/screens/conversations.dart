@@ -67,7 +67,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   void _onEvent(dynamic e) {
-    if (e is Map && e['type'] == 'message:new') _load();
+    if (e is Map &&
+        (e['type'] == 'message:new' || e['type'] == 'message:recall')) {
+      _load(); // 新消息刷新未读；撤回后刷新预览
+    }
   }
 
   List<Conversation> get _visible {
@@ -355,9 +358,29 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                               ),
                             ),
                           ),
+                          if (cv.unread > 0)
+                            Container(
+                              margin: const EdgeInsets.only(left: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              constraints: const BoxConstraints(minWidth: 19),
+                              decoration: BoxDecoration(
+                                color: AppColors.danger,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                cv.unread > 99 ? '99+' : '${cv.unread}',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10.5,
+                                    height: 1.25,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
                           if (cv.lastAt != null)
                             Padding(
-                              padding: const EdgeInsets.only(left: 8),
+                              padding: const EdgeInsets.only(left: 6),
                               child: Text(
                                 TimeFmt.listStamp(cv.lastAt!),
                                 style: const TextStyle(

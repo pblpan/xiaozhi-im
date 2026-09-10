@@ -165,9 +165,17 @@
                 <el-tag size="small">{{ row.kind }}</el-tag>
               </template>
             </el-table-column>
+            <el-table-column label="状态" width="90">
+              <template #default="{ row }">
+                <el-tag v-if="row.deleted" size="small" type="info">已撤回</el-tag>
+                <el-tag v-else-if="row.edited" size="small" type="warning">已编辑</el-tag>
+                <span v-else style="color:#c0c4cc">—</span>
+              </template>
+            </el-table-column>
             <el-table-column label="内容" show-overflow-tooltip>
               <template #default="{ row }">
-                <span v-if="row.kind === 'text'">{{ row.content }}</span>
+                <span v-if="row.deleted" style="color:#c0c4cc;font-style:italic">消息已撤回</span>
+                <span v-else-if="row.kind === 'text'">{{ row.content }}</span>
                 <span v-else style="color:#909399">[{{ row.kind }}] {{ row.content || '—' }}</span>
               </template>
             </el-table-column>

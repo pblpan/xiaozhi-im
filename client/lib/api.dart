@@ -39,6 +39,12 @@ class ImApi {
     return _handle(r);
   }
 
+  Future<dynamic> _patch(String p, Map<String, dynamic> b) async {
+    final r = await http.patch(Uri.parse('${Config.baseUrl}/api$p'),
+        headers: _h, body: jsonEncode(b));
+    return _handle(r);
+  }
+
   Future<dynamic> _get(String p) async {
     final r = await http.get(Uri.parse('${Config.baseUrl}/api$p'), headers: _h);
     return _handle(r);
@@ -94,7 +100,9 @@ class ImApi {
 
   Future<List<dynamic>> conversations() async => await _get('/conversations');
 
-  Future<List<dynamic>> messages(int cid) async =>
+  /// 会话历史 + 已读状态：
+  /// { messages: [...], members: [...], peerLastReadId, minOtherReadId, recallWindowMs }
+  Future<Map<String, dynamic>> messages(int cid) async =>
       await _get('/conversations/$cid/messages');
 
   Future<Map<String, dynamic>> sendMessage(int cid, String kind, String content,
@@ -103,6 +111,20 @@ class ImApi {
     if (fileId != null) b['fileId'] = fileId;
     return await _post('/conversations/$cid/messages', b);
   }
+
+  /// 撤回消息（仅本人、2 分钟内）
+  Future<Map<String, dynamic>> recallMessage(int cid, int msgId) async =>
+      await _post('/conversations/$cid/messages/$msgId/recall', const {});
+
+  /// 编辑文字消息（仅本人）
+  Future<Map<String, dynamic>> editMessage(
+          int cid, int msgId, String content) async =>
+      await _patch('/conversations/$cid/messages/$msgId', {'content': content});
+
+  /// 标记已读（不传 msgId = 读到该会话最新一条）
+  Future<Map<String, dynamic>> markRead(int cid, [int? msgId]) async =>
+      await _post('/conversations/$cid/read',
+          msgId == null ? const {} : {'messageId': msgId});
 
   // ---- 群组 ----
   Future<Map<String, dynamic>> createGroup(String name) async =>

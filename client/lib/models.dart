@@ -32,6 +32,7 @@ class Conversation {
   final String? avatar;
   final String? lastContent;
   final int? lastAt;
+  final int unread; // 未读消息数
 
   const Conversation({
     required this.id,
@@ -40,6 +41,7 @@ class Conversation {
     this.avatar,
     this.lastContent,
     this.lastAt,
+    this.unread = 0,
   });
 
   factory Conversation.fromJson(Map<String, dynamic> m) => Conversation(
@@ -49,6 +51,7 @@ class Conversation {
         avatar: m['avatar'],
         lastContent: m['last_content'],
         lastAt: m['last_at'],
+        unread: (m['unread'] ?? 0) as int,
       );
 }
 
@@ -63,6 +66,8 @@ class Message {
   final String? fileName;
   final int? fileSize;
   final int createdAt;
+  final bool edited; // 是否被编辑过
+  final bool deleted; // 是否已撤回
 
   const Message({
     required this.id,
@@ -75,6 +80,8 @@ class Message {
     this.fileName,
     this.fileSize,
     required this.createdAt,
+    this.edited = false,
+    this.deleted = false,
   });
 
   factory Message.fromJson(Map<String, dynamic> m) => Message(
@@ -88,6 +95,24 @@ class Message {
         fileName: m['file_name'],
         fileSize: m['file_size'],
         createdAt: m['created_at'],
+        edited: (m['edited'] ?? 0) == 1 || m['edited'] == true,
+        deleted: (m['deleted'] ?? 0) == 1 || m['deleted'] == true,
+      );
+
+  /// 本地即时更新（撤回 / 编辑后无需重新拉取整页历史）
+  Message copyWith({String? content, bool? edited, bool? deleted}) => Message(
+        id: id,
+        conversationId: conversationId,
+        senderId: senderId,
+        kind: kind,
+        content: content ?? this.content,
+        fileId: fileId,
+        fileUrl: fileUrl,
+        fileName: fileName,
+        fileSize: fileSize,
+        createdAt: createdAt,
+        edited: edited ?? this.edited,
+        deleted: deleted ?? this.deleted,
       );
 
   /// 图片可显示的地址（baseUrl 由调用方拼）

@@ -1,7 +1,10 @@
 const router = require('express').Router();
 const db = require('../db');
 const { verifyToken } = require('../auth');
-const { sendMessage, withFileInfo } = require('../chat');
+const {
+  sendMessage, withFileInfo,
+  recallMessage, editMessage, markRead, readState, RECALL_WINDOW_MS,
+} = require('../chat');
 
 function uidOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -9,13 +12,22 @@ function uidOf(req, res) {
   return c.uid;
 }
 
+/** 校验当前用户是该会话成员，否则回 403 并返回 null */
+function memberOf(cid, uid, res) {
+  const m = db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id=? AND user_id=?').get(cid, uid);
+  if (!m) { res.status(403).json({ error: 'forbidden' }); return null; }
+  return m;
+}
+
 // 我的会话列表（含最近一条消息预览）
 router.get('/', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const convs = db.prepare(`SELECT c.id, c.type, c.created_at,
-      (SELECT content FROM messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_content,
-      (SELECT kind FROM messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_kind,
-      (SELECT MAX(created_at) FROM messages m WHERE m.conversation_id=c.id) AS last_at
+      (SELECT content FROM messages m WHERE m.conversation_id=c.id AND m.deleted=0 ORDER BY m.id DESC LIMIT 1) AS last_content,
+      (SELECT kind FROM messages m WHERE m.conversation_id=c.id AND m.deleted=0 ORDER BY m.id DESC LIMIT 1) AS last_kind,
+      (SELECT MAX(created_at) FROM messages m WHERE m.conversation_id=c.id) AS last_at,
+      (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id
+         AND m.deleted=0 AND m.sender_id!=cm.user_id AND m.id>cm.last_read_id) AS unread
     FROM conversations c
     JOIN conversation_members cm ON cm.conversation_id=c.id
     WHERE cm.user_id=? ORDER BY last_at DESC`).all(uid);
@@ -48,14 +60,29 @@ router.get('/dm/:userId', (req, res) => {
   res.json({ conversationId: cid });
 });
 
-// 会话消息历史
+// 会话消息历史 + 已读状态（已读回执渲染所需）
 router.get('/:id/messages', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const cid = Number(req.params.id);
-  if (!db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id=? AND user_id=?').get(cid, uid))
-    return res.status(403).json({ error: 'forbidden' });
-  const rows = db.prepare('SELECT * FROM messages WHERE conversation_id=? AND deleted=0 ORDER BY id ASC LIMIT 200').all(cid);
-  res.json(rows.map(withFileInfo));
+  if (!memberOf(cid, uid, res)) return;
+
+  const rows = db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY id ASC LIMIT 200').all(cid);
+  const members = readState(cid);
+
+  // 单聊：对方读到哪；群聊：成员里最小已读（表示"所有人都读到"的水位）
+  const peer = members.find((m) => m.user_id !== uid);
+  const peerLastReadId = peer ? peer.last_read_id : 0;
+  const minOtherReadId = members
+    .filter((m) => m.user_id !== uid)
+    .reduce((min, m) => (min === null ? m.last_read_id : Math.min(min, m.last_read_id)), null) ?? 0;
+
+  res.json({
+    messages: rows.map(withFileInfo),
+    members,
+    peerLastReadId,
+    minOtherReadId,
+    recallWindowMs: RECALL_WINDOW_MS,
+  });
 });
 
 // 发送消息（REST 路径；服务端落库并实时广播）
@@ -67,6 +94,40 @@ router.post('/:id/messages', (req, res) => {
   try {
     const msg = sendMessage({ conversationId: cid, senderId: uid, kind, content, fileId });
     res.json(msg);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 撤回消息（仅本人 / 2 分钟内）
+router.post('/:id/messages/:msgId/recall', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const cid = Number(req.params.id);
+  if (!memberOf(cid, uid, res)) return;
+  try {
+    res.json(recallMessage({ messageId: Number(req.params.msgId), userId: uid }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 编辑消息（仅本人 / 仅文字）
+router.patch('/:id/messages/:msgId', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const cid = Number(req.params.id);
+  if (!memberOf(cid, uid, res)) return;
+  try {
+    res.json(editMessage({
+      messageId: Number(req.params.msgId),
+      userId: uid,
+      content: (req.body || {}).content,
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 标记已读（body.messageId 缺省=读到最新）
+router.post('/:id/read', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const cid = Number(req.params.id);
+  if (!memberOf(cid, uid, res)) return;
+  try {
+    res.json(markRead({ conversationId: cid, userId: uid, messageId: (req.body || {}).messageId }));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 

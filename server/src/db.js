@@ -74,6 +74,17 @@ CREATE TABLE IF NOT EXISTS files (
 );
 `);
 
+// ---- 幂等迁移（老库升级时不重建表）----
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`SELECT name FROM pragma_table_info(?)`).all(table);
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    console.log(`[小智IM] 迁移：${table}.${column} 已添加`);
+  }
+}
+// 会话成员的已读位置（已读回执）：记录该成员读到的最大 message id
+ensureColumn('conversation_members', 'last_read_id', 'last_read_id INTEGER NOT NULL DEFAULT 0');
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
@@ -15,6 +17,7 @@ class ChatScreen extends StatefulWidget {
   final Conversation conv;
   final int myId;
   final String? peerName;
+
   /// 宽屏时作为侧栏右侧面板嵌入，此时不显示返回箭头
   final bool embedded;
 
@@ -39,19 +42,26 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loading = true;
   bool _hasText = false;
 
+  /// 每个成员的已读水位：userId -> 读到的最大 message id
+  Map<int, int> _readMap = {};
+  int _recallWindowMs = 120000;
+
+  /// 对方正在输入（非空=显示）
+  int? _typingUserId;
+  Timer? _typingHide;
+  int _lastTypingSent = 0;
+
   @override
   void initState() {
     super.initState();
-    _ctrl.addListener(() {
-      final v = _ctrl.text.trim().isNotEmpty;
-      if (v != _hasText && mounted) setState(() => _hasText = v);
-    });
+    _ctrl.addListener(_onTextChanged);
     _loadMsgs();
     SocketService().stream.listen(_onEvent);
   }
 
   @override
   void dispose() {
+    _typingHide?.cancel();
     _ctrl.dispose();
     _scrollC.dispose();
     _focus.dispose();
@@ -60,25 +70,112 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadMsgs() async {
     try {
-      final list = await ImApi().messages(widget.conv.id);
+      final d = await ImApi().messages(widget.conv.id);
       if (!mounted) return;
+      final list =
+          (d['messages'] as List? ?? []).map((e) => Message.fromJson(e)).toList();
+      final members = d['members'] as List? ?? [];
       setState(() {
-        _msgs = list.map((e) => Message.fromJson(e)).toList();
+        _msgs = list;
+        _readMap = {
+          for (final m in members)
+            (m['user_id'] as int): ((m['last_read_id'] ?? 0) as int),
+        };
+        _recallWindowMs = (d['recallWindowMs'] as int?) ?? 120000;
         _loading = false;
       });
       _scroll();
+      _markRead();
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
   }
 
+  /// 上报已读（进入会话 / 收到对方新消息时）
+  Future<void> _markRead() async {
+    try {
+      final r = await ImApi().markRead(widget.conv.id);
+      final lr = (r['lastReadId'] as int?) ?? 0;
+      if (mounted) setState(() => _readMap[widget.myId] = lr);
+    } catch (_) {
+      // 已读上报失败不打扰用户，下次进会话会重试
+    }
+  }
+
+  void _onTextChanged() {
+    final v = _ctrl.text.trim().isNotEmpty;
+    if (v != _hasText && mounted) setState(() => _hasText = v);
+    if (!v) return;
+    // 输入中状态：2.5 秒节流，避免每个字符都发帧
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastTypingSent > 2500) {
+      _lastTypingSent = now;
+      SocketService().send({'type': 'typing', 'conversationId': widget.conv.id});
+    }
+  }
+
+  void _clearTyping() {
+    _typingHide?.cancel();
+    if (_typingUserId != null) setState(() => _typingUserId = null);
+  }
+
   void _onEvent(dynamic e) {
-    if (e is Map && e['type'] == 'message:new') {
+    if (e is! Map) return;
+    final type = e['type'];
+
+    if (type == 'message:new') {
       final m = Message.fromJson(e['message']);
-      if (m.conversationId == widget.conv.id) {
-        setState(() => _msgs.add(m));
-        _scroll();
-      }
+      if (m.conversationId != widget.conv.id) return;
+      setState(() => _msgs.add(m));
+      _scroll();
+      _clearTyping();
+      if (m.senderId != widget.myId) _markRead(); // 正在看这个会话，即时回执
+      return;
+    }
+
+    if (type == 'message:recall') {
+      if (e['conversationId'] != widget.conv.id) return;
+      final id = e['messageId'];
+      setState(() {
+        final i = _msgs.indexWhere((x) => x.id == id);
+        if (i >= 0) _msgs[i] = _msgs[i].copyWith(content: null, deleted: true);
+      });
+      return;
+    }
+
+    if (type == 'message:edit') {
+      if (e['conversationId'] != widget.conv.id) return;
+      final id = e['messageId'];
+      setState(() {
+        final i = _msgs.indexWhere((x) => x.id == id);
+        if (i >= 0) {
+          _msgs[i] = _msgs[i]
+              .copyWith(content: e['content'] as String?, edited: true);
+        }
+      });
+      return;
+    }
+
+    if (type == 'message:read') {
+      if (e['conversationId'] != widget.conv.id) return;
+      final uid = e['userId'] as int?;
+      if (uid == null || uid == widget.myId) return;
+      final lr = (e['lastReadId'] as int?) ?? 0;
+      setState(() {
+        final old = _readMap[uid] ?? 0;
+        if (lr > old) _readMap[uid] = lr;
+      });
+      return;
+    }
+
+    if (type == 'typing') {
+      if (e['conversationId'] != widget.conv.id) return;
+      if (e['userId'] == widget.myId) return;
+      setState(() => _typingUserId = e['userId'] as int?);
+      _typingHide?.cancel();
+      _typingHide = Timer(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _typingUserId = null);
+      });
     }
   }
 
@@ -147,6 +244,194 @@ class _ChatScreenState extends State<ChatScreen> {
   void _toast(String s) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(s), duration: const Duration(seconds: 2)));
 
+  // ---------- 消息操作（长按菜单）----------
+
+  bool _canRecall(Message m) =>
+      m.senderId == widget.myId &&
+      !m.deleted &&
+      DateTime.now().millisecondsSinceEpoch - m.createdAt <= _recallWindowMs;
+
+  bool _canEdit(Message m) =>
+      m.senderId == widget.myId && !m.deleted && m.kind == 'text';
+
+  void _showMsgMenu(Message m) {
+    final canEdit = _canEdit(m);
+    final canRecall = _canRecall(m);
+    final expired = m.senderId == widget.myId &&
+        !m.deleted &&
+        !canRecall &&
+        m.kind != 'image' &&
+        m.kind != 'file';
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.bgElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 6),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 6),
+            if (m.kind == 'text' && !m.deleted)
+              _menuItem(Icons.copy_rounded, '复制', () {
+                Navigator.pop(ctx);
+                _copyText(m);
+              }),
+            if (canEdit)
+              _menuItem(Icons.edit_rounded, '编辑', () {
+                Navigator.pop(ctx);
+                _editMsg(m);
+              }),
+            if (canRecall)
+              _menuItem(Icons.undo_rounded, '撤回', () {
+                Navigator.pop(ctx);
+                _recallMsg(m);
+              }, danger: true),
+            if (expired)
+              _menuItem(Icons.timer_off_outlined, '超过 2 分钟，无法撤回', null,
+                  disabled: true),
+            const SizedBox(height: 6),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _menuItem(IconData icon, String label, VoidCallback? onTap,
+          {bool danger = false, bool disabled = false}) =>
+      ListTile(
+        enabled: !disabled,
+        leading: Icon(icon,
+            size: 21,
+            color: disabled
+                ? AppColors.textWeak
+                : (danger ? AppColors.danger : AppColors.text)),
+        title: Text(
+          label,
+          style: TextStyle(
+            fontSize: 14.5,
+            color: disabled
+                ? AppColors.textWeak
+                : (danger ? AppColors.danger : AppColors.text),
+          ),
+        ),
+        onTap: onTap,
+      );
+
+  void _copyText(Message m) {
+    final t = m.content;
+    if (t == null || t.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: t));
+    _toast('已复制');
+  }
+
+  Future<void> _editMsg(Message m) async {
+    final ctrl = TextEditingController(text: m.content ?? '');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('编辑消息'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          minLines: 1,
+          maxLines: 5,
+          decoration: const InputDecoration(hintText: '输入新内容'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('保存')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final text = ctrl.text.trim();
+    if (text.isEmpty) {
+      _toast('内容不能为空');
+      return;
+    }
+    try {
+      await ImApi().editMessage(widget.conv.id, m.id, text);
+      if (!mounted) return;
+      setState(() {
+        final i = _msgs.indexWhere((x) => x.id == m.id);
+        if (i >= 0) _msgs[i] = _msgs[i].copyWith(content: text, edited: true);
+      });
+    } catch (e) {
+      if (mounted) _toast('编辑失败: ${_msg(e)}');
+    }
+  }
+
+  Future<void> _recallMsg(Message m) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('撤回消息'),
+        content: const Text('撤回后对方将看到「撤回了一条消息」，确定撤回吗？'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('撤回')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ImApi().recallMessage(widget.conv.id, m.id);
+      if (!mounted) return;
+      setState(() {
+        final i = _msgs.indexWhere((x) => x.id == m.id);
+        if (i >= 0) _msgs[i] = _msgs[i].copyWith(content: null, deleted: true);
+      });
+    } catch (e) {
+      if (mounted) _toast('撤回失败: ${_msg(e)}');
+    }
+  }
+
+  // ---------- 渲染 ----------
+
+  /// 已读水位：其他成员都读到哪（无其他成员返回 -1 = 不显示标签）
+  int get _watermark {
+    final others =
+        _readMap.entries.where((e) => e.key != widget.myId).toList();
+    if (others.isEmpty) return -1;
+    if (widget.conv.type == 'group') {
+      return others.map((e) => e.value).reduce((a, b) => a < b ? a : b);
+    }
+    return others.first.value;
+  }
+
+  /// 只在「自己发的最后一条未撤回消息」上显示已读/未读
+  String? _readLabelFor(int i) {
+    final m = _msgs[i];
+    if (m.senderId != widget.myId || m.deleted) return null;
+    final hasLaterMine = _msgs
+        .skip(i + 1)
+        .any((x) => x.senderId == widget.myId && !x.deleted);
+    if (hasLaterMine) return null;
+    final wm = _watermark;
+    if (wm < 0) return null;
+    return wm >= m.id ? '已读' : '未读';
+  }
+
   bool _showTimeAt(int i) {
     if (i == 0) return true;
     return _msgs[i].createdAt - _msgs[i - 1].createdAt > 5 * 60 * 1000;
@@ -181,13 +466,21 @@ class _ChatScreenState extends State<ChatScreen> {
                       style: const TextStyle(
                           fontSize: 16, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 1),
-                  Text(
-                    widget.conv.type == 'group' ? '群聊' : '私信',
-                    style: const TextStyle(
-                        fontSize: 11.5,
-                        color: AppColors.textWeak,
-                        fontWeight: FontWeight.w400),
-                  ),
+                  _typingUserId != null
+                      ? const Text(
+                          '正在输入…',
+                          style: TextStyle(
+                              fontSize: 11.5,
+                              color: AppColors.brand,
+                              fontWeight: FontWeight.w600),
+                        )
+                      : Text(
+                          widget.conv.type == 'group' ? '群聊' : '私信',
+                          style: const TextStyle(
+                              fontSize: 11.5,
+                              color: AppColors.textWeak,
+                              fontWeight: FontWeight.w400),
+                        ),
                 ],
               ),
             ),
@@ -248,6 +541,8 @@ class _ChatScreenState extends State<ChatScreen> {
               senderName: m.senderId == widget.myId ? null : widget.peerName,
               baseUrl: Config.baseUrl,
               showTime: _showTimeAt(i),
+              readLabel: _readLabelFor(i),
+              onLongPress: () => _showMsgMenu(m),
             ),
           ],
         );
