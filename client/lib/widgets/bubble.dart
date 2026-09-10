@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:xiaozhi_im_client/core/emoji.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/core/voice.dart';
@@ -24,6 +25,15 @@ class MessageBubble extends StatelessWidget {
   /// 这条消息 @了我（且不是我自己发的）→ 气泡加高亮描边
   final bool mentionHighlight;
 
+  /// 文件消息：点卡片 = 用系统默认程序打开
+  final VoidCallback? onFileOpen;
+
+  /// 文件消息：另存为
+  final VoidCallback? onFileSaveAs;
+
+  /// 文件消息：下载进度 0~1（非 null 表示正在下载，卡片上显示进度）
+  final double? fileProgress;
+
   const MessageBubble({
     super.key,
     required this.msg,
@@ -34,13 +44,12 @@ class MessageBubble extends StatelessWidget {
     this.onLongPress,
     this.readLabel,
     this.mentionHighlight = false,
+    this.onFileOpen,
+    this.onFileSaveAs,
+    this.fileProgress,
   });
 
-  String get _displayName {
-    final raw = msg.fileName ?? msg.content ?? '文件';
-    final i = raw.lastIndexOf('/');
-    return i < 0 ? raw : raw.substring(i + 1);
-  }
+  String get _displayName => msg.displayFileName;
 
   void _copy(BuildContext context) {
     final text = msg.content;
@@ -411,8 +420,14 @@ class MessageBubble extends StatelessWidget {
 
   /// 把 @提及 片段渲染成高亮色，其余按正文色。
   /// @所有人 / @all 用橙色单独强调（比普通 @ 更需要一眼看到）。
+  /// 整条只有 1~3 个表情时放大显示（微信也是这个观感）。
   Widget _richText(String text, {required bool mine}) {
-    const base = TextStyle(color: Colors.white, fontSize: 15, height: 1.4);
+    final emojiOnly = EmojiData.isEmojiOnly(text);
+    final base = TextStyle(
+      color: Colors.white,
+      fontSize: emojiOnly ? 26 : 15,
+      height: emojiOnly ? 1.3 : 1.4,
+    );
     if (!text.contains('@')) return Text(text, style: base);
 
     final mentionColor = mine ? const Color(0xFFFFE082) : AppColors.brand;
@@ -559,12 +574,21 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
+  /// 文件消息卡片
+  ///
+  /// 交互：**点卡片 = 用系统默认程序打开**，右侧「另存为」图标 = 选目录保存。
+  /// 首次打开会先下载，期间图标位换成进度环，文件名下方显示百分比。
   Widget _fileCard(BuildContext context) {
     final size = msg.fileSize == null ? '' : TimeFmt.size(msg.fileSize!);
+    final p = fileProgress;
+    final downloading = p != null;
+    final pct = ((p ?? 0) * 100).clamp(0, 100).toStringAsFixed(0);
+
     return GestureDetector(
+      onTap: downloading ? null : onFileOpen,
       onLongPress: onLongPress ?? () => _copy(context),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
         decoration: BoxDecoration(
           color: AppColors.bubbleOther,
           borderRadius: BorderRadius.circular(14),
@@ -573,15 +597,30 @@ class MessageBubble extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
+            SizedBox(
               width: 38,
               height: 38,
-              decoration: BoxDecoration(
-                color: AppColors.brand.withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.insert_drive_file_rounded,
-                  color: AppColors.brand, size: 20),
+              child: downloading
+                  ? Center(
+                      child: SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(
+                          value: p > 0 ? p : null,
+                          strokeWidth: 2.4,
+                          color: AppColors.brand,
+                          backgroundColor: AppColors.brand.withValues(alpha: 0.18),
+                        ),
+                      ),
+                    )
+                  : Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.brand.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.insert_drive_file_rounded,
+                          color: AppColors.brand, size: 20),
+                    ),
             ),
             const SizedBox(width: 10),
             Flexible(
@@ -594,15 +633,32 @@ class MessageBubble extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     maxLines: 2,
                   ),
-                  if (size.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(size,
-                        style: const TextStyle(
-                            fontSize: 11.5, color: AppColors.textWeak)),
-                  ],
+                  const SizedBox(height: 2),
+                  Text(
+                    downloading
+                        ? '下载中 $pct%'
+                        : (size.isEmpty ? '点击打开' : '$size · 点击打开'),
+                    style: const TextStyle(
+                        fontSize: 11.5, color: AppColors.textWeak),
+                  ),
                 ],
               ),
             ),
+            if (onFileSaveAs != null && !downloading) ...[
+              const SizedBox(width: 4),
+              Tooltip(
+                message: '另存为',
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(9),
+                  onTap: onFileSaveAs,
+                  child: const Padding(
+                    padding: EdgeInsets.all(7),
+                    child: Icon(Icons.save_alt_rounded,
+                        size: 19, color: AppColors.textSub),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

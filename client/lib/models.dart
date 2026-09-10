@@ -175,6 +175,25 @@ class Message {
     if (fileUrl != null && fileUrl!.isNotEmpty) return fileUrl;
     return null;
   }
+
+  /// 文件消息的下载地址（baseUrl 由调用方拼）
+  String? get filePath {
+    if (kind != 'file' && kind != 'image' && kind != 'audio') return null;
+    if (fileUrl != null && fileUrl!.isNotEmpty) return fileUrl;
+    if (content != null && content!.startsWith('/files/')) return content;
+    return null;
+  }
+
+  /// 展示 / 另存为时用的文件名（取路径最后一段，兜底「文件」）
+  String get displayFileName {
+    final raw = (fileName != null && fileName!.isNotEmpty)
+        ? fileName!
+        : (kind == 'file' ? (content ?? '') : '');
+    if (raw.isEmpty) return '文件';
+    final i = raw.lastIndexOf('/');
+    final n = i < 0 ? raw : raw.substring(i + 1);
+    return n.isEmpty ? '文件' : n;
+  }
 }
 
 /// 卡片里的一个字段（键值对，如「东北大米 → 剩 3 袋」）

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
+import 'package:xiaozhi_im_client/core/file_io.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
@@ -15,6 +16,7 @@ import 'package:xiaozhi_im_client/screens/group_manage.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/bubble.dart';
+import 'package:xiaozhi_im_client/widgets/emoji_panel.dart';
 
 class ChatScreen extends StatefulWidget {
   final Conversation conv;
@@ -80,6 +82,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// 记录上一次输入框内容，用于识别"刚输入了 @"
   String _lastText = '';
+
+  /// 表情面板展开中
+  bool _showEmoji = false;
+  final _emojiPanelKey = GlobalKey<EmojiPanelState>();
+
+  /// 文件下载进度：messageId -> 0~1（下载完移除）
+  final Map<int, double> _fileProgress = {};
 
   @override
   void initState() {
@@ -401,6 +410,98 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  // ---------- 表情 ----------
+
+  /// 在光标处插入表情（光标无效时追加到末尾）
+  void _insertEmoji(String e) {
+    final text = _ctrl.text;
+    var sel = _ctrl.selection;
+    if (!sel.isValid) sel = TextSelection.collapsed(offset: text.length);
+    final start = sel.start.clamp(0, text.length).toInt();
+    final end = sel.end.clamp(0, text.length).toInt();
+    final next = text.replaceRange(start, end, e);
+    _ctrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + e.length),
+    );
+  }
+
+  /// 退格：按「字素」删。emoji 常由多个码位组成（如 ❤️ = U+2764 + U+FE0F），
+  /// 直接删一个 code unit 会留下半个字符渲染成方框。
+  void _backspaceEmoji() {
+    final text = _ctrl.text;
+    if (text.isEmpty) return;
+    var sel = _ctrl.selection;
+    if (!sel.isValid) sel = TextSelection.collapsed(offset: text.length);
+    var start = sel.start.clamp(0, text.length).toInt();
+    final end = sel.end.clamp(0, text.length).toInt();
+    if (start == end) {
+      if (start == 0) return;
+      final before = text.substring(0, start).characters;
+      if (before.isEmpty) return;
+      start = start - before.last.length;
+    }
+    final next = text.replaceRange(start, end, '');
+    _ctrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start),
+    );
+  }
+
+  // ---------- 文件消息：打开 / 另存为 ----------
+
+  String? _fileUrlOf(Message m) {
+    final p = m.filePath;
+    if (p == null || p.isEmpty) return null;
+    return p.startsWith('http') ? p : '${Config.baseUrl}$p';
+  }
+
+  /// 下载到本地（已存在就直接复用），过程中把进度写进 _fileProgress 供气泡显示
+  Future<File?> _fetchFile(Message m) async {
+    final url = _fileUrlOf(m);
+    if (url == null) {
+      _toast('这条消息没有可下载的文件地址');
+      return null;
+    }
+    setState(() => _fileProgress[m.id] = 0);
+    try {
+      return await FileIo.ensure(
+        url: url,
+        fileId: m.fileId ?? m.id,
+        name: m.displayFileName,
+        onProgress: (p) {
+          if (!mounted) return;
+          setState(() => _fileProgress[m.id] = p);
+        },
+      );
+    } finally {
+      if (mounted) setState(() => _fileProgress.remove(m.id));
+    }
+  }
+
+  Future<void> _openFileMsg(Message m) async {
+    try {
+      final f = await _fetchFile(m);
+      if (f == null) return;
+      final err = await FileIo.open(f);
+      if (err.isNotEmpty) _toast(err);
+    } catch (e) {
+      _toast('打开失败: ${_msg(e)}');
+    }
+  }
+
+  Future<void> _saveFileAs(Message m) async {
+    try {
+      final f = await _fetchFile(m);
+      if (f == null) return;
+      final out = await FileIo.saveAs(f, m.displayFileName);
+      if (out == null) return; // 用户取消
+      _toast('已另存为 $out');
+    } catch (e) {
+      _toast('另存为失败: ${_msg(e)}');
+    }
+  }
+
   void _attach() async {
     final files = await FilePicker.pickFiles();
     if (files.isEmpty) return;
@@ -562,6 +663,17 @@ class _ChatScreenState extends State<ChatScreen> {
                 Navigator.pop(ctx);
                 _copyText(m);
               }),
+            // 文件消息：打开 / 另存为（卡片上点一下也能打开，这里给长按的补充入口）
+            if (m.kind == 'file' && !m.deleted) ...[
+              _menuItem(Icons.open_in_new_rounded, '打开', () {
+                Navigator.pop(ctx);
+                _openFileMsg(m);
+              }),
+              _menuItem(Icons.save_alt_rounded, '另存为…', () {
+                Navigator.pop(ctx);
+                _saveFileAs(m);
+              }),
+            ],
             if (canEdit)
               _menuItem(Icons.edit_rounded, '编辑', () {
                 Navigator.pop(ctx);
@@ -855,6 +967,12 @@ class _ChatScreenState extends State<ChatScreen> {
               _topBars(),
               Expanded(child: _body()),
               _composer(canSend),
+              if (_showEmoji)
+                EmojiPanel(
+                  key: _emojiPanelKey,
+                  onPick: _insertEmoji,
+                  onBackspace: _backspaceEmoji,
+                ),
             ],
           ),
           if (_recording) _recordOverlay(),
@@ -1021,6 +1139,9 @@ class _ChatScreenState extends State<ChatScreen> {
               mentionHighlight:
                   m.senderId != widget.myId && m.mentionsMe(widget.myId),
               onLongPress: () => _showMsgMenu(m),
+              onFileOpen: m.kind == 'file' ? () => _openFileMsg(m) : null,
+              onFileSaveAs: m.kind == 'file' ? () => _saveFileAs(m) : null,
+              fileProgress: _fileProgress[m.id],
             ),
           ],
         );
@@ -1133,14 +1254,33 @@ class _ChatScreenState extends State<ChatScreen> {
                       focusedBorder: InputBorder.none,
                     ),
                     onSubmitted: (_) => _send(),
+                    onTap: () {
+                      // 桌面端点输入框顺手收起表情面板，避免两块内容抢高度
+                      if (_showEmoji) setState(() => _showEmoji = false);
+                    },
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
+              _emojiButton(),
+              const SizedBox(width: 6),
               _sendButton(canSend),
             ],
           ),
         ),
+      );
+
+  /// 表情按钮：展开/收起面板；展开时先把焦点让出去，
+  /// 否则手机端系统键盘会和面板叠在一起把输入区顶得很高。
+  Widget _emojiButton() => _roundButton(
+        icon: _showEmoji
+            ? Icons.keyboard_alt_outlined
+            : Icons.emoji_emotions_outlined,
+        color: _showEmoji ? AppColors.brand : null,
+        onTap: () {
+          setState(() => _showEmoji = !_showEmoji);
+          if (_showEmoji) _focus.unfocus();
+        },
       );
 
   /// 麦克风按钮：按下即录（用 Listener 而非长按手势，响应更跟手）
