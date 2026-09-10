@@ -18,12 +18,12 @@ class UserAvatar extends StatelessWidget {
 
   /// 6 组柔和渐变，避免和文字对比度打架
   static const List<List<Color>> _palette = [
-    [Color(0xFF5B74F5), Color(0xFF8B5CF6)],
-    [Color(0xFF2DD4BF), Color(0xFF3B82F6)],
-    [Color(0xFFF59E0B), Color(0xFFEF4444)],
-    [Color(0xFFEC4899), Color(0xFF8B5CF6)],
-    [Color(0xFF10B981), Color(0xFF3DDC97)],
-    [Color(0xFF0EA5E9), Color(0xFF6366F1)],
+    [Color(0xFF10B981), Color(0xFF06B6D4)], // 青绿→青蓝（品牌主色系）
+    [Color(0xFFF59E0B), Color(0xFFEF4444)], // 琥珀→珊瑚红
+    [Color(0xFFEC4899), Color(0xFF8B5CF6)], // 玫粉→紫罗兰
+    [Color(0xFFF97316), Color(0xFFEAB308)], // 橙→金黄
+    [Color(0xFF84CC16), Color(0xFF14B8A6)], // 柠檬→翠青
+    [Color(0xFF0EA5E9), Color(0xFF6366F1)], // 青→靛蓝
   ];
 
   List<Color> get _colors {

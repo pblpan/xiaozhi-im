@@ -18,12 +18,12 @@ class AppColors {
   static const textSub = Color(0xFF98A1B3);
   static const textWeak = Color(0xFF6B7484);
 
-  // 品牌色（靛蓝 → 紫）
-  static const brand = Color(0xFF5B74F5);
-  static const brand2 = Color(0xFF9D5BF5);
+  // 品牌色（青绿 → 青蓝，跟米聊/微信/QQ/钉钉/飞书的红蓝绿都明确区分）
+  static const brand = Color(0xFF10B981);
+  static const brand2 = Color(0xFF06B6D4);
 
   // 语义色
-  static const online = Color(0xFF3DDC97);
+  static const online = Color(0xFF14B8A6);
   static const danger = Color(0xFFF4685E);
 
   // 气泡
