@@ -206,14 +206,18 @@ class _CallScreenState extends State<CallScreen> {
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
           child: Column(
             children: [
-              Text(
-                s.peerName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white),
+              GestureDetector(
+                // 长按对方名字 → 看远端接收诊断（排障用，正常通话碰不到）
+                onLongPress: () => _showDiag(s),
+                child: Text(
+                  s.peerName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white),
+                ),
               ),
               const SizedBox(height: 6),
               ValueListenableBuilder<int>(
@@ -297,6 +301,38 @@ class _CallScreenState extends State<CallScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 接收诊断（长按对方名字触发）。
+  ///
+  /// 桌面端和手机端的 WebRTC 行为差异不小，线上出问题时用户看不到日志，
+  /// 把轨道到达过程直接显示出来，截图就能定位问题。
+  void _showDiag(CallSession s) {
+    final diag = _c.remoteDiag.value;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('接收诊断'),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            '阶段：${_c.phase.value.name}\n'
+            '远端出画面：${_c.remoteVideoOn.value}\n'
+            '通话模式：${s.video ? '视频' : '语音'}\n'
+            '本机摄像头：${_c.camOn.value}   麦克风：${_c.micOn.value}\n'
+            '平台：${Platform.operatingSystem}\n'
+            '──── 轨道事件 ────\n'
+            '${diag.isEmpty ? '（暂无）' : diag}',
+            style: const TextStyle(fontSize: 12, height: 1.5),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
       ),
     );
   }

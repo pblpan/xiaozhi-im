@@ -74,6 +74,11 @@ class CallService {
   /// 远端是否已出画面（没出画面时界面显示对方头像占位）
   final remoteVideoOn = ValueNotifier<bool>(false);
 
+  /// 远端接收诊断信息（长按通话页对方名字可查看）。
+  /// 只为排障：不同平台 onTrack / 接收器的行为差异很大，把过程记下来，
+  /// 出问题时不用重开 debug 构建去抓日志。
+  final remoteDiag = ValueNotifier<String>('');
+
   final localRenderer = RTCVideoRenderer();
   final remoteRenderer = RTCVideoRenderer();
 
@@ -468,17 +473,32 @@ class CallService {
       _send('ice', cand.toMap());
     };
 
+    // 远端轨道到达。
+    //
+    // ⚠️ 平台差异（必踩）：Android / iOS 的 onTrack 事件里 `streams` 是有值的，
+    // 而 Windows 桌面端（flutter_webrtc 的桌面实现）**经常返回空列表**。
+    // 老代码只在 streams 非空时才 setState 渲染器，于是 Windows 端：
+    //   srcObject 永远是 null（画面全黑） + remoteVideoOn 永远 false（连
+    //   RTCVideoView 都不挂载）→ 表现就是"手机端正常、电脑端黑屏"。
+    // 所以这里统一按轨道兜底：没有 stream 就自己建一个装进去。
     pc.onTrack = (event) {
       if (event.streams.isNotEmpty) {
         _remote = event.streams.first;
-        remoteRenderer.srcObject = _remote;
         if (event.track.kind == 'video') remoteVideoOn.value = true;
+        remoteRenderer.srcObject = _remote;
+        _diag('轨道到达(${event.track.kind})：带 stream，直接用');
+        return;
       }
+      _diag('轨道到达(${event.track.kind})：无 stream，按轨道自建');
+      _attachRemoteTrack(event.track);
     };
 
     pc.onConnectionState = (st) {
       switch (st) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
+          _diag('连接已建立（connected）');
+          // 兜底：万一平台没触发 onTrack，这里主动把已到达的轨道捞回来渲染
+          unawaited(_sweepReceivers());
           if (phase.value != CallPhase.active) {
             phase.value = CallPhase.active;
             status.value = '通话中';
@@ -513,6 +533,59 @@ class CallService {
     });
   }
 
+  /// 记一条接收诊断（同时打到日志，release 包也能靠界面查看）
+  void _diag(String line) {
+    debugPrint('[call] $line');
+    final ts = DateTime.now().toIso8601String().substring(11, 19);
+    final old = remoteDiag.value;
+    remoteDiag.value = old.isEmpty ? '$ts $line' : '$old\n$ts $line';
+  }
+
+  /// 把一条远端轨道挂到远端渲染器上。
+  ///
+  /// 桌面端 onTrack 不带 streams，必须自己组装 MediaStream。注意同一路媒体的
+  /// 音频轨和视频轨是分两次到达的，所以**复用同一个流**，否则后到的会把先到的顶掉
+  /// （典型症状：挂了视频就没声音，或反之）。
+  Future<void> _attachRemoteTrack(MediaStreamTrack track) async {
+    var stream = _remote;
+    if (stream == null) {
+      try {
+        stream = await createLocalMediaStream('remote');
+        _remote = stream;
+      } catch (e) {
+        _diag('自建远端流失败: $e');
+        return;
+      }
+    }
+    final exists = stream.getTracks().any((t) => t.id == track.id);
+    if (!exists) {
+      try {
+        await stream.addTrack(track);
+      } catch (e) {
+        _diag('挂载 ${track.kind} 轨道失败: $e');
+      }
+    }
+    if (track.kind == 'video') remoteVideoOn.value = true;
+    remoteRenderer.srcObject = stream;
+    _diag('已挂载 ${track.kind}（当前共 ${stream.getTracks().length} 轨）');
+  }
+
+  /// 兜底扫描：个别平台/版本不触发 onTrack，连接建立后主动去接收器里捞轨道。
+  Future<void> _sweepReceivers() async {
+    final pc = _pc;
+    if (pc == null) return;
+    try {
+      final rs = await pc.getReceivers();
+      for (final r in rs) {
+        final t = r.track;
+        if (t != null) await _attachRemoteTrack(t);
+      }
+      _diag('接收器扫描：共 ${rs.length} 个');
+    } catch (e) {
+      _diag('接收器扫描失败: $e');
+    }
+  }
+
   Future<void> _ensureRenderers() async {
     if (_renderersReady) return;
     _renderersReady = true;
@@ -525,6 +598,16 @@ class CallService {
       await remoteRenderer.initialize();
     } catch (e) {
       debugPrint('[call] remoteRenderer 初始化失败: $e');
+    }
+    // 第一帧真正渲染出来才算"对方出画面"——比"收到轨道"更准，
+    // 有的平台轨道到了却迟迟解不出画面。两个信号都置 true，取或，双保险。
+    try {
+      remoteRenderer.onFirstFrameRendered = () {
+        _diag('远端首帧已渲染');
+        remoteVideoOn.value = true;
+      };
+    } catch (e) {
+      debugPrint('[call] onFirstFrameRendered 挂载失败: $e');
     }
   }
 
@@ -661,6 +744,7 @@ class CallService {
       /* 渲染器可能已释放 */
     }
     remoteVideoOn.value = false;
+    remoteDiag.value = '';
     seconds.value = 0;
     micOn.value = true;
     camOn.value = true;
