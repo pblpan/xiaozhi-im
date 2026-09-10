@@ -126,6 +126,16 @@ class ImApi {
       await _post('/conversations/$cid/read',
           msgId == null ? const {} : {'messageId': msgId});
 
+  /// 全局消息搜索（服务端只在「我参与的会话」里搜，已撤回/非文字不返回）
+  /// 返回 { items: [...], total, keyword }
+  Future<Map<String, dynamic>> searchMessages(String q,
+      {int? conversationId, int limit = 50, int offset = 0}) async {
+    final sb = StringBuffer('/conversations/search?q=${Uri.encodeComponent(q)}');
+    if (conversationId != null) sb.write('&conversationId=$conversationId');
+    sb.write('&limit=$limit&offset=$offset');
+    return await _get(sb.toString());
+  }
+
   // ---- 群组 ----
   Future<Map<String, dynamic>> createGroup(String name) async =>
       await _post('/groups', {'name': name});
@@ -134,11 +144,14 @@ class ImApi {
       await _post('/groups/$gid/members', {'userId': uid});
 
   // ---- 文件 ----
-  Future<Map<String, dynamic>> upload(File f) async {
+  /// 上传文件。语音等临时录音文件没有规范扩展名时，用 filename 指定（如 voice.m4a）。
+  Future<Map<String, dynamic>> upload(File f, {String? filename}) async {
     final req = http.MultipartRequest(
         'POST', Uri.parse('${Config.baseUrl}/api/files/upload'));
     req.headers['Authorization'] = 'Bearer $_token';
-    req.files.add(await http.MultipartFile.fromPath('file', f.path));
+    final name = filename ?? f.path.split(Platform.pathSeparator).last;
+    req.files.add(await http.MultipartFile.fromPath('file', f.path,
+        filename: name));
     final r = await req.send();
     final body = jsonDecode(await r.stream.bytesToString());
     if (r.statusCode >= 200 && r.statusCode < 300) return body;

@@ -17,7 +17,14 @@ class Config {
   // ============================================================
   static const String builtInBaseUrl = String.fromEnvironment(
     'BASE_URL',
-    defaultValue: 'http://localhost:3602',
+    defaultValue: 'http://192.168.31.44:3602',
+  );
+
+  /// 内置外网地址（ZeroNews 域名映射）
+  /// --dart-define=WAN_URL=... 可覆盖；新装 App 开箱即用，不必手动配
+  static const String builtInWanUrl = String.fromEnvironment(
+    'WAN_URL',
+    defaultValue: 'https://1dcf316343d04ecd93dd0330c2d81a0d.hn.takin.cc',
   );
 
   // ============================================================
@@ -34,8 +41,8 @@ class Config {
   /// 内网地址（办公网下用，飞牛 IP）
   static String lanUrl = builtInBaseUrl;
 
-  /// 外网地址（出差/在家用，ZeroNews 域名，可空）
-  static String wanUrl = '';
+  /// 外网地址（出差/在家用，ZeroNews 域名）
+  static String wanUrl = builtInWanUrl;
 
   /// 网络模式：auto | lan | wan
   /// 默认 auto——首次启动就靠探测
@@ -47,7 +54,9 @@ class Config {
 
   /// 用户是否改过（任一地址或模式与内置默认不同）
   static bool get isCustom =>
-      lanUrl != builtInBaseUrl || wanUrl.isNotEmpty || mode != modeAuto;
+      lanUrl != builtInBaseUrl ||
+      wanUrl != builtInWanUrl ||
+      mode != modeAuto;
 
   /// 兼容旧接口：返回当前生效地址
   static String get baseUrl => currentUrl;

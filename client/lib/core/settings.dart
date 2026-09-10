@@ -61,7 +61,7 @@ class Settings {
     await p.setString(_kMode, mode);
 
     Config.lanUrl = Config.normalize(lan);
-    Config.wanUrl = wan.isEmpty ? '' : Config.normalize(wan);
+    Config.wanUrl = wan.isEmpty ? Config.builtInWanUrl : Config.normalize(wan);
     Config.mode = mode;
   }
 
@@ -73,7 +73,7 @@ class Settings {
     await p.remove(_kMode);
     await p.remove(_kLegacyServer);
     Config.lanUrl = Config.builtInBaseUrl;
-    Config.wanUrl = '';
+    Config.wanUrl = Config.builtInWanUrl;
     Config.mode = Config.modeAuto;
   }
 

@@ -123,4 +123,44 @@ class Message {
     if (content != null && content!.startsWith('/files/')) return content;
     return null;
   }
+
+  /// 语音时长（秒）。非语音消息返回 null；非法值兜底 1 秒。
+  int? get audioSeconds {
+    if (kind != 'audio') return null;
+    final n = int.tryParse((content ?? '').trim());
+    if (n == null) return 1;
+    return n < 1 ? 1 : (n > 600 ? 600 : n);
+  }
+
+  /// 语音播放地址（baseUrl 由调用方拼）
+  String? get audioPath {
+    if (kind != 'audio') return null;
+    if (fileUrl != null && fileUrl!.isNotEmpty) return fileUrl;
+    return null;
+  }
+}
+
+/// 全局搜索结果条目（消息 + 所在会话 + 发送者）
+class SearchHit {
+  final Message msg;
+  final String? convTitle;
+  final String? convType; // dm | group
+  final String? senderName;
+  final bool mine;
+
+  const SearchHit({
+    required this.msg,
+    this.convTitle,
+    this.convType,
+    this.senderName,
+    this.mine = false,
+  });
+
+  factory SearchHit.fromJson(Map<String, dynamic> m) => SearchHit(
+        msg: Message.fromJson(m),
+        convTitle: m['conv_title'],
+        convType: m['conv_type'],
+        senderName: m['sender_name'],
+        mine: m['mine'] == true,
+      );
 }

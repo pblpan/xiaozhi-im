@@ -220,8 +220,91 @@ const find = (frames, type, pred = () => true) => frames.find((f) => f.type === 
     const gAfter = (await api(`/conversations/${gconv.id}/messages`, { token: alice })).body;
     ok('群成员已读后 minOtherReadId 推进', gAfter.minOtherReadId === gm.id, `min=${gAfter.minOtherReadId}`);
 
-    // ---------- 9. 越权保护 ----------
-    console.log('\n=== 9. 越权保护 ===');
+    // ---------- 9. 语音消息 ----------
+    console.log('\n=== 9. 语音消息 ===');
+    async function uploadBlob(token, bytes, name, mime) {
+      const fd = new FormData();
+      fd.append('file', new Blob([bytes], { type: mime }), name);
+      const r = await fetch(BASE + '/api/files/upload', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: fd,
+      });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    }
+
+    const upAudio = await uploadBlob(alice, new Uint8Array(2048).fill(7), 'voice.m4a', 'audio/mp4');
+    ok('上传音频文件成功', upAudio.status === 200 && !!upAudio.body?.id, JSON.stringify(upAudio.body));
+
+    const am = (await api(`/conversations/${cid}/messages`, {
+      method: 'POST', token: alice,
+      body: { kind: 'audio', content: '7', fileId: upAudio.body.id },
+    })).body;
+    ok('发送语音消息成功', am.kind === 'audio', JSON.stringify(am));
+    ok('语音消息带 file_url', !!am.file_url, JSON.stringify(am));
+    ok('语音时长保留 content=7', am.content === '7', `content=${am.content}`);
+    await waitFor(() => find(B.frames, 'message:new', (f) => f.message.id === am.id));
+    ok('bob 实时收到语音消息', !!find(B.frames, 'message:new', (f) => f.message.id === am.id));
+
+    const aZero = (await api(`/conversations/${cid}/messages`, {
+      method: 'POST', token: alice, body: { kind: 'audio', content: '0', fileId: upAudio.body.id },
+    })).body;
+    ok('时长 0 归一化为 1', aZero.content === '1', `content=${aZero.content}`);
+    const aHuge = (await api(`/conversations/${cid}/messages`, {
+      method: 'POST', token: alice, body: { kind: 'audio', content: '9999', fileId: upAudio.body.id },
+    })).body;
+    ok('超长时长截断为 600', aHuge.content === '600', `content=${aHuge.content}`);
+
+    const aNoFile = await api(`/conversations/${cid}/messages`, {
+      method: 'POST', token: alice, body: { kind: 'audio', content: '3' },
+    });
+    ok('语音缺文件被拒', aNoFile.status === 400, JSON.stringify(aNoFile.body));
+    const badKind = await api(`/conversations/${cid}/messages`, {
+      method: 'POST', token: alice, body: { kind: 'video', content: 'x' },
+    });
+    ok('非法消息类型被拒', badKind.status === 400, JSON.stringify(badKind.body));
+    const emptyText = await api(`/conversations/${cid}/messages`, {
+      method: 'POST', token: alice, body: { kind: 'text', content: '   ' },
+    });
+    ok('空白文字消息被拒', emptyText.status === 400, JSON.stringify(emptyText.body));
+
+    const convsVoice = (await api('/conversations', { token: alice })).body;
+    const dmVoice = convsVoice.find((c) => c.id === cid);
+    ok('会话列表语音预览为 [语音]', dmVoice?.last_content === '[语音]', `last=${dmVoice?.last_content}`);
+
+    // ---------- 10. 消息搜索 ----------
+    console.log('\n=== 10. 消息搜索 ===');
+    const q1 = await api('/conversations/search?q=' + encodeURIComponent('第一条'), { token: alice });
+    ok('搜索命中文字消息', q1.status === 200 && q1.body.total >= 1, JSON.stringify(q1.body).slice(0, 160));
+    ok('搜索结果带会话标题', !!q1.body.items?.[0]?.conv_title, JSON.stringify(q1.body.items?.[0]));
+    ok('搜索结果带发送者名', !!q1.body.items?.[0]?.sender_name, JSON.stringify(q1.body.items?.[0]));
+
+    const q2 = await api('/conversations/search?q=' + encodeURIComponent('群消息'), { token: alice });
+    ok('跨会话搜索命中群消息', q2.body.items?.some((x) => x.conv_type === 'group'),
+      JSON.stringify(q2.body.items?.map((x) => x.conv_title)));
+
+    const q3 = await api('/conversations/search?q=' + encodeURIComponent('要撤回'), { token: alice });
+    ok('已撤回消息不被搜到', q3.body.total === 0, `total=${q3.body.total}`);
+
+    const q4 = await api('/conversations/search?q=' + encodeURIComponent('语音'), { token: alice });
+    ok('非文字消息不参与搜索', q4.body.total === 0, `total=${q4.body.total}`);
+
+    const q5 = await api('/conversations/search?q=' + encodeURIComponent('%'), { token: alice });
+    ok('LIKE 通配符已转义（搜 % 不返回全部）', q5.body.total === 0, `total=${q5.body.total}`);
+
+    const q6 = await api('/conversations/search?q=', { token: alice });
+    ok('空关键词返回空结果', q6.body.total === 0 && q6.body.items.length === 0);
+
+    const q7 = await api('/conversations/search?q=' + encodeURIComponent('消息') + '&limit=1', { token: alice });
+    ok('limit 参数生效', q7.body.items.length <= 1, `n=${q7.body.items.length}`);
+
+    const q8 = await api(`/conversations/search?q=${encodeURIComponent('消息')}&conversationId=${gconv.id}`, { token: alice });
+    ok('conversationId 过滤生效', q8.body.items.every((x) => x.conversation_id === gconv.id),
+      JSON.stringify(q8.body.items?.map((x) => x.conversation_id)));
+
+    const q9 = await api('/conversations/search?q=' + encodeURIComponent('第一条'));
+    ok('搜索未登录被拒', q9.status === 401);
+
+    // ---------- 11. 越权保护 ----------
+    console.log('\n=== 11. 越权保护 ===');
     const outsider = (await api('/admin/users', { method: 'POST', token: admin, body: { username: 'eve', password: 'abc123' } })).body.id;
     const eve = (await api('/auth/login', { method: 'POST', body: { username: 'eve', password: 'abc123' } })).body.token;
     const eveRead = await api(`/conversations/${cid}/read`, { method: 'POST', token: eve });
@@ -230,6 +313,8 @@ const find = (frames, type, pred = () => true) => frames.find((f) => f.type === 
     ok('非成员撤回被拒', eveRecall.status === 403, JSON.stringify(eveRecall.body));
     const noToken = await api(`/conversations/${cid}/messages`);
     ok('无 token 访问被拒', noToken.status === 401);
+    const eveSearch = await api('/conversations/search?q=' + encodeURIComponent('第一条'), { token: eve });
+    ok('非成员搜不到别人的消息', eveSearch.body.total === 0, `total=${eveSearch.body.total}`);
     ok('eve 创建成功（对照）', !!outsider && !!eve);
 
     A.ws.close(); B.ws.close();

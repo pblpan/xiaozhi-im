@@ -157,8 +157,8 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                 ),
                 const SizedBox(height: 14),
                 _AddrField(
-                  label: '外网地址（可选）',
-                  hint: 'https://xxx.dy.takin.cc',
+                  label: '外网地址',
+                  hint: 'https://xxxx.hn.takin.cc',
                   ctrl: _wanCtrl,
                   icon: Icons.public_rounded,
                   status: _wanStatus,

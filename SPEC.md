@@ -43,13 +43,15 @@
 - [x] 服务端可视化管理：用户管理、群组管理、消息/文件统计、服务器配置
 
 ### 3.2 后期（迭代，不在首版）
-- 语音消息 / 语音通话 / 视频会议
-- 端到端加密 (E2EE)
-- 已读回执、输入中状态、消息撤回/编辑（事件溯源）
-- 机器人 / Webhook（对接 OA/ERP，吸收 Mattermost 思路）
-- 群聊话题线程（吸收 Zulip 思路）
-- 联邦互通（吸收 Matrix 思路）
-- Mac / iOS 客户端
+- [x] 已读回执、输入中状态、消息撤回/编辑（v0.1.9）
+- [x] 语音消息（v0.2.0）：长按录音、松手即发、上滑取消，单条上限 60 秒，波形气泡点击播放
+- [x] 全局消息搜索（v0.2.0）：跨会话搜「我参与的」文字消息，命中关键词高亮，点击直达会话
+- [ ] 语音通话 / 视频会议
+- [ ] 端到端加密 (E2EE)
+- [ ] 机器人 / Webhook（对接 OA/ERP，吸收 Mattermost 思路）
+- [ ] 群聊话题线程（吸收 Zulip 思路）
+- [ ] 联邦互通（吸收 Matrix 思路）
+- [ ] Mac / iOS 客户端
 
 ---
 
@@ -87,9 +89,11 @@
   ```json
   { "type": "message:send",
     "conversationId": "c_xxx",
-    "kind": "text|image|file|emoji",
+    "kind": "text|image|file|emoji|audio",
     "content": "...", "fileId": "..." }
   ```
+  > `kind=audio` 时 `content` 存语音时长（秒，1~600 截断），音频本体走 `fileId`；
+  > 客户端录音上限 60 秒，服务端只做范围归一化与文件存在性校验。
 - 服务端落库后向会话成员广播：
   ```json
   { "type": "message:new", "message": { ... } }

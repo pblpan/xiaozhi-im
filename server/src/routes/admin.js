@@ -15,12 +15,19 @@ function adminOf(req, res) {
 
 router.get('/stats', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
+  const c = (sql) => db.prepare(sql).get().c;
   res.json({
-    users: db.prepare('SELECT COUNT(*) c FROM users').get().c,
-    groups: db.prepare('SELECT COUNT(*) c FROM groups').get().c,
-    messages: db.prepare('SELECT COUNT(*) c FROM messages').get().c,
-    files: db.prepare('SELECT COUNT(*) c FROM files').get().c,
-    friendships: db.prepare("SELECT COUNT(*) c FROM friendships WHERE status='accepted'").get().c,
+    users: c('SELECT COUNT(*) c FROM users'),
+    groups: c('SELECT COUNT(*) c FROM groups'),
+    messages: c('SELECT COUNT(*) c FROM messages'),
+    files: c('SELECT COUNT(*) c FROM files'),
+    friendships: c("SELECT COUNT(*) c FROM friendships WHERE status='accepted'"),
+    // 分类计数：便于管理员一眼看清各类消息占比
+    text: c("SELECT COUNT(*) c FROM messages WHERE kind='text' AND deleted=0"),
+    images: c("SELECT COUNT(*) c FROM messages WHERE kind='image' AND deleted=0"),
+    audios: c("SELECT COUNT(*) c FROM messages WHERE kind='audio' AND deleted=0"),
+    recalled: c('SELECT COUNT(*) c FROM messages WHERE deleted=1'),
+    edited: c('SELECT COUNT(*) c FROM messages WHERE edited=1 AND deleted=0'),
   });
 });
 
@@ -231,8 +238,23 @@ router.delete('/files/:id', (req, res) => {
 router.get('/messages', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
   const limit = Math.min(Number(req.query.limit) || 200, 1000);
-  const rows = db.prepare(`SELECT m.id,m.conversation_id,m.sender_id,u.username sender_name,m.kind,m.content,m.file_id,m.created_at,m.deleted
-    FROM messages m LEFT JOIN users u ON u.id=m.sender_id ORDER BY m.id DESC LIMIT ?`).all(limit);
+  const kind = String(req.query.kind || '').trim();
+  const q = String(req.query.q || '').trim();
+
+  const where = [];
+  const params = [];
+  if (kind) { where.push('m.kind = ?'); params.push(kind); }
+  if (q) {
+    // 转义 LIKE 通配符，避免管理员输入 % 变全表扫描
+    where.push("m.content LIKE ? ESCAPE '\\'");
+    params.push('%' + q.replace(/[\\%_]/g, (ch) => '\\' + ch) + '%');
+  }
+  params.push(limit);
+
+  const rows = db.prepare(`SELECT m.id,m.conversation_id,m.sender_id,u.username sender_name,m.kind,m.content,m.file_id,m.created_at,m.deleted,m.edited
+    FROM messages m LEFT JOIN users u ON u.id=m.sender_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY m.id DESC LIMIT ?`).all(...params);
   res.json(rows);
 });
 

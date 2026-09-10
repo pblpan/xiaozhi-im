@@ -34,7 +34,7 @@
         <!-- 仪表盘 -->
         <div v-if="tab === 'dashboard'">
           <el-row :gutter="16">
-            <el-col :span="4" v-for="c in cards" :key="c.label">
+            <el-col :span="6" v-for="c in cards" :key="c.label">
               <el-card shadow="hover" class="stat">
                 <div class="stat-num">{{ stats[c.key] ?? '—' }}</div>
                 <div class="stat-label">{{ c.label }}</div>
@@ -156,13 +156,26 @@
 
         <!-- 消息管理 -->
         <div v-else-if="tab === 'messages'">
+          <div class="page-bar">
+            <el-select v-model="msgKind" placeholder="全部类型" clearable style="width:130px" @change="loadMessages">
+              <el-option label="全部类型" value="" />
+              <el-option label="文字" value="text" />
+              <el-option label="图片" value="image" />
+              <el-option label="文件" value="file" />
+              <el-option label="语音" value="audio" />
+            </el-select>
+            <el-input v-model="msgQ" placeholder="搜索消息内容" clearable style="width:220px" @keyup.enter="loadMessages" />
+            <el-button type="primary" @click="loadMessages">搜索</el-button>
+            <el-button @click="resetMsgFilter">重置</el-button>
+            <el-button @click="loadMessages">刷新</el-button>
+          </div>
           <el-table :data="messages" border stripe>
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="sender_name" label="发送者" width="120" />
             <el-table-column prop="conversation_id" label="会话" width="80" />
             <el-table-column prop="kind" label="类型" width="80">
               <template #default="{ row }">
-                <el-tag size="small">{{ row.kind }}</el-tag>
+                <el-tag size="small" :type="kindTag(row.kind)">{{ kindLabel(row.kind) }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="状态" width="90">
@@ -176,7 +189,9 @@
               <template #default="{ row }">
                 <span v-if="row.deleted" style="color:#c0c4cc;font-style:italic">消息已撤回</span>
                 <span v-else-if="row.kind === 'text'">{{ row.content }}</span>
-                <span v-else style="color:#909399">[{{ row.kind }}] {{ row.content || '—' }}</span>
+                <span v-else-if="row.kind === 'audio'" style="color:#909399">语音 · {{ row.content }} 秒</span>
+                <span v-else-if="row.kind === 'image'" style="color:#909399">图片 · {{ row.content }}</span>
+                <span v-else style="color:#909399">文件 · {{ row.content || '—' }}</span>
               </template>
             </el-table-column>
             <el-table-column prop="created_at" label="发送时间" width="180">
@@ -302,12 +317,17 @@ const groups = ref([]);
 const friendships = ref([]);
 const files = ref([]);
 const messages = ref([]);
+const msgKind = ref('');
+const msgQ = ref('');
 const info = ref({});
 
 const cards = [
   { key: 'users', label: '用户数' },
   { key: 'groups', label: '群组数' },
-  { key: 'messages', label: '消息数' },
+  { key: 'messages', label: '消息总数' },
+  { key: 'text', label: '文字消息' },
+  { key: 'images', label: '图片消息' },
+  { key: 'audios', label: '语音消息' },
   { key: 'files', label: '文件数' },
   { key: 'friendships', label: '好友关系' },
 ];
@@ -375,7 +395,26 @@ async function loadUsers() { users.value = (await api.get('/admin/users')).data;
 async function loadGroups() { groups.value = (await api.get('/admin/groups')).data; }
 async function loadFriends() { friendships.value = (await api.get('/admin/friendships')).data; }
 async function loadFiles() { files.value = (await api.get('/admin/files')).data; }
-async function loadMessages() { messages.value = (await api.get('/admin/messages?limit=300')).data; }
+async function loadMessages() {
+  const p = new URLSearchParams({ limit: '300' });
+  if (msgKind.value) p.set('kind', msgKind.value);
+  if (msgQ.value.trim()) p.set('q', msgQ.value.trim());
+  messages.value = (await api.get('/admin/messages?' + p.toString())).data;
+}
+
+function resetMsgFilter() {
+  msgKind.value = '';
+  msgQ.value = '';
+  loadMessages();
+}
+
+function kindLabel(k) {
+  return { text: '文字', image: '图片', file: '文件', audio: '语音', emoji: '表情' }[k] || k;
+}
+
+function kindTag(k) {
+  return { text: 'success', image: 'warning', audio: 'danger', file: 'info' }[k] || 'info';
+}
 async function loadInfo() { info.value = (await api.get('/admin/info')).data; }
 
 // 监听 tab 切换

@@ -4,6 +4,7 @@ const { verifyToken } = require('../auth');
 const {
   sendMessage, withFileInfo,
   recallMessage, editMessage, markRead, readState, RECALL_WINDOW_MS,
+  searchMessages, conversationTitle,
 } = require('../chat');
 
 function uidOf(req, res) {
@@ -19,11 +20,37 @@ function memberOf(cid, uid, res) {
   return m;
 }
 
+// 全局消息搜索（只搜我参与的会话；?q=关键词&conversationId=&limit=&offset=）
+// 注意：必须注册在 '/:id/...' 之前，否则 'search' 会被当成会话 id
+router.get('/search', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const { q, conversationId, limit, offset } = req.query || {};
+  if (!String(q || '').trim()) {
+    return res.json({ items: [], total: 0, keyword: '' });
+  }
+  try {
+    res.json(searchMessages({
+      userId: uid,
+      q,
+      conversationId: conversationId ? Number(conversationId) : null,
+      limit,
+      offset,
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // 我的会话列表（含最近一条消息预览）
 router.get('/', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const convs = db.prepare(`SELECT c.id, c.type, c.created_at,
-      (SELECT content FROM messages m WHERE m.conversation_id=c.id AND m.deleted=0 ORDER BY m.id DESC LIMIT 1) AS last_content,
+      (SELECT CASE m.kind
+          WHEN 'text'  THEN m.content
+          WHEN 'image' THEN '[图片]'
+          WHEN 'file'  THEN '[文件]'
+          WHEN 'audio' THEN '[语音]'
+          WHEN 'emoji' THEN '[表情]'
+          ELSE m.content END
+        FROM messages m WHERE m.conversation_id=c.id AND m.deleted=0 ORDER BY m.id DESC LIMIT 1) AS last_content,
       (SELECT kind FROM messages m WHERE m.conversation_id=c.id AND m.deleted=0 ORDER BY m.id DESC LIMIT 1) AS last_kind,
       (SELECT MAX(created_at) FROM messages m WHERE m.conversation_id=c.id) AS last_at,
       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id

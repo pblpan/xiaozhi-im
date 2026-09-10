@@ -15,6 +15,9 @@ function withFileInfo(row) {
   return { ...row, file_url: `/files/${f.path}`, file_name: f.name, file_mime: f.mime, file_size: f.size };
 }
 
+/** 允许的消息类型（audio=语音，content 存时长秒数） */
+const KINDS = ['text', 'image', 'file', 'emoji', 'audio'];
+
 function sendMessage({ conversationId, senderId, kind, content, fileId }) {
   const conv = db.prepare('SELECT id FROM conversations WHERE id = ?').get(conversationId);
   if (!conv) throw new Error('conversation not found');
@@ -22,10 +25,25 @@ function sendMessage({ conversationId, senderId, kind, content, fileId }) {
     .get(conversationId, senderId);
   if (!member) throw new Error('not a member of this conversation');
 
+  const k = kind || 'text';
+  if (!KINDS.includes(k)) throw new Error('不支持的消息类型: ' + k);
+  // 媒体类消息必须带文件；文字类必须带内容
+  if ((k === 'image' || k === 'file' || k === 'audio') && !fileId) {
+    throw new Error(k + ' 消息缺少文件');
+  }
+  if (k === 'text' && !String(content || '').trim()) throw new Error('内容不能为空');
+
+  // 语音时长归一化：限制在 1~600 秒，非法值兜底 1
+  let body = content ?? null;
+  if (k === 'audio') {
+    const sec = Math.round(Number(content));
+    body = String(Number.isFinite(sec) ? Math.min(Math.max(sec, 1), 600) : 1);
+  }
+
   const res = db.prepare(`INSERT INTO messages
     (conversation_id, sender_id, kind, content, file_id, created_at, edited, deleted)
     VALUES (?,?,?,?,?,?,0,0)`)
-    .run(conversationId, senderId, kind || 'text', content || null, fileId || null, Date.now());
+    .run(conversationId, senderId, k, body, fileId || null, Date.now());
 
   // 发消息视为已读到本条，避免自己发的消息显示未读
   db.prepare(`UPDATE conversation_members SET last_read_id = ?
@@ -129,8 +147,67 @@ function readState(conversationId) {
     .all(conversationId);
 }
 
+/** 取会话展示名（单聊=对方昵称，群聊=群名） */
+function conversationTitle(conversationId, uid) {
+  const c = db.prepare('SELECT id, type FROM conversations WHERE id = ?').get(conversationId);
+  if (!c) return { id: conversationId, type: null, title: null };
+  if (c.type === 'dm') {
+    const other = db.prepare(`SELECT u.id, u.username, u.nickname FROM conversation_members cm
+      JOIN users u ON u.id = cm.user_id
+      WHERE cm.conversation_id = ? AND cm.user_id != ?`).get(conversationId, uid);
+    return { id: c.id, type: 'dm', title: other ? (other.nickname || other.username) : null, peer: other };
+  }
+  const g = db.prepare('SELECT name FROM groups WHERE conversation_id = ?').get(conversationId);
+  return { id: c.id, type: 'group', title: g ? g.name : null };
+}
+
+/**
+ * 全局消息搜索：仅在「我参与的会话」里搜，排除已撤回。
+ * 只搜 text 类——图片/文件/语音的 content 不是可读文本，命中无意义。
+ * 关键词里的 LIKE 通配符（% _ \）做转义，避免用户输入 % 变全表匹配。
+ */
+function searchMessages({ userId, q, conversationId, limit = 50, offset = 0 }) {
+  const kw = String(q || '').trim();
+  if (!kw) return { items: [], total: 0, keyword: '' };
+
+  const cap = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const off = Math.max(Number(offset) || 0, 0);
+  const like = '%' + kw.replace(/[\\%_]/g, (ch) => '\\' + ch) + '%';
+
+  const params = [userId, like];
+  let extra = '';
+  if (conversationId) {
+    extra = ' AND m.conversation_id = ?';
+    params.push(Number(conversationId));
+  }
+
+  const from = `FROM messages m
+    JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
+    WHERE m.deleted = 0 AND m.kind = 'text' AND m.content LIKE ? ESCAPE '\\'${extra}`;
+
+  const total = db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...params).n;
+  const rows = db.prepare(`SELECT m.* ${from} ORDER BY m.id DESC LIMIT ? OFFSET ?`)
+    .all(...params, cap, off);
+
+  const items = rows.map((r) => {
+    const conv = conversationTitle(r.conversation_id, userId);
+    const s = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(r.sender_id);
+    return {
+      ...withFileInfo(r),
+      conv_title: conv.title,
+      conv_type: conv.type,
+      peer: conv.peer || null,
+      sender_name: s ? (s.nickname || s.username) : null,
+      mine: r.sender_id === userId,
+    };
+  });
+
+  return { items, total, keyword: kw, limit: cap, offset: off };
+}
+
 module.exports = {
   sendMessage, withFileInfo,
   recallMessage, editMessage, markRead, typing, readState,
-  RECALL_WINDOW_MS,
+  conversationTitle, searchMessages,
+  RECALL_WINDOW_MS, KINDS,
 };

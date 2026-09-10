@@ -8,6 +8,7 @@ import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/screens/chat.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
+import 'package:xiaozhi_im_client/screens/search.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/server_settings.dart';
 
@@ -120,6 +121,35 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           builder: (_) => ChatScreen(conv: cv, myId: _myId, peerName: cv.title)),
     );
     _load(); // 返回后刷新最后消息
+  }
+
+  // ---------------- 消息搜索 ----------------
+  Future<void> _openSearch() async {
+    final cid = await Navigator.push<int>(
+      context,
+      MaterialPageRoute(builder: (_) => const SearchScreen()),
+    );
+    if (cid == null || !mounted) return;
+
+    Conversation? cv;
+    for (final c in _all) {
+      if (c.id == cid) {
+        cv = c;
+        break;
+      }
+    }
+    // 会话可能还没加载进来（刚建的会话），拉一次列表再找
+    if (cv == null) {
+      await _load();
+      if (!mounted) return;
+      for (final c in _all) {
+        if (c.id == cid) {
+          cv = c;
+          break;
+        }
+      }
+    }
+    if (cv != null) await _openChat(cv);
   }
 
   // ---------------- 添加好友 / 发起聊天 ----------------
@@ -508,11 +538,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
           titleSpacing: 16,
-          title: Row(
+          title: const Row(
             children: [
-              const BrandLogo(size: 28),
-              const SizedBox(width: 10),
-              const Text('小智 IM',
+              BrandLogo(size: 28),
+              SizedBox(width: 10),
+              Text('小智 IM',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             ],
           ),
@@ -532,6 +562,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   icon: Icon(Icons.circle, size: 11, color: color),
                 );
               },
+            ),
+            IconButton(
+              tooltip: '搜索聊天记录',
+              onPressed: _openSearch,
+              icon: const Icon(Icons.search_rounded),
             ),
             IconButton(
               tooltip: '发起聊天',

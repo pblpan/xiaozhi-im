@@ -1,7 +1,7 @@
 name: xiaozhi_im_client
 description: 小智 IM 客户端 (Windows + Android)
 publish_to: 'none'
-version: 0.1.9+10
+version: 0.2.0+11
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -15,6 +15,9 @@ dependencies:
   file_picker: ^12.2.0
   image: ^4.2.0
   intl: ^0.19.0
+  record: ^7.1.1
+  audioplayers: ^6.8.1
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

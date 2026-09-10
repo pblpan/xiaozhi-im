@@ -8,6 +8,7 @@ import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
+import 'package:xiaozhi_im_client/core/voice.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
@@ -51,6 +52,14 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _typingHide;
   int _lastTypingSent = 0;
 
+  /// 录音中（长按麦克风期间为 true）
+  bool _recording = false;
+
+  /// 手指上滑到"取消"区域
+  bool _willCancel = false;
+  int _recSeconds = 0;
+  Timer? _recTimer;
+
   @override
   void initState() {
     super.initState();
@@ -62,6 +71,10 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _typingHide?.cancel();
+    _recTimer?.cancel();
+    // 页面销毁时若还在录音，丢弃半截文件，避免残留
+    if (_recording) Voice.cancelRecording();
+    Voice.stopPlayback(); // 离开会话停止播放
     _ctrl.dispose();
     _scrollC.dispose();
     _focus.dispose();
@@ -243,6 +256,78 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _toast(String s) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(s), duration: const Duration(seconds: 2)));
+
+  // ---------- 语音消息（长按录音 / 松开发送 / 上滑取消）----------
+
+  Future<void> _startRecord() async {
+    if (_busy || _recording) return;
+    if (!await Voice.hasPermission()) {
+      _toast('需要麦克风权限，请在系统设置里开启');
+      return;
+    }
+    if (!await Voice.start()) {
+      _toast('无法开始录音');
+      return;
+    }
+    setState(() {
+      _recording = true;
+      _willCancel = false;
+      _recSeconds = 0;
+    });
+    _recTimer?.cancel();
+    _recTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      if (!mounted || !_recording) return;
+      final s = Voice.elapsedSeconds;
+      setState(() => _recSeconds = s);
+      if (s >= Voice.maxSeconds) _finishRecord(); // 满 60 秒自动发送
+    });
+  }
+
+  /// 长按拖动：手指移到屏幕上方 140px 内即"松手取消"
+  void _updateRecordDrag(Offset globalPos) {
+    if (!_recording) return;
+    final cancel = globalPos.dy < 140;
+    if (cancel != _willCancel) setState(() => _willCancel = cancel);
+  }
+
+  Future<void> _finishRecord() async {
+    if (!_recording) return;
+    _recTimer?.cancel();
+    _recTimer = null;
+    final cancel = _willCancel;
+    setState(() {
+      _recording = false;
+      _willCancel = false;
+      _recSeconds = 0;
+    });
+    if (cancel) {
+      await Voice.cancelRecording();
+      return;
+    }
+    final clip = await Voice.stopRecording();
+    if (clip == null) {
+      _toast('说话时间太短');
+      return;
+    }
+    await _sendVoice(clip);
+  }
+
+  Future<void> _sendVoice(VoiceClip clip) async {
+    setState(() => _busy = true);
+    try {
+      // 录音文件在临时目录里没有规范扩展名，显式指定 voice.m4a 让服务端按音频存
+      final up = await ImApi().upload(clip.file, filename: 'voice.m4a');
+      final m = await ImApi()
+          .sendMessage(widget.conv.id, 'audio', '${clip.seconds}', up['id']);
+      if (!mounted) return;
+      setState(() => _msgs.add(Message.fromJson(m)));
+      _scroll();
+    } catch (e) {
+      if (mounted) _toast('语音发送失败: ${_msg(e)}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   // ---------- 消息操作（长按菜单）----------
 
@@ -495,10 +580,15 @@ class _ChatScreenState extends State<ChatScreen> {
           const SizedBox(width: 4),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(child: _body()),
-          _composer(canSend),
+          Column(
+            children: [
+              Expanded(child: _body()),
+              _composer(canSend),
+            ],
+          ),
+          if (_recording) _recordOverlay(),
         ],
       ),
     );
@@ -550,6 +640,65 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// 录音浮层：显示计时与"上滑取消"状态
+  Widget _recordOverlay() {
+    final left = (Voice.maxSeconds - _recSeconds).clamp(0, Voice.maxSeconds);
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 26, vertical: 20),
+                decoration: BoxDecoration(
+                  color: _willCancel
+                      ? AppColors.danger.withValues(alpha: 0.93)
+                      : Colors.black.withValues(alpha: 0.84),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _willCancel
+                          ? Icons.delete_outline_rounded
+                          : Icons.mic_rounded,
+                      color: Colors.white,
+                      size: 34,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      '$_recSeconds"',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _willCancel ? '松开取消' : '松开发送 · 上滑取消',
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text('还可录 $left 秒',
+                  style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11.5,
+                      shadows: [Shadow(blurRadius: 6, color: Colors.black54)])),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _composer(bool canSend) => Container(
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
         decoration: const BoxDecoration(
@@ -567,6 +716,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     : Icons.attach_file_rounded,
                 onTap: _busy ? null : _attach,
               ),
+              const SizedBox(width: 8),
+              _micButton(),
               const SizedBox(width: 8),
               Expanded(
                 child: Container(
@@ -600,6 +751,37 @@ class _ChatScreenState extends State<ChatScreen> {
               const SizedBox(width: 8),
               _sendButton(canSend),
             ],
+          ),
+        ),
+      );
+
+  /// 麦克风按钮：按下即录（用 Listener 而非长按手势，响应更跟手）
+  Widget _micButton() => Listener(
+        onPointerDown: (_) => _startRecord(),
+        onPointerMove: (e) => _updateRecordDrag(e.position),
+        onPointerUp: (_) => _finishRecord(),
+        onPointerCancel: (_) => _finishRecord(),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _recording ? AppColors.danger : AppColors.surface,
+            boxShadow: _recording
+                ? [
+                    BoxShadow(
+                      color: AppColors.danger.withValues(alpha: 0.45),
+                      blurRadius: 14,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Icon(
+            Icons.mic_rounded,
+            size: 21,
+            color: _recording ? Colors.white : AppColors.textSub,
           ),
         ),
       );
