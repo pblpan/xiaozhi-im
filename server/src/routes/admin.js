@@ -26,8 +26,15 @@ router.get('/stats', (req, res) => {
     text: c("SELECT COUNT(*) c FROM messages WHERE kind='text' AND deleted=0"),
     images: c("SELECT COUNT(*) c FROM messages WHERE kind='image' AND deleted=0"),
     audios: c("SELECT COUNT(*) c FROM messages WHERE kind='audio' AND deleted=0"),
+    cards: c("SELECT COUNT(*) c FROM messages WHERE kind='card' AND deleted=0"),
     recalled: c('SELECT COUNT(*) c FROM messages WHERE deleted=1'),
     edited: c('SELECT COUNT(*) c FROM messages WHERE edited=1 AND deleted=0'),
+    // 集成层：一眼看出对接了几个外部系统、有没有在失败
+    bots: c('SELECT COUNT(*) c FROM users WHERE is_bot=1'),
+    tokens: c('SELECT COUNT(*) c FROM api_tokens WHERE revoked=0'),
+    hooks_in: c('SELECT COUNT(*) c FROM incoming_hooks WHERE revoked=0'),
+    hooks_out: c('SELECT COUNT(*) c FROM outgoing_hooks WHERE active=1'),
+    deliveries_failed: c('SELECT COUNT(*) c FROM webhook_deliveries WHERE ok=0'),
   });
 });
 
@@ -211,6 +218,27 @@ router.delete('/groups/:id', (req, res) => {
   db.prepare('DELETE FROM group_members WHERE group_id=?').run(gid);
   if (g) db.prepare('DELETE FROM conversation_members WHERE conversation_id=?').run(g.conversation_id);
   res.json({ ok: true });
+});
+
+// 彻底删除一个会话（连同消息、成员、收藏、置顶）——用于清理测试数据/废弃会话
+router.delete('/conversations/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const cid = Number(req.params.id);
+  const conv = db.prepare('SELECT id FROM conversations WHERE id=?').get(cid);
+  if (!conv) return res.status(404).json({ error: 'not found' });
+  const ids = db.prepare('SELECT id FROM messages WHERE conversation_id=?').all(cid).map((r) => r.id);
+  for (const mid of ids) {
+    db.prepare('DELETE FROM favorites WHERE message_id=?').run(mid);
+  }
+  db.prepare('DELETE FROM messages WHERE conversation_id=?').run(cid);
+  db.prepare('DELETE FROM conversation_members WHERE conversation_id=?').run(cid);
+  const g = db.prepare('SELECT id FROM groups WHERE conversation_id=?').get(cid);
+  if (g) {
+    db.prepare('DELETE FROM group_members WHERE group_id=?').run(g.id);
+    db.prepare('DELETE FROM groups WHERE id=?').run(g.id);
+  }
+  db.prepare('DELETE FROM conversations WHERE id=?').run(cid);
+  res.json({ ok: true, id: cid, messages: ids.length });
 });
 
 /* ==================== Files ==================== */

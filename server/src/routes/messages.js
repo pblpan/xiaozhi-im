@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const db = require('../db');
 const { verifyToken } = require('../auth');
+const events = require('../events');
 const {
   sendMessage, withFileInfo,
   recallMessage, editMessage, markRead, readState, RECALL_WINDOW_MS,
@@ -64,6 +65,7 @@ router.get('/', (req, res) => {
           WHEN 'file'  THEN '[文件]'
           WHEN 'audio' THEN '[语音]'
           WHEN 'emoji' THEN '[表情]'
+          WHEN 'card'  THEN '[卡片]'
           ELSE m.content END
         FROM messages m WHERE m.conversation_id=c.id AND m.deleted=0 ORDER BY m.id DESC LIMIT 1) AS last_content,
       (SELECT kind FROM messages m WHERE m.conversation_id=c.id AND m.deleted=0 ORDER BY m.id DESC LIMIT 1) AS last_kind,
@@ -87,9 +89,12 @@ router.get('/', (req, res) => {
 
     const base = { ...c, has_mention: unreadMentions > 0, muted: !!c.muted };
     if (c.type === 'dm') {
-      const other = db.prepare(`SELECT u.id,u.username,u.nickname,u.avatar FROM conversation_members cm
+      const other = db.prepare(`SELECT u.id,u.username,u.nickname,u.avatar,u.is_bot FROM conversation_members cm
         JOIN users u ON u.id=cm.user_id WHERE cm.conversation_id=? AND cm.user_id!=?`).get(c.id, uid);
-      return { ...base, title: other?.nickname || other?.username, avatar: other?.avatar, peer: other };
+      return {
+        ...base, title: other?.nickname || other?.username, avatar: other?.avatar,
+        peer: other ? { ...other, is_bot: !!other.is_bot } : other,
+      };
     }
     const g = db.prepare('SELECT id,name,avatar,announcement FROM groups WHERE conversation_id=?').get(c.id);
     return {
@@ -114,6 +119,11 @@ router.get('/dm/:userId', (req, res) => {
   const cid = info.lastInsertRowid;
   db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)').run(cid, uid);
   db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)').run(cid, otherId);
+  events.emit('conversation.created', {
+    conversationId: cid,
+    selfId: uid,
+    data: { type: 'dm', peerId: otherId },
+  });
   res.json({ conversationId: cid });
 });
 
@@ -123,7 +133,10 @@ router.get('/:id/messages', (req, res) => {
   const cid = Number(req.params.id);
   if (!memberOf(cid, uid, res)) return;
 
-  const rows = db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY id ASC LIMIT 200').all(cid);
+  // 带上发送者是否机器人：客户端据此渲染 BOT 标签
+  const rows = db.prepare(`SELECT m.*, u.is_bot AS sender_is_bot
+    FROM messages m LEFT JOIN users u ON u.id = m.sender_id
+    WHERE m.conversation_id=? ORDER BY m.id ASC LIMIT 200`).all(cid);
   const members = readState(cid);
 
   // 单聊：对方读到哪；群聊：成员里最小已读（表示"所有人都读到"的水位）

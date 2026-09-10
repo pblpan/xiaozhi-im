@@ -1,6 +1,7 @@
 // 消息落库 + 实时广播（REST 与 WebSocket 共用）
 const db = require('./db');
 const hub = require('./hub');
+const events = require('./events');
 
 /** 撤回时限：2 分钟（与主流 IM 一致） */
 const RECALL_WINDOW_MS = 2 * 60 * 1000;
@@ -37,8 +38,61 @@ function mentionLike(id) {
   return '%,' + Number(id) + ',%';
 }
 
-/** 允许的消息类型（audio=语音，content 存时长秒数） */
-const KINDS = ['text', 'image', 'file', 'emoji', 'audio'];
+/** 允许的消息类型（audio=语音，content 存时长秒数；card=结构化卡片，content 存 JSON） */
+const KINDS = ['text', 'image', 'file', 'emoji', 'audio', 'card'];
+
+/** 卡片配色：外部系统只需给语义色名，具体色值由客户端决定（换肤不用改对接方） */
+const CARD_COLORS = ['blue', 'green', 'orange', 'red', 'purple', 'gray'];
+
+/** 单条文字消息上限。留足长文本空间，同时挡住误推整篇日志的情况 */
+const MAX_TEXT_LEN = 8000;
+
+function clip(v, n) {
+  const s = v === null || v === undefined ? '' : String(v);
+  return s.trim().slice(0, n);
+}
+
+/**
+ * 卡片内容归一化。外部系统常直接甩业务 JSON 过来，这里做一层"擦洗"：
+ *   - 字段类型/长度全部收敛，避免脏数据把客户端渲染搞崩
+ *   - 数量设上限，防止有人塞 1000 行把消息表撑爆
+ *   - 至少要有一个可展示的部分，纯空卡片直接拒绝
+ */
+function normalizeCard(content) {
+  let c = content;
+  if (typeof c === 'string') {
+    try { c = JSON.parse(c); }
+    catch { throw new Error('卡片内容不是合法 JSON'); }
+  }
+  if (!c || typeof c !== 'object' || Array.isArray(c)) throw new Error('卡片必须是 JSON 对象');
+
+  const title = clip(c.title, 80);
+  const text = clip(c.text, 2000);
+  const fields = (Array.isArray(c.fields) ? c.fields : [])
+    .slice(0, 12)
+    .map((f) => ({
+      label: clip(f && f.label, 24),
+      value: clip(f && f.value, 200),
+      short: !!(f && f.short),
+    }))
+    .filter((f) => f.label || f.value);
+
+  if (!title && !text && !fields.length) {
+    throw new Error('卡片至少要有 title / text / fields 之一');
+  }
+
+  const color = CARD_COLORS.includes(String(c.color)) ? String(c.color) : 'blue';
+  const url = clip(c.url, 500);
+  const out = {
+    title, text, fields, color,
+    footer: clip(c.footer, 120),
+    url: /^https?:\/\//i.test(url) ? url : '',
+  };
+
+  // 兜底体积上限：正常卡片几 KB，超过说明塞了不该塞的东西
+  if (JSON.stringify(out).length > 8192) throw new Error('卡片内容过大（上限 8KB）');
+  return out;
+}
 
 /** @所有人 的哨兵值（存进 mentions JSON 数组） */
 const MENTION_ALL = -1;
@@ -101,6 +155,10 @@ function sendMessage({ conversationId, senderId, kind, content, fileId, mentions
     throw new Error(k + ' 消息缺少文件');
   }
   if (k === 'text' && !String(content || '').trim()) throw new Error('内容不能为空');
+  // 外部系统可能误推超长文本（整篇日志/HTML），落库前收敛，避免撑爆消息表与客户端渲染
+  if (k === 'text' && String(content).length > MAX_TEXT_LEN) {
+    throw new Error(`文字消息过长（上限 ${MAX_TEXT_LEN} 字）`);
+  }
 
   // 语音时长归一化：限制在 1~600 秒，非法值兜底 1
   let body = content ?? null;
@@ -108,6 +166,8 @@ function sendMessage({ conversationId, senderId, kind, content, fileId, mentions
     const sec = Math.round(Number(content));
     body = String(Number.isFinite(sec) ? Math.min(Math.max(sec, 1), 600) : 1);
   }
+  // 卡片：内容归一化成规范 JSON 串，非法结构直接拒绝
+  if (k === 'card') body = JSON.stringify(normalizeCard(content));
 
   const ms = normalizeMentions(mentions, conversationId);
   const res = db.prepare(`INSERT INTO messages
@@ -124,6 +184,8 @@ function sendMessage({ conversationId, senderId, kind, content, fileId, mentions
   const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(res.lastInsertRowid);
   const full = withFileInfo(msg);
   hub.broadcastToConversation(db, conversationId, { type: 'message:new', message: full }, senderId);
+  // 对外事件：外部系统（工厂V2/OA/脚本）订阅后即可拿到每条新消息
+  events.emitMessageCreated(full);
   return full;
 }
 
@@ -144,6 +206,11 @@ function recallMessage({ messageId, userId }) {
     senderId: userId,
   };
   hub.broadcastToConversation(db, m.conversation_id, payload, null);
+  events.emit('message.recalled', {
+    conversationId: m.conversation_id,
+    selfId: userId,
+    data: { messageId, senderId: userId },
+  });
   return payload;
 }
 
@@ -169,6 +236,11 @@ function editMessage({ messageId, userId, content }) {
     edited: 1,
   };
   hub.broadcastToConversation(db, m.conversation_id, payload, null);
+  events.emit('message.edited', {
+    conversationId: m.conversation_id,
+    selfId: userId,
+    data: { messageId, content: text },
+  });
   return payload;
 }
 
@@ -234,7 +306,8 @@ function conversationTitle(conversationId, uid) {
 
 /**
  * 全局消息搜索：仅在「我参与的会话」里搜，排除已撤回。
- * 只搜 text 类——图片/文件/语音的 content 不是可读文本，命中无意义。
+ * 只搜 text / card 类——图片/文件/语音的 content 不是可读文本，命中无意义；
+ * 卡片是 JSON 但里面含标题与正文，能搜到「那条库存预警」很有用。
  * 关键词里的 LIKE 通配符（% _ \）做转义，避免用户输入 % 变全表匹配。
  */
 function searchMessages({ userId, q, conversationId, limit = 50, offset = 0 }) {
@@ -254,7 +327,7 @@ function searchMessages({ userId, q, conversationId, limit = 50, offset = 0 }) {
 
   const from = `FROM messages m
     JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
-    WHERE m.deleted = 0 AND m.kind = 'text' AND m.content LIKE ? ESCAPE '\\'${extra}`;
+    WHERE m.deleted = 0 AND m.kind IN ('text','card') AND m.content LIKE ? ESCAPE '\\'${extra}`;
 
   const total = db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...params).n;
   const rows = db.prepare(`SELECT m.* ${from} ORDER BY m.id DESC LIMIT ? OFFSET ?`)
@@ -313,6 +386,7 @@ function forwardMessage({ messageId, userId, conversationIds }) {
 
     const full = withFileInfo(db.prepare('SELECT * FROM messages WHERE id = ?').get(res.lastInsertRowid));
     hub.broadcastToConversation(db, cid, { type: 'message:new', message: full }, userId);
+    events.emitMessageCreated(full);
     done.push({ conversationId: cid, message: full });
   }
   if (!done.length) throw new Error('没有可转发的会话');
@@ -411,5 +485,6 @@ module.exports = {
   forwardMessage, togglePin, pinnedMessage, canPin,
   addFavorite, removeFavorite, listFavorites,
   normalizeMentions, mutedUntilOf, parseMentions, serializeMentions, mentionLike,
-  RECALL_WINDOW_MS, KINDS, MENTION_ALL,
+  normalizeCard,
+  RECALL_WINDOW_MS, KINDS, CARD_COLORS, MAX_TEXT_LEN, MENTION_ALL,
 };

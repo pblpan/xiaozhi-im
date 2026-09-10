@@ -79,6 +79,66 @@ CREATE TABLE IF NOT EXISTS favorites (
   created_at INTEGER NOT NULL,
   UNIQUE(user_id, message_id)
 );
+
+/* ==================== 开放集成层 ==================== */
+
+-- API 令牌：给外部系统（工厂V2 / OA / 脚本）的长期凭证，带 scope 限制
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  token TEXT NOT NULL UNIQUE,
+  scopes TEXT NOT NULL DEFAULT '',
+  user_id INTEGER NOT NULL,        -- 以谁的身份行事（机器人或真人）
+  created_by INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL DEFAULT 0,   -- 0 = 永不过期
+  revoked INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+-- 入站 Webhook：外部系统 → IM（POST 一个地址即可推消息，无需登录）
+CREATE TABLE IF NOT EXISTS incoming_hooks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  token TEXT NOT NULL UNIQUE,
+  secret TEXT NOT NULL DEFAULT '',  -- 非空则要求 HMAC 签名
+  bot_id INTEGER NOT NULL,          -- 以哪个机器人身份发言
+  conversation_id INTEGER NOT NULL, -- 推到哪个会话
+  created_by INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL DEFAULT 0,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+-- 出站 Webhook：IM → 外部系统（事件回调，带 HMAC 签名）
+CREATE TABLE IF NOT EXISTS outgoing_hooks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  secret TEXT NOT NULL DEFAULT '',
+  events TEXT NOT NULL DEFAULT '*',  -- 逗号分隔事件名；* = 全部
+  conversation_id INTEGER,           -- NULL = 订阅所有会话
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- 投递日志：每次出站回调留痕，失败可重试、可手工重发
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  hook_id INTEGER NOT NULL,
+  event TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  status INTEGER,                    -- HTTP 状态码，NULL = 尚未投递
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  ok INTEGER NOT NULL DEFAULT 0,
+  next_retry_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  delivered_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_deliveries_retry ON webhook_deliveries (ok, next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_deliveries_hook ON webhook_deliveries (hook_id, id DESC);
 `);
 
 // ---- 幂等迁移（老库升级时不重建表）----
@@ -101,6 +161,10 @@ ensureColumn('group_members', 'muted_until', 'muted_until INTEGER NOT NULL DEFAU
 ensureColumn('conversations', 'pinned_message_id', 'pinned_message_id INTEGER');
 // 会话免打扰
 ensureColumn('conversation_members', 'muted', 'muted INTEGER NOT NULL DEFAULT 0');
+// 机器人：特殊用户，不可登录、可被拉进群、可发消息（password_hash 存 '!' 使其永远验证失败）
+ensureColumn('users', 'is_bot', 'is_bot INTEGER NOT NULL DEFAULT 0');
+// 机器人的归属人（谁创建的，便于后台追责与清理）
+ensureColumn('users', 'bot_owner_id', 'bot_owner_id INTEGER');
 
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);

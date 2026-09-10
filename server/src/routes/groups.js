@@ -2,6 +2,7 @@ const router = require('express').Router();
 const db = require('../db');
 const { verifyToken } = require('../auth');
 const hub = require('../hub');
+const events = require('../events');
 
 function uidOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -37,6 +38,11 @@ router.post('/', (req, res) => {
   const gid = ginfo.lastInsertRowid;
   db.prepare('INSERT INTO group_members (group_id,user_id,role,joined_at) VALUES (?,?,?,?)').run(gid, uid, 'owner', Date.now());
   db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)').run(cid, uid);
+  events.emit('conversation.created', {
+    conversationId: cid,
+    selfId: uid,
+    data: { type: 'group', groupId: gid, name },
+  });
   res.json({ groupId: gid, conversationId: cid });
 });
 
@@ -55,8 +61,9 @@ router.get('/:groupId', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const gid = Number(req.params.groupId);
   const ctx = loadGroup(gid, uid, res); if (!ctx) return;
-  const members = db.prepare(`SELECT u.id,u.username,u.nickname,u.avatar,m.role,m.muted_until,m.joined_at
-    FROM group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=?`).all(gid);
+  const members = db.prepare(`SELECT u.id,u.username,u.nickname,u.avatar,u.is_bot,m.role,m.muted_until,m.joined_at
+    FROM group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=?`).all(gid)
+    .map((m) => ({ ...m, is_bot: !!m.is_bot }));
   res.json({
     group: ctx.g,
     members,
@@ -169,6 +176,11 @@ router.delete('/:groupId/members/:userId', (req, res) => {
   db.prepare('DELETE FROM conversation_members WHERE conversation_id=? AND user_id=?').run(ctx.g.conversation_id, target);
   notifyGroup(ctx.g.conversation_id, gid, 'member');
   hub.broadcastToUser(target, { type: 'group:kicked', groupId: gid, conversationId: ctx.g.conversation_id });
+  events.emit('member.left', {
+    conversationId: ctx.g.conversation_id,
+    selfId: uid,
+    data: { groupId: gid, userId: target, reason: 'kicked', operatorId: uid },
+  });
   res.json({ ok: true });
 });
 
@@ -182,6 +194,11 @@ router.post('/:groupId/leave', (req, res) => {
   db.prepare('DELETE FROM group_members WHERE group_id=? AND user_id=?').run(gid, uid);
   db.prepare('DELETE FROM conversation_members WHERE conversation_id=? AND user_id=?').run(ctx.g.conversation_id, uid);
   notifyGroup(ctx.g.conversation_id, gid, 'member');
+  events.emit('member.left', {
+    conversationId: ctx.g.conversation_id,
+    selfId: uid,
+    data: { groupId: gid, userId: uid, reason: 'leave' },
+  });
   res.json({ ok: true });
 });
 
@@ -200,6 +217,11 @@ router.post('/:groupId/members', (req, res) => {
   }
   notifyGroup(ctx.g.conversation_id, gid, 'member');
   hub.broadcastToUser(userId, { type: 'group:invited', groupId: gid, conversationId: ctx.g.conversation_id });
+  events.emit('member.joined', {
+    conversationId: ctx.g.conversation_id,
+    selfId: uid,
+    data: { groupId: gid, userId, operatorId: uid },
+  });
   res.json({ ok: true });
 });
 

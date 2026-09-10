@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/core/voice.dart';
@@ -83,6 +84,8 @@ class MessageBubble extends StatelessWidget {
       body = _image(context, '$baseUrl$imgPath');
     } else if (msg.kind == 'audio') {
       body = _voiceBubble(context);
+    } else if (msg.kind == 'card') {
+      body = _cardBubble(context);
     } else if (msg.kind == 'file') {
       body = _fileCard(context);
     } else {
@@ -113,9 +116,32 @@ class MessageBubble extends StatelessWidget {
                     if (!mine && senderName != null)
                       Padding(
                         padding: const EdgeInsets.only(left: 2, bottom: 4),
-                        child: Text(senderName!,
-                            style: const TextStyle(
-                                fontSize: 11.5, color: AppColors.textWeak)),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(senderName!,
+                                style: const TextStyle(
+                                    fontSize: 11.5, color: AppColors.textWeak)),
+                            // 机器人标签：让群成员一眼看出这条是系统推的，不是真人说的
+                            if (msg.senderIsBot) ...[
+                              const SizedBox(width: 5),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: AppColors.brand.withValues(alpha: 0.16),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text('机器人',
+                                    style: TextStyle(
+                                        fontSize: 9.5,
+                                        height: 1.3,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.brand)),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
                     body,
                   ],
@@ -166,6 +192,197 @@ class MessageBubble extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// 卡片消息：外部系统（工厂 V2 / OA / 脚本）推的日报、预警
+  ///
+  /// 布局刻意做成"系统通知"的观感而不是聊天气泡——顶部一条语义色条区分紧急度，
+  /// 字段区支持两列并排，底部可挂一个跳转按钮。宽度固定，长文本自动换行。
+  Widget _cardBubble(BuildContext context) {
+    final card = msg.card;
+    // 脏数据（老库/异常 JSON）降级成纯文本，绝不让用户看到一坨 JSON
+    if (card == null || card.isEmpty) return _textBubble(context);
+
+    final accent = _cardColor(card.color);
+
+    return GestureDetector(
+      onLongPress: onLongPress ?? () => _copy(context),
+      child: Container(
+        width: 272,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceHi,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 语义色条：红=预警、橙=提醒、绿=正常、蓝=信息
+            Container(height: 4, color: accent),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(13, 11, 13, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (card.title.isNotEmpty)
+                    Text(
+                      card.title,
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        height: 1.3,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  if (card.text.isNotEmpty) ...[
+                    if (card.title.isNotEmpty) const SizedBox(height: 6),
+                    Text(
+                      card.text,
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        height: 1.45,
+                        color: AppColors.textSub,
+                      ),
+                    ),
+                  ],
+                  if (card.fields.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Container(height: 1, color: AppColors.divider),
+                    const SizedBox(height: 9),
+                    ..._cardFields(card),
+                  ],
+                  if (card.footer.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      card.footer,
+                      style: const TextStyle(
+                          fontSize: 11, height: 1.3, color: AppColors.textWeak),
+                    ),
+                  ],
+                  if (card.url.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    _cardLink(context, card.url, accent),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 字段排布：连续的 short 字段两两并排，其余各占一行
+  List<Widget> _cardFields(CardData card) {
+    final rows = <Widget>[];
+    var i = 0;
+    while (i < card.fields.length) {
+      final f = card.fields[i];
+      final next = i + 1 < card.fields.length ? card.fields[i + 1] : null;
+      if (f.short && next != null && next.short) {
+        rows.add(Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: _cardField(f)),
+            const SizedBox(width: 12),
+            Expanded(child: _cardField(next)),
+          ],
+        ));
+        i += 2;
+      } else {
+        rows.add(_cardField(f));
+        i += 1;
+      }
+    }
+    return [
+      for (var k = 0; k < rows.length; k++) ...[
+        if (k > 0) const SizedBox(height: 8),
+        rows[k],
+      ],
+    ];
+  }
+
+  Widget _cardField(CardField f) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (f.label.isNotEmpty)
+            Text(f.label,
+                style: const TextStyle(
+                    fontSize: 11, height: 1.25, color: AppColors.textWeak)),
+          if (f.value.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(top: f.label.isEmpty ? 0 : 2),
+              child: Text(
+                f.value,
+                style: const TextStyle(
+                  fontSize: 13,
+                  height: 1.35,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.text,
+                ),
+              ),
+            ),
+        ],
+      );
+
+  Widget _cardLink(BuildContext context, String url, Color accent) => InkWell(
+        onTap: () => _openUrl(context, url),
+        borderRadius: BorderRadius.circular(9),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.open_in_new_rounded, size: 14, color: accent),
+              const SizedBox(width: 5),
+              Text('查看详情',
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: accent)),
+            ],
+          ),
+        ),
+      );
+
+  Future<void> _openUrl(BuildContext context, String url) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    try {
+      final done = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!done) throw Exception('no handler');
+    } catch (_) {
+      // 打不开（没装浏览器/被系统拦）就退化成复制链接，至少不丢信息
+      await Clipboard.setData(ClipboardData(text: url));
+      messenger.showSnackBar(const SnackBar(
+        content: Text('链接已复制到剪贴板'),
+        duration: Duration(seconds: 2),
+      ));
+    }
+  }
+
+  /// 语义色 → 具体色值。换肤时只改这里，对接方仍只传 'red' 这类名字。
+  Color _cardColor(String name) {
+    switch (name) {
+      case 'green':
+        return const Color(0xFF10B981);
+      case 'orange':
+        return const Color(0xFFF59E0B);
+      case 'red':
+        return const Color(0xFFEF4444);
+      case 'purple':
+        return const Color(0xFF8B5CF6);
+      case 'gray':
+        return const Color(0xFF94A3B8);
+      default:
+        return const Color(0xFF3B82F6);
+    }
   }
 
   Widget _textBubble(BuildContext context) {

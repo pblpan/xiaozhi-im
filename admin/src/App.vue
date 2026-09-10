@@ -20,6 +20,7 @@
         <el-menu-item index="friends">好友关系</el-menu-item>
         <el-menu-item index="files">文件管理</el-menu-item>
         <el-menu-item index="messages">消息管理</el-menu-item>
+        <el-menu-item index="integrations">集成对接</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
       </el-menu>
       <div class="aside-foot">
@@ -217,6 +218,199 @@
           </el-table>
         </div>
 
+        <!-- 集成对接 -->
+        <div v-else-if="tab === 'integrations'">
+          <el-alert type="success" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              把「小智 IM」接到其他软件的入口。工厂系统 / OA / 脚本按下面的<b>推送地址</b>发一条 POST，群里立刻收到；
+              也可以反过来订阅群里的事件，实时回调到你的系统。对接全程不需要改 IM 代码。
+            </template>
+          </el-alert>
+
+          <el-tabs v-model="intTab">
+            <!-- ===== 机器人 ===== -->
+            <el-tab-pane label="机器人" name="bots">
+              <div class="page-bar">
+                <el-button type="primary" @click="openBotDialog()">新建机器人</el-button>
+                <span class="hint">机器人是「系统发言人」：能被拉进群、能发消息，但无法登录，不会冒充真人。</span>
+              </div>
+              <el-table :data="bots" border stripe>
+                <el-table-column prop="id" label="ID" width="70" />
+                <el-table-column prop="nickname" label="名称" width="160" />
+                <el-table-column prop="username" label="账号" width="200" />
+                <el-table-column label="创建时间" width="170">
+                  <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+                </el-table-column>
+                <el-table-column label="操作">
+                  <template #default="{ row }">
+                    <el-button size="small" @click="openBotConvDialog(row)">加入会话</el-button>
+                    <el-button size="small" type="danger" @click="delBot(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="!bots.length" description="还没有机器人，点「新建机器人」开始对接" />
+            </el-tab-pane>
+
+            <!-- ===== API 令牌 ===== -->
+            <el-tab-pane label="API 令牌" name="tokens">
+              <div class="page-bar">
+                <el-button type="primary" @click="openTokenDialog()">发放令牌</el-button>
+                <span class="hint">令牌是给程序用的长期凭证，按需勾选权限；泄露了随时吊销。</span>
+              </div>
+              <el-table :data="tokens" border stripe>
+                <el-table-column prop="id" label="ID" width="70" />
+                <el-table-column prop="name" label="用途" width="150" />
+                <el-table-column label="令牌" width="190">
+                  <template #default="{ row }">
+                    <code class="mono">{{ row.token }}</code>
+                  </template>
+                </el-table-column>
+                <el-table-column label="身份" width="130">
+                  <template #default="{ row }">
+                    {{ row.user_name || ('#' + row.user_id) }}
+                    <el-tag v-if="row.user_is_bot" size="small" type="success" effect="plain">机器人</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="权限" min-width="220">
+                  <template #default="{ row }">
+                    <el-tag v-for="s in row.scopes" :key="s" size="small" style="margin:1px 3px 1px 0">{{ s }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="最近使用" width="160">
+                  <template #default="{ row }">{{ row.last_used_at ? fmtTime(row.last_used_at) : '未使用' }}</template>
+                </el-table-column>
+                <el-table-column label="状态" width="90">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.revoked" size="small" type="danger">已吊销</el-tag>
+                    <el-tag v-else-if="row.expires_at && row.expires_at < Date.now()" size="small" type="info">已过期</el-tag>
+                    <el-tag v-else size="small" type="success">正常</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="150">
+                  <template #default="{ row }">
+                    <el-button size="small" @click="toggleToken(row)">{{ row.revoked ? '恢复' : '吊销' }}</el-button>
+                    <el-button size="small" type="danger" @click="delToken(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+
+            <!-- ===== 入站 Webhook ===== -->
+            <el-tab-pane label="入站推送（外部 → 群）" name="incoming">
+              <div class="page-bar">
+                <el-button type="primary" @click="openIncomingDialog()">新建推送地址</el-button>
+                <span class="hint">把地址复制给对方系统，POST 一条 JSON 就能往群里发消息。</span>
+              </div>
+              <el-table :data="incoming" border stripe>
+                <el-table-column prop="name" label="用途" width="140" />
+                <el-table-column label="推送地址" min-width="330">
+                  <template #default="{ row }">
+                    <code class="mono">{{ fullUrl(row.path) }}</code>
+                    <el-button size="small" text type="primary" @click="copy(fullUrl(row.path))">复制</el-button>
+                  </template>
+                </el-table-column>
+                <el-table-column label="机器人" width="120">
+                  <template #default="{ row }">{{ row.bot_name || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="目标会话" width="150">
+                  <template #default="{ row }">{{ row.conversation_title || ('#' + row.conversation_id) }}</template>
+                </el-table-column>
+                <el-table-column label="签名" width="90">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="row.signed ? 'success' : 'info'" effect="plain">
+                      {{ row.signed ? '已开启' : '未开启' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="最近使用" width="160">
+                  <template #default="{ row }">{{ row.last_used_at ? fmtTime(row.last_used_at) : '未使用' }}</template>
+                </el-table-column>
+                <el-table-column label="状态" width="90">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.revoked" size="small" type="danger">已停用</el-tag>
+                    <el-tag v-else size="small" type="success">正常</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="230">
+                  <template #default="{ row }">
+                    <el-button size="small" @click="testIncoming(row)">试推</el-button>
+                    <el-button size="small" @click="toggleIncoming(row)">{{ row.revoked ? '启用' : '停用' }}</el-button>
+                    <el-button size="small" type="danger" @click="delIncoming(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+
+            <!-- ===== 出站 Webhook ===== -->
+            <el-tab-pane label="事件订阅（群 → 外部）" name="outgoing">
+              <div class="page-bar">
+                <el-button type="primary" @click="openOutgoingDialog()">新建订阅</el-button>
+                <span class="hint">群里有新消息 / 被 @ / 成员变动时，实时 POST 到你填的地址（带 HMAC 签名）。</span>
+              </div>
+              <el-table :data="outgoing" border stripe>
+                <el-table-column prop="name" label="用途" width="140" />
+                <el-table-column prop="url" label="回调地址" min-width="240" show-overflow-tooltip />
+                <el-table-column label="订阅事件" min-width="180">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.events === '*'" size="small" type="warning">全部事件</el-tag>
+                    <el-tag v-else v-for="e in row.events.split(',')" :key="e" size="small" style="margin:1px 3px 1px 0">{{ e }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="范围" width="140">
+                  <template #default="{ row }">{{ row.conversation_title || (row.conversation_id ? ('#' + row.conversation_id) : '全部会话') }}</template>
+                </el-table-column>
+                <el-table-column label="启用" width="80">
+                  <template #default="{ row }">
+                    <el-switch :model-value="row.active" @change="v => toggleOutgoing(row, v)" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="250">
+                  <template #default="{ row }">
+                    <el-button size="small" @click="testOutgoing(row)">发测试事件</el-button>
+                    <el-button size="small" @click="rotateOutgoing(row)">换密钥</el-button>
+                    <el-button size="small" type="danger" @click="delOutgoing(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+
+            <!-- ===== 投递日志 ===== -->
+            <el-tab-pane label="投递日志" name="deliveries">
+              <div class="page-bar">
+                <el-button @click="loadDeliveries()">刷新</el-button>
+                <el-radio-group v-model="delOk" @change="loadDeliveries()">
+                  <el-radio-button label="">全部</el-radio-button>
+                  <el-radio-button label="0">仅失败</el-radio-button>
+                  <el-radio-button label="1">仅成功</el-radio-button>
+                </el-radio-group>
+                <span class="hint">失败的会自动重试（最多 {{ intMeta.maxAttempts || 4 }} 次），也可以点「重发」立刻再试一次。</span>
+              </div>
+              <el-table :data="deliveries" border stripe>
+                <el-table-column prop="id" label="ID" width="80" />
+                <el-table-column prop="hook_name" label="订阅" width="140" />
+                <el-table-column prop="event" label="事件" width="160" />
+                <el-table-column label="结果" width="130">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.ok" size="small" type="success">成功 {{ row.status }}</el-tag>
+                    <el-tag v-else-if="row.next_retry_at" size="small" type="warning">待重试</el-tag>
+                    <el-tag v-else size="small" type="danger">失败</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="attempts" label="尝试" width="70" />
+                <el-table-column prop="error" label="错误" min-width="180" show-overflow-tooltip />
+                <el-table-column label="时间" width="160">
+                  <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="90">
+                  <template #default="{ row }">
+                    <el-button size="small" @click="retryDelivery(row)">重发</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+          </el-tabs>
+        </div>
+
         <!-- 系统设置 -->
         <div v-else-if="tab === 'settings'">
           <el-row :gutter="16">
@@ -310,6 +504,145 @@
         <el-button type="primary" :loading="groupDlgBusy" @click="saveGroup">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 机器人编辑 -->
+    <el-dialog v-model="botDlg" title="新建机器人" width="520px">
+      <el-form :model="botForm" label-width="100px">
+        <el-form-item label="名称">
+          <el-input v-model="botForm.name" placeholder="如：工厂助手、库存预警" maxlength="32" show-word-limit />
+        </el-form-item>
+        <el-form-item label="加入会话">
+          <el-select v-model="botForm.conversationId" filterable clearable placeholder="可稍后再加（选填）" style="width:100%">
+            <el-option v-for="c in intMeta.conversations" :key="c.id"
+                       :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
+                       :value="c.id" />
+          </el-select>
+        </el-form-item>
+        <p class="hint" style="margin:0 0 0 100px">机器人创建后无法登录，只能通过 Webhook / API 令牌发言。</p>
+      </el-form>
+      <template #footer>
+        <el-button @click="botDlg = false">取消</el-button>
+        <el-button type="primary" :loading="busy" @click="saveBot">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 机器人加入会话 -->
+    <el-dialog v-model="botConvDlg" :title="`把「${botConvForm.name}」加入会话`" width="520px">
+      <el-select v-model="botConvForm.conversationId" filterable placeholder="选择会话" style="width:100%">
+        <el-option v-for="c in intMeta.conversations" :key="c.id"
+                   :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
+                   :value="c.id" />
+      </el-select>
+      <template #footer>
+        <el-button @click="botConvDlg = false">取消</el-button>
+        <el-button type="primary" :loading="busy" @click="saveBotConv">加入</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 令牌编辑 -->
+    <el-dialog v-model="tokenDlg" title="发放 API 令牌" width="600px">
+      <el-form :model="tokenForm" label-width="100px">
+        <el-form-item label="用途">
+          <el-input v-model="tokenForm.name" placeholder="如：工厂V2、门店报表脚本" maxlength="64" />
+        </el-form-item>
+        <el-form-item label="身份">
+          <el-select v-model="tokenForm.userId" filterable placeholder="以谁的身份行事" style="width:100%">
+            <el-option v-for="u in identityOptions" :key="u.id"
+                       :label="`${u.is_bot ? '🤖 ' : ''}${u.nickname || u.username}（${u.username}）`" :value="u.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="权限">
+          <el-checkbox-group v-model="tokenForm.scopes">
+            <el-checkbox v-for="s in intMeta.scopes" :key="s.name" :value="s.name" style="display:block;margin:2px 0">
+              <code class="mono">{{ s.name }}</code> — {{ s.desc }}
+            </el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+        <el-form-item label="有效期">
+          <el-input-number v-model="tokenForm.days" :min="0" :max="3650" />
+          <span class="hint" style="margin-left:8px">天（0 = 永不过期）</span>
+        </el-form-item>
+      </el-form>
+      <el-alert v-if="newToken" type="success" :closable="false" style="margin-top:6px">
+        <template #title>
+          令牌已生成，<b>只显示这一次</b>，请立刻复制保存：
+          <div style="margin-top:6px">
+            <code class="mono">{{ newToken }}</code>
+            <el-button size="small" text type="primary" @click="copy(newToken)">复制</el-button>
+          </div>
+        </template>
+      </el-alert>
+      <template #footer>
+        <el-button @click="tokenDlg = false">关闭</el-button>
+        <el-button type="primary" :loading="busy" @click="saveToken">生成令牌</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 入站 Webhook 编辑 -->
+    <el-dialog v-model="incomingDlg" title="新建推送地址" width="560px">
+      <el-form :model="incomingForm" label-width="100px">
+        <el-form-item label="用途">
+          <el-input v-model="incomingForm.name" placeholder="如：库存预警、销售日报" maxlength="64" />
+        </el-form-item>
+        <el-form-item label="机器人">
+          <el-select v-model="incomingForm.botId" filterable placeholder="以哪个机器人身份发言" style="width:100%">
+            <el-option v-for="b in bots" :key="b.id" :label="`${b.nickname}（${b.username}）`" :value="b.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="推到会话">
+          <el-select v-model="incomingForm.conversationId" filterable placeholder="选择群或单聊" style="width:100%">
+            <el-option v-for="c in intMeta.conversations" :key="c.id"
+                       :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
+                       :value="c.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="签名校验">
+          <el-switch v-model="incomingForm.signed" />
+          <span class="hint" style="margin-left:10px">开启后请求必须带 HMAC-SHA256 签名，地址外泄也无法被冒用</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="incomingDlg = false">取消</el-button>
+        <el-button type="primary" :loading="busy" @click="saveIncoming">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 出站 Webhook 编辑 -->
+    <el-dialog v-model="outgoingDlg" title="新建事件订阅" width="600px">
+      <el-form :model="outgoingForm" label-width="100px">
+        <el-form-item label="用途">
+          <el-input v-model="outgoingForm.name" placeholder="如：工厂V2 回调" maxlength="64" />
+        </el-form-item>
+        <el-form-item label="回调地址">
+          <el-input v-model="outgoingForm.url" placeholder="https://你的系统/api/xiaozhi/hook" />
+        </el-form-item>
+        <el-form-item label="订阅事件">
+          <el-checkbox-group v-model="outgoingForm.events">
+            <el-checkbox v-for="e in intMeta.events" :key="e.name" :value="e.name" style="display:block;margin:2px 0">
+              <code class="mono">{{ e.name }}</code> — {{ e.desc }}
+            </el-checkbox>
+          </el-checkbox-group>
+          <span class="hint">一个都不勾 = 订阅全部事件</span>
+        </el-form-item>
+        <el-form-item label="监听范围">
+          <el-select v-model="outgoingForm.conversationId" filterable clearable placeholder="全部会话" style="width:100%">
+            <el-option v-for="c in intMeta.conversations" :key="c.id"
+                       :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
+                       :value="c.id" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <el-alert type="info" :closable="false">
+        <template #title>
+          请求头会带 <code class="mono">X-Xiaozhi-Signature: sha256=&lt;HMAC(body, secret)&gt;</code>，
+          用同一密钥验签即可确认来源。密钥创建后在列表里点「换密钥」可轮换。
+        </template>
+      </el-alert>
+      <template #footer>
+        <el-button @click="outgoingDlg = false">取消</el-button>
+        <el-button type="primary" :loading="busy" @click="saveOutgoing">创建</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
@@ -340,8 +673,12 @@ const cards = [
   { key: 'text', label: '文字消息' },
   { key: 'images', label: '图片消息' },
   { key: 'audios', label: '语音消息' },
+  { key: 'cards', label: '卡片消息' },
   { key: 'files', label: '文件数' },
   { key: 'friendships', label: '好友关系' },
+  { key: 'bots', label: '机器人' },
+  { key: 'hooks_in', label: '入站推送' },
+  { key: 'hooks_out', label: '事件订阅' },
 ];
 
 async function login() {
@@ -401,6 +738,7 @@ async function loadTab() {
   else if (tab.value === 'friends') await loadFriends();
   else if (tab.value === 'files') await loadFiles();
   else if (tab.value === 'messages') await loadMessages();
+  else if (tab.value === 'integrations') await loadIntegrations();
   else if (tab.value === 'settings') await loadInfo();
 }
 async function loadUsers() { users.value = (await api.get('/admin/users')).data; }
@@ -421,11 +759,11 @@ function resetMsgFilter() {
 }
 
 function kindLabel(k) {
-  return { text: '文字', image: '图片', file: '文件', audio: '语音', emoji: '表情' }[k] || k;
+  return { text: '文字', image: '图片', file: '文件', audio: '语音', emoji: '表情', card: '卡片' }[k] || k;
 }
 
 function kindTag(k) {
-  return { text: 'success', image: 'warning', audio: 'danger', file: 'info' }[k] || 'info';
+  return { text: 'success', image: 'warning', audio: 'danger', file: 'info', card: 'primary' }[k] || 'info';
 }
 async function loadInfo() { info.value = (await api.get('/admin/info')).data; }
 
@@ -602,6 +940,285 @@ async function delMessage(row) {
   }
 }
 
+/* ====== 集成对接 ====== */
+const intTab = ref('bots');
+const intMeta = ref({ scopes: [], events: [], conversations: [], maxAttempts: 4 });
+const bots = ref([]);
+const tokens = ref([]);
+const incoming = ref([]);
+const outgoing = ref([]);
+const deliveries = ref([]);
+const delOk = ref('');
+const busy = ref(false);
+const newToken = ref('');
+
+const botDlg = ref(false);
+const botForm = ref({ name: '', conversationId: null });
+const botConvDlg = ref(false);
+const botConvForm = ref({ id: null, name: '', conversationId: null });
+const tokenDlg = ref(false);
+const tokenForm = ref({ name: '', userId: null, scopes: [], days: 0 });
+const incomingDlg = ref(false);
+const incomingForm = ref({ name: '', botId: null, conversationId: null, signed: false });
+const outgoingDlg = ref(false);
+const outgoingForm = ref({ name: '', url: '', events: [], conversationId: null });
+
+/** 身份下拉：机器人排前面（对接一般以机器人身份发言），再接真人用户 */
+const identityOptions = computed(() => [
+  ...bots.value.map((b) => ({ id: b.id, username: b.username, nickname: b.nickname, is_bot: true })),
+  ...users.value.filter((u) => !u.is_bot).map((u) => ({ ...u, is_bot: false })),
+]);
+
+// 集成页内的子标签切换（放在 intTab 定义之后，避免 const 暂时性死区）
+watch(intTab, loadIntTab);
+
+function fullUrl(p) { return location.origin + p; }
+
+async function copy(t) {
+  try {
+    await navigator.clipboard.writeText(t);
+    ElMessage.success('已复制');
+  } catch {
+    ElMessage.warning('浏览器拒绝了剪贴板权限，请手动选中复制');
+  }
+}
+
+async function loadMeta() { intMeta.value = (await api.get('/admin/integrations/meta')).data; }
+async function loadBots() { bots.value = (await api.get('/admin/integrations/bots')).data; }
+async function loadTokens() { tokens.value = (await api.get('/admin/integrations/tokens')).data; }
+async function loadIncoming() { incoming.value = (await api.get('/admin/integrations/incoming')).data; }
+async function loadOutgoing() { outgoing.value = (await api.get('/admin/integrations/outgoing')).data; }
+async function loadDeliveries() {
+  const p = new URLSearchParams({ limit: '200' });
+  if (delOk.value !== '') p.set('ok', delOk.value);
+  deliveries.value = (await api.get('/admin/integrations/deliveries?' + p.toString())).data;
+}
+
+async function loadIntegrations() {
+  try {
+    await Promise.all([loadMeta(), loadBots(), loadTokens(), loadIncoming(), loadOutgoing(), loadDeliveries()]);
+  } catch (e) {
+    ElMessage.error('加载集成配置失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+/** 切子标签时按需刷新（新建前需要最新的机器人与会话列表） */
+async function loadIntTab() {
+  try {
+    if (intTab.value === 'bots') await loadBots();
+    else if (intTab.value === 'tokens') await loadTokens();
+    else if (intTab.value === 'incoming') { await Promise.all([loadMeta(), loadBots()]); await loadIncoming(); }
+    else if (intTab.value === 'outgoing') { await loadMeta(); await loadOutgoing(); }
+    else if (intTab.value === 'deliveries') await loadDeliveries();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || e.message);
+  }
+}
+
+function openBotDialog() {
+  botForm.value = { name: '', conversationId: null };
+  botDlg.value = true;
+}
+async function saveBot() {
+  if (!botForm.value.name.trim()) return ElMessage.warning('请填机器人名称');
+  busy.value = true;
+  try {
+    await api.post('/admin/integrations/bots', botForm.value);
+    ElMessage.success('机器人已创建');
+    botDlg.value = false;
+    await Promise.all([loadBots(), loadMeta()]);
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '创建失败');
+  } finally { busy.value = false; }
+}
+function openBotConvDialog(row) {
+  botConvForm.value = { id: row.id, name: row.nickname || row.username, conversationId: null };
+  botConvDlg.value = true;
+}
+async function saveBotConv() {
+  if (!botConvForm.value.conversationId) return ElMessage.warning('请选择会话');
+  busy.value = true;
+  try {
+    await api.post(`/admin/integrations/bots/${botConvForm.value.id}/conversations`,
+      { conversationId: botConvForm.value.conversationId });
+    ElMessage.success('已加入会话');
+    botConvDlg.value = false;
+    await loadMeta();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '操作失败');
+  } finally { busy.value = false; }
+}
+async function delBot(row) {
+  try {
+    await ElMessageBox.confirm(
+      `删除机器人「${row.nickname}」会同时清掉它的令牌和推送地址，且无法恢复。继续？`,
+      '确认删除', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/admin/integrations/bots/${row.id}`);
+    ElMessage.success('已删除');
+    await loadIntegrations();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '删除失败'); }
+}
+
+function openTokenDialog() {
+  newToken.value = '';
+  tokenForm.value = { name: '', userId: bots.value[0]?.id || null, scopes: ['message:send'], days: 0 };
+  tokenDlg.value = true;
+}
+async function saveToken() {
+  const f = tokenForm.value;
+  if (!f.name.trim()) return ElMessage.warning('请填用途');
+  if (!f.userId) return ElMessage.warning('请选择身份');
+  if (!f.scopes.length) return ElMessage.warning('至少勾一个权限');
+  busy.value = true;
+  try {
+    const { data } = await api.post('/admin/integrations/tokens', {
+      name: f.name,
+      userId: f.userId,
+      scopes: f.scopes,
+      expiresAt: f.days > 0 ? Date.now() + f.days * 86400000 : 0,
+    });
+    newToken.value = data.token;
+    await loadTokens();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '生成失败');
+  } finally { busy.value = false; }
+}
+async function toggleToken(row) {
+  try {
+    await api.post(`/admin/integrations/tokens/${row.id}/revoke`, { revoked: !row.revoked });
+    ElMessage.success(row.revoked ? '已恢复' : '已吊销');
+    await loadTokens();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '操作失败'); }
+}
+async function delToken(row) {
+  try { await ElMessageBox.confirm(`删除令牌「${row.name}」？使用它的程序会立刻失效。`, '确认删除', { type: 'warning' }); }
+  catch { return; }
+  try {
+    await api.delete(`/admin/integrations/tokens/${row.id}`);
+    ElMessage.success('已删除');
+    await loadTokens();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '删除失败'); }
+}
+
+function openIncomingDialog() {
+  incomingForm.value = {
+    name: '', botId: bots.value[0]?.id || null,
+    conversationId: intMeta.value.conversations[0]?.id || null, signed: false,
+  };
+  incomingDlg.value = true;
+}
+async function saveIncoming() {
+  const f = incomingForm.value;
+  if (!f.name.trim()) return ElMessage.warning('请填用途');
+  if (!f.botId) return ElMessage.warning('请选择机器人');
+  if (!f.conversationId) return ElMessage.warning('请选择目标会话');
+  busy.value = true;
+  try {
+    await api.post('/admin/integrations/incoming', f);
+    ElMessage.success('推送地址已创建');
+    incomingDlg.value = false;
+    await loadIncoming();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '创建失败');
+  } finally { busy.value = false; }
+}
+async function toggleIncoming(row) {
+  try {
+    await api.post(`/admin/integrations/incoming/${row.id}/revoke`, { revoked: !row.revoked });
+    ElMessage.success(row.revoked ? '已启用' : '已停用');
+    await loadIncoming();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '操作失败'); }
+}
+async function delIncoming(row) {
+  try { await ElMessageBox.confirm(`删除推送地址「${row.name}」？对方的推送会立刻失败。`, '确认删除', { type: 'warning' }); }
+  catch { return; }
+  try {
+    await api.delete(`/admin/integrations/incoming/${row.id}`);
+    ElMessage.success('已删除');
+    await loadIncoming();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '删除失败'); }
+}
+/** 试推一张示例卡片：既验证链路，也能顺便看到客户端卡片长什么样 */
+async function testIncoming(row) {
+  try {
+    await api.post(`/admin/integrations/incoming/${row.id}/send`, {
+      kind: 'card',
+      content: {
+        title: '测试推送',
+        text: '这是一条来自管理后台的测试卡片。收到它说明推送地址已经配好了。',
+        color: 'green',
+        fields: [
+          { label: '用途', value: row.name, short: true },
+          { label: '目标会话', value: row.conversation_title || ('#' + row.conversation_id), short: true },
+        ],
+        footer: '小智 IM · 集成对接',
+      },
+    });
+    ElMessage.success('已推送，去群里看看');
+    await loadIncoming();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '推送失败'); }
+}
+
+function openOutgoingDialog() {
+  outgoingForm.value = { name: '', url: '', events: [], conversationId: null };
+  outgoingDlg.value = true;
+}
+async function saveOutgoing() {
+  const f = outgoingForm.value;
+  if (!f.name.trim()) return ElMessage.warning('请填用途');
+  if (!/^https?:\/\/.+/i.test(f.url.trim())) return ElMessage.warning('回调地址要以 http:// 或 https:// 开头');
+  busy.value = true;
+  try {
+    const { data } = await api.post('/admin/integrations/outgoing', f);
+    ElMessage.success(`订阅已创建，签名密钥：${data.secret}`);
+    outgoingDlg.value = false;
+    await loadOutgoing();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '创建失败');
+  } finally { busy.value = false; }
+}
+async function toggleOutgoing(row, v) {
+  try {
+    await api.patch(`/admin/integrations/outgoing/${row.id}`, { active: v });
+    ElMessage.success(v ? '已启用' : '已停用');
+    await loadOutgoing();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '操作失败'); }
+}
+async function testOutgoing(row) {
+  try {
+    await api.post(`/admin/integrations/outgoing/${row.id}/test`);
+    ElMessage.success('测试事件已发出，去「投递日志」看结果');
+    setTimeout(loadDeliveries, 800);
+  } catch (e) { ElMessage.error(e.response?.data?.error || '发送失败'); }
+}
+async function rotateOutgoing(row) {
+  try { await ElMessageBox.confirm('换密钥后对方必须同步更新，否则验签会失败。继续？', '确认换密钥', { type: 'warning' }); }
+  catch { return; }
+  try {
+    const { data } = await api.patch(`/admin/integrations/outgoing/${row.id}`, { rotateSecret: true });
+    ElMessage.success(`新密钥：${data.secret}`);
+    await loadOutgoing();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '操作失败'); }
+}
+async function delOutgoing(row) {
+  try { await ElMessageBox.confirm(`删除订阅「${row.name}」？投递日志会一并清理。`, '确认删除', { type: 'warning' }); }
+  catch { return; }
+  try {
+    await api.delete(`/admin/integrations/outgoing/${row.id}`);
+    ElMessage.success('已删除');
+    await loadIntegrations();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '删除失败'); }
+}
+async function retryDelivery(row) {
+  try {
+    await api.post(`/admin/integrations/deliveries/${row.id}/retry`);
+    ElMessage.success('已重新投递');
+    setTimeout(loadDeliveries, 900);
+  } catch (e) { ElMessage.error(e.response?.data?.error || '重发失败'); }
+}
+
 /* ====== Settings ====== */
 const pwd = ref({ old: '', neu: '', neu2: '' });
 const pwdBusy = ref(false);
@@ -661,5 +1278,7 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .stat-num { font-size: 28px; font-weight: 700; color: #10B981; }
 .stat-label { color: #909399; margin-top: 6px; }
 .page-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.hint { color: #909399; font-size: 12px; }
+.mono { font-family: Consolas, Monaco, "Courier New", monospace; font-size: 12px; background: #f5f7fa; padding: 1px 5px; border-radius: 4px; word-break: break-all; }
 .el-menu { border-right: none !important; }
 </style>

@@ -1,9 +1,12 @@
+import 'dart:convert';
+
 class User {
   final int id;
   final String username;
   final String? nickname;
   final String? avatar;
   final String role;
+  final bool isBot;
 
   const User({
     required this.id,
@@ -11,6 +14,7 @@ class User {
     this.nickname,
     this.avatar,
     this.role = 'user',
+    this.isBot = false,
   });
 
   factory User.fromJson(Map<String, dynamic> m) => User(
@@ -19,6 +23,7 @@ class User {
         nickname: m['nickname'],
         avatar: m['avatar'],
         role: m['role'] ?? 'user',
+        isBot: m['is_bot'] == true || m['is_bot'] == 1,
       );
 
   String get display =>
@@ -74,7 +79,7 @@ class Message {
   final int id;
   final int conversationId;
   final int senderId;
-  final String kind; // text | image | file | emoji | audio
+  final String kind; // text | image | file | emoji | audio | card
   final String? content;
   final int? fileId;
   final String? fileUrl; // 服务端 join 出的 /files/xxx 访问地址
@@ -84,6 +89,7 @@ class Message {
   final bool edited; // 是否被编辑过
   final bool deleted; // 是否已撤回
   final List<int> mentions; // @提及的用户 id；-1 表示 @所有人
+  final bool senderIsBot; // 发送者是不是机器人（渲染 BOT 标签）
 
   const Message({
     required this.id,
@@ -99,6 +105,7 @@ class Message {
     this.edited = false,
     this.deleted = false,
     this.mentions = const [],
+    this.senderIsBot = false,
   });
 
   factory Message.fromJson(Map<String, dynamic> m) => Message(
@@ -118,6 +125,7 @@ class Message {
             .map((e) => e is int ? e : int.tryParse('$e') ?? -99)
             .where((e) => e != -99)
             .toList(),
+        senderIsBot: m['sender_is_bot'] == true || m['sender_is_bot'] == 1,
       );
 
   /// 本地即时更新（撤回 / 编辑后无需重新拉取整页历史）
@@ -135,10 +143,14 @@ class Message {
         edited: edited ?? this.edited,
         deleted: deleted ?? this.deleted,
         mentions: mentions,
+        senderIsBot: senderIsBot,
       );
 
   /// 是否 @了我（含 @所有人）
   bool mentionsMe(int myId) => mentions.contains(myId) || mentions.contains(-1);
+
+  /// 卡片内容（kind == 'card' 且 JSON 合法时非空）
+  CardData? get card => kind == 'card' ? CardData.tryParse(content) : null;
 
   /// 图片可显示的地址（baseUrl 由调用方拼）
   String? get imagePath {
@@ -163,6 +175,68 @@ class Message {
     if (fileUrl != null && fileUrl!.isNotEmpty) return fileUrl;
     return null;
   }
+}
+
+/// 卡片里的一个字段（键值对，如「东北大米 → 剩 3 袋」）
+class CardField {
+  final String label;
+  final String value;
+  final bool short; // true = 可与相邻字段并排显示
+
+  const CardField({this.label = '', this.value = '', this.short = false});
+
+  factory CardField.fromJson(Map<String, dynamic> m) => CardField(
+        label: '${m['label'] ?? ''}',
+        value: '${m['value'] ?? ''}',
+        short: m['short'] == true,
+      );
+}
+
+/// 结构化卡片消息：外部系统（工厂 V2 / OA / 脚本）推送的日报、预警等
+///
+/// 内容由服务端归一化过（长度、字段数、颜色白名单），客户端只负责画，
+/// 不需要再做防御性校验——但解析失败时仍返回 null 走降级渲染。
+class CardData {
+  final String title;
+  final String text;
+  final List<CardField> fields;
+  final String color; // blue | green | orange | red | purple | gray
+  final String footer;
+  final String url; // 可点击跳转的链接（可为空）
+
+  const CardData({
+    this.title = '',
+    this.text = '',
+    this.fields = const [],
+    this.color = 'blue',
+    this.footer = '',
+    this.url = '',
+  });
+
+  factory CardData.fromJson(Map<String, dynamic> m) => CardData(
+        title: '${m['title'] ?? ''}',
+        text: '${m['text'] ?? ''}',
+        fields: ((m['fields'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => CardField.fromJson(e.cast<String, dynamic>()))
+            .toList(),
+        color: '${m['color'] ?? 'blue'}',
+        footer: '${m['footer'] ?? ''}',
+        url: '${m['url'] ?? ''}',
+      );
+
+  static CardData? tryParse(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final v = jsonDecode(raw);
+      if (v is! Map) return null;
+      return CardData.fromJson(v.cast<String, dynamic>());
+    } catch (_) {
+      return null; // 老数据/脏数据 → 调用方降级成纯文本
+    }
+  }
+
+  bool get isEmpty => title.isEmpty && text.isEmpty && fields.isEmpty;
 }
 
 /// 全局搜索结果条目（消息 + 所在会话 + 发送者）
@@ -227,6 +301,7 @@ class GroupMember {
   final String role; // owner | admin | member
   final int mutedUntil; // 禁言到期时间戳，0 = 未禁言
   final int? joinedAt;
+  final bool isBot;
 
   const GroupMember({
     required this.id,
@@ -236,6 +311,7 @@ class GroupMember {
     this.role = 'member',
     this.mutedUntil = 0,
     this.joinedAt,
+    this.isBot = false,
   });
 
   factory GroupMember.fromJson(Map<String, dynamic> m) => GroupMember(
@@ -246,6 +322,7 @@ class GroupMember {
         role: m['role'] ?? 'member',
         mutedUntil: (m['muted_until'] ?? 0) as int,
         joinedAt: m['joined_at'],
+        isBot: m['is_bot'] == true || m['is_bot'] == 1,
       );
 
   String get display =>

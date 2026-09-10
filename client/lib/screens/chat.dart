@@ -780,6 +780,17 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String get _title => widget.conv.title ?? widget.peerName ?? '会话';
 
+  /// 每条消息的发送者名字。
+  /// 群聊里成员名单是拉到的，优先用它——这样机器人、其他成员的名字都能显示对，
+  /// 而不是一律显示会话名（旧实现只有单聊能显示对）。
+  String? _senderName(Message m) {
+    if (m.senderId == widget.myId) return null;
+    for (final mem in _members) {
+      if (mem.id == m.senderId) return mem.display;
+    }
+    return widget.peerName;
+  }
+
   @override
   Widget build(BuildContext context) {
     final canSend = _hasText && !_busy;
@@ -1003,7 +1014,7 @@ class _ChatScreenState extends State<ChatScreen> {
             MessageBubble(
               msg: m,
               mine: m.senderId == widget.myId,
-              senderName: m.senderId == widget.myId ? null : widget.peerName,
+              senderName: _senderName(m),
               baseUrl: Config.baseUrl,
               showTime: _showTimeAt(i),
               readLabel: _readLabelFor(i),
