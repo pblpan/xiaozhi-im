@@ -39,6 +39,13 @@ add_definitions(-DUNICODE -D_UNICODE)
 # of modifying this function.
 function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_features(${TARGET} PUBLIC cxx_std_17)
+  # 中文 Windows 的默认代码页是 936(GBK)，而插件源码是 UTF-8，MSVC 会报
+  # C4819「该文件包含不能在当前代码页中表示的字符」。本来只是个警告，但下面
+  # 的 /WX（警告视为错误）会把它升级成 error C2220，直接编译失败
+  # —— flutter_webrtc 就是这么挂的。
+  # 显式声明源码字符集即可根治。插件同样走这个函数，所以一处配置全项目受益。
+  # 只改 source-charset，不动 execution-charset，避免影响窄字符串字面量的行为。
+  target_compile_options(${TARGET} PRIVATE "/source-charset:utf-8")
   target_compile_options(${TARGET} PRIVATE /W4 /WX /wd"4100")
   target_compile_options(${TARGET} PRIVATE /EHsc)
   target_compile_definitions(${TARGET} PRIVATE "_HAS_EXCEPTIONS=0")

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
+import 'package:xiaozhi_im_client/core/call_service.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
 import 'package:xiaozhi_im_client/core/storage.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
@@ -60,6 +61,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         await Storage.clear();
         ImApi().clearToken();
         SocketService().disconnect();
+        await CallService().resetAll();
         if (mounted) {
           Navigator.pushReplacement(
               context, MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -119,6 +121,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     await Storage.clear();
     ImApi().clearToken();
     SocketService().disconnect();
+    await CallService().resetAll();
     if (mounted) {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -132,6 +135,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     await Storage.clear();
     ImApi().clearToken();
     SocketService().disconnect();
+    await CallService().resetAll();
     if (mounted) {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const LoginScreen()));

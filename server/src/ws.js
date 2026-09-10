@@ -2,6 +2,7 @@ const { WebSocketServer } = require('ws');
 const hub = require('./hub');
 const { verifyToken } = require('./auth');
 const { sendMessage, recallMessage, editMessage, markRead, typing } = require('./chat');
+const call = require('./call');
 
 function init(server) {
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -48,6 +49,38 @@ function init(server) {
             typing({ conversationId: frame.conversationId, userId });
             break;
           }
+          // ---- 音视频通话信令（服务端只转发，媒体走 WebRTC P2P）----
+          case 'call:invite':
+            call.invite({
+              conversationId: frame.conversationId,
+              callerId: userId,
+              calleeId: frame.calleeId,
+              mode: frame.mode,
+            });
+            break;
+          case 'call:accept':
+            call.accept({ callId: frame.callId, userId });
+            break;
+          case 'call:reject':
+            call.reject({ callId: frame.callId, userId, reason: frame.reason });
+            break;
+          case 'call:cancel':
+            call.cancel({ callId: frame.callId, userId });
+            break;
+          case 'call:end':
+            call.end({ callId: frame.callId, userId, reason: frame.reason });
+            break;
+          // offer / answer / ice 三种 SDP 交换共用一条中继
+          case 'call:offer':
+          case 'call:answer':
+          case 'call:ice':
+            call.relay({
+              callId: frame.callId,
+              userId,
+              type: frame.type.slice(5),
+              data: frame.data,
+            });
+            break;
           default:
             break;
         }
@@ -56,8 +89,15 @@ function init(server) {
       }
     });
 
-    ws.on('close', () => hub.removeSocket(userId, ws));
-    ws.on('error', () => hub.removeSocket(userId, ws));
+    ws.on('close', () => {
+      hub.removeSocket(userId, ws);
+      // 该用户所有端都掉线了，才认为他真的离线（通话可能还挂在另一端）
+      if (!hub.userSockets.has(userId)) call.handleOffline(userId);
+    });
+    ws.on('error', () => {
+      hub.removeSocket(userId, ws);
+      if (!hub.userSockets.has(userId)) call.handleOffline(userId);
+    });
   });
   return wss;
 }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:xiaozhi_im_client/api.dart';
+import 'package:xiaozhi_im_client/core/call_service.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/file_io.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
@@ -892,6 +893,31 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String get _title => widget.conv.title ?? widget.peerName ?? '会话';
 
+  /// 单聊对方信息（群聊为 null）。服务端 /conversations 已把 peer 展开，
+  /// 这里只用它取 id / 头像 / 是否机器人。
+  Map<String, dynamic>? get _peer => widget.conv.peer;
+
+  int? get _peerId => (_peer?['id'] as num?)?.toInt();
+
+  bool get _peerIsBot => _peer?['is_bot'] == true || _peer?['is_bot'] == 1;
+
+  /// 发起通话（video=false 为语音）。失败原因直接弹提示，不静默。
+  Future<void> _startCall(bool video) async {
+    final pid = _peerId;
+    if (pid == null) {
+      _toast('无法识别通话对象，请下拉刷新会话列表');
+      return;
+    }
+    final err = await CallService().startCall(
+      conversationId: widget.conv.id,
+      peerId: pid,
+      peerName: _title,
+      peerAvatar: _peer?['avatar'] as String?,
+      video: video,
+    );
+    if (err != null && mounted) _toast(err);
+  }
+
   /// 每条消息的发送者名字。
   /// 群聊里成员名单是拉到的，优先用它——这样机器人、其他成员的名字都能显示对，
   /// 而不是一律显示会话名（旧实现只有单聊能显示对）。
@@ -952,6 +978,19 @@ class _ChatScreenState extends State<ChatScreen> {
               onPressed: _openGroupManage,
               icon: const Icon(Icons.groups_rounded),
             ),
+          // 单聊才有通话入口（群通话/会议是后续版本的事）；机器人不会接，直接不给按钮
+          if (widget.conv.type == 'dm' && !_peerIsBot) ...[
+            IconButton(
+              tooltip: '语音通话',
+              onPressed: () => _startCall(false),
+              icon: const Icon(Icons.call_rounded),
+            ),
+            IconButton(
+              tooltip: '视频通话',
+              onPressed: () => _startCall(true),
+              icon: const Icon(Icons.videocam_rounded),
+            ),
+          ],
           IconButton(
             tooltip: '刷新',
             onPressed: _loadMsgs,
@@ -1078,6 +1117,10 @@ class _ChatScreenState extends State<ChatScreen> {
         return '[文件] ${m.fileName ?? ''}';
       case 'emoji':
         return '[表情] ${m.content ?? ''}';
+      case 'card':
+        return '[卡片] ${m.card?.title ?? ''}';
+      case 'call':
+        return m.call?.label ?? '[通话]';
       default:
         return m.content ?? '';
     }

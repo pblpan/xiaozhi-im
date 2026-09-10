@@ -66,6 +66,7 @@ router.get('/', (req, res) => {
           WHEN 'audio' THEN '[语音]'
           WHEN 'emoji' THEN '[表情]'
           WHEN 'card'  THEN '[卡片]'
+          WHEN 'call'  THEN '[通话]'
           ELSE m.content END
         FROM messages m WHERE m.conversation_id=c.id AND m.deleted=0 ORDER BY m.id DESC LIMIT 1) AS last_content,
       (SELECT kind FROM messages m WHERE m.conversation_id=c.id AND m.deleted=0 ORDER BY m.id DESC LIMIT 1) AS last_kind,

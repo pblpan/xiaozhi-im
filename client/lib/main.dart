@@ -2,12 +2,17 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api.dart';
+import 'core/call_service.dart';
 import 'core/settings.dart';
 import 'core/storage.dart';
 import 'core/theme.dart';
 import 'screens/login.dart';
 import 'screens/conversations.dart';
 import 'widgets/avatar.dart';
+
+/// 全局导航 key：来电时用户可能在任意页面（甚至聊天页里），
+/// 通话引擎靠它把全屏通话页推到最上层。
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,6 +26,8 @@ void main() async {
   }
   await Settings.load(); // 载入用户自定义的服务器地址
   await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
+  CallService().navKey = appNavigatorKey;
+  await CallService().attach(); // 订阅通话信令，随时能接来电
   runApp(const MyApp());
 }
 
@@ -30,6 +37,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: '小智 IM',
+        navigatorKey: appNavigatorKey,
         theme: AppTheme.dark(),
         home: const AuthGate(),
         debugShowCheckedModeBanner: false,

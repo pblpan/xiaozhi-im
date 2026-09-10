@@ -152,6 +152,9 @@ class Message {
   /// 卡片内容（kind == 'card' 且 JSON 合法时非空）
   CardData? get card => kind == 'card' ? CardData.tryParse(content) : null;
 
+  /// 通话记录内容（kind == 'call' 且 JSON 合法时非空）
+  CallLog? get call => kind == 'call' ? CallLog.tryParse(content) : null;
+
   /// 图片可显示的地址（baseUrl 由调用方拼）
   String? get imagePath {
     if (kind != 'image') return null;
@@ -194,6 +197,75 @@ class Message {
     final n = i < 0 ? raw : raw.substring(i + 1);
     return n.isEmpty ? '文件' : n;
   }
+}
+
+/// 通话记录消息（kind == 'call'）的内容。
+///
+/// 服务端在通话的每个终态都会落一条这样的消息，所以"漏接/被拒"不会静默丢失。
+class CallLog {
+  final String mode; // audio | video
+  final String status; // ended | missed | rejected | canceled | busy | failed
+  final int duration; // 通话秒数（未接通为 0）
+
+  const CallLog({
+    this.mode = 'audio',
+    this.status = 'ended',
+    this.duration = 0,
+  });
+
+  factory CallLog.fromJson(Map<String, dynamic> m) => CallLog(
+        mode: '${m['mode'] ?? 'audio'}',
+        status: '${m['status'] ?? 'ended'}',
+        duration: (m['duration'] as num?)?.toInt() ?? 0,
+      );
+
+  static CallLog? tryParse(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final v = jsonDecode(raw);
+      if (v is! Map) return null;
+      return CallLog.fromJson(v.cast<String, dynamic>());
+    } catch (_) {
+      return null; // 脏数据 → 调用方降级成纯文本
+    }
+  }
+
+  bool get isVideo => mode == 'video';
+
+  /// 时长文案：不足 1 小时用 mm:ss，超过用 h:mm:ss
+  String get durationText {
+    final s = duration < 0 ? 0 : duration;
+    final h = s ~/ 3600;
+    final m = (s % 3600) ~/ 60;
+    final sec = s % 60;
+    final mm = m.toString().padLeft(2, '0');
+    final ss = sec.toString().padLeft(2, '0');
+    return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
+  }
+
+  /// 气泡里显示的一行文案
+  String get label {
+    final kind = isVideo ? '视频通话' : '语音通话';
+    switch (status) {
+      case 'ended':
+        return duration > 0 ? '$kind  $durationText' : kind;
+      case 'missed':
+        return '$kind · 未接听';
+      case 'rejected':
+        return '$kind · 已拒绝';
+      case 'canceled':
+        return '$kind · 已取消';
+      case 'busy':
+        return '$kind · 对方忙线中';
+      case 'failed':
+        return '$kind · 通话中断';
+      default:
+        return kind;
+    }
+  }
+
+  /// 未正常通话结束（界面用弱化/警示色）
+  bool get isMissed => status != 'ended';
 }
 
 /// 卡片里的一个字段（键值对，如「东北大米 → 剩 3 袋」）

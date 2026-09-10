@@ -95,6 +95,8 @@ class MessageBubble extends StatelessWidget {
       body = _voiceBubble(context);
     } else if (msg.kind == 'card') {
       body = _cardBubble(context);
+    } else if (msg.kind == 'call') {
+      body = _callBubble(context);
     } else if (msg.kind == 'file') {
       body = _fileCard(context);
     } else {
@@ -392,6 +394,49 @@ class MessageBubble extends StatelessWidget {
       default:
         return const Color(0xFF3B82F6);
     }
+  }
+
+  /// 通话记录气泡：一行「图标 + 文案」。
+  /// 正常结束用品牌绿，未接听/被拒/中断用警示色——一眼能看出这通电话有没有接通。
+  Widget _callBubble(BuildContext context) {
+    final c = msg.call;
+    final missed = c?.isMissed ?? false;
+    final accent = missed ? AppColors.danger : AppColors.brand;
+    final icon = (c?.isVideo ?? false)
+        ? Icons.videocam_rounded
+        : Icons.call_rounded;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: mine
+            ? AppColors.brand.withValues(alpha: 0.13)
+            : AppColors.bubbleOther,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(16),
+          topRight: const Radius.circular(16),
+          bottomLeft: Radius.circular(mine ? 16 : 5),
+          bottomRight: Radius.circular(mine ? 5 : 16),
+        ),
+        border: Border.all(color: accent.withValues(alpha: 0.34)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 17, color: accent),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              c?.label ?? '通话',
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w500,
+                color: missed ? AppColors.textSub : AppColors.text,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _textBubble(BuildContext context) {

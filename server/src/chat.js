@@ -38,8 +38,9 @@ function mentionLike(id) {
   return '%,' + Number(id) + ',%';
 }
 
-/** 允许的消息类型（audio=语音，content 存时长秒数；card=结构化卡片，content 存 JSON） */
-const KINDS = ['text', 'image', 'file', 'emoji', 'audio', 'card'];
+/** 允许的消息类型（audio=语音，content 存时长秒数；card=结构化卡片，content 存 JSON；
+ *  call=通话记录，content 存 {mode,status,duration,caller,callee} JSON） */
+const KINDS = ['text', 'image', 'file', 'emoji', 'audio', 'card', 'call'];
 
 /** 卡片配色：外部系统只需给语义色名，具体色值由客户端决定（换肤不用改对接方） */
 const CARD_COLORS = ['blue', 'green', 'orange', 'red', 'purple', 'gray'];
