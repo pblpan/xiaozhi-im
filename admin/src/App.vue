@@ -89,6 +89,12 @@
             <el-table-column prop="name" label="群名" />
             <el-table-column prop="owner_name" label="群主" />
             <el-table-column prop="members" label="成员数" width="90" />
+            <el-table-column label="群公告" min-width="160" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="row.announcement">{{ row.announcement }}</span>
+                <span v-else style="color:#c0c4cc">—</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="created_at" label="创建时间" width="180">
               <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
             </el-table-column>
@@ -182,6 +188,12 @@
               <template #default="{ row }">
                 <el-tag v-if="row.deleted" size="small" type="info">已撤回</el-tag>
                 <el-tag v-else-if="row.edited" size="small" type="warning">已编辑</el-tag>
+                <span v-else style="color:#c0c4cc">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="@" width="80">
+              <template #default="{ row }">
+                <el-tag v-if="row.mentions" size="small" type="success">@提及</el-tag>
                 <span v-else style="color:#c0c4cc">—</span>
               </template>
             </el-table-column>

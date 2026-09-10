@@ -8,22 +8,91 @@ const RECALL_WINDOW_MS = 2 * 60 * 1000;
 // 给消息行补上文件访问地址（历史消息 content 存的是原始名，实际要按 files.path 取）
 function withFileInfo(row) {
   if (!row) return row;
-  if (row.deleted) return { ...row, file_url: null, file_name: null, file_mime: null, file_size: null };
-  if (!row.file_id) return { ...row, file_url: null };
+  // mentions 落库是 JSON 字符串，出口统一转成数组，客户端直接用
+  const base = { ...row, mentions: parseMentions(row.mentions) };
+  if (row.deleted) return { ...base, file_url: null, file_name: null, file_mime: null, file_size: null };
+  if (!row.file_id) return { ...base, file_url: null };
   const f = db.prepare('SELECT name,mime,size,path FROM files WHERE id=?').get(row.file_id);
-  if (!f) return { ...row, file_url: null };
-  return { ...row, file_url: `/files/${f.path}`, file_name: f.name, file_mime: f.mime, file_size: f.size };
+  if (!f) return { ...base, file_url: null };
+  return { ...base, file_url: `/files/${f.path}`, file_name: f.name, file_mime: f.mime, file_size: f.size };
+}
+
+/** mentions 列（",1,11," 形式）→ 数字数组；非法值一律当空 */
+function parseMentions(raw) {
+  if (!raw) return [];
+  return String(raw).split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+    .map(Number)
+    .filter((n) => Number.isInteger(n));
+}
+
+/** 数字数组 → ",1,11," 形式。用逗号包裹是为了 LIKE '%,1,%' 能精确命中，避免 uid=1 误匹配 [11] */
+function serializeMentions(ids) {
+  return ids.length ? ',' + ids.join(',') + ',' : null;
+}
+
+/** 生成"精确匹配某个提及 id"的 LIKE 模式 */
+function mentionLike(id) {
+  return '%,' + Number(id) + ',%';
 }
 
 /** 允许的消息类型（audio=语音，content 存时长秒数） */
 const KINDS = ['text', 'image', 'file', 'emoji', 'audio'];
 
-function sendMessage({ conversationId, senderId, kind, content, fileId }) {
+/** @所有人 的哨兵值（存进 mentions JSON 数组） */
+const MENTION_ALL = -1;
+
+/**
+ * 规范化 @提及列表：
+ * - 允许传数字 id 或字符串（'all' / '-1' 表示所有人）
+ * - 只保留当前会话的真实成员，防止 @ 到会话外的人（越权探测）
+ * - 非群聊忽略 @所有人
+ */
+function normalizeMentions(raw, conversationId) {
+  if (!raw) return [];
+  const arr = Array.isArray(raw) ? raw : [raw];
+  const memberIds = new Set(
+    db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?')
+      .all(conversationId).map((r) => r.user_id),
+  );
+  const isGroup = db.prepare('SELECT type FROM conversations WHERE id = ?').get(conversationId)?.type === 'group';
+
+  const out = new Set();
+  for (const v of arr) {
+    const s = String(v).trim().toLowerCase();
+    if (s === 'all' || s === '-1') {
+      if (isGroup) out.add(MENTION_ALL);
+      continue;
+    }
+    const id = Number(v);
+    if (Number.isInteger(id) && memberIds.has(id)) out.add(id);
+  }
+  return [...out];
+}
+
+/** 取群成员的禁言到期时间（非群成员 / 非群聊返回 0） */
+function mutedUntilOf(conversationId, userId) {
+  const g = db.prepare('SELECT id, owner_id FROM groups WHERE conversation_id = ?').get(conversationId);
+  if (!g) return 0;
+  if (g.owner_id === userId) return 0; // 群主永不被禁言
+  const m = db.prepare('SELECT muted_until FROM group_members WHERE group_id = ? AND user_id = ?').get(g.id, userId);
+  return m?.muted_until || 0;
+}
+
+function sendMessage({ conversationId, senderId, kind, content, fileId, mentions }) {
   const conv = db.prepare('SELECT id FROM conversations WHERE id = ?').get(conversationId);
   if (!conv) throw new Error('conversation not found');
   const member = db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
     .get(conversationId, senderId);
   if (!member) throw new Error('not a member of this conversation');
+
+  // 群内被禁言的成员不能发言
+  const muted = mutedUntilOf(conversationId, senderId);
+  if (muted > Date.now()) {
+    const mins = Math.ceil((muted - Date.now()) / 60000);
+    throw new Error(`你已被禁言，还需 ${mins} 分钟`);
+  }
 
   const k = kind || 'text';
   if (!KINDS.includes(k)) throw new Error('不支持的消息类型: ' + k);
@@ -40,10 +109,12 @@ function sendMessage({ conversationId, senderId, kind, content, fileId }) {
     body = String(Number.isFinite(sec) ? Math.min(Math.max(sec, 1), 600) : 1);
   }
 
+  const ms = normalizeMentions(mentions, conversationId);
   const res = db.prepare(`INSERT INTO messages
-    (conversation_id, sender_id, kind, content, file_id, created_at, edited, deleted)
-    VALUES (?,?,?,?,?,?,0,0)`)
-    .run(conversationId, senderId, k, body, fileId || null, Date.now());
+    (conversation_id, sender_id, kind, content, file_id, created_at, edited, deleted, mentions)
+    VALUES (?,?,?,?,?,?,0,0,?)`)
+    .run(conversationId, senderId, k, body, fileId || null, Date.now(),
+      serializeMentions(ms));
 
   // 发消息视为已读到本条，避免自己发的消息显示未读
   db.prepare(`UPDATE conversation_members SET last_read_id = ?
@@ -205,9 +276,140 @@ function searchMessages({ userId, q, conversationId, limit = 50, offset = 0 }) {
   return { items, total, keyword: kw, limit: cap, offset: off };
 }
 
+/**
+ * 转发消息到若干会话：内容原样复制（新的 sender 是我），不复制 @提及。
+ * 只允许转发「我参与的原会话」里的消息；目标会话必须是我是成员。
+ */
+function forwardMessage({ messageId, userId, conversationIds }) {
+  const src = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+  if (!src) throw new Error('消息不存在');
+  if (src.deleted) throw new Error('该消息已撤回，无法转发');
+  const srcMember = db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+    .get(src.conversation_id, userId);
+  if (!srcMember) throw new Error('无权转发该消息');
+
+  const ids = [...new Set(
+    (Array.isArray(conversationIds) ? conversationIds : [conversationIds])
+      .map(Number).filter(Number.isInteger),
+  )];
+  if (!ids.length) throw new Error('请选择转发目标');
+  if (ids.length > 20) throw new Error('一次最多转发到 20 个会话');
+
+  const now = Date.now();
+  const done = [];
+  for (const cid of ids) {
+    const m = db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+      .get(cid, userId);
+    if (!m) continue;                                   // 非成员静默跳过
+    if (mutedUntilOf(cid, userId) > now) continue;       // 被禁言的会话跳过
+
+    const res = db.prepare(`INSERT INTO messages
+      (conversation_id, sender_id, kind, content, file_id, created_at, edited, deleted, mentions)
+      VALUES (?,?,?,?,?,?,0,0,NULL)`)
+      .run(cid, userId, src.kind, src.content, src.file_id, now);
+    db.prepare(`UPDATE conversation_members SET last_read_id = ?
+      WHERE conversation_id = ? AND user_id = ? AND last_read_id < ?`)
+      .run(res.lastInsertRowid, cid, userId, res.lastInsertRowid);
+
+    const full = withFileInfo(db.prepare('SELECT * FROM messages WHERE id = ?').get(res.lastInsertRowid));
+    hub.broadcastToConversation(db, cid, { type: 'message:new', message: full }, userId);
+    done.push({ conversationId: cid, message: full });
+  }
+  if (!done.length) throw new Error('没有可转发的会话');
+  return { count: done.length, items: done };
+}
+
+/** 群聊置顶需要群主/管理员；单聊任意成员可置顶。 */
+function canPin(conversationId, userId) {
+  const g = db.prepare('SELECT id, owner_id FROM groups WHERE conversation_id = ?').get(conversationId);
+  if (!g) return true;
+  if (g.owner_id === userId) return true;
+  const m = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(g.id, userId);
+  return m?.role === 'admin';
+}
+
+/** 置顶/取消置顶一条消息（同一个 messageId 再调一次即取消）。 */
+function togglePin({ conversationId, userId, messageId }) {
+  const member = db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+    .get(conversationId, userId);
+  if (!member) throw new Error('not a member of this conversation');
+  if (!canPin(conversationId, userId)) throw new Error('只有群主或管理员可以置顶消息');
+
+  const conv = db.prepare('SELECT pinned_message_id FROM conversations WHERE id = ?').get(conversationId);
+  const mid = Number(messageId);
+  let pinned = null;
+  if (Number(conv?.pinned_message_id) !== mid) {
+    const m = db.prepare('SELECT id FROM messages WHERE id = ? AND conversation_id = ? AND deleted = 0')
+      .get(mid, conversationId);
+    if (!m) throw new Error('消息不存在或已撤回');
+    pinned = m.id;
+  }
+  db.prepare('UPDATE conversations SET pinned_message_id = ? WHERE id = ?').run(pinned, conversationId);
+
+  const payload = { type: 'conversation:pin', conversationId, pinnedMessageId: pinned };
+  hub.broadcastToConversation(db, conversationId, payload, null);
+  return payload;
+}
+
+/** 会话置顶消息详情（供会话顶部展示） */
+function pinnedMessage(conversationId) {
+  const conv = db.prepare('SELECT pinned_message_id FROM conversations WHERE id = ?').get(conversationId);
+  const mid = conv?.pinned_message_id;
+  if (!mid) return null;
+  const m = db.prepare('SELECT * FROM messages WHERE id = ?').get(mid);
+  if (!m || m.deleted) return null;
+  const s = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(m.sender_id);
+  return { ...withFileInfo(m), sender_name: s ? (s.nickname || s.username) : null };
+}
+
+// ---------- 消息收藏 ----------
+
+function addFavorite({ userId, messageId }) {
+  const m = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+  if (!m) throw new Error('消息不存在');
+  if (m.deleted) throw new Error('该消息已撤回，无法收藏');
+  const mem = db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+    .get(m.conversation_id, userId);
+  if (!mem) throw new Error('无权收藏该消息');
+  db.prepare('INSERT OR IGNORE INTO favorites (user_id, message_id, created_at) VALUES (?,?,?)')
+    .run(userId, messageId, Date.now());
+  return { ok: true, messageId };
+}
+
+function removeFavorite({ userId, messageId }) {
+  db.prepare('DELETE FROM favorites WHERE user_id = ? AND message_id = ?').run(userId, messageId);
+  return { ok: true, messageId };
+}
+
+function listFavorites({ userId, limit = 100, offset = 0 }) {
+  const cap = Math.min(Math.max(Number(limit) || 100, 1), 200);
+  const off = Math.max(Number(offset) || 0, 0);
+  const rows = db.prepare(`SELECT m.*, f.created_at AS favorited_at
+    FROM favorites f JOIN messages m ON m.id = f.message_id
+    WHERE f.user_id = ? ORDER BY f.id DESC LIMIT ? OFFSET ?`).all(userId, cap, off);
+  const total = db.prepare('SELECT COUNT(*) n FROM favorites WHERE user_id = ?').get(userId).n;
+
+  const items = rows.map((r) => {
+    const conv = conversationTitle(r.conversation_id, userId);
+    const s = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(r.sender_id);
+    return {
+      ...withFileInfo(r),
+      conv_title: conv.title,
+      conv_type: conv.type,
+      peer: conv.peer || null,
+      sender_name: s ? (s.nickname || s.username) : null,
+      mine: r.sender_id === userId,
+    };
+  });
+  return { items, total, limit: cap, offset: off };
+}
+
 module.exports = {
   sendMessage, withFileInfo,
   recallMessage, editMessage, markRead, typing, readState,
   conversationTitle, searchMessages,
-  RECALL_WINDOW_MS, KINDS,
+  forwardMessage, togglePin, pinnedMessage, canPin,
+  addFavorite, removeFavorite, listFavorites,
+  normalizeMentions, mutedUntilOf, parseMentions, serializeMentions, mentionLike,
+  RECALL_WINDOW_MS, KINDS, MENTION_ALL,
 };

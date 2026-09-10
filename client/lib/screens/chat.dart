@@ -10,6 +10,8 @@ import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/core/voice.dart';
 import 'package:xiaozhi_im_client/models.dart';
+import 'package:xiaozhi_im_client/screens/forward.dart';
+import 'package:xiaozhi_im_client/screens/group_manage.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/bubble.dart';
@@ -60,6 +62,25 @@ class _ChatScreenState extends State<ChatScreen> {
   int _recSeconds = 0;
   Timer? _recTimer;
 
+  /// 群成员（用于 @提及 选择器；单聊为空）
+  List<GroupMember> _members = [];
+
+  /// 群公告（群聊才有）
+  String? _announcement;
+  bool _announceCollapsed = true;
+
+  /// 当前置顶消息（null = 无）
+  Message? _pinned;
+
+  /// 我在群里的管理权限（群主/管理员）
+  bool _canManage = false;
+
+  /// 我已收藏的消息 id 集合（长按菜单显示"收藏/取消收藏"）
+  final Set<int> _favIds = {};
+
+  /// 记录上一次输入框内容，用于识别"刚输入了 @"
+  String _lastText = '';
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +109,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final list =
           (d['messages'] as List? ?? []).map((e) => Message.fromJson(e)).toList();
       final members = d['members'] as List? ?? [];
+      final pinnedRaw = d['pinned'];
       setState(() {
         _msgs = list;
         _readMap = {
@@ -95,12 +117,50 @@ class _ChatScreenState extends State<ChatScreen> {
             (m['user_id'] as int): ((m['last_read_id'] ?? 0) as int),
         };
         _recallWindowMs = (d['recallWindowMs'] as int?) ?? 120000;
+        _pinned = pinnedRaw is Map
+            ? Message.fromJson(Map<String, dynamic>.from(pinnedRaw))
+            : null;
         _loading = false;
       });
       _scroll();
       _markRead();
+      _loadGroup();
+      _loadFavs();
     } catch (e) {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// 群聊：拉成员（@选择器用）、公告、我的管理权限
+  Future<void> _loadGroup() async {
+    final gid = widget.conv.groupId;
+    if (gid == null) return;
+    try {
+      final d = await ImApi().groupDetail(gid);
+      if (!mounted) return;
+      final g = GroupDetail.fromJson(d);
+      setState(() {
+        _members = g.members;
+        _canManage = g.canManage;
+        _announcement = g.announcement;
+      });
+    } catch (_) {
+      // 群信息拉取失败不影响聊天
+    }
+  }
+
+  /// 我收藏过的消息 id（长按菜单据此显示"收藏 / 取消收藏"）
+  Future<void> _loadFavs() async {
+    try {
+      final d = await ImApi().favorites(limit: 200);
+      if (!mounted) return;
+      setState(() {
+        _favIds
+          ..clear()
+          ..addAll(((d['items'] as List?) ?? []).map((e) => (e['id'] as int)));
+      });
+    } catch (_) {
+      // 收藏状态拉取失败不打扰用户
     }
   }
 
@@ -116,8 +176,18 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onTextChanged() {
-    final v = _ctrl.text.trim().isNotEmpty;
+    final text = _ctrl.text;
+    final v = text.trim().isNotEmpty;
     if (v != _hasText && mounted) setState(() => _hasText = v);
+
+    // 刚敲下 @ → 弹出成员选择（仅群聊；插入的 "@昵称 " 以空格结尾，不会递归触发）
+    if (widget.conv.type == 'group' &&
+        text.length == _lastText.length + 1 &&
+        text.endsWith('@')) {
+      _pickMention();
+    }
+    _lastText = text;
+
     if (!v) return;
     // 输入中状态：2.5 秒节流，避免每个字符都发帧
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -125,6 +195,80 @@ class _ChatScreenState extends State<ChatScreen> {
       _lastTypingSent = now;
       SocketService().send({'type': 'typing', 'conversationId': widget.conv.id});
     }
+  }
+
+  /// 输入 @ 后弹出成员选择（含"所有人"），选中则把 "@昵称 " 插入光标处
+  Future<void> _pickMention() async {
+    if (_members.isEmpty) await _loadGroup();
+    if (!mounted) return;
+    final picked = await showModalBottomSheet<_MentionPick>(
+      context: context,
+      backgroundColor: AppColors.bgElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            const Text('选择要提醒的人',
+                style: TextStyle(fontSize: 13.5, color: AppColors.textSub)),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.campaign_rounded,
+                        size: 21, color: Color(0xFFFFB74D)),
+                    title: const Text('所有人',
+                        style: TextStyle(
+                            fontSize: 14.5, fontWeight: FontWeight.w600)),
+                    onTap: () =>
+                        Navigator.pop(ctx, const _MentionPick('所有人', -1)),
+                  ),
+                  ..._members
+                      .where((m) => m.id != widget.myId)
+                      .map((m) => ListTile(
+                            leading: UserAvatar(name: m.display, size: 34, radius: 9),
+                            title: Text(m.display,
+                                style: const TextStyle(fontSize: 14.5)),
+                            onTap: () =>
+                                Navigator.pop(ctx, _MentionPick(m.display, m.id)),
+                          )),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+
+    // 去掉刚输入的 @，替换为 "@昵称 "
+    final text = _ctrl.text;
+    final base = text.endsWith('@') ? text.substring(0, text.length - 1) : text;
+    final next = '$base@${picked.name} ';
+    _ctrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: next.length),
+    );
+    _lastText = next;
+    _focus.requestFocus();
+  }
+
+  /// 从文本里反查 @提及 的成员 id（避免用户删掉 @ 文本后仍误发提醒）
+  List<int> _mentionsInText(String text) {
+    final out = <int>[];
+    for (final m in _members) {
+      if (m.id != widget.myId && text.contains('@${m.display}')) out.add(m.id);
+    }
+    if (text.contains('@所有人') || text.toLowerCase().contains('@all')) {
+      out.add(-1);
+    }
+    return out;
   }
 
   void _clearTyping() {
@@ -189,6 +333,43 @@ class _ChatScreenState extends State<ChatScreen> {
       _typingHide = Timer(const Duration(seconds: 3), () {
         if (mounted) setState(() => _typingUserId = null);
       });
+      return;
+    }
+
+    // 有人置顶 / 取消置顶
+    if (type == 'conversation:pin') {
+      if (e['conversationId'] != widget.conv.id) return;
+      final pid = e['pinnedMessageId'] as int?;
+      if (pid == null) {
+        setState(() => _pinned = null);
+        return;
+      }
+      Message? found;
+      for (final m in _msgs) {
+        if (m.id == pid) { found = m; break; }
+      }
+      if (found == null) {
+        _loadMsgs(); // 置顶的消息不在当前窗口内，重新拉一次
+      } else {
+        setState(() => _pinned = found);
+      }
+      return;
+    }
+
+    // 群资料 / 成员变更
+    if (type == 'group:updated') {
+      if (e['conversationId'] != widget.conv.id) return;
+      _loadGroup();
+      return;
+    }
+
+    // 被移出群聊 → 关掉会话页
+    if (type == 'group:kicked') {
+      if (e['conversationId'] != widget.conv.id) return;
+      if (mounted) {
+        _toast('你已被移出该群聊');
+        Navigator.of(context).maybePop();
+      }
     }
   }
 
@@ -203,10 +384,15 @@ class _ChatScreenState extends State<ChatScreen> {
   void _send() async {
     final t = _ctrl.text.trim();
     if (t.isEmpty) return;
+    // 群聊：从文本里反查 @了谁（用户删掉 @文本就不会误提醒）
+    final mentions =
+        widget.conv.type == 'group' ? _mentionsInText(t) : const <int>[];
     _ctrl.clear();
+    _lastText = '';
     setState(() => _hasText = false);
     try {
-      final m = await ImApi().sendMessage(widget.conv.id, 'text', t);
+      final m =
+          await ImApi().sendMessage(widget.conv.id, 'text', t, null, mentions);
       if (!mounted) return;
       setState(() => _msgs.add(Message.fromJson(m)));
       _scroll();
@@ -339,6 +525,9 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _canEdit(Message m) =>
       m.senderId == widget.myId && !m.deleted && m.kind == 'text';
 
+  /// 能否置顶：单聊任意成员；群聊需群主或管理员
+  bool get _canPinHere => widget.conv.type != 'group' || _canManage;
+
   void _showMsgMenu(Message m) {
     final canEdit = _canEdit(m);
     final canRecall = _canRecall(m);
@@ -377,6 +566,28 @@ class _ChatScreenState extends State<ChatScreen> {
               _menuItem(Icons.edit_rounded, '编辑', () {
                 Navigator.pop(ctx);
                 _editMsg(m);
+              }),
+            if (!m.deleted)
+              _menuItem(Icons.forward_rounded, '转发', () {
+                Navigator.pop(ctx);
+                _forward(m);
+              }),
+            if (!m.deleted)
+              _menuItem(
+                _favIds.contains(m.id)
+                    ? Icons.star_rounded
+                    : Icons.star_border_rounded,
+                _favIds.contains(m.id) ? '取消收藏' : '收藏',
+                () {
+                  Navigator.pop(ctx);
+                  _toggleFav(m);
+                },
+              ),
+            if (!m.deleted && _canPinHere)
+              _menuItem(Icons.push_pin_rounded,
+                  _pinned?.id == m.id ? '取消置顶' : '置顶', () {
+                Navigator.pop(ctx);
+                _togglePin(m);
               }),
             if (canRecall)
               _menuItem(Icons.undo_rounded, '撤回', () {
@@ -491,6 +702,46 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// 转发：弹出会话多选页
+  Future<void> _forward(Message m) async {
+    final done = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => ForwardScreen(messageId: m.id)),
+    );
+    if (done == true && mounted) _scroll();
+  }
+
+  /// 收藏 / 取消收藏
+  Future<void> _toggleFav(Message m) async {
+    final has = _favIds.contains(m.id);
+    try {
+      if (has) {
+        await ImApi().removeFavorite(m.id);
+        if (mounted) setState(() => _favIds.remove(m.id));
+        _toast('已取消收藏');
+      } else {
+        await ImApi().addFavorite(m.id);
+        if (mounted) setState(() => _favIds.add(m.id));
+        _toast('已收藏，可在「我的收藏」查看');
+      }
+    } catch (e) {
+      if (mounted) _toast('操作失败: ${_msg(e)}');
+    }
+  }
+
+  /// 置顶 / 取消置顶
+  Future<void> _togglePin(Message m) async {
+    try {
+      final r = await ImApi().pinMessage(widget.conv.id, m.id);
+      final pid = r['pinnedMessageId'] as int?;
+      if (!mounted) return;
+      setState(() => _pinned = pid == null ? null : m);
+      _toast(pid == null ? '已取消置顶' : '已置顶');
+    } catch (e) {
+      if (mounted) _toast('操作失败: ${_msg(e)}');
+    }
+  }
+
   // ---------- 渲染 ----------
 
   /// 已读水位：其他成员都读到哪（无其他成员返回 -1 = 不显示标签）
@@ -572,6 +823,12 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          if (widget.conv.type == 'group' && widget.conv.groupId != null)
+            IconButton(
+              tooltip: '群管理',
+              onPressed: _openGroupManage,
+              icon: const Icon(Icons.groups_rounded),
+            ),
           IconButton(
             tooltip: '刷新',
             onPressed: _loadMsgs,
@@ -584,6 +841,7 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Column(
             children: [
+              _topBars(),
               Expanded(child: _body()),
               _composer(canSend),
             ],
@@ -592,6 +850,123 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+
+  /// 会话顶部信息条：置顶消息 + 群公告（都没有则占 0 高度）
+  Widget _topBars() {
+    final bars = <Widget>[];
+    if (_pinned != null) bars.add(_pinnedBar(_pinned!));
+    if (widget.conv.type == 'group' &&
+        _announcement != null &&
+        _announcement!.isNotEmpty) {
+      bars.add(_announceBar(_announcement!));
+    }
+    if (bars.isEmpty) return const SizedBox.shrink();
+    return Column(children: bars);
+  }
+
+  Widget _pinnedBar(Message m) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        color: AppColors.brand.withValues(alpha: 0.10),
+        child: Row(
+          children: [
+            const Icon(Icons.push_pin_rounded, size: 15, color: AppColors.brand),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _previewOf(m),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12.5, color: AppColors.text),
+              ),
+            ),
+            if (_canPinHere)
+              GestureDetector(
+                onTap: () => _togglePin(m),
+                child: const Padding(
+                  padding: EdgeInsets.only(left: 8),
+                  child: Icon(Icons.close_rounded,
+                      size: 15, color: AppColors.textWeak),
+                ),
+              ),
+          ],
+        ),
+      );
+
+  Widget _announceBar(String text) => GestureDetector(
+        onTap: () => setState(() => _announceCollapsed = !_announceCollapsed),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: const BoxDecoration(
+            color: AppColors.surfaceHi,
+            border: Border(bottom: BorderSide(color: AppColors.divider)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 1),
+                child: Icon(Icons.campaign_rounded,
+                    size: 15, color: Color(0xFFFFB74D)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '群公告：$text',
+                  maxLines: _announceCollapsed ? 1 : 6,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 12.5, color: AppColors.textSub, height: 1.4),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 6, top: 1),
+                child: Icon(
+                  _announceCollapsed
+                      ? Icons.expand_more_rounded
+                      : Icons.expand_less_rounded,
+                  size: 16,
+                  color: AppColors.textWeak,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+  /// 单行预览（置顶条 / 转发提示用）
+  String _previewOf(Message m) {
+    switch (m.kind) {
+      case 'text':
+        return m.content ?? '';
+      case 'image':
+        return '[图片]';
+      case 'audio':
+        return '[语音] ${m.audioSeconds ?? 1}"';
+      case 'file':
+        return '[文件] ${m.fileName ?? ''}';
+      case 'emoji':
+        return '[表情] ${m.content ?? ''}';
+      default:
+        return m.content ?? '';
+    }
+  }
+
+  Future<void> _openGroupManage() async {
+    final gid = widget.conv.groupId;
+    if (gid == null) return;
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GroupManageScreen(groupId: gid, myId: widget.myId),
+      ),
+    );
+    if (changed == true && mounted) {
+      _loadGroup();
+      _loadMsgs();
+    }
   }
 
   Widget _body() {
@@ -632,6 +1007,8 @@ class _ChatScreenState extends State<ChatScreen> {
               baseUrl: Config.baseUrl,
               showTime: _showTimeAt(i),
               readLabel: _readLabelFor(i),
+              mentionHighlight:
+                  m.senderId != widget.myId && m.mentionsMe(widget.myId),
               onLongPress: () => _showMsgMenu(m),
             ),
           ],
@@ -829,4 +1206,12 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
       );
+}
+
+/// @提及选择结果：name 用于插入文本，id 用于服务端校验（-1 = 所有人）
+class _MentionPick {
+  final String name;
+  final int id;
+
+  const _MentionPick(this.name, this.id);
 }

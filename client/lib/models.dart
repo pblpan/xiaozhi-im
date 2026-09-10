@@ -33,6 +33,11 @@ class Conversation {
   final String? lastContent;
   final int? lastAt;
   final int unread; // 未读消息数
+  final bool hasMention; // 未读里是否有人 @我
+  final bool muted; // 免打扰
+  final String? announcement; // 群公告
+  final int? groupId; // 群聊对应的群 id（单聊为 null）
+  final Map<String, dynamic>? peer;
 
   const Conversation({
     required this.id,
@@ -42,6 +47,11 @@ class Conversation {
     this.lastContent,
     this.lastAt,
     this.unread = 0,
+    this.hasMention = false,
+    this.muted = false,
+    this.announcement,
+    this.groupId,
+    this.peer,
   });
 
   factory Conversation.fromJson(Map<String, dynamic> m) => Conversation(
@@ -52,6 +62,11 @@ class Conversation {
         lastContent: m['last_content'],
         lastAt: m['last_at'],
         unread: (m['unread'] ?? 0) as int,
+        hasMention: m['has_mention'] == true,
+        muted: m['muted'] == true,
+        announcement: m['announcement'],
+        groupId: m['group_id'] as int?,
+        peer: m['peer'] as Map<String, dynamic>?,
       );
 }
 
@@ -59,7 +74,7 @@ class Message {
   final int id;
   final int conversationId;
   final int senderId;
-  final String kind; // text | image | file | emoji
+  final String kind; // text | image | file | emoji | audio
   final String? content;
   final int? fileId;
   final String? fileUrl; // 服务端 join 出的 /files/xxx 访问地址
@@ -68,6 +83,7 @@ class Message {
   final int createdAt;
   final bool edited; // 是否被编辑过
   final bool deleted; // 是否已撤回
+  final List<int> mentions; // @提及的用户 id；-1 表示 @所有人
 
   const Message({
     required this.id,
@@ -82,6 +98,7 @@ class Message {
     required this.createdAt,
     this.edited = false,
     this.deleted = false,
+    this.mentions = const [],
   });
 
   factory Message.fromJson(Map<String, dynamic> m) => Message(
@@ -97,6 +114,10 @@ class Message {
         createdAt: m['created_at'],
         edited: (m['edited'] ?? 0) == 1 || m['edited'] == true,
         deleted: (m['deleted'] ?? 0) == 1 || m['deleted'] == true,
+        mentions: ((m['mentions'] as List?) ?? const [])
+            .map((e) => e is int ? e : int.tryParse('$e') ?? -99)
+            .where((e) => e != -99)
+            .toList(),
       );
 
   /// 本地即时更新（撤回 / 编辑后无需重新拉取整页历史）
@@ -113,7 +134,11 @@ class Message {
         createdAt: createdAt,
         edited: edited ?? this.edited,
         deleted: deleted ?? this.deleted,
+        mentions: mentions,
       );
+
+  /// 是否 @了我（含 @所有人）
+  bool mentionsMe(int myId) => mentions.contains(myId) || mentions.contains(-1);
 
   /// 图片可显示的地址（baseUrl 由调用方拼）
   String? get imagePath {
@@ -163,4 +188,103 @@ class SearchHit {
         senderName: m['sender_name'],
         mine: m['mine'] == true,
       );
+}
+
+/// 收藏条目（消息 + 所在会话 + 发送者 + 收藏时间）
+class FavoriteHit {
+  final Message msg;
+  final String? convTitle;
+  final String? convType;
+  final String? senderName;
+  final bool mine;
+  final int? favoritedAt;
+
+  const FavoriteHit({
+    required this.msg,
+    this.convTitle,
+    this.convType,
+    this.senderName,
+    this.mine = false,
+    this.favoritedAt,
+  });
+
+  factory FavoriteHit.fromJson(Map<String, dynamic> m) => FavoriteHit(
+        msg: Message.fromJson(m),
+        convTitle: m['conv_title'],
+        convType: m['conv_type'],
+        senderName: m['sender_name'],
+        mine: m['mine'] == true,
+        favoritedAt: m['favorited_at'],
+      );
+}
+
+/// 群成员（群管理页用）
+class GroupMember {
+  final int id;
+  final String username;
+  final String? nickname;
+  final String? avatar;
+  final String role; // owner | admin | member
+  final int mutedUntil; // 禁言到期时间戳，0 = 未禁言
+  final int? joinedAt;
+
+  const GroupMember({
+    required this.id,
+    required this.username,
+    this.nickname,
+    this.avatar,
+    this.role = 'member',
+    this.mutedUntil = 0,
+    this.joinedAt,
+  });
+
+  factory GroupMember.fromJson(Map<String, dynamic> m) => GroupMember(
+        id: m['id'],
+        username: m['username'],
+        nickname: m['nickname'],
+        avatar: m['avatar'],
+        role: m['role'] ?? 'member',
+        mutedUntil: (m['muted_until'] ?? 0) as int,
+        joinedAt: m['joined_at'],
+      );
+
+  String get display =>
+      (nickname != null && nickname!.isNotEmpty) ? nickname! : username;
+
+  bool get isMuted => mutedUntil > DateTime.now().millisecondsSinceEpoch;
+
+  String get roleLabel =>
+      role == 'owner' ? '群主' : (role == 'admin' ? '管理员' : '成员');
+}
+
+/// 群详情（群信息 + 成员 + 我的权限）
+class GroupDetail {
+  final Map<String, dynamic> group;
+  final List<GroupMember> members;
+  final String myRole;
+  final bool isOwner;
+  final bool canManage;
+
+  const GroupDetail({
+    required this.group,
+    required this.members,
+    this.myRole = 'member',
+    this.isOwner = false,
+    this.canManage = false,
+  });
+
+  factory GroupDetail.fromJson(Map<String, dynamic> m) => GroupDetail(
+        group: (m['group'] ?? const {}) as Map<String, dynamic>,
+        members: ((m['members'] as List?) ?? const [])
+            .map((e) => GroupMember.fromJson(e))
+            .toList(),
+        myRole: m['my_role'] ?? 'member',
+        isOwner: m['is_owner'] == true,
+        canManage: m['can_manage'] == true,
+      );
+
+  int get id => (group['id'] ?? 0) as int;
+  String get name => (group['name'] ?? '') as String;
+  String? get announcement => group['announcement'] as String?;
+  int get conversationId => (group['conversation_id'] ?? 0) as int;
 }

@@ -26,6 +26,7 @@ function init(server) {
               kind: frame.kind,
               content: frame.content,
               fileId: frame.fileId,
+              mentions: frame.mentions,
             });
             hub.send(ws, { type: 'message:new', message: msg });
             break;

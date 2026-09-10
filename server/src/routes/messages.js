@@ -5,6 +5,7 @@ const {
   sendMessage, withFileInfo,
   recallMessage, editMessage, markRead, readState, RECALL_WINDOW_MS,
   searchMessages, conversationTitle,
+  forwardMessage, togglePin, pinnedMessage, MENTION_ALL, mentionLike,
 } = require('../chat');
 
 function uidOf(req, res) {
@@ -39,10 +40,24 @@ router.get('/search', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// 我的会话列表（含最近一条消息预览）
+// 转发消息到多个会话（body: { messageId, conversationIds: [] }）
+// 必须注册在 '/:id/...' 之前，否则 'forward' 会被当成会话 id
+router.post('/forward', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const { messageId, conversationIds } = req.body || {};
+  try {
+    res.json(forwardMessage({
+      messageId: Number(messageId),
+      userId: uid,
+      conversationIds,
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 我的会话列表（含最近一条消息预览、未读数、是否有人@我）
 router.get('/', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
-  const convs = db.prepare(`SELECT c.id, c.type, c.created_at,
+  const convs = db.prepare(`SELECT c.id, c.type, c.created_at, c.pinned_message_id, cm.muted,
       (SELECT CASE m.kind
           WHEN 'text'  THEN m.content
           WHEN 'image' THEN '[图片]'
@@ -58,14 +73,29 @@ router.get('/', (req, res) => {
     FROM conversations c
     JOIN conversation_members cm ON cm.conversation_id=c.id
     WHERE cm.user_id=? ORDER BY last_at DESC`).all(uid);
+
+  // 未读里是否有 @我 / @所有人（群聊的"有人@我"红字提示）
+  const mentionStmt = db.prepare(`SELECT COUNT(*) n FROM messages m
+    JOIN conversation_members cm2 ON cm2.conversation_id=m.conversation_id AND cm2.user_id=?
+    WHERE m.conversation_id=? AND m.deleted=0 AND m.sender_id!=?
+      AND m.id > cm2.last_read_id AND m.mentions IS NOT NULL
+      AND (m.mentions LIKE ? OR m.mentions LIKE ?)`);
+
   const out = convs.map(c => {
+    const unreadMentions = mentionStmt
+      .get(uid, c.id, uid, mentionLike(MENTION_ALL), mentionLike(uid)).n;
+
+    const base = { ...c, has_mention: unreadMentions > 0, muted: !!c.muted };
     if (c.type === 'dm') {
       const other = db.prepare(`SELECT u.id,u.username,u.nickname,u.avatar FROM conversation_members cm
         JOIN users u ON u.id=cm.user_id WHERE cm.conversation_id=? AND cm.user_id!=?`).get(c.id, uid);
-      return { ...c, title: other?.nickname || other?.username, avatar: other?.avatar, peer: other };
+      return { ...base, title: other?.nickname || other?.username, avatar: other?.avatar, peer: other };
     }
-    const g = db.prepare('SELECT name,avatar FROM groups WHERE conversation_id=?').get(c.id);
-    return { ...c, title: g?.name, avatar: g?.avatar };
+    const g = db.prepare('SELECT id,name,avatar,announcement FROM groups WHERE conversation_id=?').get(c.id);
+    return {
+      ...base, title: g?.name, avatar: g?.avatar,
+      announcement: g?.announcement, group_id: g?.id,
+    };
   });
   res.json(out);
 });
@@ -109,6 +139,8 @@ router.get('/:id/messages', (req, res) => {
     peerLastReadId,
     minOtherReadId,
     recallWindowMs: RECALL_WINDOW_MS,
+    pinned: pinnedMessage(cid),
+    conversation: conversationTitle(cid, uid),
   });
 });
 
@@ -116,12 +148,37 @@ router.get('/:id/messages', (req, res) => {
 router.post('/:id/messages', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const cid = Number(req.params.id);
-  const { kind, content, fileId } = req.body || {};
+  const { kind, content, fileId, mentions } = req.body || {};
   if (!kind) return res.status(400).json({ error: 'kind required' });
   try {
-    const msg = sendMessage({ conversationId: cid, senderId: uid, kind, content, fileId });
+    const msg = sendMessage({ conversationId: cid, senderId: uid, kind, content, fileId, mentions });
     res.json(msg);
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 置顶 / 取消置顶（同一 messageId 再调一次即取消；群聊需群主或管理员）
+router.post('/:id/pin', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const cid = Number(req.params.id);
+  if (!memberOf(cid, uid, res)) return;
+  try {
+    res.json(togglePin({
+      conversationId: cid,
+      userId: uid,
+      messageId: (req.body || {}).messageId,
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 免打扰开关（只影响自己）
+router.post('/:id/mute', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const cid = Number(req.params.id);
+  if (!memberOf(cid, uid, res)) return;
+  const on = (req.body || {}).muted ? 1 : 0;
+  db.prepare('UPDATE conversation_members SET muted = ? WHERE conversation_id = ? AND user_id = ?')
+    .run(on, cid, uid);
+  res.json({ conversationId: cid, muted: !!on });
 });
 
 // 撤回消息（仅本人 / 2 分钟内）

@@ -60,7 +60,7 @@ class AppTheme {
   static const cardBorder = BorderSide(color: AppColors.border, width: 1);
 
   static ThemeData dark() {
-    final scheme = ColorScheme.dark(
+    final scheme = const ColorScheme.dark(
       primary: AppColors.brand,
       onPrimary: Colors.white,
       secondary: AppColors.brand2,

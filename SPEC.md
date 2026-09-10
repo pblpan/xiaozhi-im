@@ -46,6 +46,9 @@
 - [x] 已读回执、输入中状态、消息撤回/编辑（v0.1.9）
 - [x] 语音消息（v0.2.0）：长按录音、松手即发、上滑取消，单条上限 60 秒，波形气泡点击播放
 - [x] 全局消息搜索（v0.2.0）：跨会话搜「我参与的」文字消息，命中关键词高亮，点击直达会话
+- [x] @提及 + 消息转发 / 收藏 / 置顶（v0.3.0）：群聊输入 @ 选成员或 @所有人，被点名者会话列表显示「有人@我」；
+      消息可转发到多个会话、收藏进「我的收藏」跨会话回看、由群主或管理员置顶到会话顶部
+- [x] 群管理（v0.3.0）：改群名 / 群公告、设撤管理员、禁言（10 分钟/1 小时/1 天）、移出成员、转让群主、退群
 - [ ] 语音通话 / 视频会议
 - [ ] 端到端加密 (E2EE)
 - [ ] 机器人 / Webhook（对接 OA/ERP，吸收 Mattermost 思路）
@@ -108,12 +111,13 @@
 |---|---|
 | `users` | id, username(唯一), password_hash, nickname, avatar, role(admin/user), created_at |
 | `friendships` | id, user_id, friend_id, status(pending/accepted), created_at |
-| `groups` | id, name, owner_id, avatar, created_at |
-| `group_members` | group_id, user_id, role(owner/admin/member), joined_at |
-| `conversations` | id, type(dm/group), created_at |
-| `conversation_members` | conversation_id, user_id |
-| `messages` | id, conversation_id, sender_id, kind, content, file_id, topic, created_at, edited, deleted |
+| `groups` | id, name, owner_id, avatar, announcement(群公告), conversation_id, created_at |
+| `group_members` | group_id, user_id, role(owner/admin/member), muted_until(禁言到期), joined_at |
+| `conversations` | id, type(dm/group), pinned_message_id(置顶消息), created_at |
+| `conversation_members` | conversation_id, user_id, last_read_id, muted(免打扰) |
+| `messages` | id, conversation_id, sender_id, kind, content, file_id, topic, mentions(@提及 id 列表), created_at, edited, deleted |
 | `files` | id, owner_id, name, mime, size, path, created_at |
+| `favorites` | id, user_id, message_id, created_at（UNIQUE(user_id,message_id)，重复收藏幂等） |
 
 > 单聊 = 仅 2 人的 `conversations(type=dm)`；群聊 = 多人的 `conversations(type=group)`。
 > 首版消息为"先删后插"简单模型；后期升级为 Matrix 式事件溯源（编辑/撤回=新业态）。

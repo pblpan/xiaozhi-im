@@ -20,6 +20,9 @@ class MessageBubble extends StatelessWidget {
   /// 已读回执标签：'已读' / '未读' / null（不显示）
   final String? readLabel;
 
+  /// 这条消息 @了我（且不是我自己发的）→ 气泡加高亮描边
+  final bool mentionHighlight;
+
   const MessageBubble({
     super.key,
     required this.msg,
@@ -29,6 +32,7 @@ class MessageBubble extends StatelessWidget {
     this.showTime = false,
     this.onLongPress,
     this.readLabel,
+    this.mentionHighlight = false,
   });
 
   String get _displayName {
@@ -173,6 +177,9 @@ class MessageBubble extends StatelessWidget {
         decoration: BoxDecoration(
           gradient: mine ? AppTheme.brandGradient : null,
           color: mine ? null : AppColors.bubbleOther,
+          border: mentionHighlight
+              ? Border.all(color: AppColors.brand, width: 1.4)
+              : null,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(16),
             topRight: const Radius.circular(16),
@@ -180,16 +187,40 @@ class MessageBubble extends StatelessWidget {
             bottomRight: Radius.circular(mine ? 5 : 16),
           ),
         ),
-        child: Text(
-          text,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 15,
-            height: 1.4,
-          ),
-        ),
+        child: _richText(text, mine: mine),
       ),
     );
+  }
+
+  /// 把 @提及 片段渲染成高亮色，其余按正文色。
+  /// @所有人 / @all 用橙色单独强调（比普通 @ 更需要一眼看到）。
+  Widget _richText(String text, {required bool mine}) {
+    const base = TextStyle(color: Colors.white, fontSize: 15, height: 1.4);
+    if (!text.contains('@')) return Text(text, style: base);
+
+    final mentionColor = mine ? const Color(0xFFFFE082) : AppColors.brand;
+    final spans = <TextSpan>[];
+    final re = RegExp(r'@[^\s@]+');
+    int last = 0;
+    for (final m in re.allMatches(text)) {
+      if (m.start > last) {
+        spans.add(TextSpan(text: text.substring(last, m.start), style: base));
+      }
+      final seg = m.group(0)!;
+      final isAll = seg == '@所有人' || seg.toLowerCase() == '@all';
+      spans.add(TextSpan(
+        text: seg,
+        style: base.copyWith(
+          color: isAll ? const Color(0xFFFFB74D) : mentionColor,
+          fontWeight: FontWeight.w700,
+        ),
+      ));
+      last = m.end;
+    }
+    if (last < text.length) {
+      spans.add(TextSpan(text: text.substring(last), style: base));
+    }
+    return RichText(text: TextSpan(children: spans));
   }
 
   Widget _image(BuildContext context, String url) => GestureDetector(

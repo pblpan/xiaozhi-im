@@ -20,6 +20,7 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/friends', require('./routes/friends'));
 app.use('/api/groups', require('./routes/groups'));
 app.use('/api/conversations', require('./routes/messages'));
+app.use('/api/favorites', require('./routes/favorites'));
 app.use('/api/files', require('./routes/files'));
 app.use('/api/admin', require('./routes/admin'));
 

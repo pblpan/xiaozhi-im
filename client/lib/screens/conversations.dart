@@ -7,6 +7,7 @@ import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/screens/chat.dart';
+import 'package:xiaozhi_im_client/screens/favorites.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
 import 'package:xiaozhi_im_client/screens/search.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
@@ -68,10 +69,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   void _onEvent(dynamic e) {
-    if (e is Map &&
-        (e['type'] == 'message:new' || e['type'] == 'message:recall')) {
-      _load(); // 新消息刷新未读；撤回后刷新预览
-    }
+    if (e is! Map) return;
+    const refreshOn = {
+      'message:new', // 新消息：刷新未读与预览
+      'message:recall', // 撤回后刷新预览
+      'message:read', // 已读推进：未读数变化
+      'conversation:pin', // 置顶变更
+      'group:updated', // 群名 / 公告 / 成员变更
+      'group:kicked', // 自己被移出群
+      'group:invited', // 被拉进新群
+    };
+    if (refreshOn.contains(e['type'])) _load();
   }
 
   List<Conversation> get _visible {
@@ -124,6 +132,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   // ---------------- 消息搜索 ----------------
+  Future<void> _openFavorites() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => FavoritesScreen(myId: _myId)),
+    );
+    if (mounted) _load();
+  }
+
   Future<void> _openSearch() async {
     final cid = await Navigator.push<int>(
       context,
@@ -388,6 +404,24 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                               ),
                             ),
                           ),
+                          if (cv.hasMention && cv.unread > 0)
+                            Container(
+                              margin: const EdgeInsets.only(left: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 5, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF4685E)
+                                    .withValues(alpha: 0.18),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                '有人@我',
+                                style: TextStyle(
+                                    fontSize: 10.5,
+                                    color: Color(0xFFF4685E),
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
                           if (cv.unread > 0)
                             Container(
                               margin: const EdgeInsets.only(left: 6),
@@ -577,6 +611,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               icon: const Icon(Icons.more_vert_rounded),
               onSelected: (v) {
                 if (v == 'refresh') _load();
+                if (v == 'fav') _openFavorites();
                 if (v == 'server') _openServer();
                 if (v == 'logout') _logout();
               },
@@ -587,6 +622,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       Icon(Icons.refresh_rounded, size: 19),
                       SizedBox(width: 10),
                       Text('刷新列表')
+                    ])),
+                PopupMenuItem(
+                    value: 'fav',
+                    child: Row(children: [
+                      Icon(Icons.star_border_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('我的收藏')
                     ])),
                 PopupMenuItem(
                     value: 'server',

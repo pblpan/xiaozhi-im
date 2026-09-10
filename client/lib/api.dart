@@ -50,6 +50,12 @@ class ImApi {
     return _handle(r);
   }
 
+  Future<dynamic> _delete(String p) async {
+    final r =
+        await http.delete(Uri.parse('${Config.baseUrl}/api$p'), headers: _h);
+    return _handle(r);
+  }
+
   /// 测试某个服务器地址是否可用（GET /api/health，不需要登录）。
   /// 返回提示文案用的结果 map；不通则抛异常。
   static Future<Map<String, dynamic>> testServer(String url) async {
@@ -105,12 +111,40 @@ class ImApi {
   Future<Map<String, dynamic>> messages(int cid) async =>
       await _get('/conversations/$cid/messages');
 
+  /// 发送消息。mentions 传被 @ 的用户 id 列表，-1 表示 @所有人。
   Future<Map<String, dynamic>> sendMessage(int cid, String kind, String content,
-      [int? fileId]) async {
+      [int? fileId, List<int>? mentions]) async {
     final b = <String, dynamic>{'kind': kind, 'content': content};
     if (fileId != null) b['fileId'] = fileId;
+    if (mentions != null && mentions.isNotEmpty) b['mentions'] = mentions;
     return await _post('/conversations/$cid/messages', b);
   }
+
+  /// 转发消息到若干会话（返回 { count, items }）
+  Future<Map<String, dynamic>> forwardMessage(
+          int messageId, List<int> conversationIds) async =>
+      await _post('/conversations/forward',
+          {'messageId': messageId, 'conversationIds': conversationIds});
+
+  /// 置顶 / 取消置顶（同一 messageId 再调一次即取消）
+  /// 返回 { conversationId, pinnedMessageId }
+  Future<Map<String, dynamic>> pinMessage(int cid, int messageId) async =>
+      await _post('/conversations/$cid/pin', {'messageId': messageId});
+
+  /// 免打扰开关
+  Future<Map<String, dynamic>> muteConversation(int cid, bool muted) async =>
+      await _post('/conversations/$cid/mute', {'muted': muted});
+
+  // ---- 收藏 ----
+  /// 我的收藏列表：{ items: [...], total }
+  Future<Map<String, dynamic>> favorites({int limit = 100, int offset = 0}) async =>
+      await _get('/favorites?limit=$limit&offset=$offset');
+
+  Future<Map<String, dynamic>> addFavorite(int messageId) async =>
+      await _post('/favorites', {'messageId': messageId});
+
+  Future<Map<String, dynamic>> removeFavorite(int messageId) async =>
+      await _delete('/favorites/$messageId');
 
   /// 撤回消息（仅本人、2 分钟内）
   Future<Map<String, dynamic>> recallMessage(int cid, int msgId) async =>
@@ -142,6 +176,39 @@ class ImApi {
 
   Future<void> addMember(int gid, int uid) async =>
       await _post('/groups/$gid/members', {'userId': uid});
+
+  /// 群详情：{ group, members, my_role, is_owner, can_manage }
+  Future<Map<String, dynamic>> groupDetail(int gid) async =>
+      await _get('/groups/$gid');
+
+  /// 改群名 / 群公告（群主或管理员）
+  Future<Map<String, dynamic>> updateGroup(int gid,
+      {String? name, String? announcement}) async {
+    final b = <String, dynamic>{};
+    if (name != null) b['name'] = name;
+    if (announcement != null) b['announcement'] = announcement;
+    return await _patch('/groups/$gid', b);
+  }
+
+  /// 设/撤管理员（role: admin|member）
+  Future<Map<String, dynamic>> setMemberRole(int gid, int uid, String role) async =>
+      await _patch('/groups/$gid/members/$uid', {'role': role});
+
+  /// 禁言 / 解除禁言（muteMinutes=0 表示解除）
+  Future<Map<String, dynamic>> muteMember(int gid, int uid, int muteMinutes) async =>
+      await _patch('/groups/$gid/members/$uid', {'muteMinutes': muteMinutes});
+
+  /// 转让群主
+  Future<Map<String, dynamic>> transferOwner(int gid, int uid) async =>
+      await _post('/groups/$gid/transfer', {'userId': uid});
+
+  /// 踢人
+  Future<Map<String, dynamic>> kickMember(int gid, int uid) async =>
+      await _delete('/groups/$gid/members/$uid');
+
+  /// 主动退群
+  Future<Map<String, dynamic>> leaveGroup(int gid) async =>
+      await _post('/groups/$gid/leave', const {});
 
   // ---- 文件 ----
   /// 上传文件。语音等临时录音文件没有规范扩展名时，用 filename 指定（如 voice.m4a）。

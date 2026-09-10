@@ -120,7 +120,7 @@ router.delete('/users/:id', (req, res) => {
 
 router.get('/groups', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
-  res.json(db.prepare(`SELECT g.id,g.name,g.owner_id,u.nickname owner_name,g.created_at,
+  res.json(db.prepare(`SELECT g.id,g.name,g.owner_id,u.nickname owner_name,g.created_at,g.announcement,
     (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id=g.id) members
     FROM groups g JOIN users u ON u.id=g.owner_id ORDER BY g.id DESC`).all());
 });
@@ -240,10 +240,12 @@ router.get('/messages', (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 200, 1000);
   const kind = String(req.query.kind || '').trim();
   const q = String(req.query.q || '').trim();
+  const mentioned = String(req.query.mentioned || '').trim();
 
   const where = [];
   const params = [];
   if (kind) { where.push('m.kind = ?'); params.push(kind); }
+  if (mentioned === '1') where.push('m.mentions IS NOT NULL');
   if (q) {
     // 转义 LIKE 通配符，避免管理员输入 % 变全表扫描
     where.push("m.content LIKE ? ESCAPE '\\'");
@@ -251,7 +253,7 @@ router.get('/messages', (req, res) => {
   }
   params.push(limit);
 
-  const rows = db.prepare(`SELECT m.id,m.conversation_id,m.sender_id,u.username sender_name,m.kind,m.content,m.file_id,m.created_at,m.deleted,m.edited
+  const rows = db.prepare(`SELECT m.id,m.conversation_id,m.sender_id,u.username sender_name,m.kind,m.content,m.file_id,m.created_at,m.deleted,m.edited,m.mentions
     FROM messages m LEFT JOIN users u ON u.id=m.sender_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY m.id DESC LIMIT ?`).all(...params);
