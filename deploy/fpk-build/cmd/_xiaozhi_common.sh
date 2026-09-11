@@ -74,7 +74,12 @@ xiaozhi_env() {
   local TURN_URL_LINE="# TURN_URLS="
   if [ -n "$PUBIP" ]; then
     TURN_IP_LINE="TURN_EXTERNAL_IP=$PUBIP"
-    TURN_URL_LINE="TURN_URLS=turn:$PUBIP:3478?transport=udp"
+    # 同时下发 UDP 和 TCP 两条中继：
+    #   - UDP 是首选（延迟低），但需要路由器映射 3478/udp + 49160-49200/udp
+    #   - TCP 只需放通 3478/tcp 一个端口，适合"没有公网 IP、只能靠
+    #     ZeroNews 等 TCP 隧道"的场景：隧道通一个口，外网通话就能走中继
+    # 客户端 ICE 会自己挑能通的那条，不通的候选自动丢弃，不会互相干扰。
+    TURN_URL_LINE="TURN_URLS=turn:$PUBIP:3478?transport=udp,turn:$PUBIP:3478?transport=tcp"
   fi
 
   cat > "$ENV_FILE" <<EOF

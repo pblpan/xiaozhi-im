@@ -43,6 +43,9 @@ services:
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     environment:
       - TURN_EXTERNAL_IP=${TURN_EXTERNAL_IP:-}
+      # 内网地址：留空则由 entrypoint 自动探测。写上后 coturn 用
+      # "公网/内网" 双地址形式，两路都走本中继时直接在内部投递，不绕公网回环
+      - TURN_INTERNAL_IP=${TURN_INTERNAL_IP:-}
       - TURN_USER=${TURN_USER:-xiaozhi}
       - TURN_PASSWORD=${TURN_PASSWORD:-xiaozhi-turn-2026}
       - TURN_REALM=${TURN_REALM:-xiaozhi.im}

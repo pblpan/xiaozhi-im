@@ -48,9 +48,37 @@ if [ -z "$IP" ]; then
   IP="0.0.0.0"
 fi
 
+# ---- 探测本机内网地址 ----
+# 为什么要它：coturn 的 external-ip 支持「公网/内网」双地址写法。
+# 写了内网地址后，两路通话都走本中继时（手机流量 <-> 家里设备都能接通话），
+# coturn 发现对方候选其实就是自己的公网地址，会直接在内网侧投递，
+# 不再绕出去打一圈 NAT 回环 —— 家用路由器基本都不支持回环，不写这一项
+# 这种"双中继"通话仍会失败。
+detect_lan_ip() {
+  lan=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1)
+  if [ -z "$lan" ]; then
+    lan=$(ip -4 addr show scope global 2>/dev/null \
+      | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p' \
+      | grep -v '^172\.' | head -1)
+  fi
+  echo "$lan"
+}
+
+LAN_IP="${TURN_INTERNAL_IP:-}"
+if [ -z "$LAN_IP" ]; then
+  LAN_IP=$(detect_lan_ip || true)
+fi
+
+# 只有公网和内网确实不同、且都拿到时才用双地址写法
+if [ -n "$LAN_IP" ] && [ "$LAN_IP" != "$IP" ] && [ "$IP" != "0.0.0.0" ]; then
+  EXTERNAL_IP_VALUE="${IP}/${LAN_IP}"
+else
+  EXTERNAL_IP_VALUE="$IP"
+fi
+
 # ---- 渲染配置 ----
 cp "$SRC" "$CONF"
-sed -i "s|__EXTERNAL_IP__|${IP}|g" "$CONF"
+sed -i "s|__EXTERNAL_IP__|${EXTERNAL_IP_VALUE}|g" "$CONF"
 sed -i "s|__MIN_PORT__|${MIN_PORT}|g"  "$CONF"
 sed -i "s|__MAX_PORT__|${MAX_PORT}|g"  "$CONF"
 sed -i "s|__REALM__|${REALM}|g"        "$CONF"
@@ -58,7 +86,7 @@ sed -i "s|__TURN_USER__|${TUSER}|g"    "$CONF"
 sed -i "s|__TURN_PASSWORD__|${TPASS}|g" "$CONF"
 
 echo "[turn] ========================================"
-echo "[turn] external-ip : ${IP}"
+echo "[turn] external-ip : ${EXTERNAL_IP_VALUE}"
 echo "[turn] relay 端口  : ${MIN_PORT}-${MAX_PORT}/udp"
 echo "[turn] 账号        : ${TUSER} / ******"
 echo "[turn] ========================================"

@@ -187,6 +187,71 @@ def check_apk(zf, marks):
     return 0 if all_ok else 1
 
 
+def check_fpk(path):
+    """校验服务端 fpk：版本号 + v0.6.1/v0.6.2 关键修复点是否都打进去了。
+
+    fpk 是 tar.gz；app.tgz 里再套一层，所以拆两次。
+    """
+    import tarfile
+
+    # 文件名 -> 必须出现的特征串
+    want = {
+        'manifest': ['version', '0.6.2', 'v0.6.2'],
+        'src/package.json': ['"version": "0.6.2"'],
+        'src/src/routes/call.js': ['iceServers', 'turnConfigured'],
+        'src/src/call.js': ['OFFLINE_GRACE_MS', 'pendingForUser', 'handleOnline'],
+        'src/src/ws.js': ['isAlive', "case 'ping'"],
+        'src/src/config.js': ['TURN_URLS', 'iceServers'],
+        'docker/coturn/entrypoint.sh': ['detect_lan_ip', 'EXTERNAL_IP_VALUE'],
+        'docker/coturn/turnserver.conf': ['__EXTERNAL_IP__', '__MIN_PORT__'],
+        'docker/docker-compose.yaml': ['coturn', 'TURN_INTERNAL_IP', 'TURN_URLS'],
+        'cmd/_xiaozhi_common.sh': ['transport=tcp', 'transport=udp'],
+    }
+    # 必须彻底消失的（v0.6.1 起）。
+    # 注意用带 scheme 的完整写法：config.js 里有一条注释提到过
+    # stun.qq.com（解释为什么把它换掉），那属于正常注释，不要误报。
+    gone = ['stun:stun.qq.com']
+
+    blob = {}
+    with tarfile.open(path, 'r:gz') as t:
+        for m in t.getmembers():
+            if m.isfile():
+                blob[m.name.lstrip('./')] = t.extractfile(m).read()
+        inner = [n for n in blob if n.endswith('app.tgz')]
+        if inner:
+            import io
+            with tarfile.open(mode='r:gz', fileobj=io.BytesIO(blob[inner[0]])) as t2:
+                for m in t2.getmembers():
+                    if m.isfile():
+                        blob[m.name.lstrip('./')] = t2.extractfile(m).read()
+
+    print('解包条目: %d' % len(blob))
+    all_ok = True
+    for name, marks in want.items():
+        data = blob.get(name)
+        if data is None:
+            print('%-30s 缺失 ✗' % name)
+            all_ok = False
+            continue
+        miss = [s for s in marks if s.encode('utf-8') not in data]
+        if miss:
+            print('%-30s 缺 %s ✗' % (name, miss))
+            all_ok = False
+        else:
+            print('%-30s 全部命中 ✓' % name)
+
+    hits = []
+    for name, data in blob.items():
+        for g in gone:
+            if g.encode('utf-8') in data and name.endswith(('.js', '.dart')):
+                hits.append('%s @ %s' % (g, name))
+    print('\n应剔除项 %s: %s' % (gone, '已清除 ✓' if not hits else '仍存在 ✗ %s' % hits))
+    all_ok = all_ok and not hits
+
+    print('\n结论: %s' % ('服务端改动已全部打入 fpk ✓' if all_ok else '有问题 ✗'))
+    return 0 if all_ok else 1
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -195,12 +260,16 @@ def main():
     if not os.path.isfile(path):
         print('文件不存在:', path)
         return 2
-    marks = sys.argv[2:] or (APK_MARKS if path.lower().endswith('.apk') else WIN_MARKS)
 
     print('=' * 56)
     print('校验:', path)
     print('大小: %.1f MB' % (os.path.getsize(path) / 1048576.0))
     print('=' * 56)
+
+    if path.lower().endswith('.fpk'):
+        return check_fpk(path)
+
+    marks = sys.argv[2:] or (APK_MARKS if path.lower().endswith('.apk') else WIN_MARKS)
     with zipfile.ZipFile(path) as zf:
         if path.lower().endswith('.apk'):
             rc = check_apk(zf, marks)
