@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/call_service.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
+import 'package:xiaozhi_im_client/core/sound_service.dart';
 import 'package:xiaozhi_im_client/core/storage.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
@@ -24,6 +25,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   List<Conversation> _all = [];
   Conversation? _sel;
   int _myId = 0;
+  // 提示音开关（菜单里可切，存本机）。main() 里已 init 过，这里直接读缓存值
+  bool _soundOn = SoundService().enabled;
   bool _loading = true;
   String? _error;
   ApiException? _lastErr; // 最近一次错误的原始异常，UI 据此切换文案/按钮
@@ -51,6 +54,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     try {
       final me = await ImApi().me();
       _myId = me['user']['id'];
+      SoundService().myId = _myId; // 提示音靠它过滤「自己发的消息不响」
       await SocketService().connect();
       await _load();
       SocketService().stream.listen(_onEvent);
@@ -62,6 +66,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         ImApi().clearToken();
         SocketService().disconnect();
         await CallService().resetAll();
+    await SoundService().reset(); // 清掉 myId 与正在响的提示音
         if (mounted) {
           Navigator.pushReplacement(
               context, MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -117,11 +122,21 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   String _msg(Object e) =>
       e.toString().replaceFirst('Exception: ', '');
 
+  /// 提示音开关；打开时顺便试听一声，让用户确认音量合适
+  Future<void> _toggleSound() async {
+    final nv = !_soundOn;
+    await SoundService().setEnabled(nv);
+    if (!mounted) return;
+    setState(() => _soundOn = nv);
+    if (nv) SoundService().playMessage();
+  }
+
   void _logout() async {
     await Storage.clear();
     ImApi().clearToken();
     SocketService().disconnect();
     await CallService().resetAll();
+    await SoundService().reset(); // 清掉 myId 与正在响的提示音
     if (mounted) {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -136,6 +151,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     ImApi().clearToken();
     SocketService().disconnect();
     await CallService().resetAll();
+    await SoundService().reset(); // 清掉 myId 与正在响的提示音
     if (mounted) {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -688,16 +704,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'fav') _openFavorites();
                 if (v == 'server') _openServer();
                 if (v == 'logout') _logout();
+                if (v == 'sound') _toggleSound();
               },
-              itemBuilder: (_) => const [
-                PopupMenuItem(
+              itemBuilder: (_) => [
+                const PopupMenuItem(
                     value: 'refresh',
                     child: Row(children: [
                       Icon(Icons.refresh_rounded, size: 19),
                       SizedBox(width: 10),
                       Text('刷新列表')
                     ])),
-                PopupMenuItem(
+                const PopupMenuItem(
                     value: 'fav',
                     child: Row(children: [
                       Icon(Icons.star_border_rounded, size: 19),
@@ -705,13 +722,24 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       Text('我的收藏')
                     ])),
                 PopupMenuItem(
+                    value: 'sound',
+                    child: Row(children: [
+                      Icon(
+                          _soundOn
+                              ? Icons.volume_up_rounded
+                              : Icons.volume_off_rounded,
+                          size: 19),
+                      const SizedBox(width: 10),
+                      Text(_soundOn ? '提示音：开' : '提示音：关')
+                    ])),
+                const PopupMenuItem(
                     value: 'server',
                     child: Row(children: [
                       Icon(Icons.dns_rounded, size: 19),
                       SizedBox(width: 10),
                       Text('服务器设置')
                     ])),
-                PopupMenuItem(
+                const PopupMenuItem(
                     value: 'logout',
                     child: Row(children: [
                       Icon(Icons.logout_rounded, size: 19, color: AppColors.danger),

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'api.dart';
 import 'core/call_service.dart';
 import 'core/settings.dart';
+import 'core/sound_service.dart';
 import 'core/storage.dart';
 import 'core/theme.dart';
 import 'screens/login.dart';
@@ -26,6 +27,8 @@ void main() async {
   }
   await Settings.load(); // 载入用户自定义的服务器地址
   await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
+  await SoundService().init(); // 读提示音开关 + 预加载音频
+  SoundService().attach(); // 全局监听新消息，收到就响一声
   CallService().navKey = appNavigatorKey;
   await CallService().attach(); // 订阅通话信令，随时能接来电
   runApp(const MyApp());

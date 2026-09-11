@@ -7,6 +7,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../screens/call.dart';
 import '../socket.dart';
+import 'sound_service.dart';
 
 /// 通话阶段
 enum CallPhase {
@@ -109,6 +110,22 @@ class CallService {
     _attached = true;
     _sub = SocketService().stream.listen(_onFrame);
     SocketService().state.addListener(_onConnState);
+    // 铃声跟着通话阶段走：来电=振铃、呼出=回铃、其余（接通/结束/空闲）立刻停。
+    // 放在监听里而不是各个业务分支里，避免漏掉某条结束路径导致铃声一直响。
+    phase.addListener(_syncTone);
+  }
+
+  void _syncTone() {
+    switch (phase.value) {
+      case CallPhase.incoming:
+        unawaited(SoundService().setTone(CallTone.incoming));
+        break;
+      case CallPhase.outgoing:
+        unawaited(SoundService().setTone(CallTone.outgoing));
+        break;
+      default:
+        unawaited(SoundService().setTone(CallTone.none));
+    }
   }
 
   /// 退出登录 / 切换服务器时调用：挂断并复位

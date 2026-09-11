@@ -1,7 +1,7 @@
 name: xiaozhi_im_client
 description: 小智 IM 客户端 (Windows + Android)
 publish_to: 'none'
-version: 0.5.1+17
+version: 0.5.2+18
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -30,3 +30,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # 提示音：消息音 / 来电铃声 / 呼出回铃（由 tools/gen_sounds.py 合成）
+    - assets/sounds/

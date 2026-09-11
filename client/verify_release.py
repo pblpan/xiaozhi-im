@@ -13,7 +13,7 @@ import os
 import sys
 import zipfile
 
-# v0.5.1「Windows 端视频通话黑屏」修复的关键记号
+# v0.5.1「Windows 端视频通话黑屏」修复 + v0.5.2「提示音」的关键记号
 #
 # 注意：这里只放**函数名 / 字符串常量**。字段名（如 remoteDiag）会被 AOT 直接
 # 消除，搜不到是正常的，别拿它当判据 —— 这一点踩过一次，白折腾一轮。
@@ -25,6 +25,21 @@ WIN_MARKS = [
     'createLocalMediaStream',   # 组装远端流用的 API
     'CallService',
     'RTCVideoView',
+    # ---- v0.5.2 提示音 ----
+    'SoundService',             # 提示音服务
+    '_syncTone',                # 通话阶段驱动铃声
+    'setTone',                  # 切换来电/呼出铃声
+    'CallTone',                 # 铃声枚举（AOT 保留枚举名）
+    'assets/sounds/message.wav',
+    'assets/sounds/ringtone.wav',
+    'assets/sounds/outgoing.wav',
+]
+
+# 音频资源条目（必须真的打进包里，否则运行时静默无声）
+SOUND_ASSETS = [
+    'assets/sounds/message.wav',
+    'assets/sounds/ringtone.wav',
+    'assets/sounds/outgoing.wav',
 ]
 # Android 侧记号与 Windows 相同。
 # 注意别再往里加 `libjingle_peerconnection_so`：那是**原生库的文件名**，
@@ -59,6 +74,24 @@ def scan_bytes(data, marks):
     return out
 
 
+def check_sounds(zf, names, prefix):
+    """校验提示音文件是否真的打进包。
+
+    音频漏配 pubspec 的 assets 段时，编译期毫无提示、构建照样成功，
+    只有真机收到消息那一刻才发现「没声音」——所以必须显式验条目。
+    """
+    print('\n-- 提示音资源 (%s) --' % prefix)
+    miss = []
+    for s in SOUND_ASSETS:
+        full = prefix + s
+        if full in names:
+            print('  %-34s 已打包 %5.1f KB' % (s, zf.getinfo(full).file_size / 1024.0))
+        else:
+            print('  %-34s 缺失 ✗' % s)
+            miss.append(s)
+    return not miss
+
+
 def check_win(zf, marks):
     names = zf.namelist()
     print('条目数: %d' % len(names))
@@ -80,8 +113,9 @@ def check_win(zf, marks):
     bad = [k for k, v in hits.items() if v == 0]
     for k, v in hits.items():
         print('  %-24s %s' % (k, '命中 x%d' % v if v else '未命中 ✗'))
-    print('\n结论: %s' % ('新代码已编入产物 ✓' if not bad else '缺少 %s ✗' % bad))
-    return 0 if not bad else 1
+    snd_ok = check_sounds(zf, names, 'data/flutter_assets/')
+    print('\n结论: %s' % ('新代码已编入产物 ✓' if (not bad and snd_ok) else '缺少 %s ✗' % (bad or '提示音')))
+    return 0 if (not bad and snd_ok) else 1
 
 
 def check_apk(zf, marks):
@@ -103,9 +137,11 @@ def check_apk(zf, marks):
     for k, v in hits.items():
         print('  %-28s %s' % (k, '命中 x%d' % v if v else '未命中 ✗'))
     ok_native = len(native) >= 3
+    snd_ok = check_sounds(zf, names, 'assets/flutter_assets/')
     print('\nWebRTC 原生库三架构: %s' % ('齐全 ✓' if ok_native else '不足 ✗'))
-    print('结论: %s' % ('新代码已编入产物 ✓' if (not bad and ok_native) else '有问题 ✗'))
-    return 0 if (not bad and ok_native) else 1
+    all_ok = not bad and ok_native and snd_ok
+    print('结论: %s' % ('新代码已编入产物 ✓' if all_ok else '有问题 ✗'))
+    return 0 if all_ok else 1
 
 
 def main():
