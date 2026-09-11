@@ -310,18 +310,8 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    if (type == 'message:edit') {
-      if (e['conversationId'] != widget.conv.id) return;
-      final id = e['messageId'];
-      setState(() {
-        final i = _msgs.indexWhere((x) => x.id == id);
-        if (i >= 0) {
-          _msgs[i] = _msgs[i]
-              .copyWith(content: e['content'] as String?, edited: true);
-        }
-      });
-      return;
-    }
+    // 不再处理 message:edit —— 服务端已下线编辑能力。
+    // 旧服务端可能还在广播它，收到就忽略，不做任何界面改动。
 
     if (type == 'message:read') {
       if (e['conversationId'] != widget.conv.id) return;
@@ -624,14 +614,13 @@ class _ChatScreenState extends State<ChatScreen> {
       !m.deleted &&
       DateTime.now().millisecondsSinceEpoch - m.createdAt <= _recallWindowMs;
 
-  bool _canEdit(Message m) =>
-      m.senderId == widget.myId && !m.deleted && m.kind == 'text';
+  // 已发送的消息不支持编辑（产品决策：只能撤回）。
+  // 服务端对应接口已返回 410，这里也不再给入口。
 
   /// 能否置顶：单聊任意成员；群聊需群主或管理员
   bool get _canPinHere => widget.conv.type != 'group' || _canManage;
 
   void _showMsgMenu(Message m) {
-    final canEdit = _canEdit(m);
     final canRecall = _canRecall(m);
     final expired = m.senderId == widget.myId &&
         !m.deleted &&
@@ -675,11 +664,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 _saveFileAs(m);
               }),
             ],
-            if (canEdit)
-              _menuItem(Icons.edit_rounded, '编辑', () {
-                Navigator.pop(ctx);
-                _editMsg(m);
-              }),
+            // 已发送的消息只能撤回，不给「编辑」入口
             if (!m.deleted)
               _menuItem(Icons.forward_rounded, '转发', () {
                 Navigator.pop(ctx);
@@ -743,47 +728,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (t == null || t.isEmpty) return;
     Clipboard.setData(ClipboardData(text: t));
     _toast('已复制');
-  }
-
-  Future<void> _editMsg(Message m) async {
-    final ctrl = TextEditingController(text: m.content ?? '');
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑消息'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          minLines: 1,
-          maxLines: 5,
-          decoration: const InputDecoration(hintText: '输入新内容'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    final text = ctrl.text.trim();
-    if (text.isEmpty) {
-      _toast('内容不能为空');
-      return;
-    }
-    try {
-      await ImApi().editMessage(widget.conv.id, m.id, text);
-      if (!mounted) return;
-      setState(() {
-        final i = _msgs.indexWhere((x) => x.id == m.id);
-        if (i >= 0) _msgs[i] = _msgs[i].copyWith(content: text, edited: true);
-      });
-    } catch (e) {
-      if (mounted) _toast('编辑失败: ${_msg(e)}');
-    }
   }
 
   Future<void> _recallMsg(Message m) async {

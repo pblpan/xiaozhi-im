@@ -180,6 +180,30 @@ ensureColumn('users', 'is_bot', 'is_bot INTEGER NOT NULL DEFAULT 0');
 // 机器人的归属人（谁创建的，便于后台追责与清理）
 ensureColumn('users', 'bot_owner_id', 'bot_owner_id INTEGER');
 
+// ---- 个人资料扩展（个人信息面板用）----
+// 生日存 'YYYY-MM-DD' 文本：不做时区换算、不存年龄（年龄会过期，生日不会）
+ensureColumn('users', 'signature', 'signature TEXT');
+ensureColumn('users', 'gender', 'gender TEXT');
+ensureColumn('users', 'region', 'region TEXT');
+ensureColumn('users', 'birthday', 'birthday TEXT');
+
+// ---- 好友申请附言（认证消息）----
+// 存在 friendships 上而不是单独建表：一条申请就是一行，天然一一对应
+ensureColumn('friendships', 'message', 'message TEXT');
+
+// ---- 好友申请附言模板 ----
+// 每个用户维护自己的常用语；UNIQUE(user_id,content) 防重复添加同一条
+db.exec(`
+CREATE TABLE IF NOT EXISTS friend_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  UNIQUE(user_id, content)
+);
+`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

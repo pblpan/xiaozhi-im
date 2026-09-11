@@ -215,35 +215,17 @@ function recallMessage({ messageId, userId }) {
   return payload;
 }
 
-/** 编辑消息：仅本人、仅文字、未被撤回。广播给会话全体（含自己的其他端）。 */
-function editMessage({ messageId, userId, content }) {
-  const m = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
-  if (!m) throw new Error('消息不存在');
-  if (m.sender_id !== userId) throw new Error('只能编辑自己的消息');
-  if (m.deleted) throw new Error('该消息已撤回');
-  if (m.kind !== 'text') throw new Error('只能编辑文字消息');
-
-  const text = (content || '').trim();
-  if (!text) throw new Error('内容不能为空');
-  if (text === m.content) return { type: 'message:edit', messageId, conversationId: m.conversation_id, content: text };
-
-  db.prepare('UPDATE messages SET content = ?, edited = 1 WHERE id = ?').run(text, messageId);
-
-  const payload = {
-    type: 'message:edit',
-    messageId,
-    conversationId: m.conversation_id,
-    content: text,
-    edited: 1,
-  };
-  hub.broadcastToConversation(db, m.conversation_id, payload, null);
-  events.emit('message.edited', {
-    conversationId: m.conversation_id,
-    selfId: userId,
-    data: { messageId, content: text },
-  });
-  return payload;
-}
+/**
+ * 已发送的消息**不支持编辑**（产品决策：只能撤回）。
+ *
+ * 这里刻意不再提供实现，而不是留个空壳：留空壳的话，将来有人看到
+ * `editMessage` 存在就会顺手接上路由，等于把口子又开回来。
+ * messages.js / ws.js 里对编辑请求统一回 410 + 中文提示，
+ * 兜住还在用旧版客户端（<= v0.5.2）的用户。
+ *
+ * `messages.edited` 列保留：历史数据里可能有 edited=1 的消息，
+ * 客户端仍会渲染「已编辑」标记，删列会让老消息显示异常。
+ */
 
 /** 标记已读：把会话成员的 last_read_id 推进到指定消息（缺省=该会话最新一条）。 */
 function markRead({ conversationId, userId, messageId }) {
@@ -481,7 +463,7 @@ function listFavorites({ userId, limit = 100, offset = 0 }) {
 
 module.exports = {
   sendMessage, withFileInfo,
-  recallMessage, editMessage, markRead, typing, readState,
+  recallMessage, markRead, typing, readState,
   conversationTitle, searchMessages,
   forwardMessage, togglePin, pinnedMessage, canPin,
   addFavorite, removeFavorite, listFavorites,

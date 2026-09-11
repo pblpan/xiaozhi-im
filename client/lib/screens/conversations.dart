@@ -10,9 +10,12 @@ import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/screens/chat.dart';
 import 'package:xiaozhi_im_client/screens/favorites.dart';
+import 'package:xiaozhi_im_client/screens/friends_new.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
+import 'package:xiaozhi_im_client/screens/profile.dart';
 import 'package:xiaozhi_im_client/screens/search.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
+import 'package:xiaozhi_im_client/widgets/friend_auth_sheet.dart';
 import 'package:xiaozhi_im_client/widgets/server_settings.dart';
 
 class ConversationsScreen extends StatefulWidget {
@@ -25,6 +28,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   List<Conversation> _all = [];
   Conversation? _sel;
   int _myId = 0;
+  int _pendingCount = 0; // 待处理的好友申请数（「新的朋友」入口上显示）
   // 提示音开关（菜单里可切，存本机）。main() 里已 init 过，这里直接读缓存值
   bool _soundOn = SoundService().enabled;
   bool _loading = true;
@@ -57,6 +61,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       SoundService().myId = _myId; // 提示音靠它过滤「自己发的消息不响」
       await SocketService().connect();
       await _load();
+      _refreshPendingCount(); // 待处理好友申请数：拉不到不影响主流程
       SocketService().stream.listen(_onEvent);
     } catch (e) {
       // 401 → token 失效，清掉回到登录页（不让用户卡错误循环）
@@ -105,8 +110,36 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       'group:updated', // 群名 / 公告 / 成员变更
       'group:kicked', // 自己被移出群
       'group:invited', // 被拉进新群
+      'user:update', // 好友/群友改了昵称或头像
     };
-    if (refreshOn.contains(e['type'])) _load();
+    final t = e['type'];
+    if (refreshOn.contains(t)) _load();
+
+    if (t == 'friend:request') {
+      // 有人申请加我：提示一句并刷新入口上的数字。
+      // 这里刻意不播提示音 —— 「提示音」指的是新消息与来电，
+      // 好友申请也响会让人以为来了消息。
+      final u = e['user'];
+      final name =
+          (u is Map ? (u['nickname'] ?? u['username']) : null)?.toString() ?? '有人';
+      _toast('$name 请求加你为好友');
+      _refreshPendingCount();
+    }
+    if (t == 'friend:accepted' || t == 'friend:rejected') {
+      _refreshPendingCount();
+      _load();
+    }
+  }
+
+  /// 拉一次「待处理好友申请」数量，用于菜单入口的数字提示
+  Future<void> _refreshPendingCount() async {
+    try {
+      final d = await ImApi().friends();
+      final n = ((d['pending'] as List?) ?? const []).length;
+      if (mounted && n != _pendingCount) setState(() => _pendingCount = n);
+    } catch (_) {
+      // 静默失败：这只是个数字提示，不该弹错误打扰用户
+    }
   }
 
   List<Conversation> get _visible {
@@ -180,6 +213,36 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           builder: (_) => ChatScreen(conv: cv, myId: _myId, peerName: cv.title)),
     );
     _load(); // 返回后刷新最后消息
+  }
+
+  // ---------------- 个人信息 / 新的朋友 ----------------
+  Future<void> _openProfile() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ProfileScreen()),
+    );
+    // 昵称或头像可能改过，回来刷新列表里的显示
+    if (mounted) _load();
+  }
+
+  Future<void> _openNewFriends() async {
+    // 在新朋友页点某个好友时返回该 User，语义是「打开跟 TA 的聊天」
+    final u = await Navigator.push<User>(
+      context,
+      MaterialPageRoute(builder: (_) => const NewFriendsScreen()),
+    );
+    if (!mounted) return;
+    _load();
+    _refreshPendingCount();
+    if (u == null) return;
+    try {
+      final r = await ImApi().dm(u.id);
+      if (!mounted) return;
+      await _openChat(
+          Conversation(id: r['conversationId'], type: 'dm', title: u.display));
+    } catch (e) {
+      _toast(_msg(e));
+    }
   }
 
   // ---------------- 消息搜索 ----------------
@@ -321,11 +384,26 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                                 children: [
                                   TextButton(
                                     onPressed: () async {
+                                      final name =
+                                          (u['nickname'] ?? u['username'] ?? '用户')
+                                              .toString();
+                                      // 先写认证附言（可选模板一键填入），再发申请。
+                                      // 返回 null = 用户取消，不发。
+                                      final msg = await showFriendAuthSheet(
+                                        context,
+                                        userId: u['id'] as int,
+                                        peerName: name,
+                                        peerAvatar: u['avatar']?.toString(),
+                                      );
+                                      if (msg == null || !mounted) return;
                                       try {
-                                        await ImApi().friendRequest(u['id']);
-                                        if (mounted) {
-                                          _toast('已发送好友请求');
-                                        }
+                                        final r = await ImApi().friendRequest(
+                                            u['id'] as int,
+                                            message: msg);
+                                        if (!mounted) return;
+                                        _toast(r['updated'] == true
+                                            ? '验证消息已更新'
+                                            : '已发送好友申请');
                                       } catch (e) {
                                         if (mounted) _toast(_msg(e));
                                       }
@@ -705,8 +783,42 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'server') _openServer();
                 if (v == 'logout') _logout();
                 if (v == 'sound') _toggleSound();
+                if (v == 'profile') _openProfile();
+                if (v == 'newfriends') _openNewFriends();
               },
               itemBuilder: (_) => [
+                const PopupMenuItem(
+                    value: 'profile',
+                    child: Row(children: [
+                      Icon(Icons.person_outline_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('个人信息')
+                    ])),
+                PopupMenuItem(
+                    value: 'newfriends',
+                    child: Row(children: [
+                      const Icon(Icons.person_add_alt_1_rounded, size: 19),
+                      const SizedBox(width: 10),
+                      const Text('新的朋友'),
+                      if (_pendingCount > 0) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: AppColors.danger,
+                            borderRadius: BorderRadius.circular(AppRadii.pill),
+                          ),
+                          child: Text(
+                            '$_pendingCount',
+                            style: const TextStyle(
+                                fontSize: 10.5,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ])),
                 const PopupMenuItem(
                     value: 'refresh',
                     child: Row(children: [

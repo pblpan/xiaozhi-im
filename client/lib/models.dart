@@ -8,6 +8,12 @@ class User {
   final String role;
   final bool isBot;
 
+  // ---- 个人资料扩展（个人信息面板）----
+  final String? signature; // 个性签名
+  final String? gender; // male | female | other | null（未设置）
+  final String? region; // 地区
+  final String? birthday; // 生日，'YYYY-MM-DD'
+
   const User({
     required this.id,
     required this.username,
@@ -15,6 +21,10 @@ class User {
     this.avatar,
     this.role = 'user',
     this.isBot = false,
+    this.signature,
+    this.gender,
+    this.region,
+    this.birthday,
   });
 
   factory User.fromJson(Map<String, dynamic> m) => User(
@@ -24,10 +34,28 @@ class User {
         avatar: m['avatar'],
         role: m['role'] ?? 'user',
         isBot: m['is_bot'] == true || m['is_bot'] == 1,
+        signature: m['signature'],
+        gender: m['gender'],
+        region: m['region'],
+        birthday: m['birthday'],
       );
 
   String get display =>
       (nickname != null && nickname!.isNotEmpty) ? nickname! : username;
+
+  /// 性别展示文案（未设置返回 null，面板里显示「未设置」）
+  String? get genderLabel {
+    switch (gender) {
+      case 'male':
+        return '男';
+      case 'female':
+        return '女';
+      case 'other':
+        return '保密';
+      default:
+        return null;
+    }
+  }
 }
 
 class Conversation {
@@ -455,4 +483,60 @@ class GroupDetail {
   String get name => (group['name'] ?? '') as String;
   String? get announcement => group['announcement'] as String?;
   int get conversationId => (group['conversation_id'] ?? 0) as int;
+}
+
+/// 好友申请（待我处理）：申请人资料 + 认证附言 + 申请时间
+class FriendRequest {
+  final int userId;
+  final String username;
+  final String? nickname;
+  final String? avatar;
+  final String? signature;
+  final String message; // 认证附言，可能为空串（对方没写）
+  final int createdAt;
+
+  const FriendRequest({
+    required this.userId,
+    required this.username,
+    this.nickname,
+    this.avatar,
+    this.signature,
+    this.message = '',
+    this.createdAt = 0,
+  });
+
+  factory FriendRequest.fromJson(Map<String, dynamic> m) => FriendRequest(
+        userId: m['id'] as int,
+        username: (m['username'] ?? '') as String,
+        nickname: m['nickname'] as String?,
+        avatar: m['avatar'] as String?,
+        signature: m['signature'] as String?,
+        message: (m['message'] ?? '') as String,
+        createdAt: (m['created_at'] ?? 0) as int,
+      );
+
+  String get display =>
+      (nickname != null && nickname!.isNotEmpty) ? nickname! : username;
+
+  /// 转成 User，便于复用「打开单聊」等既有逻辑
+  User get asUser => User(
+        id: userId,
+        username: username,
+        nickname: nickname,
+        avatar: avatar,
+        signature: signature,
+      );
+}
+
+/// 好友申请附言模板（每人一份；服务端首次读取会播种 3 条默认）
+class FriendTemplate {
+  final int id;
+  final String content;
+
+  const FriendTemplate({required this.id, required this.content});
+
+  factory FriendTemplate.fromJson(Map<String, dynamic> m) => FriendTemplate(
+        id: m['id'] as int,
+        content: (m['content'] ?? '') as String,
+      );
 }

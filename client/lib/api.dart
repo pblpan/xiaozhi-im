@@ -93,6 +93,10 @@ class ImApi {
       _handle(await _send(() => http.patch(Uri.parse('${Config.baseUrl}/api$p'),
           headers: _h, body: jsonEncode(b))));
 
+  Future<dynamic> _put(String p, Map<String, dynamic> b) async =>
+      _handle(await _send(() => http.put(Uri.parse('${Config.baseUrl}/api$p'),
+          headers: _h, body: jsonEncode(b))));
+
   Future<dynamic> _get(String p) async =>
       _handle(await _send(
           () => http.get(Uri.parse('${Config.baseUrl}/api$p'), headers: _h)));
@@ -145,13 +149,39 @@ class ImApi {
   Future<List<dynamic>> search(String q) async =>
       await _get('/users/search?q=${Uri.encodeComponent(q)}');
 
-  Future<void> friendRequest(int id) async =>
-      await _post('/friends/request', {'friendId': id});
+  /// 查看某人的公开资料（个人信息面板 / 好友资料卡都走这里）
+  Future<Map<String, dynamic>> userProfile(int id) async => await _get('/users/$id');
+
+  /// 更新我的资料。
+  /// 只传要改的字段即可 —— 服务端语义是「字段没传 = 不改，传空串 = 清空」，
+  /// 所以想清掉个性签名必须显式传 `''`，省略字段等于不动它。
+  Future<Map<String, dynamic>> updateProfile(Map<String, dynamic> patch) async =>
+      await _put('/auth/profile', patch);
+
+  /// 发起好友申请。[message] 为认证附言（可选，上限 100 字）。
+  Future<Map<String, dynamic>> friendRequest(int id, {String message = ''}) async =>
+      await _post('/friends/request', {'friendId': id, 'message': message});
 
   Future<void> acceptFriend(int id) async =>
       await _post('/friends/accept', {'friendId': id});
 
+  Future<void> rejectFriend(int id) async =>
+      await _post('/friends/reject', {'friendId': id});
+
+  /// 好友列表 + 待处理申请（含认证附言）：{ friends: [...], pending: [...] }
   Future<Map<String, dynamic>> friends() async => await _get('/friends');
+
+  // ---- 好友申请附言模板（人手一份，首次读取服务端会播种 3 条）----
+  Future<List<dynamic>> friendTemplates() async => await _get('/friends/templates');
+
+  Future<Map<String, dynamic>> addFriendTemplate(String content) async =>
+      await _post('/friends/templates', {'content': content});
+
+  Future<Map<String, dynamic>> updateFriendTemplate(int id, String content) async =>
+      await _put('/friends/templates/$id', {'content': content});
+
+  Future<void> deleteFriendTemplate(int id) async =>
+      await _delete('/friends/templates/$id');
 
   // ---- 会话 / 消息 ----
   Future<Map<String, dynamic>> dm(int userId) async =>
@@ -203,10 +233,9 @@ class ImApi {
   Future<Map<String, dynamic>> recallMessage(int cid, int msgId) async =>
       await _post('/conversations/$cid/messages/$msgId/recall', const {});
 
-  /// 编辑文字消息（仅本人）
-  Future<Map<String, dynamic>> editMessage(
-          int cid, int msgId, String content) async =>
-      await _patch('/conversations/$cid/messages/$msgId', {'content': content});
+  // 编辑已发消息的能力已下线（产品决策：已发出的消息只能撤回，不能修改）。
+  // 服务端对应接口返回 410 Gone。这里不再提供方法，而不是留个空壳 ——
+  // 留空壳的话，将来有人看到 API 还在就会顺手把右键菜单里的「编辑」接回来。
 
   /// 标记已读（不传 msgId = 读到该会话最新一条）
   Future<Map<String, dynamic>> markRead(int cid, [int? msgId]) async =>

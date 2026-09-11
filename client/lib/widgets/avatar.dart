@@ -1,12 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 
-/// 名称首字母头像：按名字哈希取渐变色，同一个人颜色稳定。
+/// 用户头像。
+///
+/// 有 `imageUrl` 就显示真实头像图；没有（或加载失败）回落到
+/// 「名字首字 + 哈希渐变」—— 保证任何用户在任何场景都有稳定、可辨识的外观，
+/// 不会出现空白方块或问号。
 class UserAvatar extends StatelessWidget {
   final String name;
   final double size;
   final bool showOnlineDot;
   final double radius;
+
+  /// 头像图片地址：站内相对路径（`/files/xxx.png`）或 http(s) 绝对地址。
+  final String? imageUrl;
 
   const UserAvatar({
     super.key,
@@ -14,6 +22,7 @@ class UserAvatar extends StatelessWidget {
     this.size = 46,
     this.showOnlineDot = false,
     this.radius = 14,
+    this.imageUrl,
   });
 
   /// 6 组柔和渐变，避免和文字对比度打架
@@ -43,10 +52,34 @@ class UserAvatar extends StatelessWidget {
     return first.toUpperCase();
   }
 
+  /// 把 avatar 字段解析成可用的图片 URL。
+  /// 服务端存的是 `/files/xxx.png` 相对路径（跨内网/外网都能用，
+  /// 因为域名前缀由客户端当前选中的服务器决定）；也兼容历史数据里的绝对地址。
+  String? get _resolvedUrl {
+    final u = imageUrl?.trim();
+    if (u == null || u.isEmpty) return null;
+    if (u.startsWith('http://') || u.startsWith('https://')) return u;
+    if (u.startsWith('/')) return '${Config.baseUrl}$u';
+    return null; // 相对路径之外的一律不认，避免拼出诡异 URL
+  }
+
+  Widget _initialBox() => Center(
+        child: Text(
+          _initial,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: size * 0.42,
+            fontWeight: FontWeight.w600,
+            height: 1.1,
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final colors = _colors;
     final dot = size * 0.26;
+    final url = _resolvedUrl;
     return SizedBox(
       width: size,
       height: size,
@@ -56,6 +89,7 @@ class UserAvatar extends StatelessWidget {
           Container(
             width: size,
             height: size,
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(radius),
               gradient: LinearGradient(
@@ -72,15 +106,19 @@ class UserAvatar extends StatelessWidget {
               ],
             ),
             alignment: Alignment.center,
-            child: Text(
-              _initial,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: size * 0.42,
-                fontWeight: FontWeight.w600,
-                height: 1.1,
-              ),
-            ),
+            child: url == null
+                ? _initialBox()
+                : Image.network(
+                    url,
+                    width: size,
+                    height: size,
+                    fit: BoxFit.cover,
+                    // 加载中先铺首字母：头像在列表里高频出现，
+                    // 留白会闪出一片空格子，比慢一点更难看
+                    loadingBuilder: (c, child, p) =>
+                        p == null ? child : _initialBox(),
+                    errorBuilder: (c, e, s) => _initialBox(),
+                  ),
           ),
           if (showOnlineDot)
             Positioned(

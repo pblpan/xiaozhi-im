@@ -4,7 +4,7 @@ const { verifyToken } = require('../auth');
 const events = require('../events');
 const {
   sendMessage, withFileInfo,
-  recallMessage, editMessage, markRead, readState, RECALL_WINDOW_MS,
+  recallMessage, markRead, readState, RECALL_WINDOW_MS,
   searchMessages, conversationTitle,
   forwardMessage, togglePin, pinnedMessage, MENTION_ALL, mentionLike,
 } = require('../chat');
@@ -205,18 +205,14 @@ router.post('/:id/messages/:msgId/recall', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// 编辑消息（仅本人 / 仅文字）
+// 编辑消息：已下线。已发送的消息只能撤回，不能修改。
+// 路由保留并回 410（Gone）而不是 404：旧版客户端仍会调它，
+// 给它一条能读懂的说明，比语焉不详的「not found」有用。
 router.patch('/:id/messages/:msgId', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const cid = Number(req.params.id);
   if (!memberOf(cid, uid, res)) return;
-  try {
-    res.json(editMessage({
-      messageId: Number(req.params.msgId),
-      userId: uid,
-      content: (req.body || {}).content,
-    }));
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  res.status(410).json({ error: '已发送的消息不支持修改，只能撤回' });
 });
 
 // 标记已读（body.messageId 缺省=读到最新）

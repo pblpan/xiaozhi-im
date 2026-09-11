@@ -33,6 +33,15 @@ WIN_MARKS = [
     'assets/sounds/message.wav',
     'assets/sounds/ringtone.wav',
     'assets/sounds/outgoing.wav',
+    # ---- v0.6.0 个人信息面板 / 好友验证 / 取消编辑 ----
+    'ProfileScreen',            # 个人信息面板
+    'FriendAuthSheet',          # 加好友验证弹窗（含模板）
+    'NewFriendsScreen',         # 新的朋友（待处理申请）
+    'FriendTemplatesScreen',    # 认证消息模板管理
+    'updateProfile',            # 更新资料 API
+    '/friends/templates',       # 模板接口路径（字符串常量）
+    'friend:request',           # 好友申请实时帧
+    'user:update',              # 资料变更广播帧
 ]
 
 # 音频资源条目（必须真的打进包里，否则运行时静默无声）

@@ -1,7 +1,7 @@
 const { WebSocketServer } = require('ws');
 const hub = require('./hub');
 const { verifyToken } = require('./auth');
-const { sendMessage, recallMessage, editMessage, markRead, typing } = require('./chat');
+const { sendMessage, recallMessage, markRead, typing } = require('./chat');
 const call = require('./call');
 
 function init(server) {
@@ -32,12 +32,15 @@ function init(server) {
             hub.send(ws, { type: 'message:new', message: msg });
             break;
           }
-          // 撤回 / 编辑：内部已广播给会话全体（含发起端，用于多端同步），无需再回执
+          // 撤回：内部已广播给会话全体（含发起端，用于多端同步），无需再回执
           case 'message:recall':
             recallMessage({ messageId: frame.messageId, userId });
             break;
+          // 已发消息不可修改，只能撤回。
+          // 回一条 error 是给旧版客户端（<= v0.5.2，右键菜单里还有「编辑」）的兜底：
+          // 不回的话它点了会毫无反应，用户以为卡住了。
           case 'message:edit':
-            editMessage({ messageId: frame.messageId, userId, content: frame.content });
+            hub.send(ws, { type: 'error', ref: 'message:edit', message: '已发送的消息不支持修改，只能撤回' });
             break;
           // 已读回执：推进自己的 last_read_id 并广播给对方
           case 'message:read': {
