@@ -25,6 +25,18 @@ const MAX_DURATION_MS = 4 * 60 * 60 * 1000;
 /** 支持的通话模式 */
 const MODES = ['audio', 'video'];
 
+/**
+ * 掉线宽限期。
+ *
+ * 外网（尤其走内网穿透隧道 / 手机流量）WebSocket 抖动是常态。
+ * 老逻辑是"被叫 socket 一断就判未接、直接拆通话"，结果是：网络抖一下，
+ * 对方那通还在响的来电就被判死了，用户重连上也接不到 —— 只能看到
+ * 一条"未接视频"。给 20 秒重连窗口，人回来了就接着响、补推来电界面。
+ *
+ * 可用 OFFLINE_GRACE_MS 覆盖（测试里压到几秒，免得每个用例干等）。
+ */
+const OFFLINE_GRACE_MS = Number(process.env.OFFLINE_GRACE_MS || 20 * 1000);
+
 /** 通话记录里的状态取值（客户端按这个渲染文案） */
 const STATUS = {
   ENDED: 'ended',       // 正常通话结束（含时长）
@@ -64,6 +76,11 @@ function publicInfo(call) {
 function cleanup(call) {
   if (call.timer) clearTimeout(call.timer);
   if (call.maxTimer) clearTimeout(call.maxTimer);
+  // 连掉线宽限定时器一起清，否则它们超时后会对着已经结束的通话再操作一遍
+  if (call.offlineTimers) {
+    for (const t of call.offlineTimers.values()) clearTimeout(t);
+    call.offlineTimers.clear();
+  }
   calls.delete(call.id);
   if (userCall.get(call.callerId) === call.id) userCall.delete(call.callerId);
   if (userCall.get(call.calleeId) === call.id) userCall.delete(call.calleeId);
@@ -161,6 +178,8 @@ function invite({ conversationId, callerId, calleeId, mode }) {
     answeredAt: 0,
     timer: null,
     maxTimer: null,
+    // userId -> 掉线宽限定时器
+    offlineTimers: new Map(),
   };
   calls.set(call.id, call);
   userCall.set(callerId, call.id);
@@ -276,8 +295,11 @@ function relay({ callId, userId, type, data }) {
 
 /**
  * 某用户的所有连接都断开时调用（hub 里已确认没有剩余 socket）。
- * - 振铃中被叫掉线 → 主叫收到"无人接听"
- * - 通话中任一方掉线 → 对方收到"对方已断开"
+ *
+ * 不立刻拆通话，而是挂一个 20 秒宽限定时器：
+ * - 期间重连回来 → [handleOnline] 取消定时器，通话继续（来电界面由
+ *   [pendingForUser] 补推）
+ * - 到期仍未归 → 才按"真的掉线"处理：振铃中判未接/取消，通话中判失败
  */
 function handleOffline(userId) {
   const callId = userCall.get(userId);
@@ -285,15 +307,69 @@ function handleOffline(userId) {
   const call = calls.get(callId);
   if (!call) { userCall.delete(userId); return; }
 
-  const peer = otherSide(call, userId);
-  if (call.state === 'ringing') {
-    hub.broadcastToUser(peer, { type: 'call:ended', callId: call.id, reason: 'unreachable', by: userId });
-    logCall(call, call.calleeId === userId ? STATUS.MISSED : STATUS.CANCELED, 0);
-  } else {
-    hub.broadcastToUser(peer, { type: 'call:ended', callId: call.id, reason: 'peer-offline', by: userId });
-    logCall(call, STATUS.FAILED, durationOf(call));
+  if (!call.offlineTimers) call.offlineTimers = new Map();
+  // 同一端可能因 close + error 被通知两次，别叠定时器
+  if (call.offlineTimers.has(userId)) return;
+
+  const timer = setTimeout(() => {
+    call.offlineTimers.delete(userId);
+    // 人已经回来了（handleOnline 会清掉定时器，这里是双保险）
+    if (hub.userSockets.has(userId)) return;
+    if (!calls.has(call.id)) return;
+
+    const peer = otherSide(call, userId);
+    if (call.state === 'ringing') {
+      hub.broadcastToUser(peer, { type: 'call:ended', callId: call.id, reason: 'unreachable', by: userId });
+      logCall(call, call.calleeId === userId ? STATUS.MISSED : STATUS.CANCELED, 0);
+    } else {
+      hub.broadcastToUser(peer, { type: 'call:ended', callId: call.id, reason: 'peer-offline', by: userId });
+      logCall(call, STATUS.FAILED, durationOf(call));
+    }
+    cleanup(call);
+  }, OFFLINE_GRACE_MS);
+
+  call.offlineTimers.set(userId, timer);
+}
+
+/**
+ * 用户（重新）上线时调用。
+ * 取消他的掉线宽限定时器 —— 人回来了，这通电话不该再被判死。
+ * 振铃中的来电由 [pendingForUser] 负责把界面补推回去。
+ */
+function handleOnline(userId) {
+  const callId = userCall.get(userId);
+  if (!callId) return;
+  const call = calls.get(callId);
+  if (!call || !call.offlineTimers) return;
+  const t = call.offlineTimers.get(userId);
+  if (t) {
+    clearTimeout(t);
+    call.offlineTimers.delete(userId);
   }
-  cleanup(call);
+}
+
+/**
+ * 用户（重新）上线时补推正在振铃的通话。
+ *
+ * 背景：外网环境下 WebSocket 容易被 NAT / 隧道静默回收，被叫断线期间
+ * `call:incoming` 直接进了黑洞，用户完全无感知，只能等主叫挂断后
+ * 在会话里看到一条"未接视频"。这里让被叫一重连就立刻补弹来电界面。
+ *
+ * - 被叫 → call:incoming
+ * - 主叫 → call:ringing（客户端若已本地结束会安全忽略）
+ * - 只补 ringing 阶段：已接通的通话没法靠补帧恢复，需要重新协商 SDP。
+ */
+function pendingForUser(userId) {
+  const callId = userCall.get(userId);
+  if (!callId) return null;
+  const c = calls.get(callId);
+  if (!c || c.state !== 'ringing') return null;
+
+  const info = publicInfo(c);
+  if (c.calleeId === userId) {
+    return { type: 'call:incoming', ...info, from: c.callerId, resumed: true };
+  }
+  return { type: 'call:ringing', ...info, peerId: c.calleeId, resumed: true };
 }
 
 /** 给管理后台/健康检查看的运行态快照 */
@@ -307,6 +383,7 @@ function stats() {
 }
 
 module.exports = {
-  invite, accept, reject, cancel, end, relay, handleOffline, stats,
-  RING_TIMEOUT_MS, MODES, STATUS,
+  invite, accept, reject, cancel, end, relay,
+  handleOffline, handleOnline, pendingForUser, stats,
+  RING_TIMEOUT_MS, OFFLINE_GRACE_MS, MODES, STATUS,
 };

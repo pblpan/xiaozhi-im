@@ -292,6 +292,17 @@ class ImApi {
   Future<Map<String, dynamic>> leaveGroup(int gid) async =>
       await _post('/groups/$gid/leave', const {});
 
+  // ---- 通话 ----
+  /// 拉取 ICE 服务器配置（STUN / TURN）。
+  ///
+  /// 穿透地址由服务端下发而非写死在客户端，原因是 STUN 的可用性跟网络环境
+  /// 强相关（`stun.qq.com` 在黑龙江电信就会被 RST）。放服务端以后，调穿透
+  /// 方案只需改环境变量重启，不用重新发安卓包让所有人重装。
+  Future<Map<String, dynamic>> callIce() async {
+    final d = await _get('/call/ice');
+    return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+  }
+
   // ---- 文件 ----
   /// 上传文件。语音等临时录音文件没有规范扩展名时，用 filename 指定（如 voice.m4a）。
   Future<Map<String, dynamic>> upload(File f, {String? filename}) async {

@@ -42,6 +42,18 @@ WIN_MARKS = [
     '/friends/templates',       # 模板接口路径（字符串常量）
     'friend:request',           # 好友申请实时帧
     'user:update',              # 资料变更广播帧
+    # ---- v0.6.1 外网通话修复：保活 / 心跳 / TURN 中继 ----
+    '/call/ice',                # 服务端下发 ICE 配置的接口路径
+    'stun.miwifi.com',          # 新 STUN（旧的内置 stun.qq.com 实测被 RST）
+    'stun.chat.bilibili.com',   # 备用 STUN
+    'AppLifecycleListener',     # 回到前台主动探活（AOT 保留类名）
+    'socket.dart',              # 长连接保活逻辑所在文件
+]
+
+# 必须**不再出现**的记号：功能下线 / 资源被替换。
+# 只在"确定它不该在产物里"时才加进来 —— 误报会让人白跑一轮构建。
+GONE_MARKS = [
+    'stun.qq.com',              # v0.6.1：黑龙江电信实测被 RST，已从内置列表剔除
 ]
 
 # 音频资源条目（必须真的打进包里，否则运行时静默无声）
@@ -83,6 +95,25 @@ def scan_bytes(data, marks):
     return out
 
 
+def check_gone(data):
+    """确认该下线的记号确实没了。
+
+    只验"新东西在不在"是不够的：把 stun.qq.com 从列表里删掉后，
+    万一某处还留着硬编码，产物里照样能找到它 —— 而它在本机是被 RST 的，
+    会让 ICE 收集白白卡住。所以下线项要单独验"已消失"。
+    """
+    print('\n-- 应已下线的记号 --')
+    bad = []
+    for m in GONE_MARKS:
+        n = data.count(m.encode('utf-8')) or data.count(m.encode('utf-16-le'))
+        if n:
+            bad.append(m)
+            print('  %-24s 仍存在 x%d ✗' % (m, n))
+        else:
+            print('  %-24s 已剔除 ✓' % m)
+    return not bad
+
+
 def check_sounds(zf, names, prefix):
     """校验提示音文件是否真的打进包。
 
@@ -122,9 +153,11 @@ def check_win(zf, marks):
     bad = [k for k, v in hits.items() if v == 0]
     for k, v in hits.items():
         print('  %-24s %s' % (k, '命中 x%d' % v if v else '未命中 ✗'))
+    gone_ok = check_gone(data)
     snd_ok = check_sounds(zf, names, 'data/flutter_assets/')
-    print('\n结论: %s' % ('新代码已编入产物 ✓' if (not bad and snd_ok) else '缺少 %s ✗' % (bad or '提示音')))
-    return 0 if (not bad and snd_ok) else 1
+    all_ok = not bad and gone_ok and snd_ok
+    print('\n结论: %s' % ('新代码已编入产物 ✓' if all_ok else '缺少 %s ✗' % (bad or '提示音/下线项')))
+    return 0 if all_ok else 1
 
 
 def check_apk(zf, marks):
@@ -146,9 +179,10 @@ def check_apk(zf, marks):
     for k, v in hits.items():
         print('  %-28s %s' % (k, '命中 x%d' % v if v else '未命中 ✗'))
     ok_native = len(native) >= 3
+    gone_ok = check_gone(data)
     snd_ok = check_sounds(zf, names, 'assets/flutter_assets/')
     print('\nWebRTC 原生库三架构: %s' % ('齐全 ✓' if ok_native else '不足 ✗'))
-    all_ok = not bad and ok_native and snd_ok
+    all_ok = not bad and ok_native and gone_ok and snd_ok
     print('结论: %s' % ('新代码已编入产物 ✓' if all_ok else '有问题 ✗'))
     return 0 if all_ok else 1
 

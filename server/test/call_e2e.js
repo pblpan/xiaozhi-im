@@ -108,6 +108,10 @@ async function main() {
       PORT: String(PORT),
       DATA_DIR,
       DB_PATH: path.join(DATA_DIR, 'test.db'),
+      // 掉线判定有宽限期（默认 20 秒，让外网抖动的用户有机会重连）。
+      // 测试里压到 1.5 秒，好让"被叫掉线 → 判未接"这条用例快速跑完。
+      // 宽限期本身的语义由 test/reconnect_e2e.js 覆盖。
+      OFFLINE_GRACE_MS: '1500',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../api.dart';
 import '../screens/call.dart';
 import '../socket.dart';
 import 'sound_service.dart';
@@ -40,13 +41,15 @@ class CallSession {
   });
 }
 
-/// ICE 服务器。
+/// ICE 服务器**兜底**列表。
 ///
-/// 同网段靠 host candidate 直连，本来不需要 STUN；这里挂一个国内可达的 STUN
-/// 是为了覆盖「同网不同段 / 有 NAT 但不严格」的情况。跨公网需要 TURN 中转，
-/// 届时把自建 coturn 地址加进这个列表即可，客户端其余代码不用动。
+/// 正常情况下用服务端下发的配置（见 [_resolveIceServers]），这里只是
+/// 拉不到配置时的保险。注意 `stun.qq.com` 已经被剔除 —— 2026-09 实测在
+/// 黑龙江电信会被直接 RST，留着只会白白拖慢候选收集。
 const List<Map<String, dynamic>> kIceServers = [
-  {'urls': 'stun:stun.qq.com:3478'},
+  {'urls': 'stun:stun.miwifi.com:3478'},
+  {'urls': 'stun:stun.chat.bilibili.com:3478'},
+  {'urls': 'stun:stun.hitv.com:3478'},
 ];
 
 /// 通话引擎（单例）
@@ -96,6 +99,8 @@ class CallService {
   bool _remoteSet = false;
 
   Timer? _tick;
+  Timer? _graceTimer;
+  Timer? _endTimer;
   DateTime? _answeredAt;
   bool _ending = false;
 
@@ -147,11 +152,33 @@ class CallService {
   void _onConnState() {
     // WebSocket 断了，服务端已经把通话拆了（另一端会收到 call:ended）。
     // 本地必须跟着结束，否则界面会一直停在"通话中"。
-    if (SocketService().state.value == ConnState.offline &&
-        phase.value != CallPhase.idle &&
-        phase.value != CallPhase.ended) {
-      _finish('网络已断开');
+    //
+    // 但**还没接通的阶段**（来电响铃 / 呼出等待）要网开一面：外网下 WS
+    // 抖动是常态，一断就掐掉来电界面，用户压根来不及接。给 20 秒宽限期，
+    // 期间重连成功会由服务端补推 call:incoming 把界面接回来
+    // （服务端振铃超时 45 秒，且掉线判定也有 20 秒宽限，所以这里是安全的）。
+    if (SocketService().state.value == ConnState.online) {
+      _graceTimer?.cancel();
+      return;
     }
+    if (phase.value == CallPhase.idle || phase.value == CallPhase.ended) return;
+
+    final notYetConnected = phase.value == CallPhase.incoming ||
+        phase.value == CallPhase.outgoing;
+    if (!notYetConnected) {
+      _finish('网络已断开');
+      return;
+    }
+
+    status.value = '网络不稳，正在重连…';
+    _graceTimer?.cancel();
+    _graceTimer = Timer(const Duration(seconds: 20), () {
+      if (SocketService().state.value != ConnState.online &&
+          (phase.value == CallPhase.incoming ||
+              phase.value == CallPhase.outgoing)) {
+        _finish('网络已断开');
+      }
+    });
   }
 
   // ------------------------------------------------------------------ 发起方
@@ -329,8 +356,12 @@ class CallService {
   }
 
   void _onIncoming(Map raw) {
-    // 已经在通话里：直接回绝，别让对方一直等
-    if (phase.value != CallPhase.idle) {
+    // 已经在通话里：直接回绝，别让对方一直等。
+    //
+    // 例外：`ended` 只是"上一通刚结束、界面还在展示原因"的 1.2 秒过渡态，
+    // 此时完全可以接新来电。放行它对"外网断线重连后服务端补推来电"很关键 ——
+    // 补推往往就落在上一通被判定断线后的那一两秒内，卡在这里就白补了。
+    if (phase.value != CallPhase.idle && phase.value != CallPhase.ended) {
       SocketService().send({
         'type': 'call:reject',
         'callId': raw['callId'],
@@ -338,6 +369,11 @@ class CallService {
       });
       return;
     }
+    // 取消上一通的收尾定时器，否则它 1.2 秒后会把 session 清空，
+    // 来电界面会变成一片空白。
+    _endTimer?.cancel();
+    _ending = false;
+
     final video = raw['mode'] != 'audio';
     session.value = CallSession(
       callId: '${raw['callId']}',
@@ -471,12 +507,55 @@ class CallService {
 
   // -------------------------------------------------------------- WebRTC
 
+  /// 服务端下发的 ICE 配置缓存
+  List<Map<String, dynamic>>? _iceCache;
+  DateTime? _iceCachedAt;
+
+  /// 解析本次通话要用的 ICE 服务器列表。
+  ///
+  /// 优先用服务端下发的（`GET /api/call/ice`）—— 服务端配了 coturn 中继时，
+  /// 对称 NAT / 手机流量这类打不通洞的场景才有兜底。拉不到就用内置 STUN。
+  /// 结果缓存 5 分钟，避免每通电话都多一次往返。
+  Future<List<Map<String, dynamic>>> _resolveIceServers() async {
+    final at = _iceCachedAt;
+    if (_iceCache != null &&
+        at != null &&
+        DateTime.now().difference(at) < const Duration(minutes: 5)) {
+      return _iceCache!;
+    }
+    try {
+      final d = await ImApi().callIce();
+      final raw = d['iceServers'];
+      if (raw is List) {
+        final list = raw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .where((e) => e['urls'] != null)
+            .toList();
+        if (list.isNotEmpty) {
+          _iceCache = list;
+          _iceCachedAt = DateTime.now();
+          final turn = d['turnConfigured'] == true;
+          _diag('ICE 配置已下发：${list.length} 项'
+              '${turn ? '，含 TURN 中继' : '，仅 STUN 无中继'}');
+          return list;
+        }
+      }
+      _diag('服务端 ICE 配置为空，改用内置 STUN');
+    } catch (e) {
+      _diag('拉取 ICE 配置失败（$e），改用内置 STUN');
+    }
+    _iceCache = kIceServers;
+    _iceCachedAt = DateTime.now();
+    return kIceServers;
+  }
+
   Future<RTCPeerConnection?> _ensurePeer() async {
     if (_pc != null) return _pc;
     await _ensureRenderers();
 
     final pc = await createPeerConnection({
-      'iceServers': kIceServers,
+      'iceServers': await _resolveIceServers(),
       'sdpSemantics': 'unified-plan',
     });
 
@@ -711,7 +790,11 @@ class CallService {
     phase.value = CallPhase.ended;
     _teardown().then((_) {
       // 界面留 1.2 秒展示结束原因，再自动关闭
-      Timer(const Duration(milliseconds: 1200), () {
+      _endTimer?.cancel();
+      _endTimer = Timer(const Duration(milliseconds: 1200), () {
+        // 期间若来了新来电，_onIncoming 会复位 _ending 并取消这个定时器，
+        // 这里就不会误清 session（否则来电界面会变成空白）。
+        if (!_ending) return;
         phase.value = CallPhase.idle;
         session.value = null;
         _ending = false;
@@ -722,6 +805,8 @@ class CallService {
   Future<void> _teardown() async {
     _tick?.cancel();
     _tick = null;
+    _graceTimer?.cancel();
+    _graceTimer = null;
     _answeredAt = null;
     _remoteSet = false;
     _pendingIce.clear();

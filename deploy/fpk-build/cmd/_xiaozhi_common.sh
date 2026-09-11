@@ -51,18 +51,50 @@ xiaozhi_env() {
   mkdir -p "$(dirname "$ENV_FILE")"
 
   local SECRET=""
+  local OLD_IP=""
   if [ -f "$ENV_FILE" ]; then
     SECRET=$(grep -E '^JWT_SECRET=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
+    OLD_IP=$(grep -E '^TURN_EXTERNAL_IP=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
   fi
   [ -z "$SECRET" ] && SECRET=$(xiaozhi_gen_secret)
+
+  # 公网 IP：每次安装/升级都重探（家宽基本是动态 IP，写死过几天就失效）。
+  # 探测失败时沿用上次的值 —— 别把一份可能还能用的配置擦成空的。
+  local PUBIP=""
+  for u in https://ipinfo.io/ip https://api.ipify.org https://ifconfig.me/ip; do
+    PUBIP=$(curl -s -m 6 "$u" 2>/dev/null | tr -d '[:space:]')
+    case "$PUBIP" in
+      [0-9]*.[0-9]*.[0-9]*.[0-9]*) break ;;
+      *) PUBIP="" ;;
+    esac
+  done
+  [ -z "$PUBIP" ] && PUBIP="$OLD_IP"
+
+  local TURN_IP_LINE="# 未探测到公网 IP，TURN 中继仅内网可用"
+  local TURN_URL_LINE="# TURN_URLS="
+  if [ -n "$PUBIP" ]; then
+    TURN_IP_LINE="TURN_EXTERNAL_IP=$PUBIP"
+    TURN_URL_LINE="TURN_URLS=turn:$PUBIP:3478?transport=udp"
+  fi
 
   cat > "$ENV_FILE" <<EOF
 # 由安装/升级回调自动生成，请勿手改
 TRIM_APPDEST=$TRIM_APPDEST
 XIAOZHI_DATA_DIR=$SHARE_DIR/data
 JWT_SECRET=$SECRET
+
+# ---- TURN 中继（跨网络音视频通话必需）----
+# 写了地址不等于外网就能用：还要让下面这些入口能从公网进来，
+#   3478/udp + 3478/tcp（信令/分配）
+#   49160-49200/udp（中继通道）
+# 二选一：
+#   A) 路由器端口映射（家宽有公网 IP 时最简单）
+#   B) ZeroNews 等内网穿透开 UDP 隧道（无公网 IP 时）
+# 一条都没打通的话，跨网通话仍会失败（同网段通话不受影响）。
+$TURN_IP_LINE
+$TURN_URL_LINE
 EOF
-  echo "[$APPNAME] 已写入 $ENV_FILE"
+  echo "[$APPNAME] 已写入 $ENV_FILE (TURN_EXTERNAL_IP=${PUBIP:-无})"
 }
 
 # 释放端口：清理同名旧容器

@@ -6,7 +6,10 @@ is_docker_running () {
     DOCKER_NAME=""
 
     if [ -f "$FILE_PATH" ]; then
-        DOCKER_NAME=$(cat $FILE_PATH | grep "container_name" | awk -F ':' '{print $2}' | xargs)
+        # -m1：compose 里现在有多个 container_name（主服务 + TURN 中继），
+        # 不取第一个的话会拼成一串名称，docker inspect 只要其中任意一个在跑
+        # 就认为"应用运行中" —— 主服务挂了也照样显示绿点。
+        DOCKER_NAME=$(grep -m1 "container_name" $FILE_PATH | awk -F ':' '{print $2}' | xargs)
         echo "DOCKER_NAME is set to: $DOCKER_NAME"
     fi
 

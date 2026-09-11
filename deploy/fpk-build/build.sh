@@ -40,6 +40,15 @@ cp "$SRV/package.json" "$SRV/package-lock.json" "$SRV/smoketest.js" "$FN/app/src
 ( cd "$SRV" && tar czf "../$FN/app/src/node_modules.tar.gz" node_modules )
 echo "      src 就绪: $(du -sh "$FN/app/src" | cut -f1)"
 
+echo "[1.5/4] 组装 TURN 中继配置..."
+# compose 以 ${TRIM_APPDEST}/docker/coturn/... 挂载这两个文件，
+# 漏拷的话容器起不来（挂载源不存在）。
+mkdir -p "$FN/app/docker/coturn"
+cp "$ROOT/deploy/coturn/turnserver.conf" "$ROOT/deploy/coturn/entrypoint.sh" \
+   "$FN/app/docker/coturn/"
+chmod 755 "$FN/app/docker/coturn/entrypoint.sh"
+echo "      coturn 配置就绪"
+
 echo "[2/4] 生成图标（若未生成）..."
 if [ ! -f "$FN/ICON.PNG" ]; then
   "$PY" "$FN/gen_icons.py"
