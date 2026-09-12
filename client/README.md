@@ -1,6 +1,6 @@
 # 小智 IM 客户端（Flutter）
 
-一套 Dart 代码同时构建 **Windows 桌面** 与 **Android** 安装包，界面仿 Tailchat（宽屏双栏 / 窄屏跳转）。
+一套 Dart 代码同时构建 **Windows 桌面** 与 **Android** 安装包，采用宽屏双栏 / 窄屏跳转的自适应布局。
 
 ## 功能（MVP）
 - 注册 / 登录（JWT）

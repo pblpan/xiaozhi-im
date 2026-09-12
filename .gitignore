@@ -33,3 +33,6 @@ Thumbs.db
 # IDE
 .idea/
 *.iml
+
+# vite 构建临时文件（配置打时间戳的中间产物，不该进版本库）
+admin/vite.config.js.timestamp-*.mjs

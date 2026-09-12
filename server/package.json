@@ -1,6 +1,6 @@
 {
   "name": "xiaozhi-im-server",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "private": true,
   "description": "小智 IM 服务端 (Node.js + WebSocket + SQLite)",
   "type": "commonjs",

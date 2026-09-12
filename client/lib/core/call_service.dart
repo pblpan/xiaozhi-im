@@ -118,7 +118,14 @@ class CallService {
     // 铃声跟着通话阶段走：来电=振铃、呼出=回铃、其余（接通/结束/空闲）立刻停。
     // 放在监听里而不是各个业务分支里，避免漏掉某条结束路径导致铃声一直响。
     phase.addListener(_syncTone);
+    // 相位跃迁也记进诊断面板：线上（release 包）看不到 debugPrint，
+    // 出问题时"phase 到底走到哪一步"是第一个要问的问题。
+    phase.addListener(_diagPhase);
   }
+
+  /// 记一条相位跃迁。诊断面板里能看到 `incoming → connecting → active` 的完整时间线，
+  /// 一眼就能判断是"卡在来电没往下走"还是"接通了但没画面"。
+  void _diagPhase() => _diag('阶段 → ${phase.value.name}');
 
   void _syncTone() {
     switch (phase.value) {
@@ -146,6 +153,9 @@ class CallService {
     _sub = null;
     _attached = false;
     SocketService().state.removeListener(_onConnState);
+    // 顺手摘掉 phase 监听：attach/dispose 可反复调用，不摘会叠加重复监听
+    phase.removeListener(_syncTone);
+    phase.removeListener(_diagPhase);
     await _teardown();
   }
 

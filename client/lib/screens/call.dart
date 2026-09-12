@@ -26,20 +26,37 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     _c.phase.addListener(_onPhase);
+    _c.session.addListener(_onSession);
   }
 
   @override
   void dispose() {
     _c.phase.removeListener(_onPhase);
+    _c.session.removeListener(_onSession);
     super.dispose();
   }
 
+  /// ⚠️ 必须 setState。
+  ///
+  /// [build] 里读 `_c.phase.value` 决定渲染「来电形态」还是「通话形态」，
+  /// 这是**非响应式读取**——不主动重建的话，被叫端接听后 phase 已经从
+  /// `incoming` 走到 `connecting/active`，界面却永远停来电页（拒绝/接听按钮
+  /// 一直在），而承载 `RTCVideoView` 的通话形态从未挂载 → 画面全黑。
+  /// 两个症状（黑屏 + 已接听仍显示未接通）其实是同一个根因。
   void _onPhase() {
     // 通话彻底结束（idle）时自己关掉页面，CallService 不用管导航栈
-    if (_c.phase.value == CallPhase.idle && !_closed) {
+    if (_c.phase.value == CallPhase.idle) {
+      if (_closed) return;
       _closed = true;
       if (mounted) Navigator.of(context).pop();
+      return;
     }
+    if (mounted) setState(() {});
+  }
+
+  /// 会话对象是可变引用（如摄像头不可用时会被降级成语音），也要跟着重建。
+  void _onSession() {
+    if (mounted) setState(() {});
   }
 
   static String _fmt(int s) {

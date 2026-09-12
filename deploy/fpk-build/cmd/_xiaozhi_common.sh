@@ -5,7 +5,9 @@
 #  1) 兜底创建持久化目录（data-share 通常已由 appcenter 建好）
 #  2) 首次安装生成随机 JWT 密钥并写 docker/.env；升级复用旧密钥
 #  3) 释放 3602 端口（清理旧版裸容器/旧容器名）
-#  4) docker compose up -d 启动（依赖已随包预打包，无需 build/现场 npm install）
+#  4) docker compose up -d --force-recreate 启动（依赖已随包预打包，无需 build）
+#     —— 必须 force-recreate：fnOS 会在 init 与 callback 之间自己跑一次 compose，
+#        用裸 up -d 的话 callback 重写的 .env 永远进不了容器（详见 xiaozhi_up 注释）
 #  仅定义函数；由调用方组织执行顺序。
 # ============================================================
 set +e
@@ -66,15 +68,24 @@ xiaozhi_env() {
 
   # 公网 IP：每次安装/升级都重探（家宽基本是动态 IP，写死过几天就失效）。
   # 探测失败时沿用上次的值 —— 别把一份可能还能用的配置擦成空的。
+  #
+  # 重试 3 轮：安装早期网络/DNS 常常还没就绪，一次探测失败就会把
+  # TURN_URLS 写成注释、容器起来后没有中继（2026-09-12 实际踩到，
+  # 表现为 /api/call/ice 返回 turnConfigured:false 而 .env 里明明有值）。
   local PUBIP=""
-  for u in https://ipinfo.io/ip https://api.ipify.org https://ifconfig.me/ip; do
-    PUBIP=$(curl -s -m 6 "$u" 2>/dev/null | tr -d '[:space:]')
-    case "$PUBIP" in
-      [0-9]*.[0-9]*.[0-9]*.[0-9]*) break ;;
-      *) PUBIP="" ;;
-    esac
+  local OLD_IP_TRY="$OLD_IP"
+  for round in 1 2 3; do
+    for u in https://ipinfo.io/ip https://api.ipify.org https://ifconfig.me/ip; do
+      PUBIP=$(curl -s -m 6 "$u" 2>/dev/null | tr -d '[:space:]')
+      case "$PUBIP" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*) break ;;
+        *) PUBIP="" ;;
+      esac
+    done
+    [ -n "$PUBIP" ] && break
+    [ "$round" -lt 3 ] && sleep 2
   done
-  [ -z "$PUBIP" ] && PUBIP="$OLD_IP"
+  [ -z "$PUBIP" ] && PUBIP="$OLD_IP_TRY"
 
   local TURN_IP_LINE="# 未探测到公网 IP，TURN 中继仅内网可用"
   local TURN_URL_LINE="# TURN_URLS="
@@ -131,11 +142,18 @@ xiaozhi_cleanup() {
 }
 
 # compose up（依赖预打包，无需 build）
+#
+# ⚠️ 必须 `--force-recreate`，不能用裸 `up -d`。
+# 环境变量是在**容器创建时**烘进去的，而 fnOS 会在 init 与 callback 之间
+# **自己跑一次 compose**——那一次用的是还没写好的 `.env`。等 callback 把
+# `.env` 重写好时，容器已经存在，裸 `up -d` 判定"无变更"直接跳过，
+# 于是容器里 TURN_URLS 永远是空的（2026-09-11、09-12 各踩一次）。
+# 强制重建才能保证最终状态一定反映刚写好的 `.env`。
 xiaozhi_up() {
   local D="${TRIM_APPDEST}/docker"
   [ -z "$TRIM_APPDEST" ] && D="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docker"
   if [ -d "$D" ]; then
     cd "$D"
-    docker compose up -d 2>&1 || true
+    docker compose up -d --force-recreate "$APPNAME" 2>&1 || docker compose up -d 2>&1 || true
   fi
 }

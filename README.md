@@ -1,7 +1,7 @@
 # 小智 IM（XiaoZhi IM）
 
 自研即时通讯系统。**借鉴开源 IM 的功能设计，不直接使用其源码**；协议与代码完全自研。
-先期落地：**飞牛 FnOS 服务端 + Windows 客户端 + Android 客户端**（界面仿 Tailchat）。
+先期落地：**飞牛 FnOS 服务端 + Windows 客户端 + Android 客户端**（宽屏双栏 / 窄屏跳转自适应布局）。
 
 ## 技术栈
 - 服务端：Node.js 22 + Express 5 + WebSocket(`ws`) + SQLite(`node:sqlite`) + JWT

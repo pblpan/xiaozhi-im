@@ -30,6 +30,11 @@ CONTAINER = "xiaozhi-im"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 LOCAL_SRC = os.path.join(_HERE, "..", "server", "src")
 LOCAL_PUBLIC = os.path.join(_HERE, "..", "server", "public")
+# 宿主 .../src/package.json -> 容器 /app/package.json。
+# 管理台顶栏与服务端版本号都读它（routes/admin.js: require('../../package.json')），
+# 所以**每次涨版本都必须一起推**，否则界面显示的还是旧版本号。
+LOCAL_PKG = os.path.join(_HERE, "..", "server", "package.json")
+REMOTE_APP_SRC = REMOTE_APP + "/src"
 
 
 def collect_src():
@@ -76,6 +81,8 @@ def main():
     targets = [
         ("服务端代码", collect_src(), REMOTE_SRC, STAGE + "/src", "/app/src"),
         ("管理后台", collect_public(), REMOTE_PUBLIC, STAGE + "/public", "/app/public"),
+        ("服务端元数据", [(LOCAL_PKG, "package.json")],
+         REMOTE_APP_SRC, STAGE + "/pkg", "/app"),
     ]
 
     for name, files, _r, _s, _c in targets:
@@ -111,14 +118,19 @@ def main():
     sftp.close()
 
     # 覆盖到运行目录
+    #
+    # ⚠️ 这里必须**按 targets 通用处理**。曾经把这一步写死成"只 cp src 和 public"，
+    # 于是后来新增的第三个目标（package.json）上传成功、却永远没被拷进运行目录，
+    # md5 校验才暴露出 1 个不一致 —— 加目标时务必确认这段没被写死。
     print("\n== 覆盖到运行目录")
-    run(c, SUDO + "mkdir -p %s/routes %s" % (REMOTE_SRC, REMOTE_PUBLIC))
-    run(c, SUDO + "cp -rf %s/src/. %s/" % (STAGE, REMOTE_SRC))
-    # assets 里带 hash 文件名，旧文件必须清掉否则越堆越多
-    run(c, SUDO + "rm -rf %s/assets" % REMOTE_PUBLIC)
-    run(c, SUDO + "cp -rf %s/public/. %s/" % (STAGE, REMOTE_PUBLIC))
-    run(c, SUDO + "chown -R docker-xiaozhi-im:docker-xiaozhi-im %s %s"
-        % (REMOTE_SRC, REMOTE_PUBLIC))
+    for name, _files, remote_dir, stage_dir, _c in targets:
+        run(c, SUDO + "mkdir -p %s" % remote_dir)
+        if name == "管理后台":
+            # assets 里带 hash 文件名，旧文件必须清掉否则越堆越多
+            run(c, SUDO + "rm -rf %s/assets" % remote_dir)
+        run(c, SUDO + "cp -rf %s/. %s/" % (stage_dir, remote_dir))
+    run(c, SUDO + "chown -R docker-xiaozhi-im:docker-xiaozhi-im %s %s %s"
+        % (REMOTE_SRC, REMOTE_PUBLIC, REMOTE_APP_SRC))
     run(c, "rm -rf %s" % STAGE)
 
     # 校验

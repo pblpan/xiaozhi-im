@@ -54,6 +54,12 @@ WIN_MARKS = [
     'hasRemark',                # 是否设过备注（决定列表副标题展示）
     '/remark',                  # 备注接口路径片段（字符串常量）
     'friends_new.dart',         # 「新的朋友」页（备注入口所在文件）
+    # ---- v0.6.3 通话页形态切换修复（被叫端黑屏 / 卡在来电页）----
+    # 根因：build() 非响应式读 phase，监听器从不 setState → 接听后不重建。
+    # 这两个新增私有方法名是「新代码已进包」的最直接证据
+    # （同 _syncTone / _diag 的存活方式，AOT 会保留被 addListener 引用的方法名）。
+    '_onSession',               # 新增：会话对象变化也重建
+    '_diagPhase',               # 新增：相位跃迁写进诊断面板
 ]
 
 # 必须**不再出现**的记号：功能下线 / 资源被替换。
@@ -194,7 +200,7 @@ def check_apk(zf, marks):
 
 
 def check_fpk(path):
-    """校验服务端 fpk：版本号 + v0.6.1/v0.6.2/v0.6.3 关键修复点是否都打进去了。
+    """校验服务端 fpk：版本号 + v0.6.1~v0.6.4 关键修复点是否都打进去了。
 
     fpk 是 tar.gz；app.tgz 里再套一层，所以拆两次。
     """
@@ -202,8 +208,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.6.3', 'v0.6.3'],
-        'src/package.json': ['"version": "0.6.3"'],
+        'manifest': ['version', '0.6.4', 'v0.6.4'],
+        'src/package.json': ['"version": "0.6.4"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         'src/src/call.js': ['OFFLINE_GRACE_MS', 'pendingForUser', 'handleOnline'],
         'src/src/ws.js': ['isAlive', "case 'ping'"],
@@ -219,7 +225,10 @@ def check_fpk(path):
         'docker/docker-compose.yaml': ['coturn', 'TURN_INTERNAL_IP', 'TURN_URLS',
                                        'CF_TURN_KEY_ID'],
         'cmd/_xiaozhi_common.sh': ['transport=tcp', 'transport=udp',
-                                   'CF_TURN_KEY_ID', 'OLD_CF_ID'],
+                                   'CF_TURN_KEY_ID', 'OLD_CF_ID',
+                                   # v0.6.4：必须强制重建，否则 callback 重写的
+                                   # .env 进不了已经存在的容器（踩过两次）
+                                   '--force-recreate'],
     }
     # 必须彻底消失的（v0.6.1 起）。
     # 注意用带 scheme 的完整写法：config.js 里有一条注释提到过
@@ -264,6 +273,12 @@ def check_fpk(path):
     print('%-30s %s' % ('src/public/assets(系统帮助页)',
                         '命中 ✓' if help_hit else '缺失 ✗'))
     all_ok = all_ok and bool(help_hit)
+
+    # v0.6.4：说明文案里去掉了「仿 Tailchat 界面」的表述，产物里不该再有该词。
+    tail = [n for n in admin_js if b'Tailchat' in blob[n]]
+    print('%-30s %s' % ('src/public/assets(去 Tailchat)',
+                        '已清除 ✓' if not tail else '仍存在 ✗ %s' % tail))
+    all_ok = all_ok and not tail
 
     hits = []
     for name, data in blob.items():
