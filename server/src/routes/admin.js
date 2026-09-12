@@ -343,4 +343,133 @@ router.post('/change-password', (req, res) => {
   res.json({ ok: true });
 });
 
+/* ==================== 音视频中继（TURN）配置向导 ==================== */
+
+/** .env 的实际路径：与 docker-compose 同目录。可用 TURN_ENV_PATH 覆盖（测试用） */
+function envPath() {
+  return process.env.TURN_ENV_PATH || path.join(config.DATA_DIR, '..', 'docker', '.env');
+}
+
+/** 当前中继状态：来源、是否启用、遮盖后的值、静态 TURN */
+router.get('/turn', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const t = config.turnInfo();
+  res.json({
+    ...t,
+    envPath: envPath(),
+    // 引导管理员：CF 没配好时前端据此提示
+    ready: t.sources.length > 0,
+  });
+});
+
+/** 校验一对 CF 凭据是否真的可用（不写盘，纯探测） */
+router.post('/turn/verify', async (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const { key_id, api_token } = req.body || {};
+  const r = await config.probeTurnCredentials(key_id, api_token);
+  res.json(r);
+});
+
+/**
+ * 保存凭据到 .env。**先校验再写**，用错值覆盖生产会导致重启后中继全丢。
+ * 写入是原位的：只改这两行，其余内容与注释一字不动。
+ */
+router.post('/turn', async (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const { key_id, api_token } = req.body || {};
+
+  const kid = String(key_id || '').trim();
+  const tok = String(api_token || '').trim();
+  if (!kid || !tok) return res.status(400).json({ error: 'Key ID 与 API Token 都不能为空' });
+
+  // 强制先验一次，避免把无效凭据写进生产
+  const probe = await config.probeTurnCredentials(kid, tok);
+  if (!probe.ok) return res.status(400).json({ error: '凭据校验未通过：' + probe.error });
+
+  const f = envPath();
+  if (!fs.existsSync(f)) {
+    return res.status(500).json({ error: `找不到配置文件 ${f}，请确认应用目录结构` });
+  }
+
+  let text;
+  try {
+    text = fs.readFileSync(f, 'utf8');
+  } catch (e) {
+    return res.status(500).json({ error: '读取配置文件失败：' + e.message });
+  }
+
+  // 备份一份，出问题可回滚
+  const bak = `${f}.bak-admin-${Date.now()}`;
+  try {
+    fs.writeFileSync(bak, text, 'utf8');
+  } catch (e) {
+    return res.status(500).json({ error: '备份配置文件失败，已中止：' + e.message });
+  }
+
+  const setLine = (src, key, val) => {
+    const re = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
+    if (re.test(src)) return src.replace(re, `${key}=${val}`);
+    // 原来没有这两行（老版本 .env）时追加，并补个说明注释
+    return src.replace(/\s*$/, `\n\n# Cloudflare Realtime TURN（由管理台向导写入）\n${key}=${val}\n`);
+  };
+
+  let next = setLine(text, 'CF_TURN_KEY_ID', kid);
+  next = setLine(next, 'CF_TURN_API_TOKEN', tok);
+
+  try {
+    fs.writeFileSync(f, next, 'utf8');
+  } catch (e) {
+    return res.status(500).json({ error: '写入配置文件失败：' + e.message });
+  }
+
+  // 关键：立刻热加载进内存，让 /api/call/ice 马上用新凭据。
+  // 不重启也能生效 —— 否则会出现「向导说保存成功、实际通话仍旧」的割裂。
+  const applied = config.applyTurnCredentials(kid, tok);
+
+  res.json({
+    ok: true,
+    applied,
+    backup: path.basename(bak),
+    envPath: f,
+    // 仍提示重建：让 .env 与容器环境一致，避免下次重启后凭据「退回去」
+    needRecreate: true,
+    command: `cd ${path.dirname(f)} && docker compose up -d --force-recreate xiaozhi-im`,
+  });
+});
+
+/** 从 .env 中移除 CF 配置（回退到 STUN + 静态 TURN） */
+router.delete('/turn', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const f = envPath();
+  if (!fs.existsSync(f)) return res.status(500).json({ error: `找不到配置文件 ${f}` });
+  let text;
+  try {
+    text = fs.readFileSync(f, 'utf8');
+  } catch (e) {
+    return res.status(500).json({ error: '读取配置文件失败：' + e.message });
+  }
+  const bak = `${f}.bak-admin-${Date.now()}`;
+  try {
+    fs.writeFileSync(bak, text, 'utf8');
+  } catch (e) {
+    return res.status(500).json({ error: '备份配置文件失败，已中止：' + e.message });
+  }
+  const next = text
+    .replace(/^\s*CF_TURN_KEY_ID\s*=.*$/m, 'CF_TURN_KEY_ID=')
+    .replace(/^\s*CF_TURN_API_TOKEN\s*=.*$/m, 'CF_TURN_API_TOKEN=');
+  try {
+    fs.writeFileSync(f, next, 'utf8');
+  } catch (e) {
+    return res.status(500).json({ error: '写入配置文件失败：' + e.message });
+  }
+  // 同步清空内存里的凭据，立刻停止使用 CF 中继
+  config.applyTurnCredentials('', '');
+  res.json({
+    ok: true,
+    backup: path.basename(bak),
+    needRecreate: true,
+    command: `cd ${path.dirname(f)} && docker compose up -d --force-recreate xiaozhi-im`,
+  });
+});
+
 module.exports = router;

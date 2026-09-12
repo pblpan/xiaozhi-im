@@ -180,6 +180,98 @@
             </section>
 
             <section class="help-sec">
+              <h3>五之二、从零申请 Cloudflare TURN（推荐方案，全程免费、无需信用卡）</h3>
+              <el-alert type="warning" :closable="false" style="margin-bottom:12px">
+                <template #title>
+                  先明确一件事：<b>Cloudflare TURN 不需要信用卡、不需要绑付款方式</b>。
+                  建 key 那一步没有任何付款环节，免费额度 1000 GB / 月（仅 TURN 用量），
+                  家用 1 对 1 通话根本用不完。
+                </template>
+              </el-alert>
+
+              <p><b>第一步：登录控制台，找到正确的页面</b></p>
+              <ol>
+                <li>浏览器打开 <code class="mono">dash.cloudflare.com</code> 并登录（没有账号就免费注册一个）。</li>
+                <li>
+                  看<b>左侧菜单</b>，找 <b>「媒体」</b>（英文 Media）→ 点开 <b>「Realtime」</b> →
+                  再点 <b>「TURN 服务器」</b>（英文 TURN Server）。
+                </li>
+                <li>
+                  <b>找不到菜单就用直达网址</b>（最省事）：
+                  <div class="mono" style="margin:6px 0;padding:8px 10px;background:var(--el-fill-color-light);border-radius:6px;user-select:all">
+                    https://dash.cloudflare.com/?to=/:account/realtime/turn
+                  </div>
+                </li>
+              </ol>
+              <el-alert type="error" :closable="false" style="margin:10px 0">
+                <template #title>
+                  <b>别走错页面</b>：左侧「管理账户 → 账户 API 令牌」那个页面是配 Workers / DNS / R2 用的<b>通用令牌</b>，
+                  在那里怎么点都<b>拿不到 TURN key</b>，只会白建一个用不上的令牌。
+                </template>
+              </el-alert>
+
+              <p><b>第二步：创建 TURN 应用，拿到两个值</b></p>
+              <ol>
+                <li>在 TURN 页面点 <b>「创建」/「创建 TURN 服务器应用」</b>（英文 Create TURN app）。</li>
+                <li>名称随便填，例如 <code class="mono">xiaozhi-im</code>，确认创建。</li>
+                <li>页面立刻显示两个值，<b>当场复制</b>：</li>
+              </ol>
+              <table class="help-table">
+                <thead><tr><th style="width:190px">页面上的名字</th><th>长什么样 / 填到哪</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><b>Turn 令牌 ID</b><br /><span class="hint">Turn Token ID</span></td>
+                    <td>32 位十六进制串 → 填 <code class="mono">CF_TURN_KEY_ID</code></td>
+                  </tr>
+                  <tr>
+                    <td><b>API 令牌</b><br /><span class="hint">API Token</span></td>
+                    <td>64 位十六进制串 → 填 <code class="mono">CF_TURN_API_TOKEN</code></td>
+                  </tr>
+                </tbody>
+              </table>
+              <el-alert type="warning" :closable="false" style="margin:10px 0">
+                <template #title>
+                  API 令牌<b>只显示这一次</b>（页面会有红字提示）。关掉页面就再也看不到，
+                  只能删掉重建一个。<b>先复制到记事本再关页面。</b>
+                </template>
+              </el-alert>
+
+              <p><b>第三步：写入服务端配置</b></p>
+              <p>推荐直接用本页 <b>「系统设置 → 音视频中继配置」</b> 向导，填两个值点保存即可，不用碰命令行。</p>
+              <p>若要手工配置，编辑应用目录下的 <code class="mono">docker/.env</code>，填这两行：</p>
+              <div class="mono" style="margin:6px 0;padding:8px 10px;background:var(--el-fill-color-light);border-radius:6px;white-space:pre-wrap;user-select:all">CF_TURN_KEY_ID=你的32位令牌ID
+CF_TURN_API_TOKEN=你的64位API令牌</div>
+
+              <p><b>第四步：让配置生效（关键，最容易漏）</b></p>
+              <el-alert type="error" :closable="false" style="margin:8px 0">
+                <template #title>
+                  环境变量是容器<b>创建时</b>烘进去的。<code class="mono">docker restart</code> 完全不重读，
+                  裸 <code class="mono">docker compose up -d</code> 也常常判定「无变更」而不动 →
+                  必须用 <b><code class="mono">--force-recreate</code></b> 重建。
+                </template>
+              </el-alert>
+              <div class="mono" style="margin:6px 0;padding:8px 10px;background:var(--el-fill-color-light);border-radius:6px;white-space:pre-wrap;user-select:all">cd /vol1/@appcenter/xiaozhi-im/docker
+docker compose up -d --force-recreate xiaozhi-im</div>
+
+              <p><b>第五步：验证配置真的生效</b></p>
+              <ul>
+                <li>回到本页「系统设置」，确认显示<b>已下发 TURN</b>（即 <code class="mono">turnConfigured: true</code>）。</li>
+                <li>
+                  要看<b>中继来源</b>是否包含 <code class="mono">cloudflare</code>（结构化字段
+                  <code class="mono">turnSources</code>）。
+                  <b>别用「返回体里有没有 cloudflare 字样」判断</b> —— STUN 列表里本来就有
+                  <code class="mono">stun.cloudflare.com</code>，那样判断会永远为真。
+                </li>
+                <li>最后用<b>手机 4G/5G</b>（关掉 Wi-Fi）打给内网设备实测一次跨网通话。</li>
+              </ul>
+              <p class="help-tip">
+                客户端 ICE 配置有 <b>5 分钟缓存</b>。改完服务端后，要么等 5 分钟，
+                要么把客户端完全退出重开，否则可能拿的还是旧配置 —— 别误判成「配置没生效」。
+              </p>
+            </section>
+
+
+            <section class="help-sec">
               <h3>六、和外部系统对接</h3>
               <p>总入口在「集成对接」页，三种方式：</p>
               <ul>
@@ -694,6 +786,94 @@
               </el-card>
             </el-col>
           </el-row>
+
+          <el-card style="margin-top:16px">
+            <template #header>
+              <div class="card-hdr">
+                <span>音视频中继配置（跨网通话用）</span>
+                <div>
+                  <el-tag v-if="turn.sources && turn.sources.includes('cloudflare')" type="success" size="small">Cloudflare 已启用</el-tag>
+                  <el-tag v-else-if="turn.ready" type="warning" size="small">仅自建中继</el-tag>
+                  <el-tag v-else type="danger" size="small">未配置中继</el-tag>
+                  <el-button size="small" style="margin-left:8px" @click="loadTurn">刷新</el-button>
+                </div>
+              </div>
+            </template>
+
+            <el-alert v-if="!turn.sources || !turn.sources.includes('cloudflare')" type="info" :closable="false" style="margin-bottom:14px">
+              <template #title>
+                没有配置中继时，<b>手机 4G/5G 打内网必定不通</b>（对称 NAT 打不了洞）。
+                推荐下方向导填入 Cloudflare TURN —— <b>不需要信用卡、不需要端口映射</b>，全程免费。
+                申请步骤见「系统帮助 → 五之二」。
+              </template>
+            </el-alert>
+
+            <el-steps :active="turnStep" finish-status="success" align-center style="margin:6px 0 18px">
+              <el-step title="填入凭据" description="从 Cloudflare 控制台复制" />
+              <el-step title="校验并保存" description="服务端实测签发接口" />
+              <el-step title="持久化生效" description="重建容器写入环境变量" />
+            </el-steps>
+
+            <div v-show="turnStep === 0">
+              <el-form :model="turnForm" label-width="120px" style="max-width:620px">
+                <el-form-item label="Turn 令牌 ID">
+                  <el-input v-model="turnForm.key_id" placeholder="32 位十六进制字符" clearable />
+                </el-form-item>
+                <el-form-item label="API 令牌">
+                  <el-input v-model="turnForm.api_token" type="password" show-password
+                            placeholder="64 位十六进制，Cloudflare 只显示一次" clearable />
+                  <div class="hint" style="margin-top:4px">
+                    两个值都在 Cloudflare 控制台「媒体 → Realtime → TURN 服务器」创建后显示。
+                  </div>
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="primary" :disabled="!turnForm.key_id || !turnForm.api_token" @click="verifyTurn">
+                    校验并保存
+                  </el-button>
+                  <span v-if="turn.cloudflareEnabled" class="hint" style="margin-left:10px">
+                    当前已配置：{{ turn.cloudflareKeyIdMasked }}
+                  </span>
+                </el-form-item>
+              </el-form>
+            </div>
+
+            <div v-show="turnStep === 1">
+              <el-result v-if="turnOk" icon="success" title="凭据有效，已保存并立即生效">
+                <template #sub-title>
+                  <p>服务端已实测通过 Cloudflare 签发接口，新配置<b>现在就已经在用了</b>。</p>
+                  <p>配置文件：<code class="mono">{{ turnSaved.envPath }}</code></p>
+                  <p v-if="turnSaved.backup">原文件已备份为 <code class="mono">{{ turnSaved.backup }}</code></p>
+                </template>
+              </el-result>
+              <el-result v-else icon="error" title="校验未通过">
+                <template #sub-title>
+                  <p style="color:var(--el-color-danger)">{{ turnErr }}</p>
+                  <p class="hint">请回上一步确认两个值复制完整、没有多余空格。<b>校验不通过时不会写入任何配置</b>，请放心重试。</p>
+                </template>
+              </el-result>
+            </div>
+
+            <div v-show="turnStep === 2">
+              <el-alert v-if="turnSaved.needRecreate" type="warning" :closable="false" style="margin-bottom:12px">
+                <template #title>
+                  <b>最后一步：建议重建一次容器</b>（不是必须，但推荐）。
+                  原因是环境变量在容器<b>创建时</b>烘入 —— 现在配置已经热加载生效了，
+                  但不重建的话，<b>下次容器重启会退回旧的空值</b>。
+                </template>
+              </el-alert>
+              <p>在 NAS 的终端里执行这条命令（已按你的目录生成）：</p>
+              <div class="mono cmd-box">{{ turnSaved.command }}</div>
+              <p class="hint">执行完点「刷新」，确认标签仍为「Cloudflare 已启用」即可。</p>
+              <el-button type="primary" @click="loadTurn">刷新状态</el-button>
+              <el-button @click="turnStep = 0">重新填写</el-button>
+              <el-divider />
+              <el-popconfirm title="确定移除 Cloudflare 中继配置？会退回 STUN + 自建中继。" @confirm="removeTurn">
+                <template #reference>
+                  <el-button type="danger" plain size="small">移除 Cloudflare 配置</el-button>
+                </template>
+              </el-popconfirm>
+            </div>
+          </el-card>
         </div>
       </el-main>
     </el-container>
@@ -1132,6 +1312,7 @@ async function loadAll() {
     friendships.value = fr.data;
     messages.value = ms.data;
     info.value = inf.data;
+    loadTurn();
   } catch (e) {
     ElMessage.error('加载失败：' + (e.response?.data?.error || e.message));
   }
@@ -1731,6 +1912,59 @@ async function changePassword() {
   }
 }
 
+/* ====== Settings: TURN 配置向导 ====== */
+const turn = ref({});
+const turnStep = ref(0);
+const turnForm = ref({ key_id: '', api_token: '' });
+const turnOk = ref(false);
+const turnErr = ref('');
+const turnSaved = ref({});
+
+async function loadTurn() {
+  try {
+    turn.value = (await api.get('/admin/turn')).data;
+    // 已配好且来源里有 cloudflare 时，直接落到第三步（方便看命令/移除）
+    if (turn.value.cloudflareEnabled) turnStep.value = 2;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '读取中继状态失败');
+  }
+}
+
+async function verifyTurn() {
+  turnOk.value = false;
+  turnErr.value = '';
+  try {
+    // 先纯探测，不写盘 —— 把「凭据是否可用」和「写配置」两步分开，出错好定位
+    const probe = (await api.post('/admin/turn/verify', turnForm.value)).data;
+    if (!probe.ok) {
+      turnErr.value = probe.error || '校验失败';
+      turnStep.value = 1;
+      return;
+    }
+    const r = (await api.post('/admin/turn', turnForm.value)).data;
+    turnSaved.value = r;
+    turnOk.value = true;
+    turnStep.value = 1;
+    turnForm.value = { key_id: '', api_token: '' };
+    await loadTurn();
+  } catch (e) {
+    turnErr.value = e.response?.data?.error || e.message || '保存失败';
+    turnStep.value = 1;
+  }
+}
+
+async function removeTurn() {
+  try {
+    const r = (await api.delete('/admin/turn')).data;
+    turnSaved.value = r;
+    turnStep.value = 2;
+    await loadTurn();
+    ElMessage.success('已移除，请按下方命令重建容器');
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '移除失败');
+  }
+}
+
 /* ====== utils ====== */
 function fmtTime(ms) {
   if (!ms) return '—';
@@ -1772,6 +2006,8 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .page-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .hint { color: #909399; font-size: 12px; }
 .mono { font-family: Consolas, Monaco, "Courier New", monospace; font-size: 12px; background: #f5f7fa; padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+/* 向导里的命令块：整块可选中复制，长命令自动换行不撑破卡片 */
+.cmd-box { display: block; padding: 10px 12px; margin: 8px 0; border-radius: 6px; background: #f5f7fa; border: 1px solid #e4e7ed; white-space: pre-wrap; word-break: break-all; line-height: 1.7; user-select: all; }
 .el-menu { border-right: none !important; }
 
 /* ---- 仪表盘「系统说明」卡头（标题 + 右侧入口按钮）---- */

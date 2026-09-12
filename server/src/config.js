@@ -56,10 +56,12 @@ const TURN_URLS = (process.env.TURN_URLS || '')
 // 开通：dash.cloudflare.com → Realtime → TURN keys 新建，拿到
 // KEY ID 与 scope 为 "Calls: Edit" 的 API Token，写进 .env 两项即可。
 // ---------------------------------------------------------------------------
-const CF_TURN_KEY_ID = process.env.CF_TURN_KEY_ID || '';
-const CF_TURN_API_TOKEN = process.env.CF_TURN_API_TOKEN || '';
+// 用 let 而非 const：管理台向导保存后要能**不重启**热加载新凭据。
+// （.env 是给"下次启动"用的；进程内存里的这份支持即时生效，
+//   两者都更新才不会出现「界面说保存成功、实际没生效」的割裂。）
+let CF_TURN_KEY_ID = process.env.CF_TURN_KEY_ID || '';
+let CF_TURN_API_TOKEN = process.env.CF_TURN_API_TOKEN || '';
 const CF_TURN_TTL = Number(process.env.CF_TURN_TTL || 3600);
-const CF_TURN_ENABLED = !!(CF_TURN_KEY_ID && CF_TURN_API_TOKEN);
 // 仅用于测试：可指向本地假 CF，验证签发与缓存逻辑
 const CF_TURN_API_BASE =
   process.env.CF_TURN_API_BASE || 'https://rtc.live.cloudflare.com/v1/turn/keys';
@@ -69,9 +71,24 @@ const CF_TURN_API_BASE =
 let _cfCache = { servers: null, expiresAt: 0 };
 let _cfLastError = null;
 
+const cfEnabled = () => !!(CF_TURN_KEY_ID && CF_TURN_API_TOKEN);
+
+/**
+ * 热加载一对新凭据（管理台向导保存后调用）。
+ * 会清掉旧的签发缓存，让下一次 /api/call/ice 立刻用新凭据。
+ * **不落盘** —— 写 .env 由调用方负责。
+ */
+function applyTurnCredentials(keyId, apiToken) {
+  CF_TURN_KEY_ID = String(keyId || '').trim();
+  CF_TURN_API_TOKEN = String(apiToken || '').trim();
+  _cfCache = { servers: null, expiresAt: 0 };
+  _cfLastError = null;
+  return cfEnabled();
+}
+
 /** 向 Cloudflare 签发一组 TURN 凭据；失败时退回上一批（过期了也比没有强） */
 async function cfTurnServers() {
-  if (!CF_TURN_ENABLED) return null;
+  if (!cfEnabled()) return null;
   const now = Date.now();
   if (_cfCache.servers && now < _cfCache.expiresAt) return _cfCache.servers;
 
@@ -141,13 +158,77 @@ async function iceServers() {
 function turnInfo() {
   return {
     sources: [
-      ...(CF_TURN_ENABLED ? ['cloudflare'] : []),
+      ...(cfEnabled() ? ['cloudflare'] : []),
       ...(TURN_URLS.length ? ['static'] : []),
     ],
-    cloudflareEnabled: CF_TURN_ENABLED,
+    cloudflareEnabled: cfEnabled(),
     cloudflareError: _cfLastError,
     staticTurnUrls: TURN_URLS,
+    // 向导要用的遮盖值，绝不回传明文
+    cloudflareKeyIdMasked: _mask(CF_TURN_KEY_ID),
+    cloudflareTokenMasked: _mask(CF_TURN_API_TOKEN),
   };
+}
+
+/** 只露头尾，中间打星；用于管理台回显「已配置成什么样」而不泄露密钥 */
+function _mask(s) {
+  const v = String(s || '');
+  if (!v) return '';
+  if (v.length <= 8) return '*'.repeat(v.length);
+  return v.slice(0, 4) + '*'.repeat(Math.min(12, v.length - 8)) + v.slice(-4);
+}
+
+/**
+ * 用「传进来的」凭据实测一次 CF 签发接口，判断这对 key 是否真的可用。
+ * 向导必须先把关，否则会把错值写进 .env，重启后接口 500 或静默无中继。
+ * 与 cfTurnServers() 的区别：不读环境变量、不写缓存，纯探测。
+ * @returns {Promise<{ok:boolean, error?:string, urls?:string[]}>}
+ */
+async function probeTurnCredentials(keyId, apiToken) {
+  const kid = String(keyId || '').trim();
+  const tok = String(apiToken || '').trim();
+  if (!kid || !tok) return { ok: false, error: 'Key ID 与 API Token 都不能为空' };
+  if (!/^[0-9a-f]{32}$/i.test(kid)) {
+    return { ok: false, error: 'Key ID 格式不对：应为 32 位十六进制字符' };
+  }
+  if (!/^[0-9a-f]{64}$/i.test(tok)) {
+    return { ok: false, error: 'API Token 格式不对：应为 64 位十六进制字符' };
+  }
+  try {
+    const r = await fetch(
+      `${CF_TURN_API_BASE.replace(/\/$/, '')}/${encodeURIComponent(kid)}/credentials/generate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tok}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ttl: 60 }),
+        signal: AbortSignal.timeout(10000),
+      },
+    );
+    const text = await r.text();
+    if (!r.ok) {
+      // CF 的报错信息对排查很有用，但要截断防止刷屏
+      return { ok: false, error: `Cloudflare 返回 ${r.status}：${text.slice(0, 200)}` };
+    }
+    let urls = [];
+    try {
+      const j = JSON.parse(text);
+      const s = j && j.iceServers;
+      const first = Array.isArray(s) ? s[0] : s;
+      if (first && first.urls) {
+        urls = Array.isArray(first.urls) ? first.urls : [first.urls];
+      }
+    } catch { /* 解析失败不影响「凭据有效」的结论 */ }
+    return { ok: true, urls };
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/timeout|abort/i.test(msg)) {
+      return { ok: false, error: '连接 Cloudflare 超时，请检查服务端出网是否正常' };
+    }
+    return { ok: false, error: msg };
+  }
 }
 
 module.exports = {
@@ -162,7 +243,11 @@ module.exports = {
   PUBLIC_URL: process.env.PUBLIC_URL || '',
   ICE_STUN,
   TURN_URLS,
-  CF_TURN_ENABLED,
+  // 注意：这是**函数**不是常量 —— 向导热加载后它的值会变，
+  // 消费方必须每次调用，不能在模块顶层取值缓存。
+  CF_TURN_ENABLED: cfEnabled,
   iceServers,
   turnInfo,
+  probeTurnCredentials,
+  applyTurnCredentials,
 };

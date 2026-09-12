@@ -3,14 +3,14 @@
 生产实例只读验证（不建任何测试数据）。
 
 验五件事：
-  ① v0.6.3/v0.6.4 的新接口真的注册上了 —— 用「未登录应返回 401 而不是 404」来判定。
+  ① v0.6.3/v0.6.5 的新接口真的注册上了 —— 用「未登录应返回 401 而不是 404」来判定。
      路由不存在时 Express 会直接 404，所以 401/404 是很干净的区分。
   ② 好友备注的数据库迁移真的跑了 —— 直接查表结构。
-  ③ 管理台「系统帮助」页真的进了静态产物；且 v0.6.4 起不应再出现「Tailchat」字样。
+  ③ 管理台「系统帮助」页真的进了静态产物；且 v0.6.5 起不应再出现「Tailchat」字样。
   ④ ICE 下发现状（turnConfigured / turnSources）。
-  ⑤ 服务端版本号已到 v0.6.4。
+  ⑤ 服务端版本号已到 v0.6.5。
 
-用法：python deploy/probe_v064_prod.py
+用法：python deploy/probe_v065_prod.py
 """
 import paramiko
 import re
@@ -39,7 +39,7 @@ def ok(name, cond, extra=""):
 
 
 print("=" * 60)
-print("生产实例只读验证 — 小智IM v0.6.4")
+print("生产实例只读验证 — 小智IM v0.6.5")
 print("=" * 60)
 
 # ---------- ① 新接口是否注册 ----------
@@ -67,6 +67,21 @@ ok("GET /api/friends 仍需鉴权（401）", c3 == "401", "http=%s" % c3)
 c4 = code_of("PUT", "/api/friends/templates/1", '{"content":"x"}')
 ok("PUT /api/friends/templates/:id 未被新路由抢占（401）", c4 == "401", "http=%s" % c4)
 
+# ---------- ①b v0.6.5 新增：管理台中继配置向导 ----------
+# 关键：这些接口能改 .env，**未登录必须 401**，绝不能匿名可写。
+c5 = code_of("GET", "/api/admin/turn")
+ok("GET /api/admin/turn 已注册且要鉴权（401）", c5 == "401", "http=%s" % c5)
+c6 = code_of("POST", "/api/admin/turn/verify", '{"key_id":"a","api_token":"b"}')
+ok("POST /api/admin/turn/verify 已注册且要鉴权（401）", c6 == "401", "http=%s" % c6)
+c7 = code_of("POST", "/api/admin/turn",
+             '{"key_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","api_token":"b"}')
+ok("POST /api/admin/turn 未登录时 401（不能匿名改 .env）", c7 == "401", "http=%s" % c7)
+c8 = code_of("DELETE", "/api/admin/turn")
+ok("DELETE /api/admin/turn 未登录时 401", c8 == "401", "http=%s" % c8)
+# 老路径不能被新路由吃掉
+c9 = code_of("GET", "/api/admin/info")
+ok("/api/admin/info 未被新路由抢占（401）", c9 == "401", "http=%s" % c9)
+
 # ---------- ② 数据库迁移 ----------
 print("\n[2] 好友备注的数据库迁移")
 out2, _ = run(S + "docker exec xiaozhi-im node -e \""
@@ -90,7 +105,17 @@ if m:
     ok("管理台 JS 里有「系统帮助」页", "系统帮助" in js, "已取 %d 字节" % len(js))
     ok("管理台 JS 里有「查看完整系统帮助」入口", "查看完整系统帮助" in js)
     ok("管理台 JS 里提到 Cloudflare TURN 方案", "Cloudflare TURN" in js)
-    # v0.6.4：说明文案里的「仿 Tailchat 界面」已去掉
+    # v0.6.5：帮助里必须有「从零申请」的完整步骤，且点明「不需要信用卡」
+    ok("帮助里有 CF TURN 申请步骤", "不需要信用卡" in js and "TURN 服务器" in js,
+       "缺「不需要信用卡」或「TURN 服务器」")
+    ok("帮助里给了控制台直达网址", "realtime/turn" in js)
+    # v0.6.5：管理台「系统设置」的中继配置向导 UI
+    ok("管理台有中继配置向导", "音视频中继配置" in js and "Turn 令牌 ID" in js)
+    # 向导不该把明文密钥渲染进静态产物
+    ok("管理台产物里没有明文密钥",
+       "7839139c2d17a599f2118c6372b2410b" not in js and "e778003f51dd" not in js,
+       "产物里出现了真实凭据，必须改成占位符")
+    # v0.6.5：说明文案里的「仿 Tailchat 界面」已去掉
     ok("管理台 JS 已不再出现 Tailchat 字样", "Tailchat" not in js,
        "仍存在，需重新构建管理台并热更新")
 else:
@@ -102,7 +127,7 @@ print("\n[4] 服务端版本号")
 ver, _ = run(S + "docker exec xiaozhi-im cat /app/package.json")
 vm = re.search(r'"version"\s*:\s*"([^"]+)"', ver)
 vs = vm.group(1) if vm else ""
-ok("服务端 package.json 版本为 0.6.4", vs == "0.6.4", "实际=%s" % vs)
+ok("服务端 package.json 版本为 0.6.5", vs == "0.6.5", "实际=%s" % vs)
 
 # ---------- ⑤ ICE 下发 ----------
 print("\n[5] ICE 下发（中继配置）")

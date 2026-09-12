@@ -200,7 +200,7 @@ def check_apk(zf, marks):
 
 
 def check_fpk(path):
-    """校验服务端 fpk：版本号 + v0.6.1~v0.6.4 关键修复点是否都打进去了。
+    """校验服务端 fpk：版本号 + v0.6.1~v0.6.5 关键修复点是否都打进去了。
 
     fpk 是 tar.gz；app.tgz 里再套一层，所以拆两次。
     """
@@ -208,18 +208,24 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.6.4', 'v0.6.4'],
-        'src/package.json': ['"version": "0.6.4"'],
+        'manifest': ['version', '0.6.5', 'v0.6.5'],
+        'src/package.json': ['"version": "0.6.5"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         'src/src/call.js': ['OFFLINE_GRACE_MS', 'pendingForUser', 'handleOnline'],
         'src/src/ws.js': ['isAlive', "case 'ping'"],
         # v0.6.3：Cloudflare 托管中继（免端口映射）—— 现场签凭据 + 缓存
+        # v0.6.5：新增热加载与凭据探测（管理台向导用）
         'src/src/config.js': ['TURN_URLS', 'iceServers', 'CF_TURN_KEY_ID',
-                              'cfTurnServers', 'turnInfo', 'stun.cloudflare.com'],
+                              'cfTurnServers', 'turnInfo', 'stun.cloudflare.com',
+                              'probeTurnCredentials', 'applyTurnCredentials',
+                              'cfEnabled'],
         # v0.6.3：好友备注（落在我这一侧，对方看不到）
         'src/src/db.js': ["ensureColumn('friendships', 'remark'"],
         'src/src/routes/friends.js': ["'/:friendId/remark'", 'MAX_REMARK'],
         'src/src/chat.js': ['remarkOf'],
+        # v0.6.5：管理台中继配置向导（读状态 / 校验 / 保存 / 移除）
+        'src/src/routes/admin.js': ["'/turn'", "'/turn/verify'", 'envPath',
+                                    'probeTurnCredentials', 'needRecreate'],
         'docker/coturn/entrypoint.sh': ['detect_lan_ip', 'EXTERNAL_IP_VALUE'],
         'docker/coturn/turnserver.conf': ['__EXTERNAL_IP__', '__MIN_PORT__'],
         'docker/docker-compose.yaml': ['coturn', 'TURN_INTERNAL_IP', 'TURN_URLS',
@@ -273,6 +279,31 @@ def check_fpk(path):
     print('%-30s %s' % ('src/public/assets(系统帮助页)',
                         '命中 ✓' if help_hit else '缺失 ✗'))
     all_ok = all_ok and bool(help_hit)
+
+    # v0.6.5：帮助里必须有「从零申请」的完整步骤（用户明确要求写进去），
+    # 且要提醒「不需要信用卡」—— 这是被问过的高频误解，少一句就得重新解释。
+    guide_hit = [n for n in admin_js
+                 if '不需要信用卡'.encode('utf-8') in blob[n]
+                 and 'TURN 服务器'.encode('utf-8') in blob[n]
+                 and 'realtime/turn'.encode('utf-8') in blob[n]]
+    print('%-30s %s' % ('src/public/assets(申请步骤)',
+                        '命中 ✓' if guide_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(guide_hit)
+
+    # v0.6.5：管理台「系统设置」里要出现中继配置向导的 UI
+    wizard_hit = [n for n in admin_js
+                  if '音视频中继配置'.encode('utf-8') in blob[n]
+                  and 'Turn 令牌 ID'.encode('utf-8') in blob[n]]
+    print('%-30s %s' % ('src/public/assets(中继向导)',
+                        '命中 ✓' if wizard_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(wizard_hit)
+
+    # 向导绝不能把明文密钥渲染进静态产物（防误把测试凭据提交进去）
+    leak = [n for n in admin_js
+            if b'7839139c2d17a599f2118c6372b2410b' in blob[n]]
+    print('%-30s %s' % ('src/public/assets(无明文密钥)',
+                        '干净 ✓' if not leak else '泄漏 ✗ %s' % leak))
+    all_ok = all_ok and not leak
 
     # v0.6.4：说明文案里去掉了「仿 Tailchat 界面」的表述，产物里不该再有该词。
     tail = [n for n in admin_js if b'Tailchat' in blob[n]]
