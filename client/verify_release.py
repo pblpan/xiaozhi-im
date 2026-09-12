@@ -21,7 +21,11 @@ WIN_MARKS = [
     '_attachRemoteTrack',       # 按轨道自建远端流（新增函数）
     '_sweepReceivers',          # 连接后兜底扫描接收器（新增函数）
     '_diag',                    # 诊断记录函数（新增）
-    'onFirstFrameRendered',     # 首帧渲染信号（外部 API，UTF-16 命中）
+    # ⚠️ 别把 onFirstFrameRendered 放进来。它是 **flutter_webrtc 包自己**的字段，
+    #    我们只是给它赋值；该字段名编译在插件侧，**不会出现在我们的 libapp.so 里**，
+    #    实测 ascii / UTF-16 两种编码均搜不到 → 拿它当判据必然误报"未命中"。
+    #    （曾因此让 v0.7.0 APK 校验假失败一轮，白查一次。）
+    #    判据一律用**我们自己的**函数名或字符串常量。
     'createLocalMediaStream',   # 组装远端流用的 API
     'CallService',
     'RTCVideoView',
@@ -200,7 +204,7 @@ def check_apk(zf, marks):
 
 
 def check_fpk(path):
-    """校验服务端 fpk：版本号 + v0.6.1~v0.6.5 关键修复点是否都打进去了。
+    """校验服务端 fpk：版本号 + v0.6.1~v0.7.0 关键修复点是否都打进去了。
 
     fpk 是 tar.gz；app.tgz 里再套一层，所以拆两次。
     """
@@ -208,11 +212,23 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.6.5', 'v0.6.5'],
-        'src/package.json': ['"version": "0.6.5"'],
+        'manifest': ['version', '0.7.0', 'v0.7.0'],
+        'src/package.json': ['"version": "0.7.0"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
-        'src/src/call.js': ['OFFLINE_GRACE_MS', 'pendingForUser', 'handleOnline'],
-        'src/src/ws.js': ['isAlive', "case 'ping'"],
+        # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
+        #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
+        #   `to` 转发是 mesh 定向信令的关键；isOneToOne 必须只读 call.group
+        #   （曾用 participants.size 判断，群通话收尾时人被删光会误判成 1v1）。
+        # v0.6.1：掉线宽限与来电补推
+        #   注意 'call:join' 只出现在 ws.js（路由分发），call.js 里是 'call:joined'
+        #   （加入回执）—— 别把两者搞混，否则会误报"缺 call:join"。
+        'src/src/call.js': ['OFFLINE_GRACE_MS', 'pendingForUser', 'handleOnline',
+                            'participants', 'activeMembers', 'MAX_PARTICIPANTS',
+                            'call:peer-joined', 'call:joined', 'call:updated',
+                            'isOneToOne', "'call:joined'", 'roomOf'],
+        'src/src/ws.js': ['isAlive', "case 'ping'",
+                          # v0.7.0：群通话信令路由 + mesh 定向转发
+                          "case 'call:join'", 'frame.to'],
         # v0.6.3：Cloudflare 托管中继（免端口映射）—— 现场签凭据 + 缓存
         # v0.6.5：新增热加载与凭据探测（管理台向导用）
         'src/src/config.js': ['TURN_URLS', 'iceServers', 'CF_TURN_KEY_ID',
@@ -310,6 +326,16 @@ def check_fpk(path):
     print('%-30s %s' % ('src/public/assets(去 Tailchat)',
                         '已清除 ✓' if not tail else '仍存在 ✗ %s' % tail))
     all_ok = all_ok and not tail
+
+    # v0.7.0：群通话不能回退成双人模型。
+    # 具体的失败形态：isOneToOne 又拿 participants.size 做判断 —— 群通话收尾时
+    # 人已被删光，size=0 会被误判成 1v1，通话记录丢掉 group 标记、
+    # end() 走错分支。这条断言直接扫源码形态，比跑测试更早拦住。
+    call_src = blob.get('src/src/call.js', b'')
+    bad_1v1 = b'participants.size <= 2'
+    print('%-30s %s' % ('src/src/call.js(非 size 判 1v1)',
+                        '干净 ✓' if bad_1v1 not in call_src else '回退 ✗ 又用 participants.size 判 1v1'))
+    all_ok = all_ok and bad_1v1 not in call_src
 
     hits = []
     for name, data in blob.items():

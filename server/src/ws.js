@@ -87,27 +87,39 @@ function init(server) {
             break;
           }
           // ---- 音视频通话信令（服务端只转发，媒体走 WebRTC P2P）----
+          // 群通话：calleeIds 是显式邀请名单；都不传则邀请群内全部其他成员
           case 'call:invite':
             call.invite({
               conversationId: frame.conversationId,
               callerId: userId,
               calleeId: frame.calleeId,
+              calleeIds: frame.calleeIds,
               mode: frame.mode,
             });
             break;
           case 'call:accept':
             call.accept({ callId: frame.callId, userId });
             break;
+          // 中途加入一通正在进行的通话（群里"我也进去"）
+          case 'call:join': {
+            const err = call.join({ callId: frame.callId, userId });
+            if (err) hub.send(ws, { type: 'error', message: err, ref: 'call:join' });
+            break;
+          }
           case 'call:reject':
             call.reject({ callId: frame.callId, userId, reason: frame.reason });
             break;
           case 'call:cancel':
             call.cancel({ callId: frame.callId, userId });
             break;
+          // 挂断。1v1 整通结束；群通话里语义是"我退出"，其余人继续
+          // （发起人退出也不解散 —— 否则他手机没电全群陪跑）
           case 'call:end':
             call.end({ callId: frame.callId, userId, reason: frame.reason });
             break;
-          // offer / answer / ice 三种 SDP 交换共用一条中继
+          // offer / answer / ice 三种 SDP 交换共用一条中继。
+          // `to` 是群通话 mesh 的关键：三个人的房间里，A 的 SDP 只能给指定的人，
+          // 广播出去会让第三人收到无关 SDP 并打乱连接状态。1v1 不传，行为同老版本。
           case 'call:offer':
           case 'call:answer':
           case 'call:ice':
@@ -116,6 +128,7 @@ function init(server) {
               userId,
               type: frame.type.slice(5),
               data: frame.data,
+              to: frame.to,
             });
             break;
           default:

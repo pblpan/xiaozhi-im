@@ -2,15 +2,18 @@
 """
 生产实例只读验证（不建任何测试数据）。
 
-验五件事：
-  ① v0.6.3/v0.6.5 的新接口真的注册上了 —— 用「未登录应返回 401 而不是 404」来判定。
+验六件事：
+  ① 新接口真的注册上了 —— 用「未登录应返回 401 而不是 404」来判定。
      路由不存在时 Express 会直接 404，所以 401/404 是很干净的区分。
   ② 好友备注的数据库迁移真的跑了 —— 直接查表结构。
-  ③ 管理台「系统帮助」页真的进了静态产物；且 v0.6.5 起不应再出现「Tailchat」字样。
+  ③ 管理台「系统帮助」页真的进了静态产物；且不应再出现「Tailchat」字样。
   ④ ICE 下发现状（turnConfigured / turnSources）。
-  ⑤ 服务端版本号已到 v0.6.5。
+  ⑤ 服务端版本号已到 v0.7.0。
+  ⑥ v0.7.0 多方通话代码真的进容器了 —— 用容器内 call.js 的特征串判定。
+     ⚠️ 这一项是必要的：多方通话全是 WS 信令，没有新 REST 路由可以让 ① 去探。
+     只看版本号会被「只推了 package.json 没推 call.js」骗过去。
 
-用法：python deploy/probe_v065_prod.py
+用法：python deploy/probe_v070_prod.py
 """
 import paramiko
 import re
@@ -39,11 +42,11 @@ def ok(name, cond, extra=""):
 
 
 print("=" * 60)
-print("生产实例只读验证 — 小智IM v0.6.5")
+print("生产实例只读验证 — 小智IM v0.7.0")
 print("=" * 60)
 
-# ---------- ① 新接口是否注册 ----------
-print("\n[1] 新接口注册情况（401=已注册且要鉴权，404=路由不存在）")
+# ---------- ① 接口注册 ----------
+print("\n[1] 接口注册情况（401=已注册且要鉴权，404=路由不存在）")
 base = "http://127.0.0.1:%d" % PORT
 
 
@@ -67,7 +70,7 @@ ok("GET /api/friends 仍需鉴权（401）", c3 == "401", "http=%s" % c3)
 c4 = code_of("PUT", "/api/friends/templates/1", '{"content":"x"}')
 ok("PUT /api/friends/templates/:id 未被新路由抢占（401）", c4 == "401", "http=%s" % c4)
 
-# ---------- ①b v0.6.5 新增：管理台中继配置向导 ----------
+# ---------- ①b 管理台中继配置向导 ----------
 # 关键：这些接口能改 .env，**未登录必须 401**，绝不能匿名可写。
 c5 = code_of("GET", "/api/admin/turn")
 ok("GET /api/admin/turn 已注册且要鉴权（401）", c5 == "401", "http=%s" % c5)
@@ -105,17 +108,15 @@ if m:
     ok("管理台 JS 里有「系统帮助」页", "系统帮助" in js, "已取 %d 字节" % len(js))
     ok("管理台 JS 里有「查看完整系统帮助」入口", "查看完整系统帮助" in js)
     ok("管理台 JS 里提到 Cloudflare TURN 方案", "Cloudflare TURN" in js)
-    # v0.6.5：帮助里必须有「从零申请」的完整步骤，且点明「不需要信用卡」
+    # 帮助里必须有「从零申请」的完整步骤，且点明「不需要信用卡」
     ok("帮助里有 CF TURN 申请步骤", "不需要信用卡" in js and "TURN 服务器" in js,
        "缺「不需要信用卡」或「TURN 服务器」")
     ok("帮助里给了控制台直达网址", "realtime/turn" in js)
-    # v0.6.5：管理台「系统设置」的中继配置向导 UI
     ok("管理台有中继配置向导", "音视频中继配置" in js and "Turn 令牌 ID" in js)
     # 向导不该把明文密钥渲染进静态产物
     ok("管理台产物里没有明文密钥",
        "7839139c2d17a599f2118c6372b2410b" not in js and "e778003f51dd" not in js,
        "产物里出现了真实凭据，必须改成占位符")
-    # v0.6.5：说明文案里的「仿 Tailchat 界面」已去掉
     ok("管理台 JS 已不再出现 Tailchat 字样", "Tailchat" not in js,
        "仍存在，需重新构建管理台并热更新")
 else:
@@ -127,14 +128,43 @@ print("\n[4] 服务端版本号")
 ver, _ = run(S + "docker exec xiaozhi-im cat /app/package.json")
 vm = re.search(r'"version"\s*:\s*"([^"]+)"', ver)
 vs = vm.group(1) if vm else ""
-ok("服务端 package.json 版本为 0.6.5", vs == "0.6.5", "实际=%s" % vs)
+ok("服务端 package.json 版本为 0.7.0", vs == "0.7.0", "实际=%s" % vs)
 
-# ---------- ⑤ ICE 下发 ----------
-print("\n[5] ICE 下发（中继配置）")
+# ---------- ⑤ v0.7.0 多方通话代码是否真的进容器 ----------
+# 多方通话全走 WS，没有新 REST 路由能让 [1] 去探，所以必须直接验代码本体。
+# 别只看版本号：热更新只推 package.json 不推 call.js 时版本号是对的、功能是缺的。
+print("\n[5] v0.7.0 多方通话代码已进容器")
+calljs, _ = run(S + "docker exec xiaozhi-im cat /app/src/call.js")
+if len(calljs) > 500:
+    must = [
+        ("participants", "参与者模型"),
+        ("activeMembers", "在线人数统计"),
+        ("MAX_PARTICIPANTS", "人数上限"),
+        ("isOneToOne", "1v1 判定"),
+        ("call:peer-joined", "新人加入广播"),
+        ("call:joined", "加入回执"),
+        ("call:updated", "名单变更广播"),
+    ]
+    for token, label in must:
+        ok("call.js 含 %s（%s）" % (token, label), token in calljs)
+    # 血泪护栏：1v1 判定绝不能回退成数人数。群通话收尾时人已删光，
+    # size<=2 会把它误判成 1v1 → 通话记录丢 group 标记、end() 走错分支。
+    ok("1v1 判定只看 group、没回退去数 participants.size",
+       "participants.size <= 2" not in calljs and "participants.size<= 2" not in calljs,
+       "又出现用 size 判 1v1 的写法，群通话收尾会误判")
+else:
+    ok("能读到容器内 /app/src/call.js", False, "长度=%d" % len(calljs))
+
+wsjs, _ = run(S + "docker exec xiaozhi-im cat /app/src/ws.js")
+ok("ws.js 已接入 call:join", "call:join" in wsjs)
+ok("ws.js 信令中继透传 to 字段", "frame.to" in wsjs or "to: frame.to" in wsjs)
+
+# ---------- ⑥ ICE 下发 ----------
+print("\n[6] ICE 下发（中继配置）")
 ice, _ = run("curl -s -m 10 http://127.0.0.1:%d/api/call/ice" % PORT)
 ok("ICE 接口有响应", len(ice) > 20, ice[:200])
 ok("返回 turnConfigured 字段", "turnConfigured" in ice)
-ok("返回 turnSources 字段（v0.6.3 新增）", "turnSources" in ice, ice[:300])
+ok("返回 turnSources 字段", "turnSources" in ice, ice[:300])
 ok("不再下发已失效的 stun.qq.com", "stun.qq.com" not in ice, ice[:200])
 
 # ⚠️ 这两条必须做成**会失败的断言**。

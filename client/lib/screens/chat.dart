@@ -862,6 +862,25 @@ class _ChatScreenState extends State<ChatScreen> {
     if (err != null && mounted) _toast(err);
   }
 
+  /// 发起群通话（video=false 为群语音房）。
+  ///
+  /// 服务端不传 calleeIds 时默认邀请群内所有其他成员，所以这里只发起、不挑人。
+  /// 上限由服务端兜底（默认 6 人），这里做一次前置提示，免得用户点了才发现
+  /// 一大半人进不来。
+  Future<void> _startGroupCall(bool video) async {
+    const limit = 6;
+    if (_members.length > limit) {
+      _toast('群成员 ${_members.length} 人，单次通话最多 $limit 人，先到的先进');
+    }
+    final err = await CallService().startGroupCall(
+      conversationId: widget.conv.id,
+      video: video,
+      group: true,
+      groupName: _title,
+    );
+    if (err != null && mounted) _toast(err);
+  }
+
   /// 每条消息的发送者名字。
   /// 群聊里成员名单是拉到的，优先用它——这样机器人、其他成员的名字都能显示对，
   /// 而不是一律显示会话名（旧实现只有单聊能显示对）。
@@ -916,13 +935,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
-          if (widget.conv.type == 'group' && widget.conv.groupId != null)
-            IconButton(
-              tooltip: '群管理',
-              onPressed: _openGroupManage,
-              icon: const Icon(Icons.groups_rounded),
-            ),
-          // 单聊才有通话入口（群通话/会议是后续版本的事）；机器人不会接，直接不给按钮
+          // 单聊才有通话入口，直接给两个按钮；机器人不会接，直接不给
           if (widget.conv.type == 'dm' && !_peerIsBot) ...[
             IconButton(
               tooltip: '语音通话',
@@ -933,6 +946,56 @@ class _ChatScreenState extends State<ChatScreen> {
               tooltip: '视频通话',
               onPressed: () => _startCall(true),
               icon: const Icon(Icons.videocam_rounded),
+            ),
+          ],
+          // 群聊：通话 + 群管理收进一个菜单，否则顶栏放不下 4 个图标
+          if (widget.conv.type == 'group') ...[
+            PopupMenuButton<String>(
+              tooltip: '群通话',
+              icon: const Icon(Icons.call_rounded),
+              onSelected: (v) {
+                switch (v) {
+                  case 'audio':
+                    _startGroupCall(false);
+                    break;
+                  case 'video':
+                    _startGroupCall(true);
+                    break;
+                  case 'manage':
+                    _openGroupManage();
+                    break;
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'audio',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.phone_rounded, size: 20),
+                    title: Text('群语音通话'),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'video',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.videocam_rounded, size: 20),
+                    title: Text('群视频通话'),
+                  ),
+                ),
+                PopupMenuDivider(),
+                PopupMenuItem(
+                  value: 'manage',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.groups_rounded, size: 20),
+                    title: Text('群管理'),
+                  ),
+                ),
+              ],
             ),
           ],
           IconButton(

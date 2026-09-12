@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, 'build', 'windows', 'x64', 'runner', 'Release')
 OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
     'D:', os.sep, 'Users', 'pblpa', 'Desktop', '小智 IM',
-    '小智IM-Windows-v0.6.3.zip')
+    '小智IM-Windows-v0.7.0.zip')
 
 
 def main():

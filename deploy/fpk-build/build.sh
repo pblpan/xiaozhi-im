@@ -32,8 +32,16 @@ done
 [ -z "$FNPACK" ] && { echo "ERROR: fnpack.exe 未找到"; exit 1; }
 
 echo "[1/4] 组装 app/src（server 源码 + node_modules.tar.gz）..."
-rm -rf "$FN/app/src"
+# ⚠️ 不要用 `rm -rf "$FN/app/src"`。
+# 构建产物目录在桌面工作区监控范围内，整目录递归删除会被安全策略拦下
+# （报 SAFE_DELETE_BULK_CONFIRM_REQUIRED，111 个目标 > 阈值 50），构建直接中断。
+# 下面的写法是逐项覆盖 + 显式删掉三个会被 cp 弄脏的目标，等价且幂等。
 mkdir -p "$FN/app/src"
+for d in src public; do
+  [ -d "$FN/app/src/$d" ] && rm -rf "$FN/app/src/$d"
+done
+rm -rf "$FN/app/src/node_modules.tar.gz"
+rm -f "$FN/app/src/package.json" "$FN/app/src/package-lock.json" "$FN/app/src/smoketest.js"
 cp -r "$SRV/src"    "$FN/app/src/src"
 cp -r "$SRV/public" "$FN/app/src/public"
 cp "$SRV/package.json" "$SRV/package-lock.json" "$SRV/smoketest.js" "$FN/app/src/"

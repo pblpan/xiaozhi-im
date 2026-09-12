@@ -1,13 +1,28 @@
-// 1v1 音视频通话信令中继
+// 音视频通话信令中继（1v1 + 群通话）
 //
-// 服务端不碰媒体：只把 SDP / ICE 在通话两端之间转发。媒体走 WebRTC P2P，
+// 服务端不碰媒体：只把 SDP / ICE 在通话参与者之间转发。媒体走 WebRTC P2P mesh，
 // 所以通话本身不占服务端带宽（同网段 host candidate 直连即可；
-// 跨 NAT 需要 TURN 中转时，另行部署 coturn 并在客户端配置 iceServers）。
+// 跨 NAT 需要 TURN 中转时由 TURN 服务承载）。
+//
+// 【模型演进 v0.7.0】
+//
+// 老版本是严格双人模型：call 上只有 callerId / calleeId 两个字段，
+// userCall 保证"一个人同时只能有一通"。改成多方后：
+//
+//   participants: Map<userId, { state, joinedAt }>   state ∈ invited | joined | left
+//
+// 但 **callerId / calleeId 仍然保留**，含义不变：
+//   - 1v1 通话里它们就是双方（老客户端完全按这个渲染来电界面，不能动）
+//   - 群通话里 callerId = 发起人，calleeId = 第一个被邀请的人
+//     （只为兼容老客户端在群里的展示，新客户端一律读 participants）
 //
 // 状态机：ringing → connecting → active → ended
-//   ringing     已呼叫，等待对方接听（超时 45s 自动结束）
-//   connecting  对方已接听，正在交换 SDP / ICE
+//   ringing     已呼叫，等待有人接听（超时 45s 自动结束）
+//   connecting  至少一人已接听，正在交换 SDP / ICE
 //   active      收到 answer，媒体通道建立
+//
+// 群通话的"谁还在"由 participants 决定，而不是由 state 决定 ——
+// 三个人里走了一个，通话必须继续（这正是老双人模型做不到的地方）。
 //
 // 所有异常路径都会落一条通话记录消息（kind='call'）进会话，双方都能看到，
 // 这样"漏接"不会静默丢失。
@@ -24,6 +39,10 @@ const MAX_DURATION_MS = 4 * 60 * 60 * 1000;
 
 /** 支持的通话模式 */
 const MODES = ['audio', 'video'];
+
+/** 单通话最大参与者数。P2P mesh 的连接数 = n(n-1)/2，6 人是 15 条，
+ *  再多手机端扛不住（每条连接都要独立编解码 + 上行带宽）。 */
+const MAX_PARTICIPANTS = Number(process.env.MAX_CALL_PARTICIPANTS || 6);
 
 /**
  * 掉线宽限期。
@@ -54,21 +73,76 @@ function genId() {
   return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-function otherSide(call, userId) {
-  return call.callerId === userId ? call.calleeId : call.callerId;
+/**
+ * 是否 1v1。
+ *
+ * ⚠️ **只用 `call.group` 判断，绝不能看 participants.size**。
+ * `group` 在 invite 时就定死、全程不变；而 participants 会被 end/reject/
+ * handleOffline 删人，群通话收尾那一刻可能已经删到一个不剩 —— 那时
+ * participants.size = 0，用 size 判断会把群通话误判成 1v1，于是：
+ *   · 通话记录不带 group 标记（客户端显示成普通 1v1 记录）
+ *   · end() 走 1v1 分支直接整通结束（"最后一个人挂断"碰巧对，但语义错）
+ * 这个坑在场景 6 的全员退出用例里被测试抓出来过一次。
+ */
+function isOneToOne(call) {
+  return !call.group;
+}
+
+/** 参与者里除 userId 之外的所有人（1v1 就是那唯一的一个对方） */
+function othersOf(call, userId) {
+  const out = [];
+  for (const uid of call.participants.keys()) {
+    if (uid !== userId) out.push(uid);
+  }
+  return out;
+}
+
+/**
+ * 房间内当前"应该出现在画面上"的人：已接听 + 未退出。
+ * 尚未接听的邀请对象不算，否则发起人会对着一个空框等。
+ */
+function activeMembers(call) {
+  const out = [];
+  for (const [uid, p] of call.participants) {
+    if (p.state === 'joined') out.push(uid);
+  }
+  return out;
+}
+
+/** 是否还有人在通话里 */
+function hasAnyone(call) {
+  for (const p of call.participants.values()) {
+    if (p.state === 'joined' || p.state === 'invited') return true;
+  }
+  return false;
 }
 
 /** 通话对外摘要（不含 SDP，只用于界面展示） */
 function publicInfo(call) {
   const u = db.prepare('SELECT id, username, nickname, avatar FROM users WHERE id = ?').get(call.callerId);
+  // 参与者名单：新客户端用它渲染"通话中 x 人"和各自的昵称头像
+  const rows = [];
+  for (const [uid, p] of call.participants) {
+    const m = db.prepare('SELECT id, username, nickname, avatar FROM users WHERE id = ?').get(uid);
+    rows.push({
+      userId: uid,
+      name: m ? (m.nickname || m.username) : '',
+      avatar: m ? m.avatar : null,
+      state: p.state,
+    });
+  }
   return {
     callId: call.id,
     conversationId: call.conversationId,
     mode: call.mode,
     callerId: call.callerId,
+    // 1v1 兼容字段：老客户端靠它认来电对象
     calleeId: call.calleeId,
     callerName: u ? (u.nickname || u.username) : '',
     callerAvatar: u ? u.avatar : null,
+    // 群通话字段
+    group: !isOneToOne(call),
+    participants: rows,
   };
 }
 
@@ -82,11 +156,23 @@ function cleanup(call) {
     call.offlineTimers.clear();
   }
   calls.delete(call.id);
-  if (userCall.get(call.callerId) === call.id) userCall.delete(call.callerId);
-  if (userCall.get(call.calleeId) === call.id) userCall.delete(call.calleeId);
+  for (const uid of [call.callerId, call.calleeId]) {
+    if (userCall.get(uid) === call.id) userCall.delete(uid);
+  }
+  // 参与者可能不止这两个（群里后加入的人），一并摘掉
+  if (call.participants) {
+    for (const uid of call.participants.keys()) {
+      if (userCall.get(uid) === call.id) userCall.delete(uid);
+    }
+  }
 }
 
-/** 通话记录消息：落进会话，双方都能看到 */
+/**
+ * 通话记录消息：落进会话，会话成员都能看到。
+ *
+ * 注意 sendMessage 会广播给"除 senderId 外的会话成员"；群通话里这已经覆盖了
+ * 其余参与者，但**发起人自己**不在其中，所以要显式补一条给他（含他的多端）。
+ */
 function logCall(call, status, durationSec) {
   try {
     const payload = {
@@ -95,6 +181,11 @@ function logCall(call, status, durationSec) {
       duration: Math.max(0, Math.round(durationSec || 0)),
       caller: call.callerId,
       callee: call.calleeId,
+      // 群通话才有意义，1v1 时省略以保持记录格式不变
+      ...(isOneToOne(call) ? {} : {
+        group: true,
+        participantCount: activeMembers(call).length || call.participants.size,
+      }),
     };
     const msg = sendMessage({
       conversationId: call.conversationId,
@@ -102,7 +193,6 @@ function logCall(call, status, durationSec) {
       kind: 'call',
       content: JSON.stringify(payload),
     });
-    // sendMessage 已广播给"除主叫外的会话成员"（= 被叫）；这里补一条给主叫自己（含其多端）
     hub.broadcastToUser(call.callerId, { type: 'message:new', message: msg });
     return msg;
   } catch (e) {
@@ -118,8 +208,16 @@ function durationOf(call) {
   return (Date.now() - call.answeredAt) / 1000;
 }
 
-/** 校验会话可通话：必须是单聊，且双方都是成员 */
-function resolveConversation(conversationId, callerId, calleeId) {
+/**
+ * 校验会话可通话。
+ *
+ * 支持两种：
+ *  - dm    单聊，calleeId 必填且必须是会话成员（老行为，原样保留）
+ *  - group 群聊，显式传 calleeIds 数组；不传则表示"向群内所有其他成员发起"
+ *
+ * 返回 { conversationId, targets, group }
+ */
+function resolveConversation(conversationId, callerId, calleeId, calleeIds) {
   // 先做入参体检：缺参数 / 非数字时直接给出可读错误。
   // 否则 undefined 会被塞进 SQLite 绑定，底层抛
   // "Provided value cannot be bound to SQLite parameter 1."，客户端完全看不懂。
@@ -128,72 +226,130 @@ function resolveConversation(conversationId, callerId, calleeId) {
 
   const conv = db.prepare('SELECT id, type FROM conversations WHERE id = ?').get(convId);
   if (!conv) throw new Error('会话不存在');
-  if (conv.type !== 'dm') throw new Error('暂时只支持单聊通话');
-
-  const cid = Number(calleeId);
-  if (!Number.isInteger(cid) || cid <= 0 || cid === Number(callerId)) throw new Error('通话对象不正确');
+  if (conv.type !== 'dm' && conv.type !== 'group') throw new Error('该会话不支持通话');
 
   const members = db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?')
     .all(convId).map((r) => r.user_id);
   if (!members.includes(callerId)) throw new Error('你不在该会话中');
-  if (!members.includes(cid)) throw new Error('对方不在该会话中');
 
-  const peer = db.prepare('SELECT id, is_bot FROM users WHERE id = ?').get(cid);
-  if (!peer) throw new Error('对方不存在');
-  if (peer.is_bot) throw new Error('机器人不支持通话');
+  // 计划邀请谁：显式名单优先，其次单个 calleeId，最后（群里）全体其他人
+  let wanted;
+  if (Array.isArray(calleeIds) && calleeIds.length) {
+    wanted = calleeIds.map(Number);
+  } else if (calleeId != null && calleeId !== '') {
+    const one = Number(calleeId);
+    // 单聊里"呼叫自己"要在这里就点破。往下走会被循环静默跳过，
+    // 最后报一句"没有可以呼叫的对象"，用户完全不知道是自己填错了。
+    if (one === Number(callerId)) throw new Error('通话对象不正确：不能呼叫自己');
+    wanted = [one];
+  } else if (conv.type === 'group') {
+    wanted = members.filter((m) => m !== callerId);
+  } else {
+    throw new Error('通话对象不正确：缺少通话对象');
+  }
 
-  return { conversationId: conv.id, calleeId: cid };
+  const targets = [];
+  for (const uid of wanted) {
+    if (!Number.isInteger(uid) || uid <= 0 || uid === Number(callerId)) continue;
+    if (!members.includes(uid)) throw new Error('对方不在该会话中');
+    const peer = db.prepare('SELECT id, is_bot FROM users WHERE id = ?').get(uid);
+    if (!peer) throw new Error('对方不存在');
+    if (peer.is_bot) continue; // 机器人静默跳过，不该因为群里有个机器人就整个发起失败
+    if (!targets.includes(uid)) targets.push(uid);
+  }
+  if (!targets.length) throw new Error('没有可以呼叫的对象');
+
+  return { conversationId: conv.id, targets, group: conv.type === 'group' };
+}
+
+/** 找一个会话里正在进行中的通话（用于"加入"） */
+function roomOf(conversationId) {
+  for (const c of calls.values()) {
+    if (c.conversationId === Number(conversationId) && c.state !== 'ended') return c;
+  }
+  return null;
 }
 
 /**
  * 发起通话。
  * - 自己被占线 → 直接报错（客户端弹提示）
- * - 对方被占线 → 不回错误，而是发 call:busy 并落一条"对方忙线"记录
+ * - 部分对象被占线 → 跳过他们，能叫几个叫几个（群通话不该被一个人的忙线搞崩）
+ * - 全部被占线 → 发 call:busy 并落一条"对方忙线"记录
  */
-function invite({ conversationId, callerId, calleeId, mode }) {
+function invite({ conversationId, callerId, calleeId, calleeIds, mode }) {
   const m = MODES.includes(String(mode)) ? String(mode) : 'video';
-  const { conversationId: cid, calleeId: peerId } = resolveConversation(conversationId, callerId, calleeId);
+  const { conversationId: cid, targets, group } = resolveConversation(
+    conversationId, callerId, calleeId, calleeIds,
+  );
 
   if (userCall.has(callerId)) throw new Error('你正在通话中，请先挂断');
 
-  // 对方忙线：不建立通话，只告知主叫 + 留痕
-  if (userCall.has(peerId)) {
+  // 群里已经有一通在跑 → 转成"加入"，而不是开第二通
+  const existing = roomOf(cid);
+  if (existing) {
+    const err = join({ callId: existing.id, userId: callerId });
+    if (err) throw new Error(err);
+    return { callId: existing.id, joined: true, busy: false };
+  }
+
+  // 挑出没被占线的对象
+  const free = [];
+  const busyList = [];
+  for (const uid of targets) {
+    if (userCall.has(uid)) busyList.push(uid); else free.push(uid);
+  }
+
+  if (!free.length) {
     const busyCall = {
-      id: genId(), conversationId: cid, callerId, calleeId: peerId, mode: m,
-      state: 'ended', answeredAt: 0,
+      id: genId(), conversationId: cid, callerId, calleeId: targets[0], mode: m,
+      state: 'ended', answeredAt: 0, participants: new Map(), group,
     };
     logCall(busyCall, STATUS.BUSY, 0);
-    hub.broadcastToUser(callerId, { type: 'call:busy', calleeId: peerId, mode: m });
+    hub.broadcastToUser(callerId, { type: 'call:busy', calleeId: targets[0], mode: m });
     return { callId: null, busy: true };
   }
+
+  const participants = new Map();
+  participants.set(callerId, { state: 'joined', joinedAt: Date.now() });
+  for (const uid of free) participants.set(uid, { state: 'invited', joinedAt: 0 });
 
   const call = {
     id: genId(),
     conversationId: cid,
     callerId,
-    calleeId: peerId,
+    // 1v1 兼容：第一个被邀请的人。群通话里这个字段只作展示兜底。
+    calleeId: free[0],
     mode: m,
+    group,
     state: 'ringing',
     createdAt: Date.now(),
     answeredAt: 0,
+    participants,
     timer: null,
     maxTimer: null,
     // userId -> 掉线宽限定时器
     offlineTimers: new Map(),
   };
   calls.set(call.id, call);
-  userCall.set(callerId, call.id);
-  userCall.set(peerId, call.id);
+  for (const uid of participants.keys()) userCall.set(uid, call.id);
 
   const info = publicInfo(call);
   // 被叫可能多端在线：全部振铃，任一端接听后其余端收到 call:handled 自行收起
-  hub.broadcastToUser(peerId, { type: 'call:incoming', ...info, from: callerId });
-  hub.broadcastToUser(callerId, { type: 'call:ringing', ...info, peerId });
+  for (const uid of free) {
+    hub.broadcastToUser(uid, { type: 'call:incoming', ...info, from: callerId });
+  }
+  hub.broadcastToUser(callerId, { type: 'call:ringing', ...info, peerId: free[0] });
+  // 忙线的人让客户端知道"叫了但没叫到"，界面能提示"1 人忙线未加入"
+  for (const uid of busyList) {
+    hub.broadcastToUser(callerId, { type: 'call:busy', calleeId: uid, mode: m, silent: true });
+  }
 
   call.timer = setTimeout(() => {
     if (call.state !== 'ringing') return;
+    for (const uid of free) {
+      hub.broadcastToUser(uid, { type: 'call:canceled', callId: call.id, reason: 'timeout' });
+    }
     hub.broadcastToUser(callerId, { type: 'call:timeout', callId: call.id });
-    hub.broadcastToUser(peerId, { type: 'call:canceled', callId: call.id, reason: 'timeout' });
     logCall(call, STATUS.MISSED, 0);
     cleanup(call);
   }, RING_TIMEOUT_MS);
@@ -201,96 +357,245 @@ function invite({ conversationId, callerId, calleeId, mode }) {
   return { callId: call.id, busy: false };
 }
 
-/** 接听：仅被叫、仅 ringing 状态 */
+/**
+ * 加入一通已在进行中的通话（群里"我也要进去"）。
+ * 返回 null 表示成功，否则返回错误文案。
+ */
+function join({ callId, userId }) {
+  const call = calls.get(callId);
+  if (!call) return '通话已结束';
+
+  // 已经在房间里（joined）：幂等返回成功（重连 / 重复点击不该报错）。
+  //
+  // ⚠️ 这里**不能**把 `invited` 也算作"已在房间" —— 受邀但还没接听的人调
+  // join/accept 必须真的完成状态跃迁。老写法用 `exist.state !== 'left'` 判断，
+  // 结果被叫点"接听"时直接 return null 什么都没做，participants 里他还是
+  // invited、call.state 还停在 ringing，接着主叫发 offer 就被
+  // `state === 'ringing'` 挡回去 —— 现象是"点了接听，双方都卡住"。
+  const exist = call.participants.get(userId);
+  if (exist && exist.state === 'joined') return null;
+
+  if (userCall.has(userId) && userCall.get(userId) !== call.id) return '你正在通话中，请先挂断';
+
+  // 先确认他确实是这个会话的成员
+  const member = db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+    .get(call.conversationId, userId);
+  if (!member) return '你不在该会话中';
+
+  // 上限只看**真的接听了**的人。
+  //
+  // ⚠️ 不能用 participants.size —— 那里面还有一堆 invited（群里收到来电但还没
+  // 点"接听"的人）。群里 10 个人收到来电、只有 3 个人接了，房间实际只占 3 个
+  // mesh 位；按 size 判断会让第 4 个接听的人被"人数已满"挡住，而他前面根本
+  // 没有 4 个人真的在通话。
+  if (activeMembers(call).length >= MAX_PARTICIPANTS) {
+    return `通话人数已达上限（${MAX_PARTICIPANTS} 人）`;
+  }
+
+  call.participants.set(userId, { state: 'joined', joinedAt: Date.now() });
+  userCall.set(userId, call.id);
+
+  // 首个人加入时把振铃定时器摘掉，并启动硬上限
+  if (call.state === 'ringing') {
+    if (call.timer) { clearTimeout(call.timer); call.timer = null; }
+    call.state = 'connecting';
+    if (!call.answeredAt) call.answeredAt = Date.now();
+  }
+  if (!call.maxTimer) {
+    call.maxTimer = setTimeout(() => {
+      for (const uid of call.participants.keys()) {
+        hub.broadcastToUser(uid, { type: 'call:ended', callId: call.id, reason: 'timeout' });
+      }
+      logCall(call, STATUS.ENDED, durationOf(call));
+      cleanup(call);
+    }, MAX_DURATION_MS);
+  }
+
+  const info = publicInfo(call);
+  const me = info.participants.find((p) => p.userId === userId);
+
+  // 告知已在房间里的人"来了个新的" —— 由他们在本地建连并**向新人发 offer**。
+  // 规则固定为"已在房间里的人发"，这样不会两边同时发 offer 撞车（glare）。
+  for (const uid of call.participants.keys()) {
+    if (uid === userId) continue;
+    if (call.participants.get(uid).state === 'left') continue;
+    hub.broadcastToUser(uid, {
+      type: 'call:peer-joined', callId: call.id, peer: me, group: call.group,
+    });
+  }
+
+  // 告诉新人"房间里现在有谁"（他不需要给别人发 offer，只等别人来连）
+  hub.broadcastToUser(userId, {
+    type: 'call:joined',
+    ...info,
+    self: userId,
+    // 只在房间里、已经接听过的人
+    peers: info.participants.filter((p) => p.userId !== userId && p.state === 'joined'),
+    // 首次接听来电（之前是 invited）→ false，界面走"接听"文案；
+    // 中途加入 / 退出后重进 → true，界面走"已加入"文案。
+    // 注意 exist 可能是 undefined（退出过再进来），那种情况同样算 true。
+    accepted: !(exist && exist.state === 'invited'),
+  });
+
+  // 全员广播一次成员变化：界面上的"通话中 x 人"、参会者头像墙靠它刷新。
+  // 注意 join 里已经有 peer-joined 了，那条是给"要建连的人"的，
+  // 这条是给"只需要更新名单的人"的，两者受众不同、不能合并。
+  for (const uid of call.participants.keys()) {
+    if (uid === userId) continue;
+    hub.broadcastToUser(uid, { type: 'call:updated', ...info });
+  }
+
+  return null;
+}
+
+/** 接听：等同 join，但只允许受邀者；已 ringing 阶段或仍是 invited 状态都可以 */
 function accept({ callId, userId }) {
   const call = calls.get(callId);
   if (!call) throw new Error('通话已结束');
-  if (call.calleeId !== userId) throw new Error('只有被叫方可以接听');
-  if (call.state !== 'ringing') throw new Error('通话状态不允许接听');
+  const p = call.participants.get(userId);
+  if (!p) throw new Error('只有被叫方可以接听');
+  if (p.state === 'joined') throw new Error('你已经在这个通话中');
+  // 通话已经进到连通阶段、但他还是 invited（群里别人先接了）——依然允许接听，
+  // 这正是"后到的人也接进来"需要的行为。
+  if (call.state === 'ended') throw new Error('通话已结束');
 
-  if (call.timer) { clearTimeout(call.timer); call.timer = null; }
-  call.state = 'connecting';
-  call.answeredAt = Date.now();
+  const err = join({ callId, userId });
+  if (err) throw new Error(err);
 
+  // 1v1 老协议：主叫必须收到 call:accepted 才会去发 offer
   hub.broadcastToUser(call.callerId, { type: 'call:accepted', callId: call.id, by: userId });
   // 被叫的其他端（多设备）停止振铃
-  hub.broadcastToUser(call.calleeId, { type: 'call:handled', callId: call.id, by: userId });
-
-  // 硬上限：防止双方都忘了挂断
-  call.maxTimer = setTimeout(() => {
-    hub.broadcastToUser(call.callerId, { type: 'call:ended', callId: call.id, reason: 'timeout' });
-    hub.broadcastToUser(call.calleeId, { type: 'call:ended', callId: call.id, reason: 'timeout' });
-    logCall(call, STATUS.ENDED, durationOf(call));
-    cleanup(call);
-  }, MAX_DURATION_MS);
+  hub.broadcastToUser(userId, { type: 'call:handled', callId: call.id, by: userId });
 
   return { callId: call.id, state: call.state };
 }
 
-/** 拒接：仅被叫、仅 ringing 状态 */
+/** 拒接：仅受邀者、仅 ringing 阶段 */
 function reject({ callId, userId, reason }) {
   const call = calls.get(callId);
   if (!call) return { callId, ok: false };
-  if (call.calleeId !== userId) throw new Error('只有被叫方可以拒接');
+  const p = call.participants.get(userId);
+  if (!p || p.state === 'joined') throw new Error('只有被叫方可以拒接');
 
   const busy = reason === 'busy';
-  hub.broadcastToUser(call.callerId, {
-    type: 'call:rejected', callId: call.id, by: userId, reason: busy ? 'busy' : 'declined',
-  });
-  logCall(call, busy ? STATUS.BUSY : STATUS.REJECTED, 0);
-  cleanup(call);
+  p.state = 'left';
+  call.participants.delete(userId);
+  if (userCall.get(userId) === call.id) userCall.delete(userId);
+  hub.broadcastToUser(userId, { type: 'call:handled', callId: call.id, by: userId });
+
+  // 1v1：直接整通结束（老行为）
+  if (isOneToOne(call) || !hasAnyone(call)) {
+    hub.broadcastToUser(call.callerId, {
+      type: 'call:rejected', callId: call.id, by: userId, reason: busy ? 'busy' : 'declined',
+    });
+    logCall(call, busy ? STATUS.BUSY : STATUS.REJECTED, 0);
+    cleanup(call);
+    return { callId: call.id, ok: true };
+  }
+
+  // 群通话：只是这个人不来了，告知其他人即可
+  const info = publicInfo(call);
+  for (const uid of call.participants.keys()) {
+    hub.broadcastToUser(uid, { type: 'call:peer-left', callId: call.id, peerId: userId, reason: busy ? 'busy' : 'declined' });
+    hub.broadcastToUser(uid, { type: 'call:updated', ...info });
+  }
   return { callId: call.id, ok: true };
 }
 
-/** 主叫取消：仅主叫、仅 ringing 状态 */
+/** 主叫取消：仅主叫、仅 ringing 阶段 */
 function cancel({ callId, userId }) {
   const call = calls.get(callId);
   if (!call) return { callId, ok: false };
   if (call.callerId !== userId) throw new Error('只有主叫方可以取消');
   if (call.state !== 'ringing') throw new Error('对方已接听，请使用挂断');
 
-  hub.broadcastToUser(call.calleeId, { type: 'call:canceled', callId: call.id, reason: 'canceled' });
+  for (const uid of call.participants.keys()) {
+    if (uid === userId) continue;
+    hub.broadcastToUser(uid, { type: 'call:canceled', callId: call.id, reason: 'canceled' });
+  }
   logCall(call, STATUS.CANCELED, 0);
   cleanup(call);
   return { callId: call.id, ok: true };
 }
 
-/** 挂断：接通中/通话中任一方可发起 */
+/**
+ * 挂断 / 退出通话。
+ *
+ * 1v1：整通结束（老行为不变）。
+ * 群通话：只把自己移出，其余人继续 —— 这是群通话与 1v1 最本质的差别。
+ * 发起人退出也不结束通话（否则"发起人手机没电，全群陪跑"）。
+ * 只有一个人都不剩了才真正收尾。
+ */
 function end({ callId, userId, reason }) {
   const call = calls.get(callId);
   if (!call) return { callId, ok: false };
-  if (userId !== call.callerId && userId !== call.calleeId) throw new Error('你不是通话参与方');
+  if (!call.participants.has(userId)) throw new Error('你不是通话参与方');
 
+  const wasJoined = call.participants.get(userId).state === 'joined';
   const dur = durationOf(call);
-  hub.broadcastToUser(otherSide(call, userId), {
-    type: 'call:ended', callId: call.id, reason: reason || 'hangup', by: userId,
-  });
-  logCall(call, call.state === 'ringing' ? STATUS.CANCELED : STATUS.ENDED, dur);
-  cleanup(call);
+
+  if (isOneToOne(call)) {
+    for (const uid of othersOf(call, userId)) {
+      hub.broadcastToUser(uid, {
+        type: 'call:ended', callId: call.id, reason: reason || 'hangup', by: userId,
+      });
+    }
+    logCall(call, call.state === 'ringing' ? STATUS.CANCELED : STATUS.ENDED, dur);
+    cleanup(call);
+    return { callId: call.id, ok: true };
+  }
+
+  // ---- 群通话：单人退出 ----
+  call.participants.delete(userId);
+  if (userCall.get(userId) === call.id) userCall.delete(userId);
+
+  if (!hasAnyone(call)) {
+    logCall(call, call.state === 'ringing' ? STATUS.CANCELED : STATUS.ENDED, dur);
+    cleanup(call);
+    return { callId: call.id, ok: true };
+  }
+
+  const info = publicInfo(call);
+  for (const uid of call.participants.keys()) {
+    hub.broadcastToUser(uid, {
+      type: 'call:peer-left', callId: call.id, peerId: userId,
+      joined: wasJoined, reason: reason || 'hangup',
+    });
+    hub.broadcastToUser(uid, { type: 'call:updated', ...info });
+  }
   return { callId: call.id, ok: true };
 }
 
 /**
  * SDP / ICE 中继。
  * type ∈ offer | answer | ice
- * 只在 connecting / active 阶段转发——ringing 阶段对方还没接，
- * 提前送 SDP 会被对端当成无效帧丢弃，不如直接拒绝。
+ *
+ * `to` 字段：mesh 场景必须 —— 三个人的房间里，A 的 offer 只该给 B 或只给 C，
+ * 广播给所有人会让第三人收到一份跟自己无关的 SDP 并搞乱连接状态。
+ * 不传 `to` 时退化为"发给所有其他参与者"（1v1 正好只有一个，行为与老版本一致）。
  */
-function relay({ callId, userId, type, data }) {
+function relay({ callId, userId, type, data, to }) {
   const call = calls.get(callId);
   if (!call) throw new Error('通话已结束');
-  if (userId !== call.callerId && userId !== call.calleeId) throw new Error('你不是通话参与方');
+  if (!call.participants.has(userId)) throw new Error('你不是通话参与方');
   if (call.state === 'ringing') throw new Error('对方尚未接听');
 
-  if (type === 'answer' && call.state === 'connecting') call.state = 'active';
+  const targets = to != null && to !== '' ? [Number(to)] : othersOf(call, userId);
+  for (const uid of targets) {
+    if (uid === userId) continue;
+    // 只发给真的在房间里的人，别把信令投给已经退出/还没接的人
+    const p = call.participants.get(uid);
+    if (!p || p.state === 'left') continue;
+    hub.broadcastToUser(uid, {
+      type: 'call:' + type,
+      callId: call.id,
+      from: userId,
+      data,
+    });
+  }
 
-  hub.broadcastToUser(otherSide(call, userId), {
-    type: 'call:' + type,
-    callId: call.id,
-    from: userId,
-    data,
-  });
-  return { callId: call.id, state: call.state };
+  if (type === 'answer' && call.state === 'connecting') call.state = 'active';
+  return { callId: call.id, state: call.state, delivered: targets.length };
 }
 
 /**
@@ -317,15 +622,37 @@ function handleOffline(userId) {
     if (hub.userSockets.has(userId)) return;
     if (!calls.has(call.id)) return;
 
-    const peer = otherSide(call, userId);
-    if (call.state === 'ringing') {
-      hub.broadcastToUser(peer, { type: 'call:ended', callId: call.id, reason: 'unreachable', by: userId });
-      logCall(call, call.calleeId === userId ? STATUS.MISSED : STATUS.CANCELED, 0);
-    } else {
-      hub.broadcastToUser(peer, { type: 'call:ended', callId: call.id, reason: 'peer-offline', by: userId });
-      logCall(call, STATUS.FAILED, durationOf(call));
+    const p = call.participants.get(userId);
+    const wasInvited = p && p.state === 'invited';
+
+    if (isOneToOne(call)) {
+      const peer = othersOf(call, userId)[0];
+      if (call.state === 'ringing') {
+        if (peer) hub.broadcastToUser(peer, { type: 'call:ended', callId: call.id, reason: 'unreachable', by: userId });
+        logCall(call, wasInvited ? STATUS.MISSED : STATUS.CANCELED, 0);
+      } else {
+        if (peer) hub.broadcastToUser(peer, { type: 'call:ended', callId: call.id, reason: 'peer-offline', by: userId });
+        logCall(call, STATUS.FAILED, durationOf(call));
+      }
+      cleanup(call);
+      return;
     }
-    cleanup(call);
+
+    // ---- 群通话：一个人掉线，其余继续 ----
+    call.participants.delete(userId);
+    if (userCall.get(userId) === call.id) userCall.delete(userId);
+    if (!hasAnyone(call)) {
+      logCall(call, STATUS.ENDED, durationOf(call));
+      cleanup(call);
+      return;
+    }
+    const info = publicInfo(call);
+    for (const uid of call.participants.keys()) {
+      hub.broadcastToUser(uid, {
+        type: 'call:peer-left', callId: call.id, peerId: userId, reason: 'offline',
+      });
+      hub.broadcastToUser(uid, { type: 'call:updated', ...info });
+    }
   }, OFFLINE_GRACE_MS);
 
   call.offlineTimers.set(userId, timer);
@@ -366,7 +693,8 @@ function pendingForUser(userId) {
   if (!c || c.state !== 'ringing') return null;
 
   const info = publicInfo(c);
-  if (c.calleeId === userId) {
+  const p = c.participants.get(userId);
+  if (p && p.state === 'invited') {
     return { type: 'call:incoming', ...info, from: c.callerId, resumed: true };
   }
   return { type: 'call:ringing', ...info, peerId: c.calleeId, resumed: true };
@@ -378,12 +706,15 @@ function stats() {
     callId: c.id, conversationId: c.conversationId,
     callerId: c.callerId, calleeId: c.calleeId,
     mode: c.mode, state: c.state, duration: Math.round(durationOf(c)),
+    group: !!c.group,
+    participants: activeMembers(c),
+    participantCount: c.participants.size,
   }));
-  return { active: list.length, calls: list };
+  return { active: list.length, calls: list, maxParticipants: MAX_PARTICIPANTS };
 }
 
 module.exports = {
-  invite, accept, reject, cancel, end, relay,
-  handleOffline, handleOnline, pendingForUser, stats,
-  RING_TIMEOUT_MS, OFFLINE_GRACE_MS, MODES, STATUS,
+  invite, accept, reject, cancel, end, join, relay,
+  handleOffline, handleOnline, pendingForUser, stats, roomOf,
+  RING_TIMEOUT_MS, OFFLINE_GRACE_MS, MODES, STATUS, MAX_PARTICIPANTS,
 };
