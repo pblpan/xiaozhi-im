@@ -5,7 +5,7 @@ const events = require('../events');
 const {
   sendMessage, withFileInfo,
   recallMessage, markRead, readState, RECALL_WINDOW_MS,
-  searchMessages, conversationTitle,
+  searchMessages, conversationTitle, remarkOf,
   forwardMessage, togglePin, pinnedMessage, MENTION_ALL, mentionLike,
 } = require('../chat');
 
@@ -92,9 +92,13 @@ router.get('/', (req, res) => {
     if (c.type === 'dm') {
       const other = db.prepare(`SELECT u.id,u.username,u.nickname,u.avatar,u.is_bot FROM conversation_members cm
         JOIN users u ON u.id=cm.user_id WHERE cm.conversation_id=? AND cm.user_id!=?`).get(c.id, uid);
+      // 备注优先：我给对方起的名字要出现在列表标题上
+      const remark = other ? remarkOf(uid, other.id) : null;
       return {
-        ...base, title: other?.nickname || other?.username, avatar: other?.avatar,
-        peer: other ? { ...other, is_bot: !!other.is_bot } : other,
+        ...base,
+        title: remark || other?.nickname || other?.username,
+        avatar: other?.avatar,
+        peer: other ? { ...other, is_bot: !!other.is_bot, remark } : other,
       };
     }
     const g = db.prepare('SELECT id,name,avatar,announcement FROM groups WHERE conversation_id=?').get(c.id);

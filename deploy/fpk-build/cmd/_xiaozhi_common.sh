@@ -52,9 +52,15 @@ xiaozhi_env() {
 
   local SECRET=""
   local OLD_IP=""
+  # Cloudflare TURN 的 key 是用户自己去控制台申请后手填进 .env 的，
+  # 而下面这段是整份重写 .env —— 不显式接住就会被升级冲掉，务必保留。
+  local OLD_CF_ID=""
+  local OLD_CF_TOKEN=""
   if [ -f "$ENV_FILE" ]; then
     SECRET=$(grep -E '^JWT_SECRET=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
     OLD_IP=$(grep -E '^TURN_EXTERNAL_IP=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
+    OLD_CF_ID=$(grep -E '^CF_TURN_KEY_ID=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
+    OLD_CF_TOKEN=$(grep -E '^CF_TURN_API_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
   fi
   [ -z "$SECRET" ] && SECRET=$(xiaozhi_gen_secret)
 
@@ -88,18 +94,28 @@ TRIM_APPDEST=$TRIM_APPDEST
 XIAOZHI_DATA_DIR=$SHARE_DIR/data
 JWT_SECRET=$SECRET
 
-# ---- TURN 中继（跨网络音视频通话必需）----
-# 写了地址不等于外网就能用：还要让下面这些入口能从公网进来，
+# ---- 方案一（推荐）：Cloudflare Realtime TURN ----
+# 只用出站连接、走 443/TLS，**完全不需要端口映射**，免费额度 1TB/月。
+# 家宽没有公网 IP 时这是最省事的通路。开通：
+#   dash.cloudflare.com → Realtime → TURN keys 新建
+#   拿到 KEY ID 与 scope 为 "Calls: Edit" 的 API Token 填到下面两行
+# 填完执行：cd docker && docker compose up -d --force-recreate xiaozhi-im
+CF_TURN_KEY_ID=$OLD_CF_ID
+CF_TURN_API_TOKEN=$OLD_CF_TOKEN
+
+# ---- 方案二：自建 coturn（延迟更低，但要让公网能打进来）----
+# 写了地址不等于外网就能用，还要放通：
 #   3478/udp + 3478/tcp（信令/分配）
 #   49160-49200/udp（中继通道）
 # 二选一：
 #   A) 路由器端口映射（家宽有公网 IP 时最简单）
-#   B) ZeroNews 等内网穿透开 UDP 隧道（无公网 IP 时）
-# 一条都没打通的话，跨网通话仍会失败（同网段通话不受影响）。
+#   B) 支持 TCP/UDP 的内网穿透隧道
+#      （注意：ZeroNews 免费版不支持 TCP/UDP 隧道，要付费档才行）
+# 一条都没打通的话，跨网通话只能靠方案一；同网段通话不受影响。
 $TURN_IP_LINE
 $TURN_URL_LINE
 EOF
-  echo "[$APPNAME] 已写入 $ENV_FILE (TURN_EXTERNAL_IP=${PUBIP:-无})"
+  echo "[$APPNAME] 已写入 $ENV_FILE (TURN_EXTERNAL_IP=${PUBIP:-无}, Cloudflare TURN=$([ -n "$OLD_CF_ID" ] && echo 已配置 || echo 未配置))"
 }
 
 # 释放端口：清理同名旧容器

@@ -271,6 +271,99 @@ function stopServer() {
   r = await api('POST', '/api/friends/reject', { token: tb, body: { friendId: C.user.id } });
   ok('拒绝不存在的申请 → 404', r.status === 404, JSON.stringify(r.body));
 
+  // ---------------- 好友备注 ----------------
+  // 备注是「我这一侧」的私有属性，落在 friendships(user_id=我, friend_id=对方)，
+  // 要同时验三件事：能存、对方看不到、能顶替昵称出现在会话标题上。
+  console.log('\n【二·五】好友备注');
+  r = await api('GET', '/api/friends', { token: ta });
+  ok('未设备注时 remark 为空',
+    r.body.friends.find((f) => f.id === bId)?.remark == null,
+    JSON.stringify(r.body.friends));
+
+  r = await api('PUT', `/api/friends/${bId}/remark`, { token: ta, body: { remark: '隔壁老王' } });
+  ok('设置好友备注', r.status === 200 && r.body.remark === '隔壁老王', JSON.stringify(r.body));
+
+  r = await api('GET', '/api/friends', { token: ta });
+  ok('备注回显在好友列表里',
+    r.body.friends.find((f) => f.id === bId)?.remark === '隔壁老王',
+    JSON.stringify(r.body.friends));
+
+  r = await api('GET', '/api/friends', { token: tb });
+  ok('备注只对我可见（对方那份记录仍为空）',
+    r.body.friends.find((f) => f.id === aId)?.remark == null,
+    JSON.stringify(r.body.friends));
+
+  // 接受申请时服务端已自动建过单聊，这里拿现成的
+  r = await api('GET', `/api/conversations/dm/${bId}`, { token: ta });
+  const dmCid = r.body?.conversationId;
+  ok('取到单聊会话 id', Number.isInteger(dmCid), JSON.stringify(r.body));
+
+  r = await api('GET', '/api/conversations', { token: ta });
+  let dmA = r.body.find((c) => c.id === dmCid);
+  ok('我这边单聊标题 = 备注', !!dmA && dmA.title === '隔壁老王',
+    JSON.stringify(dmA && dmA.title));
+  ok('会话 peer 里也带 remark',
+    !!dmA && dmA.peer && dmA.peer.remark === '隔壁老王',
+    JSON.stringify(dmA && dmA.peer));
+
+  // A 的昵称在前面的用例里被改成了 24 个 emoji，这里动态取一次再比，
+  // 免得以后改前面的用例又把这个断言带崩
+  const aNick = (await api('GET', '/api/auth/me', { token: ta })).body.user.nickname;
+  r = await api('GET', '/api/conversations', { token: tb });
+  const dmB = r.body.find((c) => c.id === dmCid);
+  ok('对方那边标题仍是昵称（不受我的备注影响）',
+    !!dmB && dmB.title === aNick && dmB.title !== '隔壁老王',
+    JSON.stringify(dmB && dmB.title));
+  ok('对方 peer.remark 为空',
+    !!dmB && dmB.peer && dmB.peer.remark == null, JSON.stringify(dmB && dmB.peer));
+
+  r = await api('GET', `/api/conversations/${dmCid}/messages`, { token: ta });
+  ok('聊天页标题也用备注', r.body?.conversation?.title === '隔壁老王',
+    JSON.stringify(r.body && r.body.conversation));
+
+  // 改备注 → 无需重建会话，标题立刻跟着变
+  r = await api('PUT', `/api/friends/${bId}/remark`, { token: ta, body: { remark: '老王（同事）' } });
+  ok('改备注', r.status === 200 && r.body.remark === '老王（同事）', JSON.stringify(r.body));
+  r = await api('GET', '/api/conversations', { token: ta });
+  ok('改完备注立刻反映到会话标题',
+    r.body.find((c) => c.id === dmCid)?.title === '老王（同事）',
+    JSON.stringify(r.body.find((c) => c.id === dmCid)?.title));
+
+  // 清空：空串 / 纯空格都退回昵称
+  r = await api('PUT', `/api/friends/${bId}/remark`, { token: ta, body: { remark: '   ' } });
+  ok('纯空格视为清空', r.status === 200 && r.body.remark === null, JSON.stringify(r.body));
+  r = await api('GET', '/api/conversations', { token: ta });
+  ok('清空后备注消失、退回对方昵称',
+    r.body.find((c) => c.id === dmCid)?.title === 'bob',
+    JSON.stringify(r.body.find((c) => c.id === dmCid)?.title));
+  r = await api('GET', '/api/friends', { token: ta });
+  ok('清空后列表 remark 为 null',
+    r.body.friends.find((f) => f.id === bId)?.remark == null,
+    JSON.stringify(r.body.friends));
+
+  // 脏输入
+  r = await api('PUT', `/api/friends/${bId}/remark`, { token: ta, body: { remark: '备'.repeat(31) } });
+  ok('超长备注被拒（30 字上限）',
+    r.status === 400 && /30/.test(r.body.error || ''), JSON.stringify(r.body));
+  r = await api('PUT', `/api/friends/${bId}/remark`, { token: ta, body: { remark: '备'.repeat(30) } });
+  ok('刚好 30 字放行', r.status === 200, JSON.stringify(r.body));
+  r = await api('PUT', `/api/friends/${aId}/remark`, { token: ta, body: { remark: '自己' } });
+  ok('不能给自己设备注 → 400', r.status === 400, JSON.stringify(r.body));
+  r = await api('PUT', `/api/friends/${C.user.id}/remark`, { token: ta, body: { remark: '非好友' } });
+  ok('非好友不能设备注 → 404',
+    r.status === 404 && /不是好友/.test(r.body.error || ''), JSON.stringify(r.body));
+  r = await api('PUT', '/api/friends/abc/remark', { token: ta, body: { remark: 'x' } });
+  ok('非法好友 id → 400', r.status === 400, JSON.stringify(r.body));
+  r = await api('PUT', `/api/friends/${bId}/remark`, { body: { remark: 'x' } });
+  ok('未登录 → 401', r.status === 401, JSON.stringify(r.body));
+  // 备注被拒时不应写坏原值
+  r = await api('GET', '/api/friends', { token: ta });
+  ok('被拒的请求没有改动已有备注',
+    r.body.friends.find((f) => f.id === bId)?.remark === '备'.repeat(30),
+    JSON.stringify(r.body.friends.find((f) => f.id === bId)?.remark));
+  // 复原，免得影响后面用例
+  await api('PUT', `/api/friends/${bId}/remark`, { token: ta, body: { remark: '' } });
+
   // ---------------- 认证模板 ----------------
   console.log('\n【三】好友申请附言模板');
   r = await api('GET', '/api/friends/templates', { token: ta });

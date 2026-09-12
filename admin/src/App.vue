@@ -22,6 +22,7 @@
         <el-menu-item index="messages">消息管理</el-menu-item>
         <el-menu-item index="integrations">集成对接</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
+        <el-menu-item index="help">系统帮助</el-menu-item>
       </el-menu>
       <div class="aside-foot">
         <span>服务端运行中</span>
@@ -46,10 +47,202 @@
             </el-col>
           </el-row>
           <el-card style="margin-top:18px">
-            <template #header>系统说明</template>
-            <p>· 数据 100% 存储于本机（飞牛/群晖/绿联/麒麟等私有服务器）。</p>
-            <p>· 客户端支持 Windows / Android（仿 Tailchat 界面），后续扩展 Mac / iOS。</p>
-            <p>· 如需修改管理员密码，请到「系统设置」页操作（无需重启服务）。</p>
+            <template #header>
+              <div class="card-hdr">
+                <span>系统说明</span>
+                <el-button type="primary" link @click="tab = 'help'">查看完整系统帮助 →</el-button>
+              </div>
+            </template>
+            <p>· <b>小智 IM</b> 是私有化部署的即时通讯服务，数据 100% 存储于本机（飞牛 / 群晖 / 绿联 / 麒麟等私有服务器），不经任何第三方云。</p>
+            <p>· <b>客户端</b>支持 Windows / Android（仿 Tailchat 界面），后续扩展 Mac / iOS；支持文字、图片、文件、语音、表情、卡片消息，以及单聊 / 群聊、已读回执、撤回、收藏、转发、全局搜索、好友备注与音视频通话。</p>
+            <p>· <b>本管理台</b>用于管用户、群组、好友关系、文件、消息，以及对接外部系统的入站推送与事件订阅。</p>
+            <p>· <b>上手步骤</b>：装客户端 → 自动探测服务器地址并登录 → 搜索账号加好友 → 开聊。批量开户在「用户管理 → 新建用户」。</p>
+            <p>· <b>两个高频注意点</b>：改管理员密码在「系统设置」（无需重启）；外网通话要通，必须先配好音视频中继（见「系统帮助 → 音视频通话与网络穿透」）。</p>
+          </el-card>
+        </div>
+
+        <!-- 系统帮助 -->
+        <div v-else-if="tab === 'help'">
+          <el-card class="help">
+            <template #header>
+              <div class="card-hdr">
+                <span>系统帮助</span>
+                <span class="hint">按「先认识、再上手、出问题怎么办」的顺序编排</span>
+              </div>
+            </template>
+
+            <el-alert type="success" :closable="false" style="margin-bottom:18px">
+              <template #title>
+                数据 100% 在你自己机器上，不经过任何第三方云 —— 这是本系统与公有云 IM 的根本区别。
+              </template>
+            </el-alert>
+
+            <section class="help-sec">
+              <h3>一、这是什么</h3>
+              <ul>
+                <li><b>服务端</b>跑在自家 NAS（飞牛 FnOS，Docker 方式），提供消息收发、文件存储、通话信令与中继、以及对外集成接口。</li>
+                <li><b>客户端</b>是 Windows / Android 应用，界面仿 Tailchat；首次启动会自动探测服务器地址，也可在 App 内「服务器设置」手动指定。</li>
+                <li><b>管理台</b>就是当前这个网页，管用户、群组、好友关系、文件、消息，以及和外部系统的对接。</li>
+              </ul>
+            </section>
+
+            <section class="help-sec">
+              <h3>二、五分钟上手</h3>
+              <el-steps :active="4" align-center style="margin:6px 0 14px">
+                <el-step title="装客户端" description="Android 装 APK / Windows 解压运行" />
+                <el-step title="登录" description="自动探测地址，或手动填" />
+                <el-step title="加好友" description="搜索账号或昵称发申请" />
+                <el-step title="开聊" description="对方通过后出现在会话列表" />
+              </el-steps>
+              <ul>
+                <li>Windows 端解压后双击 <code class="mono">xiaozhi_im_client.exe</code>；<b>dll 与 data/ 目录必须一起保留</b>，不能只拷 exe。</li>
+                <li>手机装 APK 时，若提示已存在旧版，请确认新包的文件名版本号比旧的高 —— <b>版本号不涨，安卓会静默跳过覆盖安装</b>。</li>
+                <li>要给同事批量开户：本页「用户管理 → 新建用户」，不必让对方自己注册。</li>
+              </ul>
+            </section>
+
+            <section class="help-sec">
+              <h3>三、客户端能做什么</h3>
+              <table class="help-table">
+                <thead><tr><th style="width:130px">能力</th><th>说明</th></tr></thead>
+                <tbody>
+                  <tr><td>消息类型</td><td>文字 / 图片 / 文件 / 语音 / 表情 / 卡片（卡片由外部系统推送，用于告警、日报等结构化信息）</td></tr>
+                  <tr><td>会话</td><td>单聊、群聊、群公告、群成员管理、禁言、群主转让；免打扰</td></tr>
+                  <tr><td>@ 提及</td><td>群内 @某人 / @所有人，被 @ 的人会在会话列表看到红字提示</td></tr>
+                  <tr><td>消息操作</td><td>撤回（限时窗口内）、转发、收藏、复制、置顶</td></tr>
+                  <tr><td>已读回执</td><td>单聊显示对方读到哪；群聊显示「所有人都读到」的水位</td></tr>
+                  <tr><td>全局搜索</td><td>跨会话搜文字与卡片内容（图片/文件/语音不参与，因为内容不是可读文本）</td></tr>
+                  <tr><td>好友</td><td>认证附言（附言模板最多 10 条）、<b>好友备注</b>（只自己可见，不改变对方昵称）</td></tr>
+                  <tr><td>个人资料</td><td>头像、昵称、个性签名、性别、地区、生日</td></tr>
+                  <tr><td>音视频通话</td><td>1 对 1 语音 / 视频通话，含来电界面、重连恢复</td></tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section class="help-sec">
+              <h3>四、管理台各页做什么</h3>
+              <table class="help-table">
+                <thead><tr><th style="width:130px">页面</th><th>说明</th></tr></thead>
+                <tbody>
+                  <tr><td>仪表盘</td><td>各类计数总览（用户、群组、消息、文件、好友关系、机器人、入站推送、事件订阅、公钥接入）</td></tr>
+                  <tr><td>用户管理</td><td>新建 / 编辑 / 删除用户，改角色、重置密码</td></tr>
+                  <tr><td>群组管理</td><td>查看群与成员，必要时解散</td></tr>
+                  <tr><td>好友关系</td><td>查看好友关系与备注，可解除关系</td></tr>
+                  <tr><td>文件管理</td><td>查看磁盘占用与上传的文件，可删除</td></tr>
+                  <tr><td>消息管理</td><td>按类型 / 关键词检索消息，用于排查与审计</td></tr>
+                  <tr><td>集成对接</td><td>入站推送地址、事件订阅、公钥接入（详见第六节）</td></tr>
+                  <tr><td>系统设置</td><td>改管理员密码（无需重启）、查看服务器信息</td></tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section class="help-sec">
+              <h3>五、音视频通话与网络穿透（外网通话不通先看这里）</h3>
+              <p>通话建立分两步：</p>
+              <ol>
+                <li><b>优先 P2P 直连</b> —— 两端直接连，延迟最低。靠 <b>STUN</b> 问出各自的公网地址后互相打洞。</li>
+                <li><b>打不通就走中继</b> —— 手机 4G/5G、公司网络这类<b>对称 NAT</b> 环境打洞必失败，必须由 <b>TURN</b> 服务器转发媒体。</li>
+              </ol>
+              <el-alert type="info" :closable="false" style="margin:10px 0">
+                <template #title>
+                  本系统的 STUN / TURN 配置由<b>服务端下发</b>（<code class="mono">GET /api/call/ice</code>），
+                  客户端每 5 分钟拉一次。所以<b>换中继地址只需改服务端 .env 重启，不用重新发客户端</b>。
+                </template>
+              </el-alert>
+              <p>中继有两种来源，配其一即可，都配就是双保险：</p>
+              <table class="help-table">
+                <thead><tr><th style="width:170px">方案</th><th>说明 / 配置</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><b>Cloudflare TURN</b><br /><el-tag size="small" type="success">推荐</el-tag></td>
+                    <td>
+                      <b>不需要任何端口映射</b>，只用出站连接，走 443/TLS，任何网络都出得去。
+                      免费额度 <b>1TB / 月</b>。<br />
+                      .env 填 <code class="mono">CF_TURN_KEY_ID</code> 与
+                      <code class="mono">CF_TURN_API_TOKEN</code>（scope 选 Calls: Edit）。
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><b>自建 coturn</b><br /><span class="hint">飞牛上已部署</span></td>
+                    <td>
+                      延迟更低，但<b>必须让公网能打进家里的 UDP/TCP 端口</b>：
+                      ① 真公网 IP + 路由器映射 <code class="mono">3478/udp</code>、<code class="mono">3478/tcp</code>、
+                      <code class="mono">49160-49200/udp</code>；或 ② 用支持 TCP/UDP 的隧道服务。<br />
+                      免费版 ZeroNews <b>不支持</b> TCP/UDP 隧道，单靠它无法承载中继。
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="help-tip">
+                排障顺序：先看「系统设置」里有没有下发 TURN → 再用<b>手机流量</b>实测一次真实跨网通话。
+                两台都在同一个 Wi-Fi 下测不出问题。
+              </p>
+            </section>
+
+            <section class="help-sec">
+              <h3>六、和外部系统对接</h3>
+              <p>总入口在「集成对接」页，三种方式：</p>
+              <ul>
+                <li><b>入站推送</b>：给外部系统一个带令牌的地址，对方 POST 告警 / 日报过来，直接落到指定群里。</li>
+                <li><b>事件订阅</b>：把 IM 里发生的事件（新消息、加好友等）回调到你的系统。</li>
+                <li><b>公钥接入</b>：用 Ed25519 私钥签名请求体，IM 侧用你登记的公钥验签，比静态令牌更安全。</li>
+              </ul>
+              <p class="help-tip">典型用法：工厂 / 门店系统的库存预警、每日销售汇总直接推到 IM 群；服务器宕机告警即时到手机。</p>
+            </section>
+
+            <section class="help-sec">
+              <h3>七、常见问题</h3>
+              <el-collapse>
+                <el-collapse-item title="外网呼入时，被叫端「来电界面根本不弹」，挂断后才显示未接" name="1">
+                  <p>已在 v0.6.1 修复，根因有两个，缺一都修不好：</p>
+                  <ul>
+                    <li>长连接断线后<b>放弃重连</b>（旧版重试 12 次就彻底不管了），且没有心跳，假死连接识别不出来 → 来电帧收不到。现在改为无限重连 + 20 秒应用层心跳 + 服务端 30 秒协议层探测。</li>
+                    <li>服务端一发现被叫掉线就<b>立刻拆话</b>，重连回来也补不了。现在有 20 秒宽限期，期内重连会补推来电界面。</li>
+                  </ul>
+                  <p>若仍出现：确认手机上的客户端版本 ≥ v0.6.1。</p>
+                </el-collapse-item>
+                <el-collapse-item title="双方都在外网时通话完全打不通，或只有声音没有画面" name="2">
+                  <p>说明 P2P 和中继都没成功，基本都是<b>中继没配上</b>。按顺序检查：</p>
+                  <ol>
+                    <li>本页「系统设置」是否显示已下发 TURN；没配就先配 Cloudflare TURN（不需要端口映射，最省事）。</li>
+                    <li>用<b>手机 4G/5G</b> 实测（同 Wi-Fi 下测不出来）。</li>
+                    <li>自建 coturn 方案还要确认公网端口真的能进 —— 在家里的网络上测公网 IP:3478 是测不准的。</li>
+                  </ol>
+                </el-collapse-item>
+                <el-collapse-item title="忘记管理员密码了" name="3">
+                  <p>登录后可在「系统设置」页直接改（无需重启服务）。若已经登不进去，用环境变量
+                    <code class="mono">ADMIN_USERNAME</code> / <code class="mono">ADMIN_PASSWORD</code>
+                    重启服务端做引导；用户名不存在时会自动补建这个管理员账号。</p>
+                </el-collapse-item>
+                <el-collapse-item title="数据怎么备份 / 迁移" name="4">
+                  <p>全部数据都在 NAS 的应用目录（<code class="mono">/vol1/@appcenter/xiaozhi-im</code>）下：
+                    数据库、上传的文件、以及 <code class="mono">docker/.env</code> 配置。
+                    定期备份 <code class="mono">data/</code> 目录即可，迁机时整个目录搬过去。</p>
+                </el-collapse-item>
+                <el-collapse-item title="手机装了新版本，但界面还是旧的" name="5">
+                  <p>安卓在 <code class="mono">versionCode</code> 没增长时会<b>静默跳过</b>覆盖安装，看起来像没更新。
+                    请确认安装的是交付目录里版本号最高的那个 APK。</p>
+                </el-collapse-item>
+                <el-collapse-item title="客户端连不上服务器" name="6">
+                  <p>先在 App 内「服务器设置」确认地址正确（内网一般是 <code class="mono">http://192.168.31.44:3602</code>）。
+                    若人在外面，需要走外网访问通道；服务端本身只监听 3602 一个端口。</p>
+                </el-collapse-item>
+              </el-collapse>
+            </section>
+
+            <section class="help-sec">
+              <h3>八、端口与目录速查</h3>
+              <table class="help-table">
+                <thead><tr><th style="width:200px">项目</th><th>值</th></tr></thead>
+                <tbody>
+                  <tr><td>服务端端口</td><td><code class="mono">3602</code>（管理台在 <code class="mono">/admin/</code>）</td></tr>
+                  <tr><td>自建中继端口</td><td><code class="mono">3478/udp</code>、<code class="mono">3478/tcp</code>、<code class="mono">49160-49200/udp</code>（仅自建 coturn 方案需要放通）</td></tr>
+                  <tr><td>应用目录</td><td><code class="mono">/vol1/@appcenter/xiaozhi-im</code></td></tr>
+                  <tr><td>配置与数据</td><td><code class="mono">docker/.env</code>（配置）、<code class="mono">data/</code>（数据库与文件）</td></tr>
+                  <tr><td>中继自检脚本</td><td><code class="mono">deploy/turn_status.py</code>（只读，一条命令查完中继状态）</td></tr>
+                </tbody>
+              </table>
+            </section>
           </el-card>
         </div>
 
@@ -1580,4 +1773,34 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .hint { color: #909399; font-size: 12px; }
 .mono { font-family: Consolas, Monaco, "Courier New", monospace; font-size: 12px; background: #f5f7fa; padding: 1px 5px; border-radius: 4px; word-break: break-all; }
 .el-menu { border-right: none !important; }
+
+/* ---- 仪表盘「系统说明」卡头（标题 + 右侧入口按钮）---- */
+.card-hdr { display: flex; align-items: center; justify-content: space-between; }
+
+/* ---- 系统帮助页 ---- */
+.help { max-width: 980px; }
+.help-sec { margin-bottom: 26px; }
+.help-sec:last-child { margin-bottom: 4px; }
+.help-sec h3 {
+  font-size: 15px; font-weight: 700; color: #0F2620;
+  margin: 0 0 10px; padding-left: 9px;
+  border-left: 3px solid #10B981; line-height: 1.2;
+}
+.help-sec p { margin: 6px 0; font-size: 13.5px; line-height: 1.75; color: #4b5563; }
+.help-sec ul, .help-sec ol { margin: 6px 0; padding-left: 22px; }
+.help-sec li { font-size: 13.5px; line-height: 1.85; color: #4b5563; }
+.help-table { width: 100%; border-collapse: collapse; margin: 8px 0 4px; }
+.help-table th, .help-table td {
+  border: 1px solid #ebeef5; padding: 8px 10px;
+  font-size: 13px; line-height: 1.7; text-align: left; vertical-align: top; color: #4b5563;
+}
+.help-table th { background: #f7faf9; color: #0F2620; font-weight: 600; white-space: nowrap; }
+.help-table td code.mono { white-space: nowrap; }
+.help-tip {
+  background: #f0f9f4; border-left: 3px solid #10B981;
+  padding: 8px 12px; border-radius: 0 6px 6px 0;
+  font-size: 13px !important; color: #2f6b55 !important;
+}
+.help-sec .el-collapse-item__content { padding-bottom: 12px; }
+.help-sec .el-steps { margin: 10px 0 16px; }
 </style>

@@ -191,6 +191,11 @@ ensureColumn('users', 'birthday', 'birthday TEXT');
 // 存在 friendships 上而不是单独建表：一条申请就是一行，天然一一对应
 ensureColumn('friendships', 'message', 'message TEXT');
 
+// ---- 好友备注（我给对方起的名字）----
+// 同样是「我这一侧」的属性，所以存在 (user_id=我, friend_id=对方) 这一行上。
+// 对方看不到、也不会被对方的改名影响；空/NULL 表示没设备注。
+ensureColumn('friendships', 'remark', 'remark TEXT');
+
 // ---- 好友申请附言模板 ----
 // 每个用户维护自己的常用语；UNIQUE(user_id,content) 防重复添加同一条
 db.exec(`

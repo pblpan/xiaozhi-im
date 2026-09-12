@@ -48,6 +48,12 @@ WIN_MARKS = [
     'stun.chat.bilibili.com',   # 备用 STUN
     'AppLifecycleListener',     # 回到前台主动探活（AOT 保留类名）
     'socket.dart',              # 长连接保活逻辑所在文件
+    # ---- v0.6.2 好友备注（只自己可见，不改对方昵称）----
+    'setFriendRemark',          # 设置备注 API（方法名）
+    'noteName',                 # 「我看到的名称」getter：有备注用备注
+    'hasRemark',                # 是否设过备注（决定列表副标题展示）
+    '/remark',                  # 备注接口路径片段（字符串常量）
+    'friends_new.dart',         # 「新的朋友」页（备注入口所在文件）
 ]
 
 # 必须**不再出现**的记号：功能下线 / 资源被替换。
@@ -188,7 +194,7 @@ def check_apk(zf, marks):
 
 
 def check_fpk(path):
-    """校验服务端 fpk：版本号 + v0.6.1/v0.6.2 关键修复点是否都打进去了。
+    """校验服务端 fpk：版本号 + v0.6.1/v0.6.2/v0.6.3 关键修复点是否都打进去了。
 
     fpk 是 tar.gz；app.tgz 里再套一层，所以拆两次。
     """
@@ -196,16 +202,24 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.6.2', 'v0.6.2'],
-        'src/package.json': ['"version": "0.6.2"'],
-        'src/src/routes/call.js': ['iceServers', 'turnConfigured'],
+        'manifest': ['version', '0.6.3', 'v0.6.3'],
+        'src/package.json': ['"version": "0.6.3"'],
+        'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         'src/src/call.js': ['OFFLINE_GRACE_MS', 'pendingForUser', 'handleOnline'],
         'src/src/ws.js': ['isAlive', "case 'ping'"],
-        'src/src/config.js': ['TURN_URLS', 'iceServers'],
+        # v0.6.3：Cloudflare 托管中继（免端口映射）—— 现场签凭据 + 缓存
+        'src/src/config.js': ['TURN_URLS', 'iceServers', 'CF_TURN_KEY_ID',
+                              'cfTurnServers', 'turnInfo', 'stun.cloudflare.com'],
+        # v0.6.3：好友备注（落在我这一侧，对方看不到）
+        'src/src/db.js': ["ensureColumn('friendships', 'remark'"],
+        'src/src/routes/friends.js': ["'/:friendId/remark'", 'MAX_REMARK'],
+        'src/src/chat.js': ['remarkOf'],
         'docker/coturn/entrypoint.sh': ['detect_lan_ip', 'EXTERNAL_IP_VALUE'],
         'docker/coturn/turnserver.conf': ['__EXTERNAL_IP__', '__MIN_PORT__'],
-        'docker/docker-compose.yaml': ['coturn', 'TURN_INTERNAL_IP', 'TURN_URLS'],
-        'cmd/_xiaozhi_common.sh': ['transport=tcp', 'transport=udp'],
+        'docker/docker-compose.yaml': ['coturn', 'TURN_INTERNAL_IP', 'TURN_URLS',
+                                       'CF_TURN_KEY_ID'],
+        'cmd/_xiaozhi_common.sh': ['transport=tcp', 'transport=udp',
+                                   'CF_TURN_KEY_ID', 'OLD_CF_ID'],
     }
     # 必须彻底消失的（v0.6.1 起）。
     # 注意用带 scheme 的完整写法：config.js 里有一条注释提到过
@@ -239,6 +253,17 @@ def check_fpk(path):
             all_ok = False
         else:
             print('%-30s 全部命中 ✓' % name)
+
+    # 管理台是 vite 构建产物，文件名带内容哈希，写不死；
+    # 按目录扫一遍，确认新的「系统帮助」页真的打进包里了。
+    admin_js = [n for n, d in blob.items()
+                if n.startswith('src/public/assets/') and n.endswith('.js')]
+    help_hit = [n for n in admin_js
+                if '系统帮助'.encode('utf-8') in blob[n]
+                and 'Cloudflare TURN'.encode('utf-8') in blob[n]]
+    print('%-30s %s' % ('src/public/assets(系统帮助页)',
+                        '命中 ✓' if help_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(help_hit)
 
     hits = []
     for name, data in blob.items():

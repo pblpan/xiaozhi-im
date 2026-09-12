@@ -14,6 +14,10 @@ class User {
   final String? region; // 地区
   final String? birthday; // 生日，'YYYY-MM-DD'
 
+  /// 好友备注：**我给对方起的名字**，只有我自己看得到。
+  /// 只在「我的好友 / 单聊」这类我这一侧的语境里有值。
+  final String? remark;
+
   const User({
     required this.id,
     required this.username,
@@ -25,6 +29,7 @@ class User {
     this.gender,
     this.region,
     this.birthday,
+    this.remark,
   });
 
   factory User.fromJson(Map<String, dynamic> m) => User(
@@ -38,10 +43,34 @@ class User {
         gender: m['gender'],
         region: m['region'],
         birthday: m['birthday'],
+        remark: m['remark'],
+      );
+
+  User copyWith({String? remark}) => User(
+        id: id,
+        username: username,
+        nickname: nickname,
+        avatar: avatar,
+        role: role,
+        isBot: isBot,
+        signature: signature,
+        gender: gender,
+        region: region,
+        birthday: birthday,
+        remark: remark,
       );
 
   String get display =>
       (nickname != null && nickname!.isNotEmpty) ? nickname! : username;
+
+  /// 我看到的名称：有备注用备注，没有就退回昵称/账号。
+  /// 只在我这一侧的界面用（好友列表、单聊标题）；群成员一律用 [display]，
+  /// 因为群里的名字不该被你给某人的备注改写。
+  String get noteName =>
+      (remark != null && remark!.isNotEmpty) ? remark! : display;
+
+  /// 是否设过备注（列表里据此决定要不要把原昵称显示成副标题）
+  bool get hasRemark => remark != null && remark!.isNotEmpty;
 
   /// 性别展示文案（未设置返回 null，面板里显示「未设置」）
   String? get genderLabel {

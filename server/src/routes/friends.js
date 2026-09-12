@@ -26,6 +26,7 @@ function createDM(a, b) {
 const USER_COLS = 'u.id,u.username,u.nickname,u.avatar,u.signature';
 const MAX_TEMPLATES = 10;
 const MAX_MESSAGE = 100;
+const MAX_REMARK = 30;
 
 const brief = (id) => db.prepare(`SELECT id,username,nickname,avatar,signature FROM users WHERE id=?`).get(id);
 
@@ -97,6 +98,31 @@ router.delete('/templates/:id', (req, res) => {
 });
 
 // ============================================================
+// 好友备注（我给对方起的名字，只对我可见）
+// ============================================================
+
+/// 设置 / 清空备注。remark 传空串即清除；备注是「我这一侧」的私有属性，
+/// 所以只落在 (user_id=我, friend_id=对方) 这一行，不广播给对方。
+router.put('/:friendId/remark', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const friendId = Number(req.params.friendId);
+  if (!Number.isInteger(friendId) || friendId <= 0) return res.status(400).json({ error: '好友 id 不合法' });
+  if (friendId === uid) return res.status(400).json({ error: '不能给自己设备注' });
+
+  const remark = String(req.body?.remark ?? '').trim();
+  if ([...remark].length > MAX_REMARK) return res.status(400).json({ error: `备注最多 ${MAX_REMARK} 个字` });
+
+  // 必须是已接受的好友关系才能备注（申请中/已删除都不行）
+  const row = db.prepare("SELECT id FROM friendships WHERE user_id=? AND friend_id=? AND status='accepted'")
+    .get(uid, friendId);
+  if (!row) return res.status(404).json({ error: '你们还不是好友' });
+
+  db.prepare('UPDATE friendships SET remark=? WHERE user_id=? AND friend_id=?')
+    .run(remark || null, uid, friendId);
+  res.json({ ok: true, friendId, remark: remark || null });
+});
+
+// ============================================================
 // 好友申请
 // ============================================================
 
@@ -138,11 +164,13 @@ router.post('/request', (req, res) => {
 });
 
 // 我的好友 + 待处理请求（含附言、申请人资料、申请时间）
+// remark 一并返回：客户端列表要按「我看到的名称」显示与排序
 router.get('/', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
-  const friends = db.prepare(`SELECT ${USER_COLS}, f.created_at FROM friendships f
+  const friends = db.prepare(`SELECT ${USER_COLS}, f.remark, f.created_at FROM friendships f
     JOIN users u ON u.id=f.friend_id
-    WHERE f.user_id=? AND f.status='accepted' ORDER BY u.nickname`).all(uid);
+    WHERE f.user_id=? AND f.status='accepted'
+    ORDER BY COALESCE(NULLIF(f.remark,''), u.nickname, u.username)`).all(uid);
   const pending = db.prepare(`SELECT ${USER_COLS}, f.message, f.created_at FROM friendships f
     JOIN users u ON u.id=f.user_id
     WHERE f.friend_id=? AND f.status='pending' ORDER BY f.created_at DESC`).all(uid);

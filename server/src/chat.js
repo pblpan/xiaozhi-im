@@ -273,7 +273,20 @@ function readState(conversationId) {
     .all(conversationId);
 }
 
-/** 取会话展示名（单聊=对方昵称，群聊=群名） */
+/**
+ * 取「我给某人起的备注」（好友备注）。
+ *
+ * 备注是 owner 这一侧的私有属性，存在 friendships(user_id=owner, friend_id=peer)
+ * 这一行上，对方看不到。没设备注时返回 null，调用方用
+ * `remark || nickname || username` 兜底成原来的展示名。
+ */
+function remarkOf(ownerId, peerId) {
+  const r = db.prepare('SELECT remark FROM friendships WHERE user_id = ? AND friend_id = ?')
+    .get(ownerId, peerId);
+  return r && r.remark ? r.remark : null;
+}
+
+/** 取会话展示名（单聊=我给对方的备注/对方昵称，群聊=群名） */
 function conversationTitle(conversationId, uid) {
   const c = db.prepare('SELECT id, type FROM conversations WHERE id = ?').get(conversationId);
   if (!c) return { id: conversationId, type: null, title: null };
@@ -281,7 +294,13 @@ function conversationTitle(conversationId, uid) {
     const other = db.prepare(`SELECT u.id, u.username, u.nickname FROM conversation_members cm
       JOIN users u ON u.id = cm.user_id
       WHERE cm.conversation_id = ? AND cm.user_id != ?`).get(conversationId, uid);
-    return { id: c.id, type: 'dm', title: other ? (other.nickname || other.username) : null, peer: other };
+    const remark = other ? remarkOf(uid, other.id) : null;
+    return {
+      id: c.id, type: 'dm',
+      // 备注优先：我给对方起的名字应该出现在聊天标题里
+      title: remark || (other ? (other.nickname || other.username) : null),
+      peer: other ? { ...other, remark } : other,
+    };
   }
   const g = db.prepare('SELECT name FROM groups WHERE conversation_id = ?').get(conversationId);
   return { id: c.id, type: 'group', title: g ? g.name : null };
@@ -464,7 +483,7 @@ function listFavorites({ userId, limit = 100, offset = 0 }) {
 module.exports = {
   sendMessage, withFileInfo,
   recallMessage, markRead, typing, readState,
-  conversationTitle, searchMessages,
+  conversationTitle, searchMessages, remarkOf,
   forwardMessage, togglePin, pinnedMessage, canPin,
   addFavorite, removeFavorite, listFavorites,
   normalizeMentions, mutedUntilOf, parseMentions, serializeMentions, mentionLike,

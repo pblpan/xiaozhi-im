@@ -169,7 +169,13 @@ class ImApi {
       await _post('/friends/reject', {'friendId': id});
 
   /// 好友列表 + 待处理申请（含认证附言）：{ friends: [...], pending: [...] }
+  /// friends 里每项带 remark（我给对方起的备注，可为 null）
   Future<Map<String, dynamic>> friends() async => await _get('/friends');
+
+  /// 设置 / 清空好友备注。传空串即清除，之后显示退回对方昵称。
+  /// 备注只有自己可见，对方那边不会变。
+  Future<Map<String, dynamic>> setFriendRemark(int friendId, String remark) async =>
+      await _put('/friends/$friendId/remark', {'remark': remark});
 
   // ---- 好友申请附言模板（人手一份，首次读取服务端会播种 3 条）----
   Future<List<dynamic>> friendTemplates() async => await _get('/friends/templates');

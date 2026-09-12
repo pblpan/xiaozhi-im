@@ -238,8 +238,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     try {
       final r = await ImApi().dm(u.id);
       if (!mounted) return;
+      // 用 noteName：设过备注就显示备注，跟会话列表的标题保持一致
       await _openChat(
-          Conversation(id: r['conversationId'], type: 'dm', title: u.display));
+          Conversation(id: r['conversationId'], type: 'dm', title: u.noteName));
     } catch (e) {
       _toast(_msg(e));
     }

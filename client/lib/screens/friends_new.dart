@@ -93,6 +93,62 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
     );
   }
 
+  /// 设置 / 修改 / 清除好友备注。
+  ///
+  /// 备注是「我这一侧」的私有属性：对方看不到，也不会改动对方的昵称。
+  /// 留空即清除，列表与单聊标题随即退回对方昵称。
+  Future<void> _editRemark(User u) async {
+    final ctl = TextEditingController(text: u.remark ?? '');
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('设置备注'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '只对你自己可见，对方看不到，也不会改掉对方的昵称。',
+              style: TextStyle(fontSize: 12.5, color: AppColors.textWeak, height: 1.4),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctl,
+              autofocus: true,
+              maxLength: 30,
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(
+                hintText: '给对方起个名字（留空恢复昵称）',
+                counterText: '',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (v) => Navigator.pop(ctx, v),
+            ),
+            const SizedBox(height: 8),
+            Text('对方昵称：${u.display}',
+                style: const TextStyle(fontSize: 12, color: AppColors.textWeak)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctl.text), child: const Text('保存')),
+        ],
+      ),
+    );
+    if (saved == null || !mounted) return;
+    final val = saved.trim();
+    if (val == (u.remark ?? '')) return; // 没改就别白跑一趟接口
+    try {
+      await ImApi().setFriendRemark(u.id, val);
+      _toast(val.isEmpty ? '已清除备注' : '备注已保存');
+      await _load();
+    } catch (e) {
+      _toast(_errText(e));
+    }
+  }
+
   @override
   Widget build(BuildContext context) => DefaultTabController(
         length: 2,
@@ -273,19 +329,43 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
             height: 1, indent: 74, endIndent: 14, color: AppColors.divider),
         itemBuilder: (_, i) {
           final u = _friends[i];
+          // 设过备注时，副标题把「原昵称」亮出来——不然过几天就忘了这人本来叫啥
+          final sub = u.hasRemark
+              ? (u.display == u.username
+                  ? '@${u.username}'
+                  : '${u.display} · @${u.username}')
+              : ((u.signature ?? '').isNotEmpty ? u.signature! : '@${u.username}');
           return ListTile(
-            leading: UserAvatar(name: u.display, size: 46, imageUrl: u.avatar),
-            title: Text(u.display,
+            leading: UserAvatar(name: u.noteName, size: 46, imageUrl: u.avatar),
+            title: Text(u.noteName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
             subtitle: Text(
-              (u.signature ?? '').isNotEmpty ? u.signature! : '@${u.username}',
+              sub,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 12.5, color: AppColors.textWeak),
             ),
-            trailing: const Icon(Icons.chat_bubble_outline_rounded,
-                size: 19, color: AppColors.textSub),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: u.hasRemark ? '修改备注' : '设置备注',
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(
+                    u.hasRemark ? Icons.sell_rounded : Icons.sell_outlined,
+                    size: 19,
+                    color: u.hasRemark ? AppColors.brand : AppColors.textSub,
+                  ),
+                  onPressed: () => _editRemark(u),
+                ),
+                const Icon(Icons.chat_bubble_outline_rounded,
+                    size: 19, color: AppColors.textSub),
+              ],
+            ),
             onTap: () => Navigator.pop(context, u),
+            onLongPress: () => _editRemark(u),
           );
         },
       ),

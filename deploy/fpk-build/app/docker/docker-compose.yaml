@@ -21,6 +21,12 @@ services:
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USER:-xiaozhi}
       - TURN_CREDENTIAL=${TURN_PASSWORD:-xiaozhi-turn-2026}
+      # Cloudflare Realtime TURN：只走出站、走 443/TLS，不需要任何端口映射，
+      # 免费额度 1TB/月。家宽没有公网 IP 时的首选通路。
+      # 凭据由服务端现签现发（GET /api/call/ice），客户端无需任何改动。
+      # 两个都留空则自动跳过，不影响启动。
+      - CF_TURN_KEY_ID=${CF_TURN_KEY_ID:-}
+      - CF_TURN_API_TOKEN=${CF_TURN_API_TOKEN:-}
     volumes:
       # 1) 持久化数据（DB + 上传文件），路径由 install_init 写入 docker/.env
       #    :-默认值兜底：万一 .env 没写好也不会让 fnOS compose 报 "invalid spec"
@@ -37,11 +43,13 @@ services:
   #  用 host 网络是刻意的：中继要占一段 UDP 端口（49160-49200），
   #  桥接模式得逐个映射，不如直接听宿主机。
   #
-  #  公网入口有两种打法（任选其一）：
+  #  公网入口有三种打法（任选其一，也可都用）：
   #   A) 家宽有公网 IP：路由器映射 3478/udp、3478/tcp、49160-49200/udp
-  #   B) 没有公网 IP：用 ZeroNews 开 UDP 隧道（L4），把上面这些端口
-  #      逐条映射出去，公网端口号尽量与内网保持一致
-  #  两条都没配的话，这个容器起来了也接不到外网 —— 但内网通话不受影响。
+  #   B) 支持 TCP/UDP 的隧道服务，把上面这些端口逐条映射出去，
+  #      公网端口号尽量与内网保持一致（ZeroNews 免费版不支持 TCP/UDP，要付费档）
+  #   C) 干脆不用这个容器：在上面 xiaozhi-im 服务里填 CF_TURN_KEY_ID /
+  #      CF_TURN_API_TOKEN，走 Cloudflare 的托管中继（免端口映射）
+  #  都没配的话，这个容器起来了也接不到外网 —— 但内网通话不受影响。
   # ---------------------------------------------------------------
   coturn:
     image: coturn/coturn:4.6-alpine

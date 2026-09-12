@@ -16,6 +16,9 @@ services:
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USER:-xiaozhi}
       - TURN_CREDENTIAL=${TURN_PASSWORD:-xiaozhi-turn-2026}
+      # Cloudflare Realtime TURN：免端口映射，免费额度 1TB/月
+      - CF_TURN_KEY_ID=${CF_TURN_KEY_ID:-}
+      - CF_TURN_API_TOKEN=${CF_TURN_API_TOKEN:-}
     volumes:
       - ./data:/data
 
