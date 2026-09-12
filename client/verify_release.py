@@ -79,6 +79,18 @@ WIN_MARKS = [
     #   '/api/client/config'、'/api/client/report-applied'  → 由 Config.baseUrl 拼接，
     #     只保留 '/api/client/' 之外的片段，完整串不存在
     #   教训与 onFirstFrameRendered 同源：判据必须挑**真能命中**的串，加之前先探测。
+    # ---- v0.9.0 动态模块（SPEC-动态配置与模块.md 第二期）----
+    # 全部经 2026-09-13 在 APK 双架构 libapp.so 上实测命中（ascii，标注除外）。
+    'ModuleRenderer',           # 8 种组件渲染器
+    'submitModule',             # 动态表单提交（api.dart 方法名）
+    'module_schema.dart',       # 客户端侧的**二次**校验（不信任服务端）
+    'module_renderer.dart',     # 渲染器实现
+    'module_hub.dart',          # 模块列表入口页
+    'module_page.dart',         # 单个模块页面
+    # ⚠️ 下面这些**实测搜不到，禁止当判据**（2026-09-13 探测确认）：
+    #   '/api/client/modules'、'kVersionForGate'、'fetchModules'、'listVisible'
+    #   → 路径由 Config.baseUrl 拼接 / 常量折叠，与 v0.8.0 那批同源问题
+    #   中文串（如「动态模块」）只在 UTF-16LE 下能搜到，跨产物不稳，也别用。
 ]
 
 # 必须**不再出现**的记号：功能下线 / 资源被替换。
@@ -227,8 +239,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.8.0', 'v0.8.0'],
-        'src/package.json': ['"version": "0.8.0"'],
+        'manifest': ['version', '0.9.0', 'v0.9.0'],
+        'src/package.json': ['"version": "0.9.0"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
@@ -251,7 +263,9 @@ def check_fpk(path):
                               'probeTurnCredentials', 'applyTurnCredentials',
                               'cfEnabled'],
         # v0.6.3：好友备注（落在我这一侧，对方看不到）
-        'src/src/db.js': ["ensureColumn('friendships', 'remark'"],
+        'src/src/db.js': ["ensureColumn('friendships', 'remark'",
+                          # v0.9.0：动态模块的两张表（定义 + 提交记录）
+                          'app_modules', 'module_submissions'],
         'src/src/routes/friends.js': ["'/:friendId/remark'", 'MAX_REMARK'],
         'src/src/chat.js': ['remarkOf'],
         # v0.6.5：管理台中继配置向导（读状态 / 校验 / 保存 / 移除）
@@ -259,7 +273,11 @@ def check_fpk(path):
         'src/src/routes/admin.js': ["'/turn'", "'/turn/verify'", 'envPath',
                                     'probeTurnCredentials', 'needRecreate',
                                     "'/client-config'", "'/client-config/rollback'",
-                                    "'/client-config/applied'", 'clientconfig'],
+                                    "'/client-config/applied'", 'clientconfig',
+                                    # v0.9.0：动态模块的 CRUD + 提交记录（第二期）
+                                    "'/modules'", "'/modules/:id'",
+                                    "'/modules/:id/submissions'", 'appmodules',
+                                    'capability', 'templates'],
         # v0.8.0：客户端配置下发（SPEC-动态配置与模块.md 第一期）
         #   clientconfig.js 是配置中心本体：白名单校验 / 只增不改的版本快照 /
         #   回滚=用旧内容发新版。routes/client.js 是下发出去的口子：
@@ -269,7 +287,26 @@ def check_fpk(path):
                                     'reportApplied', 'appliedStatus',
                                     'minClientVersion', 'announcements'],
         'src/src/routes/client.js': ['/bootstrap', '/config', '/report-applied',
-                                     'clientconfig'],
+                                     'clientconfig',
+                                     # v0.9.0：动态模块访问与提交（第二期）
+                                     "'/modules/:id'", "'/modules/:id/submit'",
+                                     'appmodules', 'listVisible'],
+        # v0.9.0：动态模块中心（SPEC-动态配置与模块.md 第二期）
+        #   这一期的全部风险都在"服务端下发的 schema 会不会把客户端搞崩 / 变成 SSRF 跳板"，
+        #   所以判据挑的是**三道闸门**的存在证据，而不是 CRUD 函数名：
+        #     COMPONENTS  → 封闭组件集（未知组件名一律拒绝）
+        #     ACTIONS / '/api/hooks/' → 动作白名单 + 只允许这个前缀（防任意 URL 转发）
+        #     COLORS      → 颜色只允许语义枚举（防写死色值把深色主题搞成黑底黑字）
+        #     sanitizeSubmission → 提交按服务端 schema 清洗，不信任客户端
+        'src/src/appmodules.js': ['COMPONENTS', 'ACTIONS', 'COLORS', 'FIELD_TYPES',
+                                  'NAV_PAGES', 'TEMPLATES', 'MAX_DEPTH', 'MAX_COMPONENTS',
+                                  "'/api/hooks/'", 'validateComponent', 'validateAction',
+                                  'listVisible', 'versionGte', 'collectFormFields',
+                                  'sanitizeSubmission', 'recordSubmission'],
+        # v0.9.0：动态模块的表（app_modules 定义 + module_submissions 提交记录）
+        # ⚠️ 这两个串要并进上面那条 db.js 的判据里 —— dict 字面量里同名键后者覆盖前者，
+        #    单开一条会把「好友备注」的判据悄悄吃掉。
+
         'docker/coturn/entrypoint.sh': ['detect_lan_ip', 'EXTERNAL_IP_VALUE'],
         'docker/coturn/turnserver.conf': ['__EXTERNAL_IP__', '__MIN_PORT__'],
         'docker/docker-compose.yaml': ['coturn', 'TURN_INTERNAL_IP', 'TURN_URLS',
@@ -384,6 +421,17 @@ def check_fpk(path):
                         '命中 ✓' if cfg_hit else '缺失 ✗'))
     all_ok = all_ok and bool(cfg_hit)
 
+    # v0.9.0：管理台「动态模块」页必须真打进静态产物。
+    # 判据用页面独有的中文 UI 串（左栏标题 + 模板库分隔 + 可见范围字段名），
+    # 与 App.vue 完全一致 —— 改文案就要同步改这里，反过来也提醒"页面还在"。
+    mm_hit = [n for n in admin_js
+              if '模块清单'.encode('utf-8') in blob[n]
+              and '模板库'.encode('utf-8') in blob[n]
+              and '可见范围'.encode('utf-8') in blob[n]]
+    print('%-30s %s' % ('src/public/assets(动态模块页)',
+                        '命中 ✓' if mm_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(mm_hit)
+
     # v0.8.0：bootstrap 免鉴权是硬要求，但绝不能因此把用户定向内容漏出去。
     # 判据：bootstrap 分支里不得出现 verifyToken（只有 /config 与上报才鉴权）。
     #   注意别用"文件里出现 verifyToken"来判 —— uidOf() 定义在文件上方，
@@ -396,6 +444,16 @@ def check_fpk(path):
     print('%-30s %s' % ('routes/client.js(bootstrap 免鉴权)',
                         '正确 ✓' if boot_ok else '异常 ✗'))
     all_ok = all_ok and boot_ok
+
+    # v0.9.0：bootstrap 还必须**只下发"所有人可见"的模块**。
+    # 免鉴权接口一旦带上"仅管理员可见"的模块列表，等于公开了权限结构；
+    # 判据是该分支里出现了 listVisible + visibleTo 过滤（证明真的筛过），
+    # 而不是直接把 appmodules.list() 全量吐出去。
+    boot_filter_ok = (b'listVisible' in boot_seg and b'visibleTo' in boot_seg
+                      and b'list()' not in boot_seg)
+    print('%-30s %s' % ('routes/client.js(bootstrap 过滤定向模块)',
+                        '正确 ✓' if boot_filter_ok else '异常 ✗'))
+    all_ok = all_ok and boot_filter_ok
 
     hits = []
     for name, data in blob.items():

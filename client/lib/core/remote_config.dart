@@ -6,12 +6,12 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
+import 'app_version.dart';
 import 'config.dart';
 import 'settings.dart';
 
-/// 应用版本号。发版时与 pubspec.yaml（version: X.Y.Z+N）、
-/// android/local.properties 三处一起改 —— 别只改一处。
-const String kAppVersion = '0.8.0';
+// re-export：历史代码从 remote_config.dart 里 import 版本号，保持可用
+export 'app_version.dart' show kAppVersion;
 
 /// 客户端配置服务（SPEC-动态配置与模块.md 第一期）
 ///

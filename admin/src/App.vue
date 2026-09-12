@@ -22,6 +22,7 @@
         <el-menu-item index="messages">消息管理</el-menu-item>
         <el-menu-item index="integrations">集成对接</el-menu-item>
         <el-menu-item index="clientconfig">客户端配置</el-menu-item>
+        <el-menu-item index="modules">动态模块</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
         <el-menu-item index="help">系统帮助</el-menu-item>
       </el-menu>
@@ -902,6 +903,351 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           </el-dialog>
         </div>
 
+        <!-- 动态模块（v0.9.0 第二期） -->
+        <div v-else-if="tab === 'modules'">
+          <el-alert type="success" :closable="false" style="margin-bottom:14px"
+            title="在这里拼页面 → 保存 → 客户端下拉刷新即可看到入口，无需重装 App。组件只允许 8 种，颜色只允许语义名（自动适配深色主题）。" />
+
+          <el-row :gutter="16">
+            <el-col :span="8">
+              <el-card>
+                <template #header>
+                  <div class="card-hdr">
+                    <span>模块清单（{{ mm.modules.length }}）</span>
+                    <div>
+                      <el-button size="small" @click="loadMm">刷新</el-button>
+                      <el-button size="small" type="primary" @click="newModule">新建</el-button>
+                    </div>
+                  </div>
+                </template>
+
+                <el-alert v-if="!mm.modules.length" type="info" :closable="false"
+                  title="还没有模块。可以从下面的「模板库」一键建一个开始。" />
+
+                <div v-for="m in mm.modules" :key="m.moduleId" class="mm-item"
+                  :class="{ 'mm-item-on': m.moduleId === mmSel }" @click="selectModule(m)">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <b>{{ m.title }}</b>
+                    <el-tag v-if="!m.enabled" size="small" type="info">已停用</el-tag>
+                    <el-tag v-if="m.minClientVersion" size="small" type="warning">需 {{ m.minClientVersion }}</el-tag>
+                  </div>
+                  <div class="hint">
+                    <code class="mono">{{ m.moduleId }}</code>
+                    · {{ (m.body || []).length }} 个内容块
+                    · {{ visibleLabel(m) }}
+                  </div>
+                </div>
+
+                <el-divider content-position="left">模板库</el-divider>
+                <div class="hint" style="margin-bottom:8px">
+                  一键载入一份可用的起始内容（模板定义在服务端，与校验规则同源，不会出现
+                  "模板本身不合法"的情况）。载入后确认无误再点保存。
+                </div>
+                <el-button v-for="t in mm.capability.templates" :key="t.id" size="small"
+                  style="margin:0 6px 6px 0" :title="t.desc"
+                  @click="applyTemplate(t)">{{ t.name }}</el-button>
+              </el-card>
+            </el-col>
+
+            <el-col :span="16">
+              <el-card>
+                <template #header>
+                  <div class="card-hdr">
+                    <span>{{ mmSel ? '编辑模块' : '新建模块' }}</span>
+                    <div>
+                      <el-button size="small" @click="mmJsonDlg = true" :disabled="!mmForm.moduleId">预览 JSON</el-button>
+                      <el-button size="small" :disabled="!mmSel" @click="openSubs(mmSel)">提交记录</el-button>
+                      <el-button size="small" :disabled="!mmSel" type="danger" plain @click="deleteModule(mmSel)">删除</el-button>
+                      <el-button size="small" type="primary" :loading="mmBusy" @click="saveModule">保存</el-button>
+                    </div>
+                  </div>
+                </template>
+
+                <el-form label-width="120px" label-position="left">
+                  <el-row :gutter="12">
+                    <el-col :span="12">
+                      <el-form-item label="模块 ID">
+                        <el-input v-model="mmForm.moduleId" :disabled="!!mmSel"
+                          placeholder="小写字母/数字/下划线，如 device_repair" />
+                      </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-form-item label="标题">
+                        <el-input v-model="mmForm.title" placeholder="显示在应用列表里" />
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+                  <el-row :gutter="12">
+                    <el-col :span="12">
+                      <el-form-item label="图标">
+                        <el-select v-model="mmForm.icon" style="width:100%">
+                          <el-option v-for="i in mm.capability.icons" :key="i" :label="i" :value="i" />
+                        </el-select>
+                      </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-form-item label="排序">
+                        <el-input-number v-model="mmForm.sort" :min="0" :max="9999" />
+                        <span class="hint" style="margin-left:8px">数字小的排前面</span>
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+                  <el-row :gutter="12">
+                    <el-col :span="12">
+                      <el-form-item label="最低客户端版本">
+                        <el-input v-model="mmForm.minClientVersion" placeholder="如 0.9.0；留空 = 不限制" />
+                      </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-form-item label="启用">
+                        <el-switch v-model="mmForm.enabled" active-text="下发" inactive-text="停用" />
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+                  <el-form-item label="可见范围">
+                    <div style="width:100%">
+                      <el-select v-model="mmForm.roles" multiple placeholder="按角色（留空 = 不限）" style="width:100%;margin-bottom:6px">
+                        <el-option label="管理员 admin" value="admin" />
+                        <el-option label="普通用户 user" value="user" />
+                      </el-select>
+                      <el-select v-model="mmForm.userIds" multiple filterable placeholder="按用户（留空 = 不限）" style="width:100%">
+                        <el-option v-for="u in users" :key="u.id"
+                          :label="(u.nickname || u.username) + ' #' + u.id" :value="u.id" />
+                      </el-select>
+                      <div class="hint">
+                        角色和用户都留空 = 所有人可见（会写进免鉴权的 bootstrap）；只要填了任一项，就变成需登录才下发。
+                      </div>
+                    </div>
+                  </el-form-item>
+
+                  <el-divider content-position="left">页面内容（{{ mmForm.body.length }} / {{ mm.capability.maxComponents }}）</el-divider>
+
+                  <div v-for="(c, i) in mmForm.body" :key="i" class="mm-comp">
+                    <div class="mm-comp-hdr">
+                      <el-tag size="small">{{ compLabel(c.component) }}</el-tag>
+                      <div>
+                        <el-button size="small" text :disabled="i === 0" @click="moveComp(i, -1)">上移</el-button>
+                        <el-button size="small" text :disabled="i === mmForm.body.length - 1" @click="moveComp(i, 1)">下移</el-button>
+                        <el-button size="small" text type="danger" @click="mmForm.body.splice(i, 1)">删除</el-button>
+                      </div>
+                    </div>
+
+                    <!-- text -->
+                    <template v-if="c.component === 'text'">
+                      <el-input v-model="c.text" type="textarea" :rows="2" placeholder="要显示的文字" />
+                      <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+                        <el-input-number v-model="c.size" :min="8" :max="40" />
+                        <el-select v-model="c.color" style="width:130px">
+                          <el-option v-for="x in mm.capability.colors" :key="x" :label="x" :value="x" />
+                        </el-select>
+                        <el-select v-model="c.align" style="width:110px">
+                          <el-option label="左" value="left" />
+                          <el-option label="中" value="center" />
+                          <el-option label="右" value="right" />
+                        </el-select>
+                      </div>
+                    </template>
+
+                    <!-- card -->
+                    <template v-else-if="c.component === 'card'">
+                      <div style="display:flex;gap:8px">
+                        <el-input v-model="c.title" placeholder="卡片标题" />
+                        <el-input v-model="c.subtitle" placeholder="副标题" />
+                        <el-select v-model="c.accent" style="width:140px">
+                          <el-option v-for="x in mm.capability.colors" :key="x" :label="x" :value="x" />
+                        </el-select>
+                      </div>
+                      <div class="hint" style="margin:8px 0 4px">卡内组件（{{ (c.children || []).length }}）</div>
+                      <div v-for="(cc, ci) in c.children" :key="ci" class="mm-comp" style="margin-bottom:6px">
+                        <div class="mm-comp-hdr">
+                          <el-tag size="small" type="info">{{ compLabel(cc.component) }}</el-tag>
+                          <el-button size="small" text type="danger" @click="c.children.splice(ci, 1)">删除</el-button>
+                        </div>
+                        <template v-if="cc.component === 'text'">
+                          <el-input v-model="cc.text" type="textarea" :rows="2" />
+                          <el-select v-model="cc.color" style="width:140px;margin-top:6px">
+                            <el-option v-for="x in mm.capability.colors" :key="x" :label="x" :value="x" />
+                          </el-select>
+                        </template>
+                        <template v-else-if="cc.component === 'list'">
+                          <el-input v-model="cc.dataPath" placeholder="数据路径，如 data.items" style="margin-bottom:6px" />
+                          <el-input v-model="cc.itemTemplate.title" placeholder="标题模板，如 {{name}}" style="margin-bottom:6px" />
+                          <el-input v-model="cc.itemTemplate.subtitle" placeholder="副标题模板" style="margin-bottom:6px" />
+                          <el-input v-model="cc.itemTemplate.trailing" placeholder="右侧文字模板" />
+                        </template>
+                        <template v-else-if="cc.component === 'table'">
+                          <el-input v-model="cc.dataPath" placeholder="数据路径，如 data.rows" style="margin-bottom:6px" />
+                          <div v-for="(col, xi) in cc.columns" :key="xi" style="display:flex;gap:6px;margin-bottom:6px">
+                            <el-input v-model="col.key" placeholder="字段名" />
+                            <el-input v-model="col.label" placeholder="表头文字" />
+                            <el-button size="small" text type="danger" @click="cc.columns.splice(xi, 1)">删</el-button>
+                          </div>
+                          <el-button size="small" @click="cc.columns.push({ key: '', label: '' })">+ 加一列</el-button>
+                        </template>
+                        <template v-else-if="cc.component === 'chart'">
+                          <el-input v-model="cc.dataPath" placeholder="数据路径" style="margin-bottom:6px" />
+                          <div style="display:flex;gap:6px">
+                            <el-input v-model="cc.xKey" placeholder="X 字段" />
+                            <el-input v-model="cc.yKey" placeholder="Y 字段" />
+                            <el-select v-model="cc.kind" style="width:120px">
+                              <el-option v-for="k in mm.capability.chartKinds" :key="k" :label="k" :value="k" />
+                            </el-select>
+                          </div>
+                        </template>
+                        <template v-else-if="cc.component === 'action'">
+                          <el-input v-model="cc.label" placeholder="按钮文字" style="margin-bottom:6px" />
+                          <div class="mm-act">
+                            <el-select v-model="cc.onTap.action" style="width:220px">
+                              <el-option v-for="a in mmActionTypes" :key="a.value" :label="a.label" :value="a.value" />
+                            </el-select>
+                            <template v-if="cc.onTap.action === 'api' || cc.onTap.action === 'submit'">
+                              <el-input v-model="cc.onTap.path" placeholder="/api/hooks/xxx（只允许这个前缀）" />
+                              <el-select v-model="cc.onTap.method" style="width:100px">
+                                <el-option label="GET" value="GET" />
+                                <el-option label="POST" value="POST" />
+                              </el-select>
+                            </template>
+                            <el-select v-else-if="cc.onTap.action === 'navigate'" v-model="cc.onTap.page" style="width:180px">
+                              <el-option v-for="p in mm.capability.navPages" :key="p" :label="p" :value="p" />
+                            </el-select>
+                            <el-input v-else-if="cc.onTap.action === 'copy'" v-model="cc.onTap.text" placeholder="要复制的文字" />
+                            <el-input v-else v-model="cc.onTap.url" placeholder="https://…（只允许 https）" />
+                          </div>
+                        </template>
+                        <template v-else-if="cc.component === 'form'">
+                          <div class="hint">表单请放在最外层（卡内表单在客户端也能渲染，但管理台暂不提供编辑，避免嵌套过深）。</div>
+                        </template>
+                        <template v-else-if="cc.component === 'divider'">
+                          <div class="hint">分隔线，无需配置</div>
+                        </template>
+                      </div>
+                      <el-button size="small" @click="addChild(c)">+ 加卡内组件</el-button>
+                    </template>
+
+                    <!-- list -->
+                    <template v-else-if="c.component === 'list'">
+                      <el-input v-model="c.dataPath" placeholder="数据路径，如 data.items（服务端算好）" style="margin-bottom:6px" />
+                      <el-input v-model="c.itemTemplate.title" placeholder="标题模板，如 {{name}}" style="margin-bottom:6px" />
+                      <el-input v-model="c.itemTemplate.subtitle" placeholder="副标题模板" style="margin-bottom:6px" />
+                      <el-input v-model="c.itemTemplate.trailing" placeholder="右侧文字模板" />
+                      <div class="hint">模板里用「双大括号 + 字段名」写占位符，服务端数据里的同名字段会被替换进来。</div>
+                    </template>
+
+                    <!-- table -->
+                    <template v-else-if="c.component === 'table'">
+                      <el-input v-model="c.dataPath" placeholder="数据路径，如 data.rows" style="margin-bottom:6px" />
+                      <div v-for="(col, xi) in c.columns" :key="xi" style="display:flex;gap:6px;margin-bottom:6px">
+                        <el-input v-model="col.key" placeholder="字段名" />
+                        <el-input v-model="col.label" placeholder="表头文字" />
+                        <el-input-number v-model="col.width" :min="40" :max="400" placeholder="宽" />
+                        <el-button size="small" text type="danger" @click="c.columns.splice(xi, 1)">删</el-button>
+                      </div>
+                      <el-button size="small" @click="c.columns.push({ key: '', label: '' })">+ 加一列</el-button>
+                    </template>
+
+                    <!-- chart -->
+                    <template v-else-if="c.component === 'chart'">
+                      <el-input v-model="c.dataPath" placeholder="数据路径，如 data.rows" style="margin-bottom:6px" />
+                      <div style="display:flex;gap:6px">
+                        <el-input v-model="c.xKey" placeholder="X 轴字段" />
+                        <el-input v-model="c.yKey" placeholder="Y 轴字段" />
+                        <el-select v-model="c.kind" style="width:140px">
+                          <el-option v-for="k in mm.capability.chartKinds" :key="k" :label="k === 'bar' ? '柱状 bar' : '折线 line'" :value="k" />
+                        </el-select>
+                      </div>
+                    </template>
+
+                    <!-- action -->
+                    <template v-else-if="c.component === 'action'">
+                      <el-input v-model="c.label" placeholder="按钮文字" style="margin-bottom:6px" />
+                      <div class="mm-act">
+                        <el-select v-model="c.onTap.action" style="width:220px">
+                          <el-option v-for="a in mmActionTypes" :key="a.value" :label="a.label" :value="a.value" />
+                        </el-select>
+                        <template v-if="c.onTap.action === 'api' || c.onTap.action === 'submit'">
+                          <el-input v-model="c.onTap.path" placeholder="/api/hooks/xxx（只允许这个前缀）" />
+                          <el-select v-model="c.onTap.method" style="width:100px">
+                            <el-option label="GET" value="GET" />
+                            <el-option label="POST" value="POST" />
+                          </el-select>
+                        </template>
+                        <el-select v-else-if="c.onTap.action === 'navigate'" v-model="c.onTap.page" style="width:180px">
+                          <el-option v-for="p in mm.capability.navPages" :key="p" :label="p" :value="p" />
+                        </el-select>
+                        <el-input v-else-if="c.onTap.action === 'copy'" v-model="c.onTap.text" placeholder="要复制的文字" />
+                        <el-input v-else v-model="c.onTap.url" placeholder="https://…（只允许 https）" />
+                      </div>
+                      <div class="hint">接口路径必须以 <code class="mono">/api/hooks/</code> 开头；上游地址在「上游接口」里登记（第三期）。</div>
+                    </template>
+
+                    <!-- form -->
+                    <template v-else-if="c.component === 'form'">
+                      <div v-for="(f, fi) in c.fields" :key="fi" class="mm-field">
+                        <div style="display:flex;gap:6px;margin-bottom:6px">
+                          <el-input v-model="f.key" placeholder="字段名（英文，如 device）" />
+                          <el-input v-model="f.label" placeholder="显示名称" />
+                          <el-select v-model="f.type" style="width:140px">
+                            <el-option v-for="t in mm.capability.fieldTypes" :key="t" :label="t" :value="t" />
+                          </el-select>
+                          <el-checkbox v-model="f.required">必填</el-checkbox>
+                          <el-button size="small" text type="danger" @click="c.fields.splice(fi, 1)">删除</el-button>
+                        </div>
+                        <template v-if="f.type === 'select'">
+                          <div v-for="(o, oi) in f.options" :key="oi" style="display:flex;gap:6px;margin-bottom:6px">
+                            <el-input v-model="o.label" placeholder="选项文字" />
+                            <el-input v-model="o.value" placeholder="提交值" />
+                            <el-button size="small" text type="danger" @click="f.options.splice(oi, 1)">删</el-button>
+                          </div>
+                          <el-button size="small" @click="f.options.push({ label: '', value: '' })">+ 加选项</el-button>
+                        </template>
+                        <el-input v-else v-model="f.placeholder" placeholder="输入提示（可空）" />
+                      </div>
+                      <el-button size="small" @click="c.fields.push({ key: '', label: '', type: 'text', required: false, options: [] })">
+                        + 加字段
+                      </el-button>
+                      <div class="hint">
+                        提交的数据会先由服务端按这里的字段清单清洗 —— 客户端多传的字段一律丢弃。
+                      </div>
+                    </template>
+
+                    <template v-else-if="c.component === 'divider'">
+                      <div class="hint">分隔线，无需配置</div>
+                    </template>
+
+                    <template v-else>
+                      <el-alert type="error" :closable="false" title="未知组件类型，保存会被服务端拒绝" />
+                    </template>
+                  </div>
+
+                  <div style="margin-top:12px">
+                    <span class="hint" style="margin-right:8px">添加组件：</span>
+                    <el-button v-for="k in mm.capability.components" :key="k" size="small"
+                      @click="addComp(k)">{{ compLabel(k) }}</el-button>
+                  </div>
+                </el-form>
+              </el-card>
+            </el-col>
+          </el-row>
+
+          <el-dialog v-model="mmJsonDlg" title="模块定义 JSON（这就是客户端会收到的内容）" width="720px">
+            <pre class="mm-json">{{ mmJson }}</pre>
+          </el-dialog>
+
+          <el-dialog v-model="mmSubsDlg" title="提交记录" width="760px">
+            <el-table :data="mmSubs" size="small" max-height="420">
+              <el-table-column prop="nickname" label="提交人" width="120" />
+              <el-table-column label="提交内容" min-width="300">
+                <template #default="{ row }"><code class="mono">{{ JSON.stringify(row.data) }}</code></template>
+              </el-table-column>
+              <el-table-column label="时间" width="160">
+                <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+              </el-table-column>
+            </el-table>
+            <el-alert v-if="!mmSubs.length" type="info" :closable="false"
+              title="还没有提交记录。客户端提交后这里会出现（字段已由服务端按 schema 白名单清洗）。" />
+          </el-dialog>
+        </div>
+
         <!-- 系统设置 -->
         <div v-else-if="tab === 'settings'">
           <el-row :gutter="16">
@@ -1484,6 +1830,7 @@ async function loadTab() {
   else if (tab.value === 'messages') await loadMessages();
   else if (tab.value === 'integrations') await loadIntegrations();
   else if (tab.value === 'clientconfig') { await loadCc(); await loadCcApplied(); }
+  else if (tab.value === 'modules') { await loadMm(); if (!users.value.length) await loadUsers(); }
   else if (tab.value === 'settings') await loadInfo();
 }
 async function loadUsers() { users.value = (await api.get('/admin/users')).data; }
@@ -1612,6 +1959,201 @@ async function rollbackCc(v) {
   } catch (e) {
     ElMessage.error('回滚失败：' + (e.response?.data?.error || e.message));
   }
+}
+
+// ====== 动态模块（v0.9.0 第二期） ======
+// 设计取向：管理台**不**做"自由 JSON 编辑"，只提供结构化表单。
+// 因为服务端 schema 校验是硬约束（未知组件/写死颜色/非 hooks 路径一律拒绝），
+// 让管理员手写 JSON 等于把校验错误留到点保存时才暴露，体验很差。
+const mm = ref({
+  modules: [],
+  capability: {
+    components: [], colors: [], fieldTypes: [], actions: [],
+    navPages: [], icons: [], chartKinds: [], maxDepth: 4, maxComponents: 150,
+  },
+});
+const mmSel = ref('');        // 当前编辑中的 moduleId（'' = 新建）
+const mmBusy = ref(false);
+const mmJsonDlg = ref(false);
+const mmSubsDlg = ref(false);
+const mmSubs = ref([]);
+const mmForm = ref(newModuleForm());
+
+const mmActionTypes = [
+  { value: 'api', label: '调用接口 /api/hooks/*' },
+  { value: 'navigate', label: '跳内置页面' },
+  { value: 'copy', label: '复制文本' },
+  { value: 'openUrl', label: '打开网页（https）' },
+];
+
+/** 空的新模块：给一个能立刻保存的最小合法结构 */
+function newModuleForm() {
+  return {
+    moduleId: '',
+    title: '',
+    icon: 'dashboard',
+    sort: 0,
+    minClientVersion: '',
+    enabled: true,
+    roles: [],
+    userIds: [],
+    body: [blankComp('text')],
+  };
+}
+
+function blankComp(type) {
+  switch (type) {
+    case 'text': return { component: 'text', text: '', size: 15, color: 'defaultColor', align: 'left' };
+    case 'divider': return { component: 'divider' };
+    case 'card': return { component: 'card', title: '', subtitle: '', accent: 'primary', children: [] };
+    case 'list':
+      return { component: 'list', dataPath: 'data.items', itemTemplate: { title: '', subtitle: '', trailing: '' } };
+    case 'table': return { component: 'table', dataPath: 'data.rows', columns: [{ key: '', label: '', width: undefined }] };
+    case 'form': return { component: 'form', fields: [{ key: '', label: '', type: 'text', required: false, options: [] }] };
+    case 'action': return { component: 'action', label: '', color: 'primary', onTap: { action: 'api', path: '/api/hooks/', method: 'GET' } };
+    case 'chart': return { component: 'chart', dataPath: 'data.rows', xKey: 'x', yKey: 'y', kind: 'bar' };
+    default: return { component: type };
+  }
+}
+
+const COMP_LABEL = {
+  text: '文字', divider: '分隔线', card: '卡片', list: '列表',
+  table: '表格', form: '表单', action: '按钮', chart: '图表',
+};
+const compLabel = (k) => COMP_LABEL[k] || k;
+
+function visibleLabel(m) {
+  const r = m.visibleTo?.roles || [];
+  const u = m.visibleTo?.userIds || [];
+  if (!r.length && !u.length) return '所有人可见';
+  const parts = [];
+  if (r.length) parts.push('角色 ' + r.join('/'));
+  if (u.length) parts.push(`${u.length} 个指定用户`);
+  return parts.join(' + ');
+}
+
+async function loadMm() {
+  const { data } = await api.get('/admin/modules');
+  mm.value = data;
+}
+
+function selectModule(m) {
+  mmSel.value = m.moduleId;
+  mmForm.value = {
+    moduleId: m.moduleId,
+    title: m.title,
+    icon: m.icon || 'dashboard',
+    sort: m.sort || 0,
+    minClientVersion: m.minClientVersion || '',
+    enabled: !!m.enabled,
+    roles: [...(m.visibleTo?.roles || [])],
+    userIds: [...(m.visibleTo?.userIds || [])],
+    // 深拷贝：编辑中直接改 form，只有点保存才发出去（避免误改未保存就"生效"的错觉）
+    body: JSON.parse(JSON.stringify(m.body || [])),
+  };
+}
+
+function newModule() {
+  mmSel.value = '';
+  mmForm.value = newModuleForm();
+}
+
+function addComp(type) {
+  mmForm.value.body.push(blankComp(type));
+}
+
+function moveComp(i, d) {
+  const a = mmForm.value.body;
+  const j = i + d;
+  if (j < 0 || j >= a.length) return;
+  [a[i], a[j]] = [a[j], a[i]];
+}
+
+/** 卡内组件：只开放"不嵌套"的类型，避免管理台里做出 4 层嵌套后自己都看不明白 */
+function addChild(card) {
+  if (!card.children) card.children = [];
+  card.children.push(blankComp('text'));
+}
+
+/** 把表单模型转成要提交的 schema（与 appmodules.js 的 validate 对齐） */
+function mmPayload() {
+  const f = mmForm.value;
+  const out = {
+    moduleId: f.moduleId.trim(),
+    title: f.title.trim(),
+    icon: f.icon,
+    sort: Number(f.sort) || 0,
+    enabled: !!f.enabled,
+    minClientVersion: f.minClientVersion.trim() || null,
+    visibleTo: { roles: [...f.roles], userIds: [...f.userIds] },
+    body: JSON.parse(JSON.stringify(f.body)),
+  };
+  return out;
+}
+
+const mmJson = computed(() => JSON.stringify(mmPayload(), null, 2));
+
+async function saveModule() {
+  const f = mmForm.value;
+  if (!f.moduleId.trim()) return ElMessage.warning('请填写模块 ID');
+  if (!f.title.trim()) return ElMessage.warning('请填写标题');
+  mmBusy.value = true;
+  try {
+    const { data } = await api.post('/admin/modules', mmPayload());
+    ElMessage.success(`已保存「${data.module.title}」，客户端下拉刷新即可看到`);
+    mmSel.value = data.module.moduleId;
+    await loadMm();
+    const fresh = mm.value.modules.find((x) => x.moduleId === data.module.moduleId);
+    if (fresh) selectModule(fresh);
+  } catch (e) {
+    // 服务端校验失败会把原因写清楚（哪个组件、哪个字段），直接展示给管理员
+    ElMessage.error({ message: '保存失败：' + (e.response?.data?.error || e.message), duration: 6000 });
+  } finally {
+    mmBusy.value = false;
+  }
+}
+
+async function deleteModule(id) {
+  try {
+    await ElMessageBox.confirm(
+      `删除模块「${id}」？客户端下次刷新后入口就消失。提交记录会保留在数据库里。`,
+      '删除确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/admin/modules/${id}`);
+    ElMessage.success('已删除');
+    if (mmSel.value === id) newModule();
+    await loadMm();
+  } catch (e) {
+    ElMessage.error('删除失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+async function openSubs(id) {
+  try {
+    const { data } = await api.get(`/admin/modules/${id}/submissions`);
+    mmSubs.value = data.items || [];
+    mmSubsDlg.value = true;
+  } catch (e) {
+    ElMessage.error('读取提交记录失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+function applyTemplate(t) {
+  const m = JSON.parse(JSON.stringify(t.module));
+  mmSel.value = '';
+  mmForm.value = {
+    moduleId: m.moduleId,
+    title: m.title,
+    icon: m.icon || 'dashboard',
+    sort: m.sort || 0,
+    minClientVersion: m.minClientVersion || '',
+    enabled: m.enabled !== false,
+    roles: m.visibleTo?.roles || [],
+    userIds: m.visibleTo?.userIds || [],
+    body: m.body || [],
+  };
+  ElMessage.info(`已载入模板「${t.name}」，确认内容后点保存`);
 }
 
 // 监听 tab 切换
@@ -2262,6 +2804,16 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .stat-label { color: #909399; margin-top: 6px; }
 .page-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .hint { color: #909399; font-size: 12px; }
+
+/* ====== 动态模块编辑器（v0.9.0 第二期） ====== */
+.mm-item { padding: 9px 10px; border: 1px solid var(--el-border-color); border-radius: 6px; margin-bottom: 8px; cursor: pointer; }
+.mm-item:hover { border-color: var(--el-color-primary); }
+.mm-item-on { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.mm-comp { border: 1px solid var(--el-border-color); border-left: 3px solid var(--el-color-primary); border-radius: 6px; padding: 10px; margin-bottom: 10px; background: #fafcff; }
+.mm-comp-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.mm-act { display: flex; gap: 6px; flex-wrap: wrap; }
+.mm-field { border: 1px dashed var(--el-border-color); border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+.mm-json { max-height: 520px; overflow: auto; background: #f5f7fa; padding: 12px; border-radius: 6px; font-size: 12px; line-height: 1.5; }
 .mono { font-family: Consolas, Monaco, "Courier New", monospace; font-size: 12px; background: #f5f7fa; padding: 1px 5px; border-radius: 4px; word-break: break-all; }
 /* 向导里的命令块：整块可选中复制，长命令自动换行不撑破卡片 */
 .cmd-box { display: block; padding: 10px 12px; margin: 8px 0; border-radius: 6px; background: #f5f7fa; border: 1px solid #e4e7ed; white-space: pre-wrap; word-break: break-all; line-height: 1.7; user-select: all; }

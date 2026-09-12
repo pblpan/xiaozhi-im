@@ -233,6 +233,39 @@ CREATE TABLE IF NOT EXISTS config_applied (
 );
 `);
 
+// ---- 动态模块（v0.9.0 第二期）----
+// 管理员在管理台拼页面 → 客户端不重装就出现入口。schema 的合法性由
+// server/src/appmodules.js 在"发布时"严格校验，这里只负责存。
+db.exec(`
+CREATE TABLE IF NOT EXISTS app_modules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  module_id TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  icon TEXT,
+  schema TEXT NOT NULL,
+  min_client_version TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  sort INTEGER NOT NULL DEFAULT 0,
+  visible_roles TEXT NOT NULL DEFAULT '[]',
+  visible_user_ids TEXT NOT NULL DEFAULT '[]',
+  updated_at INTEGER NOT NULL,
+  updated_by TEXT
+);
+`);
+
+// 动态表单提交记录。payload 只存"按 schema 白名单清洗过"的字段，
+// 客户端多传的一律不落库（防止伪造字段污染数据）。
+db.exec(`
+CREATE TABLE IF NOT EXISTS module_submissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  module_id TEXT NOT NULL,
+  user_id INTEGER,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_submissions_module ON module_submissions(module_id, created_at DESC);`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

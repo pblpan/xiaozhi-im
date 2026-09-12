@@ -13,6 +13,7 @@ import 'package:xiaozhi_im_client/screens/chat.dart';
 import 'package:xiaozhi_im_client/screens/favorites.dart';
 import 'package:xiaozhi_im_client/screens/friends_new.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
+import 'package:xiaozhi_im_client/screens/module_hub.dart';
 import 'package:xiaozhi_im_client/screens/profile.dart';
 import 'package:xiaozhi_im_client/screens/search.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
@@ -205,6 +206,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   /// 关于 / 检查配置：显示客户端版本 + 已生效配置版本，可手动拉一次配置。
   /// 配置中心"出问题保持现状"（SPEC §6.2），这里拉取失败也只是文案提示，不报错弹窗。
+  /// 应用（动态模块）：服务端下发什么就显示什么，客户端不重装即可出现新入口。
+  /// 列表页自己处理加载/失败/空态，这里只管导航。
+  Future<void> _openApps() async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const ModuleHubPage()));
+    if (mounted) _load();
+  }
+
   Future<void> _openAbout() async {
     final rc = RemoteConfig();
     // ⚠️ fetchTip 必须放在 builder 外面：StatefulBuilder 每次重建都会重新执行
@@ -855,6 +864,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'logout') _logout();
                 if (v == 'sound') _toggleSound();
                 if (v == 'about') _openAbout();
+                if (v == 'apps') _openApps();
                 if (v == 'profile') _openProfile();
                 if (v == 'newfriends') _openNewFriends();
               },
@@ -904,6 +914,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       Icon(Icons.star_border_rounded, size: 19),
                       SizedBox(width: 10),
                       Text('我的收藏')
+                    ])),
+                const PopupMenuItem(
+                    value: 'apps',
+                    child: Row(children: [
+                      Icon(Icons.widgets_outlined, size: 19),
+                      SizedBox(width: 10),
+                      Text('应用')
                     ])),
                 PopupMenuItem(
                     value: 'sound',

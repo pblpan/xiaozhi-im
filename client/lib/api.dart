@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'core/app_version.dart';
 import 'core/config.dart';
 import 'core/storage.dart';
 
@@ -264,6 +265,33 @@ class ImApi {
   Future<void> reportConfigApplied(int configVersion, String deviceId) async {
     await _post('/client/report-applied',
         {'configVersion': configVersion, 'deviceId': deviceId});
+  }
+
+  /// 已登录拉取动态模块列表（服务端按角色/用户/版本过滤好，客户端只渲染）
+  Future<List<dynamic>> clientModules() async =>
+      await _get('/client/config?clientVersion=${Uri.encodeComponent(kAppVersion)}')
+          .then((d) => (d is Map && d['modules'] is List) ? d['modules'] as List : <dynamic>[]);
+
+  /// 打开模块时取最新定义（不吃冷启动缓存）
+  Future<Map<String, dynamic>> clientModule(String id) async =>
+      await _get('/client/modules/$id?clientVersion=${Uri.encodeComponent(kAppVersion)}');
+
+  /// 提交动态表单。data 只放 schema 里声明过的字段。
+  Future<Map<String, dynamic>> submitModule(String id, Map<String, dynamic> data) async =>
+      await _post('/client/modules/$id/submit',
+          {'data': data, 'clientVersion': kAppVersion});
+
+  /// 调用受控转发接口 `/api/hooks/*`（SPEC §4.4）。
+  /// 上游地址只能由管理台登记，客户端无法指定完整 URL —— 这是防 SSRF 的关键。
+  /// 第三期上线该路由；现在调用会拿到 404，调用方按"取数失败"处理即可。
+  Future<dynamic> hookCall(String path,
+      {String method = 'GET', Map<String, dynamic>? body}) async {
+    final p = path.startsWith('/api') ? path.substring(4) : path;
+    if (!p.startsWith('/hooks/')) {
+      throw const ApiException('非法接口路径（只允许 /api/hooks/ 前缀）');
+    }
+    if (method.toUpperCase() == 'POST') return _post(p, body ?? const {});
+    return _get(p);
   }
 
   // ---- 群组 ----

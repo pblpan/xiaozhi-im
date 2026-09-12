@@ -5,6 +5,7 @@ const db = require('../db');
 const config = require('../config');
 const { verifyToken, hashPassword, verifyPassword } = require('../auth');
 const clientconfig = require('../clientconfig');
+const appmodules = require('../appmodules');
 const pkg = require('../../package.json');
 
 function adminOf(req, res) {
@@ -454,6 +455,53 @@ router.get('/client-config/applied', (req, res) => {
   res.json({
     latest: cur.version,
     devices: clientconfig.appliedStatus(cur.version),
+  });
+});
+
+/* ==================== 动态模块（v0.9.0 第二期） ==================== */
+
+/** 模块清单 + 组件/图标/动作的能力清单（管理台据此渲染编辑器） */
+router.get('/modules', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json({
+    modules: appmodules.list(),
+    capability: {
+      components: appmodules.COMPONENTS,
+      colors: appmodules.COLORS,
+      fieldTypes: appmodules.FIELD_TYPES,
+      actions: appmodules.ACTIONS,
+      navPages: appmodules.NAV_PAGES,
+      icons: appmodules.ICONS,
+      chartKinds: appmodules.CHART_KINDS,
+      maxDepth: appmodules.MAX_DEPTH,
+      maxComponents: appmodules.MAX_COMPONENTS,
+      templates: appmodules.TEMPLATES,
+    },
+  });
+});
+
+/** 新建/更新模块（schema 在服务端严格校验，脏数据出不了管理台） */
+router.post('/modules', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const r = appmodules.upsert(req.body, u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, module: r.module });
+});
+
+router.delete('/modules/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const ok = appmodules.remove(req.params.id);
+  if (!ok) return res.status(404).json({ error: '模块不存在' });
+  res.json({ ok: true });
+});
+
+/** 某模块的提交记录（第二期验收要看"表单真的收到数据了"） */
+router.get('/modules/:id/submissions', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json({
+    moduleId: req.params.id,
+    items: appmodules.listSubmissions(req.params.id, Number(req.query.limit) || 100),
   });
 });
 

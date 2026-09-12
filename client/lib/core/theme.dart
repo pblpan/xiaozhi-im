@@ -221,8 +221,77 @@ class AppTheme {
         radius: const Radius.circular(4),
         thickness: WidgetStateProperty.all(6),
       ),
+
+      // 动态模块用到的语义色令牌（见 AppSemantic 注释）
+      extensions: const [AppSemantic.dark],
     );
   }
 
   const AppTheme._();
+}
+
+/// 语义色令牌 —— 专门给「动态模块」用。
+///
+/// 为什么要有这个类：动态页面（由服务端 JSON 描述）里**不允许写死色值**，
+/// 只能写 `primary/muted/danger/success/warning` 这样的语义名。具体是哪个色，
+/// 由这里按当前主题翻译。这样将来加亮色主题时，服务端一个字节都不用改，
+/// 所有动态页面自动跟着主题走 —— 这就是 SPEC §4.3 拍板项 3 的落地方式。
+///
+/// 用 ThemeExtension 而不是直接读 AppColors：ThemeExtension 会被 Theme.of()
+/// 按主题解析，将来 AppTheme.light() 注册自己的 AppSemantic.light 即可。
+@immutable
+class AppSemantic extends ThemeExtension<AppSemantic> {
+  final Color success;
+  final Color warning;
+  final Color muted;      // 次要文字
+  final Color cardBg;     // 卡片底色
+  final Color cardBorder; // 卡片描边
+
+  const AppSemantic({
+    required this.success,
+    required this.warning,
+    required this.muted,
+    required this.cardBg,
+    required this.cardBorder,
+  });
+
+  static const dark = AppSemantic(
+    success: AppColors.online,
+    warning: AppColors.warn,
+    muted: AppColors.textSub,
+    cardBg: AppColors.surface,
+    cardBorder: AppColors.border,
+  );
+
+  /// 取令牌；主题没注册时回落到深色（App 目前只有深色，行为不变）
+  static AppSemantic of(BuildContext context) =>
+      Theme.of(context).extension<AppSemantic>() ?? dark;
+
+  @override
+  AppSemantic copyWith({
+    Color? success,
+    Color? warning,
+    Color? muted,
+    Color? cardBg,
+    Color? cardBorder,
+  }) =>
+      AppSemantic(
+        success: success ?? this.success,
+        warning: warning ?? this.warning,
+        muted: muted ?? this.muted,
+        cardBg: cardBg ?? this.cardBg,
+        cardBorder: cardBorder ?? this.cardBorder,
+      );
+
+  @override
+  AppSemantic lerp(ThemeExtension<AppSemantic>? other, double t) {
+    if (other is! AppSemantic) return this;
+    return AppSemantic(
+      success: Color.lerp(success, other.success, t)!,
+      warning: Color.lerp(warning, other.warning, t)!,
+      muted: Color.lerp(muted, other.muted, t)!,
+      cardBg: Color.lerp(cardBg, other.cardBg, t)!,
+      cardBorder: Color.lerp(cardBorder, other.cardBorder, t)!,
+    );
+  }
 }
