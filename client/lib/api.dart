@@ -258,6 +258,14 @@ class ImApi {
     return await _get(sb.toString());
   }
 
+  // ---- 客户端配置中心（SPEC §6）----
+
+  /// 上报本机已生效的配置版本（管理台"同步状态"数据来源）。失败由调用方吞掉。
+  Future<void> reportConfigApplied(int configVersion, String deviceId) async {
+    await _post('/client/report-applied',
+        {'configVersion': configVersion, 'deviceId': deviceId});
+  }
+
   // ---- 群组 ----
   Future<Map<String, dynamic>> createGroup(String name) async =>
       await _post('/groups', {'name': name});

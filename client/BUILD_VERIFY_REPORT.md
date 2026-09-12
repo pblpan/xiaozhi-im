@@ -11,7 +11,7 @@
 | 注册接口 | 返回 JWT + 用户对象 ✅ |
 | 重启策略 | `restart: unless-stopped`（飞牛重启自动拉起）|
 
-> 飞牛部署要点（实测，已纠正旧记录）：存储池真实路径 `/vol1`；docker 须 `echo Pbl15858505566. | sudo -S docker ...` 提权；项目路径 `/vol1/@appcenter/xiaozhi-im/docker`。
+> 飞牛部署要点（实测，已纠正旧记录）：存储池真实路径 `/vol1`；docker 须 `echo "$FNOS_PASS" | sudo -S docker ...` 提权（密码不要写进文档/源码，见 `deploy/fnos_auth.py`）；项目路径 `/vol1/@appcenter/xiaozhi-im/docker`。
 
 ## 二、Flutter 客户端（本机 x86_64 装 SDK 编译验证通过）
 

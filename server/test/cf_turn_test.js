@@ -181,7 +181,7 @@ const config = require('./src/config');
       CF_TURN_KEY_ID: 'k', CF_TURN_API_TOKEN: 't',
       CF_TURN_API_BASE: `http://127.0.0.1:${cf2.port}/v1/turn/keys`,
       TURN_URLS: 'turn:112.99.176.76:3478?transport=udp,turn:112.99.176.76:3478?transport=tcp',
-      TURN_USERNAME: 'xiaozhi', TURN_CREDENTIAL: 'xiaozhi-turn-2026',
+      TURN_USERNAME: 'xiaozhi', TURN_CREDENTIAL: 'test-turn-pass',
       ICE_STUN: 'stun:stun.miwifi.com:3478',
     },
     RUN
@@ -191,7 +191,7 @@ const config = require('./src/config');
     JSON.stringify(r.list).includes('112.99.176.76'),
     JSON.stringify(r.list.map((s) => s.urls)));
   ok('自建那条带 coturn 账号',
-    r.list.some((s) => s.username === 'xiaozhi' && s.credential === 'xiaozhi-turn-2026'));
+    r.list.some((s) => s.username === 'xiaozhi' && s.credential === 'test-turn-pass'));
   ok('sources = [cloudflare, static]',
     JSON.stringify(r.info.sources) === JSON.stringify(['cloudflare', 'static']),
     JSON.stringify(r.info.sources));

@@ -16,9 +16,9 @@ import os
 import sys
 import paramiko
 
-HOST = "192.168.31.44"
-USER = "pblpan"
-PASS = "Pbl15858505566."
+# ⚠️ 凭据一律不进源码（本仓库是 Public）：从环境变量 FNOS_PASS
+#    或 deploy/.fnos.env 读取，详见 deploy/fnos_auth.py
+from fnos_auth import HOST, PASS, USER  # noqa: E402
 SUDO = "echo '%s' | sudo -S " % PASS
 
 REMOTE_APP = "/vol1/@appcenter/xiaozhi-im"

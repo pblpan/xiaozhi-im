@@ -14,7 +14,9 @@
 import paramiko
 import re
 
-HOST, USER, PASS = "192.168.31.44", "pblpan", "Pbl15858505566."
+# ⚠️ 凭据一律不进源码（本仓库是 Public）：从环境变量 FNOS_PASS
+#    或 deploy/.fnos.env 读取，详见 deploy/fnos_auth.py
+from fnos_auth import HOST, PASS, USER  # noqa: E402
 PORT = 3602
 S = "echo '%s' | sudo -S " % PASS
 

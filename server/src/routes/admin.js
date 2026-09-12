@@ -4,6 +4,7 @@ const path = require('path');
 const db = require('../db');
 const config = require('../config');
 const { verifyToken, hashPassword, verifyPassword } = require('../auth');
+const clientconfig = require('../clientconfig');
 const pkg = require('../../package.json');
 
 function adminOf(req, res) {
@@ -345,9 +346,18 @@ router.post('/change-password', (req, res) => {
 
 /* ==================== 音视频中继（TURN）配置向导 ==================== */
 
-/** .env 的实际路径：与 docker-compose 同目录。可用 TURN_ENV_PATH 覆盖（测试用） */
+/**
+ * 中继配置的持久化文件路径。
+ *
+ * ⚠️ 以前这里返回 `${DATA_DIR}/../docker/.env`，在容器里 DATA_DIR=/data，
+ * 于是拼出 `/docker/.env` —— 一个既不存在也没挂载的路径。文件不存在时
+ * 保存接口直接 500，就算真写成功了也在容器层里，重建即丢。
+ * 现在统一由 config.turnEnvPath() 提供（${DATA_DIR}/turn.env），
+ * 落在共享数据目录，重建不丢、改完立即生效、无需 force-recreate。
+ * 测试仍可用 TURN_ENV_PATH 覆盖。
+ */
 function envPath() {
-  return process.env.TURN_ENV_PATH || path.join(config.DATA_DIR, '..', 'docker', '.env');
+  return process.env.TURN_ENV_PATH || config.turnEnvPath();
 }
 
 /** 当前中继状态：来源、是否启用、遮盖后的值、静态 TURN */
@@ -371,8 +381,9 @@ router.post('/turn/verify', async (req, res) => {
 });
 
 /**
- * 保存凭据到 .env。**先校验再写**，用错值覆盖生产会导致重启后中继全丢。
- * 写入是原位的：只改这两行，其余内容与注释一字不动。
+ * 保存凭据。**先校验再写**，用错值覆盖生产会导致重启后中继全丢。
+ * 写进 ${DATA_DIR}/turn.env（不是 compose 的 .env —— 那个路径在容器里不存在，
+ * 而且改完还得 force-recreate 才进得了进程）。写完立即热加载。
  */
 router.post('/turn', async (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
@@ -386,89 +397,74 @@ router.post('/turn', async (req, res) => {
   const probe = await config.probeTurnCredentials(kid, tok);
   if (!probe.ok) return res.status(400).json({ error: '凭据校验未通过：' + probe.error });
 
-  const f = envPath();
-  if (!fs.existsSync(f)) {
-    return res.status(500).json({ error: `找不到配置文件 ${f}，请确认应用目录结构` });
-  }
-
-  let text;
+  // 落盘交给 config：写 ${DATA_DIR}/turn.env（共享目录，重建不丢），
+  // 同时热加载进内存。不再手工拼 .env 文本 —— 那套写法既改不动不存在的
+  // 文件，也没法让「保存成功」和「重启后仍在」同时成立。
   try {
-    text = fs.readFileSync(f, 'utf8');
-  } catch (e) {
-    return res.status(500).json({ error: '读取配置文件失败：' + e.message });
-  }
-
-  // 备份一份，出问题可回滚
-  const bak = `${f}.bak-admin-${Date.now()}`;
-  try {
-    fs.writeFileSync(bak, text, 'utf8');
-  } catch (e) {
-    return res.status(500).json({ error: '备份配置文件失败，已中止：' + e.message });
-  }
-
-  const setLine = (src, key, val) => {
-    const re = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
-    if (re.test(src)) return src.replace(re, `${key}=${val}`);
-    // 原来没有这两行（老版本 .env）时追加，并补个说明注释
-    return src.replace(/\s*$/, `\n\n# Cloudflare Realtime TURN（由管理台向导写入）\n${key}=${val}\n`);
-  };
-
-  let next = setLine(text, 'CF_TURN_KEY_ID', kid);
-  next = setLine(next, 'CF_TURN_API_TOKEN', tok);
-
-  try {
-    fs.writeFileSync(f, next, 'utf8');
+    config.writeTurnEnv({ CF_TURN_KEY_ID: kid, CF_TURN_API_TOKEN: tok });
   } catch (e) {
     return res.status(500).json({ error: '写入配置文件失败：' + e.message });
   }
-
-  // 关键：立刻热加载进内存，让 /api/call/ice 马上用新凭据。
-  // 不重启也能生效 —— 否则会出现「向导说保存成功、实际通话仍旧」的割裂。
   const applied = config.applyTurnCredentials(kid, tok);
 
   res.json({
     ok: true,
     applied,
-    backup: path.basename(bak),
-    envPath: f,
-    // 仍提示重建：让 .env 与容器环境一致，避免下次重启后凭据「退回去」
-    needRecreate: true,
-    command: `cd ${path.dirname(f)} && docker compose up -d --force-recreate xiaozhi-im`,
+    envPath: envPath(),
+    // 不再需要重建容器：turn.env 每次启动都会读，内存也已热加载。
+    needRecreate: false,
   });
 });
 
-/** 从 .env 中移除 CF 配置（回退到 STUN + 静态 TURN） */
+/* ==================== 客户端配置中心（v0.8.0 第一期） ==================== */
+
+/** 当前线上配置 + 历史版本列表 */
+router.get('/client-config', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const cur = clientconfig.current();
+  res.json({
+    current: { version: cur.version, payload: cur.payload },
+    history: clientconfig.history(20),
+  });
+});
+
+/** 发布新版本（版本化只增不改；发布前服务端严格校验，脏数据出不了管理台） */
+router.post('/client-config', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const { payload, note } = req.body || {};
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const r = clientconfig.publish(payload, note, u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, version: r.version, payload: r.payload });
+});
+
+/** 回滚 = 用旧版本内容发布新版本 */
+router.post('/client-config/rollback', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const r = clientconfig.rollback(Number(req.body?.version), u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, version: r.version });
+});
+
+/** 同步状态：哪些设备吃到了哪版（排障时最想知道"还有几台在旧配置"） */
+router.get('/client-config/applied', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const cur = clientconfig.current();
+  res.json({
+    latest: cur.version,
+    devices: clientconfig.appliedStatus(cur.version),
+  });
+});
+
+/** 移除 CF 配置（回退到 STUN + 静态 TURN） */
 router.delete('/turn', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
-  const f = envPath();
-  if (!fs.existsSync(f)) return res.status(500).json({ error: `找不到配置文件 ${f}` });
-  let text;
-  try {
-    text = fs.readFileSync(f, 'utf8');
-  } catch (e) {
-    return res.status(500).json({ error: '读取配置文件失败：' + e.message });
-  }
-  const bak = `${f}.bak-admin-${Date.now()}`;
-  try {
-    fs.writeFileSync(bak, text, 'utf8');
-  } catch (e) {
-    return res.status(500).json({ error: '备份配置文件失败，已中止：' + e.message });
-  }
-  const next = text
-    .replace(/^\s*CF_TURN_KEY_ID\s*=.*$/m, 'CF_TURN_KEY_ID=')
-    .replace(/^\s*CF_TURN_API_TOKEN\s*=.*$/m, 'CF_TURN_API_TOKEN=');
-  try {
-    fs.writeFileSync(f, next, 'utf8');
-  } catch (e) {
-    return res.status(500).json({ error: '写入配置文件失败：' + e.message });
-  }
-  // 同步清空内存里的凭据，立刻停止使用 CF 中继
-  config.applyTurnCredentials('', '');
+  config.clearTurnCredentials();
   res.json({
     ok: true,
-    backup: path.basename(bak),
-    needRecreate: true,
-    command: `cd ${path.dirname(f)} && docker compose up -d --force-recreate xiaozhi-im`,
+    envPath: envPath(),
+    needRecreate: false,
   });
 });
 

@@ -25,6 +25,7 @@ class AppColors {
   // 语义色
   static const online = Color(0xFF14B8A6);
   static const danger = Color(0xFFF4685E);
+  static const warn = Color(0xFFE8A33D);
 
   // 气泡
   static const bubbleOther = Color(0xFF212734);

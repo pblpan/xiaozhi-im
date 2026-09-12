@@ -34,10 +34,84 @@ const ICE_STUN = (
   .map((s) => s.trim())
   .filter(Boolean);
 
-const TURN_URLS = (process.env.TURN_URLS || '')
+// ---------------------------------------------------------------------------
+// 中继配置的持久化文件（管理台向导写这里）
+//
+// ⚠️ 血泪坑：以前向导把凭据写进「compose 的 .env」，路径是
+//    `${DATA_DIR}/../docker/.env` —— 在容器里 DATA_DIR=/data，于是解析成
+//    `/docker/.env`：一个根本不存在、也没挂载的路径。结果是向导保存后
+//    内存里生效（探针看到 cloudflare 已启用），容器一重启就**全丢**，
+//    而且 .env 从没被写过，永远恢复不了。
+//    更麻烦的是 .env 里的改动还得 `docker compose up -d --force-recreate`
+//    才会进进程 —— restart 不重读 env。
+//
+// 现在改为：写进 `${DATA_DIR}/turn.env`（/data 是挂载到宿主机的共享目录，
+// 容器重建也在），启动时加载并覆盖环境变量。好处是改中继配置
+// **既不用重建容器、也不会因为重启而丢**。
+// ---------------------------------------------------------------------------
+const TURN_ENV_FILE = path.join(DATA_DIR, 'turn.env');
+
+/** 允许写进 turn.env 的键（白名单，防止被塞进别的环境变量） */
+const TURN_ENV_KEYS = [
+  'TURN_URLS',
+  'TURN_USERNAME',
+  'TURN_CREDENTIAL',
+  'CF_TURN_KEY_ID',
+  'CF_TURN_API_TOKEN',
+];
+
+function turnEnvPath() {
+  return TURN_ENV_FILE;
+}
+
+/** 读 turn.env，返回 {key: value}；文件不存在或损坏都返回 {}（绝不因此崩） */
+function readTurnEnv() {
+  try {
+    if (!fs.existsSync(TURN_ENV_FILE)) return {};
+    const out = {};
+    for (const line of fs.readFileSync(TURN_ENV_FILE, 'utf8').split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s || s.startsWith('#')) continue;
+      const i = s.indexOf('=');
+      if (i <= 0) continue;
+      const k = s.slice(0, i).trim();
+      if (!TURN_ENV_KEYS.includes(k)) continue;
+      out[k] = s.slice(i + 1).trim();
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** 合并写回 turn.env（只动传入的键，保留其他行） */
+function writeTurnEnv(patch) {
+  const cur = readTurnEnv();
+  const next = { ...cur, ...patch };
+  // 空值视为「清除」，不写进文件
+  const lines = [
+    '# 音视频中继配置 —— 由管理台「系统设置 → 音视频中继配置」写入。',
+    '# 这个文件在共享数据目录里，容器重建/重启都不会丢失；',
+    '# 改完立即生效，不需要重建容器。手工改也可以，重启后生效。',
+  ];
+  for (const k of TURN_ENV_KEYS) {
+    const v = next[k];
+    if (v) lines.push(`${k}=${v}`);
+  }
+  fs.writeFileSync(TURN_ENV_FILE, lines.join('\n') + '\n', 'utf8');
+}
+
+// 启动时先加载持久化的中继配置，再落到下面的变量里。
+const _turnEnv = readTurnEnv();
+
+const TURN_URLS = (_turnEnv.TURN_URLS || process.env.TURN_URLS || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+
+const TURN_USERNAME = _turnEnv.TURN_USERNAME || process.env.TURN_USERNAME || '';
+const TURN_CREDENTIAL =
+  _turnEnv.TURN_CREDENTIAL || process.env.TURN_CREDENTIAL || '';
 
 // ---------------------------------------------------------------------------
 // Cloudflare Realtime TURN —— 家宽没有公网 IP 时的正解
@@ -59,8 +133,9 @@ const TURN_URLS = (process.env.TURN_URLS || '')
 // 用 let 而非 const：管理台向导保存后要能**不重启**热加载新凭据。
 // （.env 是给"下次启动"用的；进程内存里的这份支持即时生效，
 //   两者都更新才不会出现「界面说保存成功、实际没生效」的割裂。）
-let CF_TURN_KEY_ID = process.env.CF_TURN_KEY_ID || '';
-let CF_TURN_API_TOKEN = process.env.CF_TURN_API_TOKEN || '';
+let CF_TURN_KEY_ID = _turnEnv.CF_TURN_KEY_ID || process.env.CF_TURN_KEY_ID || '';
+let CF_TURN_API_TOKEN =
+  _turnEnv.CF_TURN_API_TOKEN || process.env.CF_TURN_API_TOKEN || '';
 const CF_TURN_TTL = Number(process.env.CF_TURN_TTL || 3600);
 // 仅用于测试：可指向本地假 CF，验证签发与缓存逻辑
 const CF_TURN_API_BASE =
@@ -76,14 +151,36 @@ const cfEnabled = () => !!(CF_TURN_KEY_ID && CF_TURN_API_TOKEN);
 /**
  * 热加载一对新凭据（管理台向导保存后调用）。
  * 会清掉旧的签发缓存，让下一次 /api/call/ice 立刻用新凭据。
- * **不落盘** —— 写 .env 由调用方负责。
+ * **同时落盘到 turn.env** —— 以前只改内存，容器一重启凭据就没了，
+ * 表现是「昨天还好好的跨网通话，今天突然打不通」。
  */
 function applyTurnCredentials(keyId, apiToken) {
   CF_TURN_KEY_ID = String(keyId || '').trim();
   CF_TURN_API_TOKEN = String(apiToken || '').trim();
   _cfCache = { servers: null, expiresAt: 0 };
   _cfLastError = null;
+  try {
+    writeTurnEnv({
+      CF_TURN_KEY_ID: CF_TURN_KEY_ID,
+      CF_TURN_API_TOKEN: CF_TURN_API_TOKEN,
+    });
+  } catch {
+    // 落盘失败不影响本次热生效，但会在 turnInfo 里体现不出来 —— 记录即可
+  }
   return cfEnabled();
+}
+
+/** 清除 Cloudflare 凭据（管理台「移除」按钮） */
+function clearTurnCredentials() {
+  CF_TURN_KEY_ID = '';
+  CF_TURN_API_TOKEN = '';
+  _cfCache = { servers: null, expiresAt: 0 };
+  _cfLastError = null;
+  try {
+    writeTurnEnv({ CF_TURN_KEY_ID: '', CF_TURN_API_TOKEN: '' });
+  } catch {
+    /* 同上 */
+  }
 }
 
 /** 向 Cloudflare 签发一组 TURN 凭据；失败时退回上一批（过期了也比没有强） */
@@ -147,8 +244,8 @@ async function iceServers() {
   if (TURN_URLS.length) {
     list.push({
       urls: TURN_URLS,
-      username: process.env.TURN_USERNAME || '',
-      credential: process.env.TURN_CREDENTIAL || '',
+      username: TURN_USERNAME,
+      credential: TURN_CREDENTIAL,
     });
   }
   return list;
@@ -243,6 +340,13 @@ module.exports = {
   PUBLIC_URL: process.env.PUBLIC_URL || '',
   ICE_STUN,
   TURN_URLS,
+  TURN_USERNAME,
+  TURN_CREDENTIAL,
+  // 中继配置持久化文件（管理台向导读写它；在共享数据目录里，重启不丢）
+  TURN_ENV_FILE,
+  turnEnvPath,
+  readTurnEnv,
+  writeTurnEnv,
   // 注意：这是**函数**不是常量 —— 向导热加载后它的值会变，
   // 消费方必须每次调用，不能在模块顶层取值缓存。
   CF_TURN_ENABLED: cfEnabled,
@@ -250,4 +354,5 @@ module.exports = {
   turnInfo,
   probeTurnCredentials,
   applyTurnCredentials,
+  clearTurnCredentials,
 };

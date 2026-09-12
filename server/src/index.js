@@ -30,6 +30,8 @@ app.use('/api/favorites', require('./routes/favorites'));
 app.use('/api/files', require('./routes/files'));
 // 通话运行参数下发（ICE/STUN/TURN），客户端建 RTCPeerConnection 前拉取
 app.use('/api/call', require('./routes/call'));
+// 客户端配置中心（bootstrap 免鉴权，必须在 /api/admin 之前注册无影响，独立前缀）
+app.use('/api/client', require('./routes/client'));
 // 集成管理必须挂在 /api/admin 之前，否则会被管理路由先接管
 app.use('/api/admin/integrations', require('./routes/integrations'));
 app.use('/api/admin', require('./routes/admin'));

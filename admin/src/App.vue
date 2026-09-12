@@ -21,6 +21,7 @@
         <el-menu-item index="files">文件管理</el-menu-item>
         <el-menu-item index="messages">消息管理</el-menu-item>
         <el-menu-item index="integrations">集成对接</el-menu-item>
+        <el-menu-item index="clientconfig">客户端配置</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
         <el-menu-item index="help">系统帮助</el-menu-item>
       </el-menu>
@@ -748,6 +749,159 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </el-tabs>
         </div>
 
+        <!-- 客户端配置中心（v0.8.0 第一期） -->
+        <div v-else-if="tab === 'clientconfig'">
+          <el-row :gutter="16">
+            <el-col :span="14">
+              <el-card>
+                <template #header>
+                  <div class="card-hdr">
+                    <span>编辑配置（当前线上 v{{ cc.current.version }}）</span>
+                    <div>
+                      <el-button size="small" @click="loadCc">刷新</el-button>
+                      <el-button size="small" type="primary" @click="openCcDiff">发布…</el-button>
+                    </div>
+                  </div>
+                </template>
+
+                <el-alert type="info" :closable="false" style="margin-bottom:14px"
+                  title="改完点「发布」生成新版本，客户端启动时/每 30 分钟自动拉取热生效，无需重装 App。" />
+
+                <el-form label-width="130px" label-position="left">
+                  <el-form-item>
+                    <template #label><span class="cc-label">服务器地址候选</span></template>
+                    <div style="width:100%">
+                      <el-input v-model="ccForm.addrText" type="textarea" :rows="3"
+                        placeholder="每行一个，按优先级排序，如：&#10;http://192.168.31.44:3602&#10;https://xxxx.hn.takin.cc" />
+                      <div class="hint">客户端未手动改过地址时按顺序探测；留空 = 用打包内置地址。改动后**不打断**在线连接，下次重连生效。</div>
+                    </div>
+                  </el-form-item>
+
+                  <el-form-item>
+                    <template #label><span class="cc-label">功能开关</span></template>
+                    <div style="width:100%">
+                      <div v-for="(f, i) in ccForm.features" :key="i" style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+                        <el-input v-model="f.key" placeholder="功能名，如 groupCall" style="width:220px" />
+                        <el-switch v-model="f.on" active-text="开" inactive-text="关" />
+                        <el-button size="small" text type="danger" @click="ccForm.features.splice(i,1)">删除</el-button>
+                      </div>
+                      <el-button size="small" @click="ccForm.features.push({ key: '', on: true })">+ 加开关</el-button>
+                      <div class="hint">客户端入口显隐跟随开关；不认识的开关客户端会忽略，不会报错。</div>
+                    </div>
+                  </el-form-item>
+
+                  <el-form-item>
+                    <template #label><span class="cc-label">最低客户端版本</span></template>
+                    <div style="width:100%">
+                      <el-input v-model="ccForm.minVersion" placeholder="如 0.7.0；留空 = 不限制" style="width:220px" />
+                      <div class="hint">低于此版本的客户端会在登录页提示升级（不拦截使用）。</div>
+                    </div>
+                  </el-form-item>
+
+                  <el-form-item>
+                    <template #label><span class="cc-label">升级地址</span></template>
+                    <el-input v-model="ccForm.upgradeUrl" placeholder="https://…（留空 = 不显示）" />
+                  </el-form-item>
+
+                  <el-form-item>
+                    <template #label><span class="cc-label">公告</span></template>
+                    <div style="width:100%">
+                      <div v-for="(a, i) in ccForm.announcements" :key="i" style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+                        <el-select v-model="a.level" style="width:100px">
+                          <el-option label="通知" value="info" />
+                          <el-option label="警告" value="warn" />
+                          <el-option label="严重" value="critical" />
+                        </el-select>
+                        <el-input v-model="a.text" placeholder="公告内容" />
+                        <el-button size="small" text type="danger" @click="ccForm.announcements.splice(i,1)">删除</el-button>
+                      </div>
+                      <el-button size="small" @click="ccForm.announcements.push({ text: '', level: 'info' })">+ 加公告</el-button>
+                    </div>
+                  </el-form-item>
+
+                  <el-form-item>
+                    <template #label><span class="cc-label">维护公告</span></template>
+                    <div style="width:100%">
+                      <el-switch v-model="ccForm.maintOn" inactive-text="无" active-text="启用" />
+                      <template v-if="ccForm.maintOn">
+                        <el-input v-model="ccForm.maintText" type="textarea" :rows="2" placeholder="维护说明，会显示在登录页" style="margin-top:8px" />
+                      </template>
+                    </div>
+                  </el-form-item>
+                </el-form>
+              </el-card>
+            </el-col>
+
+            <el-col :span="10">
+              <el-card style="margin-bottom:16px">
+                <template #header>历史版本（版本只增不改，回滚 = 以旧内容发新版本）</template>
+                <el-table :data="cc.history" size="small" max-height="260">
+                  <el-table-column prop="version" label="版本" width="64" />
+                  <el-table-column prop="note" label="说明" show-overflow-tooltip />
+                  <el-table-column prop="created_by" label="发布人" width="84" />
+                  <el-table-column label="发布时间" width="160">
+                    <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="84">
+                    <template #default="{ row }">
+                      <el-button v-if="row.version !== cc.current.version" size="small" text type="warning"
+                        @click="rollbackCc(row.version)">回滚</el-button>
+                      <el-tag v-else size="small" type="success">当前</el-tag>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-card>
+
+              <el-card>
+                <template #header>
+                  <div class="card-hdr">
+                    <span>同步状态（设备上报）</span>
+                    <el-button size="small" @click="loadCcApplied">刷新</el-button>
+                  </div>
+                </template>
+                <el-alert v-if="!ccApplied.devices.length" type="info" :closable="false"
+                  title="还没有设备上报过配置版本（客户端 v0.8.0 起支持）" />
+                <el-table v-else :data="ccApplied.devices" size="small" max-height="300">
+                  <el-table-column label="设备" min-width="120">
+                    <template #default="{ row }">{{ row.device_id }}</template>
+                  </el-table-column>
+                  <el-table-column label="用户" width="100">
+                    <template #default="{ row }">{{ row.nickname || row.username || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="配置版本" width="88">
+                    <template #default="{ row }">v{{ row.config_version }}</template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="88">
+                    <template #default="{ row }">
+                      <el-tag size="small" :type="row.state === 'latest' ? 'success' : 'warning'">
+                        {{ row.state === 'latest' ? '最新' : '待更新' }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="上报时间" width="160">
+                    <template #default="{ row }">{{ fmtTime(row.applied_at) }}</template>
+                  </el-table-column>
+                </el-table>
+              </el-card>
+            </el-col>
+          </el-row>
+
+          <!-- 发布前变更对比 -->
+          <el-dialog v-model="ccDiffDlg" title="发布确认 — 本次变更" width="560px">
+            <div v-for="d in ccDiff" :key="d.key" style="margin-bottom:10px">
+              <b>{{ d.key }}</b>
+              <div class="hint">旧：{{ d.old }}</div>
+              <div style="color:var(--el-color-success)">新：{{ d.neu }}</div>
+            </div>
+            <el-alert v-if="!ccDiff.length" type="warning" :closable="false" title="内容没有任何变化，无需发布" />
+            <el-input v-model="ccNote" placeholder="发布说明（会记录到历史）" style="margin-top:8px" />
+            <template #footer>
+              <el-button @click="ccDiffDlg = false">取消</el-button>
+              <el-button type="primary" :disabled="!ccDiff.length" :loading="ccBusy" @click="publishCc">确认发布</el-button>
+            </template>
+          </el-dialog>
+        </div>
+
         <!-- 系统设置 -->
         <div v-else-if="tab === 'settings'">
           <el-row :gutter="16">
@@ -1329,6 +1483,7 @@ async function loadTab() {
   else if (tab.value === 'files') await loadFiles();
   else if (tab.value === 'messages') await loadMessages();
   else if (tab.value === 'integrations') await loadIntegrations();
+  else if (tab.value === 'clientconfig') { await loadCc(); await loadCcApplied(); }
   else if (tab.value === 'settings') await loadInfo();
 }
 async function loadUsers() { users.value = (await api.get('/admin/users')).data; }
@@ -1356,6 +1511,108 @@ function kindTag(k) {
   return { text: 'success', image: 'warning', audio: 'danger', file: 'info', card: 'primary' }[k] || 'info';
 }
 async function loadInfo() { info.value = (await api.get('/admin/info')).data; }
+
+// ====== 客户端配置中心（v0.8.0 第一期） ======
+const cc = ref({ current: { version: 0, payload: {} }, history: [] });
+const ccApplied = ref({ latest: 0, devices: [] });
+const ccDiffDlg = ref(false);
+const ccDiff = ref([]);
+const ccNote = ref('');
+const ccBusy = ref(false);
+// 表单模型：从线上 payload 展开成好编辑的形状
+const ccForm = ref({
+  addrText: '',
+  features: [],        // [{ key, on }]
+  minVersion: '',
+  upgradeUrl: '',
+  announcements: [],   // [{ text, level }]
+  maintOn: false,
+  maintText: '',
+});
+
+function payloadToForm(p) {
+  return {
+    addrText: (p.serverAddresses || []).join('\n'),
+    features: Object.entries(p.features || {}).map(([key, on]) => ({ key, on: !!on })),
+    minVersion: p.minClientVersion || '',
+    upgradeUrl: p.upgradeUrl || '',
+    announcements: (p.announcements || []).map((a) => ({ text: a.text, level: a.level || 'info' })),
+    maintOn: !!p.maintenance,
+    maintText: p.maintenance?.text || '',
+  };
+}
+
+function formToPayload() {
+  const p = {
+    serverAddresses: ccForm.value.addrText.split('\n').map((s) => s.trim()).filter(Boolean),
+    features: {},
+    announcements: ccForm.value.announcements.filter((a) => a.text.trim()).map((a) => ({ text: a.text.trim(), level: a.level })),
+  };
+  for (const f of ccForm.value.features) {
+    const k = f.key.trim();
+    if (k) p.features[k] = !!f.on;
+  }
+  if (ccForm.value.minVersion.trim()) p.minClientVersion = ccForm.value.minVersion.trim();
+  if (ccForm.value.upgradeUrl.trim()) p.upgradeUrl = ccForm.value.upgradeUrl.trim();
+  if (ccForm.value.maintOn && ccForm.value.maintText.trim()) p.maintenance = { text: ccForm.value.maintText.trim(), until: null };
+  return p;
+}
+
+const brief = (v) => {
+  const s = JSON.stringify(v) ?? '—';
+  return s.length > 120 ? s.slice(0, 120) + '…' : s;
+};
+
+async function loadCc() {
+  const { data } = await api.get('/admin/client-config');
+  cc.value = data;
+  ccForm.value = payloadToForm(data.current.payload || {});
+}
+
+async function loadCcApplied() {
+  ccApplied.value = (await api.get('/admin/client-config/applied')).data;
+}
+
+function openCcDiff() {
+  const next = formToPayload();
+  const cur = cc.value.current.payload || {};
+  const keys = new Set([...Object.keys(next), ...Object.keys(cur)]);
+  ccDiff.value = [];
+  for (const k of keys) {
+    if (JSON.stringify(next[k] ?? null) !== JSON.stringify(cur[k] ?? null)) {
+      ccDiff.value.push({ key: k, old: brief(cur[k] ?? null), neu: brief(next[k] ?? null) });
+    }
+  }
+  ccNote.value = '';
+  ccDiffDlg.value = true;
+}
+
+async function publishCc() {
+  ccBusy.value = true;
+  try {
+    const { data } = await api.post('/admin/client-config', { payload: formToPayload(), note: ccNote.value });
+    ElMessage.success(`已发布 v${data.version}`);
+    ccDiffDlg.value = false;
+    await loadCc();
+  } catch (e) {
+    ElMessage.error('发布失败：' + (e.response?.data?.error || e.message));
+  } finally {
+    ccBusy.value = false;
+  }
+}
+
+async function rollbackCc(v) {
+  try {
+    await ElMessageBox.confirm(`用 v${v} 的内容发布一个新版本？历史记录不会改动。`, '回滚确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    const { data } = await api.post('/admin/client-config/rollback', { version: v });
+    ElMessage.success(`已回滚：发布为 v${data.version}`);
+    await loadCc();
+  } catch (e) {
+    ElMessage.error('回滚失败：' + (e.response?.data?.error || e.message));
+  }
+}
 
 // 监听 tab 切换
 watch(tab, loadTab);

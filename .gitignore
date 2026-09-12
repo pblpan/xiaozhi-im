@@ -26,6 +26,9 @@ data/
 *.sqlite
 *.sqlite3
 
+# 飞牛 NAS 连接凭据（绝不入库；本仓库是 Public）
+deploy/.fnos.env
+
 # OS
 .DS_Store
 Thumbs.db

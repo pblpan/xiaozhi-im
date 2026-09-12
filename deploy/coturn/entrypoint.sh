@@ -16,6 +16,8 @@ MIN_PORT="${TURN_MIN_PORT:-49160}"
 MAX_PORT="${TURN_MAX_PORT:-49200}"
 REALM="${TURN_REALM:-xiaozhi.im}"
 TUSER="${TURN_USER:-xiaozhi}"
+# ⚠️ 默认口令在公开仓库可见（弱口令）。生产请通过 docker/.env 传 TURN_PASSWORD 覆盖，
+#    且必须与服务端 /data/turn.env 的 TURN_CREDENTIAL 一致，否则中继认证会失败。
 TPASS="${TURN_PASSWORD:-xiaozhi-turn-2026}"
 
 # ---- 探测公网出口 IP ----

@@ -18,7 +18,9 @@
 import paramiko
 import re
 
-HOST, USER, PASS = "192.168.31.44", "pblpan", "Pbl15858505566."
+# ⚠️ 凭据一律不进源码（本仓库是 Public）：从环境变量 FNOS_PASS
+#    或 deploy/.fnos.env 读取，详见 deploy/fnos_auth.py
+from fnos_auth import HOST, PASS, USER  # noqa: E402
 PORT = 3602
 S = "echo '%s' | sudo -S " % PASS
 
@@ -113,10 +115,13 @@ if m:
        "缺「不需要信用卡」或「TURN 服务器」")
     ok("帮助里给了控制台直达网址", "realtime/turn" in js)
     ok("管理台有中继配置向导", "音视频中继配置" in js and "Turn 令牌 ID" in js)
-    # 向导不该把明文密钥渲染进静态产物
-    ok("管理台产物里没有明文密钥",
-       "7839139c2d17a599f2118c6372b2410b" not in js and "e778003f51dd" not in js,
-       "产物里出现了真实凭据，必须改成占位符")
+    # 向导不该把明文密钥渲染进静态产物。
+    # ⚠️ 判据按**形态**检测，绝不写真实凭据 —— 本仓库公开，
+    #    把真值写进脚本等于自曝 KEY_ID / API Token（踩过这个坑）。
+    cred_leak = re.search(
+        r'CF_TURN_(?:KEY_ID|API_TOKEN)\s*[:=\'"]+\s*[0-9a-fA-F]{16,}', js)
+    ok("管理台产物里没有明文密钥", not cred_leak,
+       "产物里出现了凭据键值对，必须改成占位符/遮盖回显")
     ok("管理台 JS 已不再出现 Tailchat 字样", "Tailchat" not in js,
        "仍存在，需重新构建管理台并热更新")
 else:

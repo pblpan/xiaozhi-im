@@ -16,16 +16,19 @@
 依赖: paramiko
 飞牛地址/账号在下方常量里改（默认取本项目现场环境）。
 """
+import os
 import sys
 import time
 
 import paramiko
 
-HOST = "192.168.31.44"
-USER = "pblpan"
-PASS = "Pbl15858505566."
+# ⚠️ 凭据一律不进源码（本仓库是 Public）：从环境变量 FNOS_PASS
+#    或 deploy/.fnos.env 读取，详见 deploy/fnos_auth.py
+from fnos_auth import HOST, PASS, USER  # noqa: E402
 APPDIR = "/vol1/@appcenter/xiaozhi-im"
-UARGS = "-u xiaozhi -w xiaozhi-turn-2026 -p 3478 -n 3 -m 1 127.0.0.1"
+# 自建 coturn 的测试口令同样不入库：从环境变量 TURN_PASSWORD 读
+TURN_PASSWORD = os.environ.get("TURN_PASSWORD", "")
+UARGS = ("-u xiaozhi -w %s -p 3478 -n 3 -m 1 127.0.0.1" % TURN_PASSWORD).strip()
 
 
 def connect():

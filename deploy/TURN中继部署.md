@@ -248,15 +248,15 @@ curl -s http://127.0.0.1:3602/api/call/ice
 ```bash
 # UDP 中继
 sudo docker exec xiaozhi-im-turn turnutils_uclient -T \
-  -u xiaozhi -w xiaozhi-turn-2026 -p 3478 -n 3 -m 1 127.0.0.1 | tail -3
+  -u xiaozhi -w "$TURN_PASSWORD" -p 3478 -n 3 -m 1 127.0.0.1 | tail -3
 
 # TCP 中继
 sudo docker exec xiaozhi-im-turn turnutils_uclient -T -t \
-  -u xiaozhi -w xiaozhi-turn-2026 -p 3478 -n 3 -m 1 127.0.0.1 | tail -3
+  -u xiaozhi -w "$TURN_PASSWORD" -p 3478 -n 3 -m 1 127.0.0.1 | tail -3
 
 # 两端都走中继互发（最接近真实跨网通话）
 sudo docker exec xiaozhi-im-turn turnutils_uclient -T -y \
-  -u xiaozhi -w xiaozhi-turn-2026 -p 3478 -n 3 -m 1 127.0.0.1 | tail -3
+  -u xiaozhi -w "$TURN_PASSWORD" -p 3478 -n 3 -m 1 127.0.0.1 | tail -3
 ```
 
 三条都期望 `Total lost packets 0 (0.000000%)`。

@@ -65,6 +65,13 @@ class Settings {
     Config.mode = mode;
   }
 
+  /// 用户是否自己保存过服务器地址（RemoteConfig 判断"地址候选要不要跟随下发"用：
+  /// 用户手动配过的优先，绝不被下发的候选覆盖）
+  static Future<bool> hasUserServers() async {
+    final p = await SharedPreferences.getInstance();
+    return p.containsKey(_kLan) || p.containsKey(_kWan) || p.containsKey(_kMode);
+  }
+
   /// 恢复打包内置地址（清空所有用户设置）
   static Future<void> reset() async {
     final p = await SharedPreferences.getInstance();

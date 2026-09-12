@@ -209,6 +209,30 @@ CREATE TABLE IF NOT EXISTS friend_templates (
 );
 `);
 
+// ---- 客户端配置中心（v0.8.0 第一期）----
+// 版本化快照，只增不改：回滚 = 用旧内容发布新版本（历史永远可查）
+db.exec(`
+CREATE TABLE IF NOT EXISTS client_configs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  version INTEGER NOT NULL UNIQUE,
+  payload TEXT NOT NULL,
+  note TEXT,
+  created_by TEXT,
+  created_at INTEGER NOT NULL
+);
+`);
+
+// 哪台设备吃到了哪版配置（排障用：管理员能看到"还有 N 台在旧版本"）
+db.exec(`
+CREATE TABLE IF NOT EXISTS config_applied (
+  user_id INTEGER,
+  device_id TEXT,
+  config_version INTEGER NOT NULL,
+  applied_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, device_id)
+);
+`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

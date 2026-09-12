@@ -15,6 +15,10 @@ services:
       - ICE_STUN=${ICE_STUN:-}
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USER:-xiaozhi}
+      # ⚠️ 安全：这里的默认口令是**公开仓库里可见的弱口令**，且必须与
+      #    服务端 /data/turn.env 的 TURN_CREDENTIAL 完全一致，否则自建中继认证失败。
+      #    生产环境请在 docker/.env 里显式覆盖 TURN_PASSWORD（并同步改 turn.env），
+      #    不要依赖这个默认值。改了要重建 coturn 容器才生效。
       - TURN_CREDENTIAL=${TURN_PASSWORD:-xiaozhi-turn-2026}
       # Cloudflare Realtime TURN：免端口映射，免费额度 1TB/月
       - CF_TURN_KEY_ID=${CF_TURN_KEY_ID:-}
@@ -50,6 +54,7 @@ services:
       # "公网/内网" 双地址形式，两路都走本中继时直接在内部投递，不绕公网回环
       - TURN_INTERNAL_IP=${TURN_INTERNAL_IP:-}
       - TURN_USER=${TURN_USER:-xiaozhi}
+      # ⚠️ 同上：公开可见的默认口令，生产请在 docker/.env 里覆盖 TURN_PASSWORD
       - TURN_PASSWORD=${TURN_PASSWORD:-xiaozhi-turn-2026}
       - TURN_REALM=${TURN_REALM:-xiaozhi.im}
       - TURN_MIN_PORT=${TURN_MIN_PORT:-49160}

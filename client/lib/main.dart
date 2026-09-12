@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api.dart';
 import 'core/call_service.dart';
+import 'core/remote_config.dart';
 import 'core/settings.dart';
 import 'core/sound_service.dart';
 import 'core/storage.dart';
@@ -26,6 +27,7 @@ void main() async {
     ));
   }
   await Settings.load(); // 载入用户自定义的服务器地址
+  await RemoteConfig().init(); // 配置中心：先吃本地缓存，再后台拉最新（含地址候选）
   await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
   await SoundService().init(); // 读提示音开关 + 预加载音频
   SoundService().attach(); // 全局监听新消息，收到就响一声

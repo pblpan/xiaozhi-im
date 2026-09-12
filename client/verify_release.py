@@ -10,6 +10,7 @@ AOT 会保留类名/方法名/字符串常量，所以这些记号命中就说�
 不加特征串时用下面的默认集合（对应 v0.5.1 的 Windows 黑屏修复）。
 """
 import os
+import re
 import sys
 import zipfile
 
@@ -64,6 +65,20 @@ WIN_MARKS = [
     # （同 _syncTone / _diag 的存活方式，AOT 会保留被 addListener 引用的方法名）。
     '_onSession',               # 新增：会话对象变化也重建
     '_diagPhase',               # 新增：相位跃迁写进诊断面板
+    # ---- v0.8.0 客户端配置下发（SPEC-动态配置与模块.md 第一期）----
+    # 第一期客户端**只消费免鉴权的 /bootstrap**（防未登录死锁）；
+    # /api/client/config 是给第二期「按角色/用户定向下发」预留的服务端骨架，
+    # 客户端此刻不调用它 —— 所以 **不要**把 '/api/client/config' 加进来当判据。
+    '/api/client/bootstrap',    # 冷启动/轮询拉配置的接口路径（片段常量，能搜到）
+    'reportConfigApplied',      # 生效上报（api.dart 新增方法名）
+    'RemoteConfig',             # 配置服务单例类名（AOT 保留）
+    'hasUserServers',           # 「用户自配地址永不被下发覆盖」的判定函数
+    'remote_config.dart',       # 上述逻辑所在文件
+    # ⚠️ 下面这些**实测搜不到，禁止当判据**（2026-09-12 探测 APK/WIN 双产物确认）：
+    #   kAppVersion / appliedVersion / appliedConfigVersion  → AOT 直接常量折叠消除
+    #   '/api/client/config'、'/api/client/report-applied'  → 由 Config.baseUrl 拼接，
+    #     只保留 '/api/client/' 之外的片段，完整串不存在
+    #   教训与 onFirstFrameRendered 同源：判据必须挑**真能命中**的串，加之前先探测。
 ]
 
 # 必须**不再出现**的记号：功能下线 / 资源被替换。
@@ -212,8 +227,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.7.0', 'v0.7.0'],
-        'src/package.json': ['"version": "0.7.0"'],
+        'manifest': ['version', '0.8.0', 'v0.8.0'],
+        'src/package.json': ['"version": "0.8.0"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
@@ -240,8 +255,21 @@ def check_fpk(path):
         'src/src/routes/friends.js': ["'/:friendId/remark'", 'MAX_REMARK'],
         'src/src/chat.js': ['remarkOf'],
         # v0.6.5：管理台中继配置向导（读状态 / 校验 / 保存 / 移除）
+        # v0.8.0：客户端配置中心的管理台接口（读 / 发布 / 回滚 / 同步状态）
         'src/src/routes/admin.js': ["'/turn'", "'/turn/verify'", 'envPath',
-                                    'probeTurnCredentials', 'needRecreate'],
+                                    'probeTurnCredentials', 'needRecreate',
+                                    "'/client-config'", "'/client-config/rollback'",
+                                    "'/client-config/applied'", 'clientconfig'],
+        # v0.8.0：客户端配置下发（SPEC-动态配置与模块.md 第一期）
+        #   clientconfig.js 是配置中心本体：白名单校验 / 只增不改的版本快照 /
+        #   回滚=用旧内容发新版。routes/client.js 是下发出去的口子：
+        #   bootstrap 免鉴权（未登录也要能拿地址，否则死锁），report-applied 上报。
+        'src/src/clientconfig.js': ['DEFAULT_CONFIG', 'client_configs',
+                                    'validate', 'publish', 'rollback',
+                                    'reportApplied', 'appliedStatus',
+                                    'minClientVersion', 'announcements'],
+        'src/src/routes/client.js': ['/bootstrap', '/config', '/report-applied',
+                                     'clientconfig'],
         'docker/coturn/entrypoint.sh': ['detect_lan_ip', 'EXTERNAL_IP_VALUE'],
         'docker/coturn/turnserver.conf': ['__EXTERNAL_IP__', '__MIN_PORT__'],
         'docker/docker-compose.yaml': ['coturn', 'TURN_INTERNAL_IP', 'TURN_URLS',
@@ -314,9 +342,15 @@ def check_fpk(path):
                         '命中 ✓' if wizard_hit else '缺失 ✗'))
     all_ok = all_ok and bool(wizard_hit)
 
-    # 向导绝不能把明文密钥渲染进静态产物（防误把测试凭据提交进去）
-    leak = [n for n in admin_js
-            if b'7839139c2d17a599f2118c6372b2410b' in blob[n]]
+    # 向导绝不能把明文密钥渲染进静态产物。
+    # ⚠️ 这里**绝对不要**写真实凭据去做比对 —— 本仓库是公开的，
+    #    一旦把 KEY_ID / API Token 写进源码，等于把它们直接公开出去
+    #    （曾经真的这么干过：用真值当"不该出现的串"，等于自曝密钥）。
+    #    改为按**形态**检测：只要产物里出现「CF_TURN_ 键名 + 16 位以上 hex 值」
+    #    就报警。不依赖任何真实值，目的完全一样。
+    CRED_RE = re.compile(
+        rb'CF_TURN_(?:KEY_ID|API_TOKEN)\s*[:=\'"]+\s*[0-9a-fA-F]{16,}')
+    leak = [n for n in admin_js if CRED_RE.search(blob[n])]
     print('%-30s %s' % ('src/public/assets(无明文密钥)',
                         '干净 ✓' if not leak else '泄漏 ✗ %s' % leak))
     all_ok = all_ok and not leak
@@ -336,6 +370,32 @@ def check_fpk(path):
     print('%-30s %s' % ('src/src/call.js(非 size 判 1v1)',
                         '干净 ✓' if bad_1v1 not in call_src else '回退 ✗ 又用 participants.size 判 1v1'))
     all_ok = all_ok and bad_1v1 not in call_src
+
+    # v0.8.0：管理台「客户端配置」页必须真打进静态产物。
+    # 判据用页面里独有的中文 UI 串（编辑区标题 + 发布按钮语义），
+    # 不用文件名 —— vite 产物名带内容哈希，写不死。
+    #   判据串要跟 App.vue 里**一模一样**：页面标题是「客户端配置」，
+    #   按钮实际写的是「发布…」/「确认发布」（不是"发布新版本"）—— 差一个字就误报。
+    cfg_hit = [n for n in admin_js
+               if '客户端配置'.encode('utf-8') in blob[n]
+               and '同步状态'.encode('utf-8') in blob[n]
+               and '回滚'.encode('utf-8') in blob[n]]
+    print('%-30s %s' % ('src/public/assets(客户端配置页)',
+                        '命中 ✓' if cfg_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(cfg_hit)
+
+    # v0.8.0：bootstrap 免鉴权是硬要求，但绝不能因此把用户定向内容漏出去。
+    # 判据：bootstrap 分支里不得出现 verifyToken（只有 /config 与上报才鉴权）。
+    #   注意别用"文件里出现 verifyToken"来判 —— uidOf() 定义在文件上方，
+    #   那样必然误报。只截取 '/bootstrap' 到下一个 router.get 之间的处理函数体。
+    cjs = blob.get('src/src/routes/client.js', b'')
+    boot_seg = b''
+    if b"'/bootstrap'" in cjs:
+        boot_seg = cjs.split(b"'/bootstrap'", 1)[1].split(b'router.get', 1)[0]
+    boot_ok = bool(boot_seg) and b'uidOf' not in boot_seg and b'verifyToken' not in boot_seg
+    print('%-30s %s' % ('routes/client.js(bootstrap 免鉴权)',
+                        '正确 ✓' if boot_ok else '异常 ✗'))
+    all_ok = all_ok and boot_ok
 
     hits = []
     for name, data in blob.items():

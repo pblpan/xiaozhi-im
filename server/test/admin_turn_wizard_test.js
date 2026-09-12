@@ -86,7 +86,9 @@ async function main() {
   console.log('='.repeat(56));
 
   const cf = await fakeCf();
-  const VALID_KID = '7839139c2d17a599f2118c6372b2410b';
+  // ⚠️ 一律用**假凭据**。测试只关心"格式是否正确"，用真实 KEY_ID 会把它
+  //    永久留在公开仓库里（踩过：本仓库是 Public，等同自曝凭据）。
+  const VALID_KID = '0123456789abcdef0123456789abcdef';
   const VALID_TOK = 'a'.repeat(64);
 
   // 临时目录当 DATA_DIR，.env 放它旁边，全部隔离

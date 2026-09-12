@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/call_service.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
+import 'package:xiaozhi_im_client/core/remote_config.dart';
 import 'package:xiaozhi_im_client/core/sound_service.dart';
 import 'package:xiaozhi_im_client/core/storage.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
@@ -200,6 +201,75 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     // showServerSettings 内部已经 resolveNow()，刷新 currentUrl
     await SocketService().reconnect();
     await _init();
+  }
+
+  /// 关于 / 检查配置：显示客户端版本 + 已生效配置版本，可手动拉一次配置。
+  /// 配置中心"出问题保持现状"（SPEC §6.2），这里拉取失败也只是文案提示，不报错弹窗。
+  Future<void> _openAbout() async {
+    final rc = RemoteConfig();
+    // ⚠️ fetchTip 必须放在 builder 外面：StatefulBuilder 每次重建都会重新执行
+    // builder，写在里面的局部变量会被重置回 null，setD 的赋值永远显示不出来。
+    String? fetchTip;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) {
+          return AlertDialog(
+            title: const Text('关于'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('小智 IM 客户端 v$kAppVersion'),
+                const SizedBox(height: 6),
+                Text('配置版本：${rc.appliedVersion > 0 ? 'v${rc.appliedVersion}' : '未获取'}',
+                    style: const TextStyle(fontSize: 13)),
+                if (fetchTip != null) ...[
+                  const SizedBox(height: 6),
+                  Text(fetchTip!,
+                      style: const TextStyle(
+                          fontSize: 12, color: AppColors.textSub)),
+                ],
+                if (rc.upgradeHint.value != null) ...[
+                  const SizedBox(height: 10),
+                  Text(rc.upgradeHint.value!,
+                      style: const TextStyle(
+                          fontSize: 13, color: AppColors.danger)),
+                ],
+                for (final a in (rc.payload['announcements'] as List? ?? []))
+                  if (a is Map && (a['text'] ?? '').toString().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text((a['text'] ?? '').toString(),
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: a['level'] == 'critical'
+                                ? AppColors.danger
+                                : (a['level'] == 'warn'
+                                    ? AppColors.warn
+                                    : AppColors.textSub))),
+                  ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  setD(() => fetchTip = '正在检查…');
+                  await rc.fetch();
+                  setD(() => fetchTip = rc.appliedVersion > 0
+                      ? '已是最新（配置 v${rc.appliedVersion}）'
+                      : '暂时连不上，稍后会自动重试');
+                },
+                child: const Text('检查更新'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('关闭'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _openChat(Conversation cv) async {
@@ -784,6 +854,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'server') _openServer();
                 if (v == 'logout') _logout();
                 if (v == 'sound') _toggleSound();
+                if (v == 'about') _openAbout();
                 if (v == 'profile') _openProfile();
                 if (v == 'newfriends') _openNewFriends();
               },
@@ -851,6 +922,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       Icon(Icons.dns_rounded, size: 19),
                       SizedBox(width: 10),
                       Text('服务器设置')
+                    ])),
+                const PopupMenuItem(
+                    value: 'about',
+                    child: Row(children: [
+                      Icon(Icons.info_outline_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('关于 / 检查配置')
                     ])),
                 const PopupMenuItem(
                     value: 'logout',
