@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>小智 IM</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>xiaozhi_im_client</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<!-- ===== PERMISSIONS BEGIN (gen_ios_project.py) ===== -->
+	<!-- ⚠️ 本段由 client/tool/gen_ios_project.py 生成，手改会被下次重建覆盖。
+	     要增删权限请改脚本里的 PERMISSIONS 段 / PLAIN_HTTP_HOSTS。 -->
+	<!-- 相机：视频通话 / 拍照发送。缺了会直接闪退（不是禁用，是崩） -->
+	<key>NSCameraUsageDescription</key>
+	<string>用于视频通话，以及拍照后发送给对方</string>
+	<!-- 麦克风：语音通话 / 语音消息 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音通话，以及录制语音消息</string>
+	<!-- 相册读取：发照片 -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于选择手机里的照片发送给对方</string>
+	<!-- 相册写入：存收到的图 -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于把收到的图片保存到相册</string>
+	<!-- ⚠️⚠️ 本地网络：iOS 14 起连局域网设备**必须**声明。
+	     我们默认连内网 http://192.168.31.44:3602（飞牛 NAS）。
+	     漏了的典型现象：外网域名能连、内网地址连不上，且**不弹任何提示** ——
+	     极易被误判成"服务器挂了"，实际是这里少一行。 -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于在局域网内直连你自己的小智 IM 服务器（如家里的飞牛 NAS）</string>
+	<!-- Bonjour 服务类型。我们连的是纯 IP + 端口，按最小集填，不做过度申报 -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
+	<!-- ⚠️ ATS：iOS 默认禁止明文 HTTP。
+	     下面**不**全局放开（NSAllowsArbitraryLoads=false），只对指定内网 IP 开例外 ——
+	     全局放开会在 App Store 审核时被要求书面说明理由，而我们确实只需要这几个地址。 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>192.168.31.44</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+	<!-- ===== PERMISSIONS END ===== -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>UIWindowScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>

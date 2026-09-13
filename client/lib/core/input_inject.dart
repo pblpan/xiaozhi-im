@@ -15,23 +15,32 @@
 // 是 dart:ffi 里声明的**扩展方法** —— 扩展的可见性取决于"哪个库被 import"，
 // 光靠 package:ffi 再导出类型是不够的。不 import 会报很难懂的
 // "expression doesn't evaluate to a function"。
-import 'dart:ffi' as dffi;
+// ⚠️ 这里**不 import 任何平台专属 Dart 包**（尤其不 import package:win32）。
+// 原因：Dart 的 import 是编译期解析的。win32 只在 Windows 有实现，
+// 只要主文件里出现这一行，在 Mac 上编译 iOS 目标就会直接失败 ——
+// 条件导入救不了（dart.library.io 在所有原生平台都为真），
+// pubspec 也没法按平台剔除依赖（dart-lang/pub#2785）。
+//
+// 解法：Windows 实现拆到 input_inject_win.dart，里面**只用 dart:ffi**
+// 自己声明 Win32 结构体、运行期从 user32.dll 取 SendInput。
+// 那个文件因此不含任何平台专属包，iOS/macOS 上编译也是干净的。
+// 详见该文件的头部说明。
 import 'dart:io' show Platform;
 
-import 'package:ffi/ffi.dart' as ffi;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:win32/win32.dart' as win;
+
+import 'input_inject_win.dart';
+
+// 对外仍然从本文件导出 Windows 实现与键码表，
+// 这样调用方（remote_assist.dart / remote.dart / 测试）不用改 import 路径。
+export 'input_inject_win.dart' show WindowsInputInjector, Vk, absoluteMousePos;
 
 enum RemoteMouseButton { left, middle, right }
 
-/// 归一化坐标 → Win32 绝对鼠标坐标（0..65535）。
-///
-/// 抽成顶层纯函数是为了**能单测**：这里算错的表象是"鼠标点了但点偏一点点"，
-/// 靠肉眼几乎不可能定位。之所以要特意强调：曾经这里先加虚拟屏原点、再除屏幕
-/// 总宽，结果副屏摆在主屏左侧时审核不出问题、实测却算出负坐标。
-({int x, int y}) absoluteMousePos(double nx, double ny) =>
-    (x: (nx.clamp(0.0, 1.0) * 65535).round(), y: (ny.clamp(0.0, 1.0) * 65535).round());
+// 注：`absoluteMousePos()` 与 `Vk` 键码表已移到 input_inject_win.dart
+// （它们只对 Windows 有意义），本文件通过上面的 export 重新对外提供，
+// 调用方与测试的 import 路径不变。
 
 /// 一次键盘动作的"原始素材"。
 ///
@@ -85,125 +94,6 @@ abstract class InputInjector {
   void tapKey(RemoteKey key) {
     keyDown(key);
     keyUp(key);
-  }
-}
-
-// ---------------------------------------------------------------- Windows
-
-/// Windows 注入实现：Win32 `SendInput`。
-///
-/// 【为什么不用已被标记废弃的 mouse_event / keybd_event】
-/// 它们现在还能跑，但官方已明确建议迁移；更实际的是 SendInput 支持
-/// "一次投递多条输入由系统按队列处理"，行为与真实输入一致，延迟也更低。
-class WindowsInputInjector extends InputInjector {
-  @override
-  bool get supported => Platform.isWindows;
-
-  @override
-  String get hint => 'Windows 端可直接远程控制';
-
-  /// ⚠️ 归一化 → 绝对坐标的换算，**不能**减虚拟屏原点。
-  ///
-  /// `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK` 的语义就是：dx/dy 是覆盖
-  /// **整个虚拟桌面**的 0..65535 定点数。所以 0..1 的比例乘 65535 就是答案，
-  /// 不需要（也不应该）先用 GetSystemMetrics 拿虚拟屏尺寸再折算 ——
-  /// 一旦副屏摆在主屏左侧，虚拟屏原点 _vx 是负数，先加原点再除总宽会算出负坐标。
-  ///
-  /// ⚠️ 已知限制：若被控端有多块显示器而共享的只是其中一块，控制端画面里的
-  /// 0..1 会映射到整块虚拟桌面而非那块被共享的屏。要用 gloss 去区分的话得先让
-  /// 采集侧回报"共享的是哪一块屏"，目前 getDisplayMedia 拿不到，先按桌面整体处理。
-  @override
-  void moveAbsolute(double nx, double ny) {
-    final p = absoluteMousePos(nx, ny);
-    _sendMouse(
-      win.MOUSEEVENTF_MOVE |
-          win.MOUSEEVENTF_ABSOLUTE |
-          win.MOUSEEVENTF_VIRTUALDESK,
-      p.x,
-      p.y,
-      0,
-    );
-  }
-
-  @override
-  void mouseButton(RemoteMouseButton button, bool down) {
-    // down/up 事件自带上一个 moveAbsolute 的位置 —— 上层保证"先移动再点击"的顺序
-    final win.MOUSE_EVENT_FLAGS f;
-    switch (button) {
-      case RemoteMouseButton.left:
-        f = down ? win.MOUSEEVENTF_LEFTDOWN : win.MOUSEEVENTF_LEFTUP;
-        break;
-      case RemoteMouseButton.middle:
-        f = down ? win.MOUSEEVENTF_MIDDLEDOWN : win.MOUSEEVENTF_MIDDLEUP;
-        break;
-      case RemoteMouseButton.right:
-        f = down ? win.MOUSEEVENTF_RIGHTDOWN : win.MOUSEEVENTF_RIGHTUP;
-        break;
-    }
-    _sendMouse(f, 0, 0, 0);
-  }
-
-  @override
-  void scroll(int delta) {
-    // WHEEL_DELTA = 120 是"一格"的标准量；符号按直觉取反（向上滚为正）
-    _sendMouse(win.MOUSEEVENTF_WHEEL, 0, 0, -delta * 120);
-  }
-
-  void _sendMouse(win.MOUSE_EVENT_FLAGS flags, int dx, int dy, int data) {
-    final p = ffi.calloc<win.INPUT>();
-    try {
-      p.ref.type = win.INPUT_MOUSE;
-      p.ref.mi.dx = dx;
-      p.ref.mi.dy = dy;
-      p.ref.mi.mouseData = data;
-      p.ref.mi.dwFlags = flags;
-      p.ref.mi.time = 0;
-      p.ref.mi.dwExtraInfo = 0;
-      win.SendInput(1, p, dffi.sizeOf<win.INPUT>());
-    } finally {
-      ffi.calloc.free(p);
-    }
-  }
-
-  @override
-  void keyDown(RemoteKey key) => _key(key, true);
-
-  @override
-  void keyUp(RemoteKey key) => _key(key, false);
-
-  void _key(RemoteKey k, bool down) {
-    final p = ffi.calloc<win.INPUT>();
-    try {
-      p.ref.type = win.INPUT_KEYBOARD;
-      final up = down ? const win.KEYBD_EVENT_FLAGS(0) : win.KEYEVENTF_KEYUP;
-
-      if (k.char != null && k.char!.isNotEmpty) {
-        // Unicode 注入：一个 UTF-16 码元一次。中文/符号都能原样打出，
-        // 不受被控端输入法状态影响。
-        for (final unit in k.char!.codeUnits) {
-          p.ref.ki.wVk = const win.VIRTUAL_KEY(0);
-          p.ref.ki.wScan = unit;
-          p.ref.ki.dwFlags = win.KEYEVENTF_UNICODE | up;
-          p.ref.ki.time = 0;
-          p.ref.ki.dwExtraInfo = 0;
-          win.SendInput(1, p, dffi.sizeOf<win.INPUT>());
-        }
-        return;
-      }
-
-      final vk = k.vk;
-      if (vk == null) return;
-      var flags = up;
-      if (k.extended) flags = flags | win.KEYEVENTF_EXTENDEDKEY;
-      p.ref.ki.wVk = win.VIRTUAL_KEY(vk);
-      p.ref.ki.wScan = 0;
-      p.ref.ki.dwFlags = flags;
-      p.ref.ki.time = 0;
-      p.ref.ki.dwExtraInfo = 0;
-      win.SendInput(1, p, dffi.sizeOf<win.INPUT>());
-    } finally {
-      ffi.calloc.free(p);
-    }
   }
 }
 
@@ -294,31 +184,4 @@ InputInjector createInputInjector() {
   if (Platform.isWindows) return WindowsInputInjector();
   if (Platform.isAndroid) return AndroidInputInjector();
   return UnsupportedInputInjector('当前平台不支持远程控制，只能观看对方屏幕');
-}
-
-/// 常用的 Windows 虚拟键码。
-///
-/// 只列远程协助真正用得到的 —— 键盘上一百多个键全抄一遍既没意义又容易抄错。
-class Vk {
-  static const int backspace = 0x08;
-  static const int tab = 0x09;
-  static const int enter = 0x0D;
-  static const int shift = 0x10;
-  static const int control = 0x11;
-  static const int alt = 0x12;
-  static const int escape = 0x1B;
-  static const int space = 0x20;
-  static const int pageUp = 0x21;
-  static const int pageDown = 0x22;
-  static const int end = 0x23;
-  static const int home = 0x24;
-  static const int left = 0x25;
-  static const int up = 0x26;
-  static const int right = 0x27;
-  static const int down = 0x28;
-  static const int insert = 0x2D;
-  static const int delete = 0x2E;
-  static const int meta = 0x5B;      // 左 Win
-  static const int f1 = 0x70;        // F1..F12 = f1 + (n-1)
-  static const int f12 = 0x7B;
 }
