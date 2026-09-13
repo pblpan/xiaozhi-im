@@ -177,6 +177,39 @@ ensureColumn('conversations', 'pinned_message_id', 'pinned_message_id INTEGER');
 ensureColumn('conversation_members', 'muted', 'muted INTEGER NOT NULL DEFAULT 0');
 // 机器人：特殊用户，不可登录、可被拉进群、可发消息（password_hash 存 '!' 使其永远验证失败）
 ensureColumn('users', 'is_bot', 'is_bot INTEGER NOT NULL DEFAULT 0');
+// 工号（好友"工作模式"下：工号=登录账号）；普通模式下为空
+ensureColumn('users', 'employee_no', 'employee_no TEXT');
+// 所属部门 id（工作模式组织机构用）；NULL = 不属于任何部门
+ensureColumn('users', 'org_id', 'org_id INTEGER');
+
+// ---- 实例级设置（键值）----
+// 与 client_configs（版本化快照+灰度）的区别：公司名/好友模式是"服务器身份与策略"，
+// 管理员改一次全体生效，不需要版本化与回滚 —— 用最简单的 KV 就够，
+// 复杂机制只会让"改个名字"变得难懂。
+db.exec(`
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at INTEGER NOT NULL,
+  updated_by TEXT
+);
+`);
+// ---- 组织机构（工作模式）----
+// 一个服务器一个组织：工作模式下管理员建组织、按工号录入员工。
+// 员工账号的 username=工号、初始密码=工号，org_id/employee_no 挂在 users 上
+// （列迁移在下方 ensureColumn）。同事之间不需要好友申请 —— 录入时自动互为好友。
+db.exec(`
+CREATE TABLE IF NOT EXISTS orgs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  created_by INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`);
+// 工作模式组织机构：员工所属组织与工号
+ensureColumn('users', 'employee_no', 'employee_no TEXT');
+ensureColumn('users', 'org_id', 'org_id INTEGER');
+
 // 机器人的归属人（谁创建的，便于后台追责与清理）
 ensureColumn('users', 'bot_owner_id', 'bot_owner_id INTEGER');
 

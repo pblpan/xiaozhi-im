@@ -4,6 +4,7 @@ const { verifyToken } = require('./auth');
 const { sendMessage, recallMessage, markRead, typing } = require('./chat');
 const call = require('./call');
 const remote = require('./remote');
+const friends = require('./routes/friends');
 
 /** 协议层心跳探测间隔：30 秒 */
 const PING_EVERY_MS = 30 * 1000;
@@ -43,6 +44,18 @@ function init(server) {
     call.handleOnline(userId);
     const pending = call.pendingForUser(userId);
     if (pending) hub.send(ws, pending);
+
+    // ---- 好友申请上线补推 ----
+    // 申请落库那一刻（POST /api/friends/request）对方不在线的话，
+    // friend:request 帧就发不出去了；而申请不会自己消失，
+    // 只靠客户端进页面拉一次列表，用户感知就是"发了邀请对方说没收到"。
+    // 与上面通话补推同一模式：每次 WS 连上就查一次 pending，
+    // 有未处理的就补发一条 friend:pending，客户端据此弹提示+刷新徽标。
+    // （申请被处理前，每次上线都会再提醒一次 —— 与未读消息同语义，是有意的。）
+    const friendPending = friends.pendingForUser(userId);
+    if (friendPending.length) {
+      hub.send(ws, { type: 'friend:pending', requests: friendPending });
+    }
 
     ws.on('message', (raw) => {
       let frame;

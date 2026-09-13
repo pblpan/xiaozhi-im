@@ -271,6 +271,40 @@ function stopServer() {
   r = await api('POST', '/api/friends/reject', { token: tb, body: { friendId: C.user.id } });
   ok('拒绝不存在的申请 → 404', r.status === 404, JSON.stringify(r.body));
 
+  // ---------------- 离线申请上线补推 ----------------
+  // 根因场景：申请落库那一刻对方不在线，friend:request 帧发不出去，
+  // 上线后也没有任何补偿 → 用户表现"发了邀请对方说没收到"。
+  // 修复：WS 连接建立时服务端查 pending，非空就补发 friend:pending。
+  console.log('\n【二·四】离线申请上线补推');
+  wsB.close();
+  await sleep(150); // 等 B 的连接真的断掉
+
+  r = await api('POST', '/api/friends/request', { token: tc, body: { friendId: bId, message: '你上线才能看到我' } });
+  ok('B 离线时收到好友申请（落库成功）', r.status === 200, JSON.stringify(r.body));
+
+  const wsB2 = new Ws(tb);
+  await wsB2.open();
+  const backfill = await wsB2.wait('friend:pending');
+  ok('B 上线后收到 friend:pending 补推帧', !!backfill, '未收到补推帧');
+  ok('补推帧带完整申请信息（申请人/附言）',
+    !!backfill && Array.isArray(backfill.requests) && backfill.requests.length === 1
+    && backfill.requests[0].username === 'carol'
+    && backfill.requests[0].message === '你上线才能看到我',
+    JSON.stringify(backfill));
+
+  // 处理掉申请后再上线，不应再收到补推（没欠账了）
+  r = await api('POST', '/api/friends/reject', { token: tb, body: { friendId: C.user.id } });
+  ok('处理掉补推的申请', r.status === 200, JSON.stringify(r.body));
+  wsB2.close();
+  await sleep(150);
+  const wsB3 = new Ws(tb);
+  await wsB3.open();
+  await sleep(600); // 给服务端留出"若有 bug 就会推帧"的时间窗
+  ok('无待处理申请时上线不再发 friend:pending',
+    !wsB3.buf.some((m) => m.type === 'friend:pending'),
+    JSON.stringify(wsB3.buf.filter((m) => m.type === 'friend:pending')));
+  wsB3.close();
+
   // ---------------- 好友备注 ----------------
   // 备注是「我这一侧」的私有属性，落在 friendships(user_id=我, friend_id=对方)，
   // 要同时验三件事：能存、对方看不到、能顶替昵称出现在会话标题上。

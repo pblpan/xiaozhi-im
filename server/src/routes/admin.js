@@ -6,6 +6,7 @@ const config = require('../config');
 const { verifyToken, hashPassword, verifyPassword } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
+const settings = require('../settings');
 const pkg = require('../../package.json');
 
 function adminOf(req, res) {
@@ -62,6 +63,23 @@ router.get('/info', (req, res) => {
     node: process.version,
     version: pkg.version,
   });
+});
+
+/* ==================== 实例级设置（公司名 / 好友模式） ==================== */
+
+router.get('/settings', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json(settings.all());
+});
+
+// 公司名客户端显示为「公司名小智」，所以这里只存公司原文。
+// 切到 work 模式前管理员应先建好组织机构（接口在 /api/admin/org*）；
+// 本接口不做这个强校验 —— 模式开关与建机构是两件事，绑死反而难用。
+router.put('/settings', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const r = settings.update(req.body, uid);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json(r.settings);
 });
 
 /* ==================== Users ==================== */

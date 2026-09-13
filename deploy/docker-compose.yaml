@@ -5,6 +5,9 @@ services:
     restart: unless-stopped
     ports:
       - "3602:3602"
+      # 局域网发现（UDP 广播应答）：客户端首装时自动找到服务器。
+      # 必须映射为 UDP；不映射的话发现服务静默失效，客户端只能手填地址。
+      - "3616:3616/udp"
     environment:
       - PORT=3602
       - JWT_SECRET=${JWT_SECRET:-change-me-xiaozhi-im}

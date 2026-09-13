@@ -222,6 +222,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _toast('已复制$label');
   }
 
+  Future<void> _changePassword() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => const _ChangePasswordDialog(),
+    );
+    if (ok == true) _toast('密码已修改，下次登录请使用新密码');
+  }
+
   // ---------------- 界面 ----------------
 
   @override
@@ -323,6 +331,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 icon: const Icon(Icons.copy_rounded, size: 16),
                 onPressed: () => _copy('ID', '${u.id}'),
               )),
+          if (_isMe)
+            _row('修改密码', '定期更换更安全', weak: true, onTap: _changePassword),
         ]),
         const SizedBox(height: 10),
         const Padding(
@@ -445,5 +455,152 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
         ),
+      );
+}
+
+/// 修改密码对话框。
+///
+/// 校验顺序：客户端先拦格式（非空 / ≥6 位 / 两次一致），再交给服务端
+/// 复核旧密码 —— 服务端返回的中文错误（旧密码不正确等）直接展示。
+/// 成功后 `Navigator.pop(true)`，由调用方 toast 提示；当前会话不被踢下线。
+class _ChangePasswordDialog extends StatefulWidget {
+  const _ChangePasswordDialog();
+
+  @override
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
+  final _old = TextEditingController();
+  final _new = TextEditingController();
+  final _confirm = TextEditingController();
+  bool _obscure = true;
+  bool _busy = false;
+  String? _error;
+
+  void _listen() => setState(() {});
+
+  @override
+  void initState() {
+    super.initState();
+    _old.addListener(_listen);
+    _new.addListener(_listen);
+  }
+
+  @override
+  void dispose() {
+    _old.dispose();
+    _new.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  bool get _canSubmit =>
+      !_busy && _old.text.isNotEmpty && _new.text.isNotEmpty;
+
+  Future<void> _submit() async {
+    final np = _new.text;
+    if (np.length < 6) {
+      setState(() => _error = '新密码至少 6 位');
+      return;
+    }
+    if (np != _confirm.text) {
+      setState(() => _error = '两次输入的新密码不一致');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await ImApi().changePassword(_old.text, np);
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e is ApiException
+          ? e.message
+          : e.toString().replaceFirst('Exception: ', '');
+      setState(() {
+        _busy = false;
+        _error = msg;
+      });
+    }
+  }
+
+  InputDecoration _dec(String hint) => InputDecoration(
+        hintText: hint,
+        counterText: '',
+        suffixIcon: _new.text.isEmpty
+            ? null
+            : IconButton(
+                tooltip: _obscure ? '显示密码' : '隐藏密码',
+                icon: Icon(
+                  _obscure
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  size: 19,
+                ),
+                onPressed: () => setState(() => _obscure = !_obscure),
+              ),
+      );
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('修改密码'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _old,
+              autofocus: true,
+              obscureText: _obscure,
+              maxLength: 64,
+              enabled: !_busy,
+              decoration: const InputDecoration(hintText: '当前密码', counterText: ''),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _new,
+              obscureText: _obscure,
+              maxLength: 64,
+              enabled: !_busy,
+              decoration: _dec('新密码（至少 6 位）'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _confirm,
+              obscureText: _obscure,
+              maxLength: 64,
+              enabled: !_busy,
+              onSubmitted: _canSubmit ? (_) => _submit() : null,
+              decoration: _dec('确认新密码'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(_error!,
+                    style: const TextStyle(
+                        fontSize: 12.5, color: AppColors.danger)),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: _busy ? null : () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: _canSubmit ? _submit : null,
+            child: _busy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('确认修改'),
+          ),
+        ],
       );
 }

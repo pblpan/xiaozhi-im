@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
+import 'package:xiaozhi_im_client/core/discover.dart';
 import 'package:xiaozhi_im_client/core/settings.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 
@@ -31,6 +32,11 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
   String? _lanStatus; // null | 'ok' | 'fail:<msg>'
   String? _wanStatus;
   bool _probing = false;
+
+  // 局域网扫描状态
+  bool _scanning = false;
+  List<DiscoveredServer> _scanned = const [];
+  String? _scanNote; // 扫描结果说明（没扫到/失败原因）
 
   @override
   void initState() {
@@ -77,6 +83,32 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
             ? _lanStatus = 'fail:$msg'
             : _wanStatus = 'fail:$msg');
       }
+    }
+  }
+
+  /// 局域网扫描：UDP 广播问一圈"谁是内网 IM 服务器"。
+  /// 扫到 → 列表展示，点一条直接填入内网地址框；
+  /// 扫不到 → 给出说明（服务器可能不在这个网段 / 不支持发现），引导手填。
+  Future<void> _scan() async {
+    setState(() {
+      _scanning = true;
+      _scanned = const [];
+      _scanNote = null;
+    });
+    try {
+      final found = await LanDiscover.scan();
+      if (!mounted) return;
+      setState(() {
+        _scanned = found;
+        _scanning = false;
+        _scanNote = found.isEmpty ? '没发现服务器：请确认手机/电脑与服务器连的是同一个路由器' : null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _scanning = false;
+        _scanNote = '扫描失败，可直接手填内网地址';
+      });
     }
   }
 
@@ -163,6 +195,84 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                   icon: Icons.public_rounded,
                   status: _wanStatus,
                 ),
+
+                const SizedBox(height: 18),
+                OutlinedButton.icon(
+                  onPressed: _scanning ? null : _scan,
+                  icon: _scanning
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.radar_rounded, size: 16),
+                  label: Text(_scanning ? '正在扫描局域网…' : '扫描内网服务器',
+                      style: const TextStyle(fontSize: 13)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.brand,
+                    side: const BorderSide(color: AppColors.border),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.sm)),
+                  ),
+                ),
+                // 扫描结果：点一条直接填入内网地址（仍可手改）
+                for (final s in _scanned)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(AppRadii.sm),
+                      onTap: () {
+                        _lanCtrl.text = s.url;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                              content: Text('已填入：${s.url}（记得保存）'),
+                              duration: const Duration(seconds: 2)),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 9),
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(AppRadii.sm),
+                          border: Border.all(color: AppColors.border),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.dns_rounded,
+                                size: 16, color: AppColors.brand),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(s.url,
+                                      style: const TextStyle(
+                                          fontSize: 13,
+                                          fontFamily: 'monospace',
+                                          fontWeight: FontWeight.w600)),
+                                  if (s.companyName.isNotEmpty)
+                                    Text('公司：${s.companyName} · 服务端 v${s.serverVersion}',
+                                        style: const TextStyle(
+                                            fontSize: 11,
+                                            color: AppColors.textWeak)),
+                                ],
+                              ),
+                            ),
+                            const Icon(Icons.check_rounded,
+                                size: 16, color: AppColors.textWeak),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                if (_scanNote != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(_scanNote!,
+                        style: const TextStyle(
+                            fontSize: 11.5, color: AppColors.textWeak)),
+                  ),
 
                 const SizedBox(height: 6),
                 Row(

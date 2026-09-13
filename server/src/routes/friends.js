@@ -2,6 +2,7 @@ const router = require('express').Router();
 const db = require('../db');
 const { verifyToken } = require('../auth');
 const hub = require('../hub');
+const settings = require('../settings');
 
 function uidOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -29,6 +30,16 @@ const MAX_MESSAGE = 100;
 const MAX_REMARK = 30;
 
 const brief = (id) => db.prepare(`SELECT id,username,nickname,avatar,signature FROM users WHERE id=?`).get(id);
+
+/// 某用户所有待处理的好友申请（含申请人资料、附言、时间）。
+/// 供两处使用：GET / 的 pending 段、ws.js 用户上线时的补推 ——
+/// 申请落库那一刻对方可能不在线（friend:request 帧发不出去），
+/// 上线补推是保证"申请必达"的兜底，缺了它用户表现就是"发了邀请对方说没收到"。
+function pendingForUser(userId) {
+  return db.prepare(`SELECT ${USER_COLS}, f.message, f.created_at FROM friendships f
+    JOIN users u ON u.id=f.user_id
+    WHERE f.friend_id=? AND f.status='pending' ORDER BY f.created_at DESC`).all(userId);
+}
 
 // ============================================================
 // 认证附言模板
@@ -129,6 +140,11 @@ router.put('/:friendId/remark', (req, res) => {
 // 发起好友请求（带认证附言）
 router.post('/request', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
+  // 工作模式下没有"申请好友"语义：录入员工时已自动互为好友，
+  // 同事列表 = 好友列表；放行申请只会让「已经是好友却收到申请」的怪状态出现
+  if (settings.get('friendMode') === 'work') {
+    return res.status(403).json({ error: '工作模式下同事自动互为好友，无需申请' });
+  }
   const friendId = Number(req.body?.friendId);
   const message = String(req.body?.message || '').trim();
   if (!Number.isInteger(friendId) || friendId <= 0) return res.status(400).json({ error: '好友 id 不合法' });
@@ -171,10 +187,7 @@ router.get('/', (req, res) => {
     JOIN users u ON u.id=f.friend_id
     WHERE f.user_id=? AND f.status='accepted'
     ORDER BY COALESCE(NULLIF(f.remark,''), u.nickname, u.username)`).all(uid);
-  const pending = db.prepare(`SELECT ${USER_COLS}, f.message, f.created_at FROM friendships f
-    JOIN users u ON u.id=f.user_id
-    WHERE f.friend_id=? AND f.status='pending' ORDER BY f.created_at DESC`).all(uid);
-  res.json({ friends, pending });
+  res.json({ friends, pending: pendingForUser(uid) });
 });
 
 // 接受好友请求（自动建单聊会话）
@@ -213,3 +226,4 @@ router.delete('/:friendId', (req, res) => {
 });
 
 module.exports = router;
+module.exports.pendingForUser = pendingForUser;

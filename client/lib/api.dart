@@ -147,6 +147,27 @@ class ImApi {
 
   Future<Map<String, dynamic>> me() async => await _get('/auth/me');
 
+  /// 修改密码（需登录）。旧密码错 → 401；新密码 <6 位 / 与旧密码相同 → 400。
+  /// 注意：JWT 无状态，改密后当前会话 token 仍有效（不会被自己踢下线）。
+  Future<void> changePassword(String oldP, String newP) async =>
+      await _post('/auth/password', {'oldPassword': oldP, 'newPassword': newP});
+
+  // ---- 组织机构（工作模式）----
+  /// 我的组织：{ org: {...}|null, members: [...] }。
+  /// org=null 表示「我没在组织里 / 本服务器还没建组织」。
+  Future<Map<String, dynamic>> myOrg() async => await _get('/orgs/my');
+
+  /// 创建组织（仅管理员；服务端要求工作模式）。
+  Future<Map<String, dynamic>> createOrg(String name) async =>
+      await _post('/orgs', {'name': name});
+
+  /// 录入员工：工号=登录账号、初始密码=工号，自动与同事互为好友。
+  Future<Map<String, dynamic>> addOrgMember(int orgId, String employeeNo, String nickname) async =>
+      await _post('/orgs/$orgId/members', {'employeeNo': employeeNo, 'nickname': nickname});
+
+  Future<void> removeOrgMember(int orgId, int uid) async =>
+      await _delete('/orgs/$orgId/members/$uid');
+
   // ---- 用户 / 好友 ----
   Future<List<dynamic>> search(String q) async =>
       await _get('/users/search?q=${Uri.encodeComponent(q)}');

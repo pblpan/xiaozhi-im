@@ -15,6 +15,7 @@ import 'package:xiaozhi_im_client/screens/favorites.dart';
 import 'package:xiaozhi_im_client/screens/friends_new.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
 import 'package:xiaozhi_im_client/screens/module_hub.dart';
+import 'package:xiaozhi_im_client/screens/org_screen.dart';
 import 'package:xiaozhi_im_client/screens/remote.dart';
 import 'package:xiaozhi_im_client/screens/profile.dart';
 import 'package:xiaozhi_im_client/screens/search.dart';
@@ -127,6 +128,23 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final name =
           (u is Map ? (u['nickname'] ?? u['username']) : null)?.toString() ?? '有人';
       _toast('$name 请求加你为好友');
+      _refreshPendingCount();
+    }
+    if (t == 'friend:pending') {
+      // 上线补推：申请落库那一刻我不在线，friend:request 帧没送到，
+      // 服务端在我连上 WS 时把未处理的申请整包补发过来。
+      // 有 1 条就说名字，多条说总数 —— 不逐条刷屏。
+      final reqs = (e['requests'] as List?) ?? const [];
+      if (reqs.isNotEmpty) {
+        if (reqs.length == 1) {
+          final u = (reqs.first as Map)['user'];
+          final name =
+              (u is Map ? (u['nickname'] ?? u['username']) : null)?.toString() ?? '有人';
+          _toast('$name 请求加你为好友');
+        } else {
+          _toast('有 ${reqs.length} 条待处理的好友申请');
+        }
+      }
       _refreshPendingCount();
     }
     if (t == 'friend:accepted' || t == 'friend:rejected') {
@@ -386,6 +404,26 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       }
     }
     if (cv != null) await _openChat(cv);
+  }
+
+  // ---------------- 组织机构 ----------------
+  Future<void> _openOrg() async {
+    // 在组织页点某个成员时返回该 User，语义是「打开跟 TA 的聊天」
+    final u = await Navigator.push<User>(
+      context,
+      MaterialPageRoute(builder: (_) => const OrgScreen()),
+    );
+    if (!mounted) return;
+    _load();
+    if (u == null) return;
+    try {
+      final r = await ImApi().dm(u.id);
+      if (!mounted) return;
+      await _openChat(
+          Conversation(id: r['conversationId'], type: 'dm', title: u.display));
+    } catch (e) {
+      _toast(_msg(e));
+    }
   }
 
   // ---------------- 添加好友 / 发起聊天 ----------------
@@ -895,6 +933,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'remote') _openRemote();
                 if (v == 'profile') _openProfile();
                 if (v == 'newfriends') _openNewFriends();
+                if (v == 'org') _openOrg();
               },
               itemBuilder: (_) => [
                 const PopupMenuItem(
@@ -928,6 +967,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                           ),
                         ),
                       ],
+                    ])),
+                const PopupMenuItem(
+                    value: 'org',
+                    child: Row(children: [
+                      Icon(Icons.corporate_fare_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('组织机构')
                     ])),
                 const PopupMenuItem(
                     value: 'refresh',

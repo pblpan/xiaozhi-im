@@ -2,6 +2,7 @@ const router = require('express').Router();
 const db = require('../db');
 const hub = require('../hub');
 const { hashPassword, verifyPassword, signToken, verifyToken } = require('../auth');
+const settings = require('../settings');
 
 function uidOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -121,6 +122,11 @@ function broadcastProfile(uid, user) {
 // 路由
 // ============================================================
 router.post('/register', (req, res) => {
+  // 工作模式关闭自助注册：账号由管理员按工号录入（POST /api/orgs/:id/members），
+  // 放开注册会让"工号=账号、初始密码=工号"的账号纪律形同虚设
+  if (settings.get('friendMode') === 'work') {
+    return res.status(403).json({ error: '工作模式下由管理员统一添加员工账号' });
+  }
   const { username, password, nickname } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
   if (username.length < 3) return res.status(400).json({ error: 'username too short' });
@@ -160,6 +166,36 @@ router.put('/profile', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(uid);
   broadcastProfile(uid, user);
   res.json({ user: publicUser(user) });
+});
+
+// ============================================================
+// 修改密码
+// ============================================================
+// 安全边界说明：token 是无状态 JWT（没有 session 表），改密后旧 token
+// 在剩余有效期内（最长 30 天）依然可用 —— 做「改密即全端下线」需要
+// 给十几个路由的 uidOf 加版本比对或引入统一鉴权中间件，本版本不做，
+// 局域网场景下风险可接受。当前会话 token 继续有效正是用户期望的行为：
+// 改完密码不会被自己踢出去，其他端下次登录才用新密码。
+router.post('/password', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const { oldPassword, newPassword } = req.body || {};
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(uid);
+  if (!user) return res.status(401).json({ error: 'unauthorized' });
+
+  // 旧密码必须本人确认 —— 防止设备被他人顺手改掉密码
+  if (!verifyPassword(String(oldPassword ?? ''), user.password_hash)) {
+    return res.status(401).json({ error: '旧密码不正确' });
+  }
+  const np = String(newPassword ?? '');
+  // 注册接口没设密码强度底线（历史包袱），但「主动改密」是安全动作，
+  // 这里给出 6 位下限是合理增量；不回填到注册是为了不破坏既有账号习惯
+  if (np.length < 6) return res.status(400).json({ error: '新密码至少 6 位' });
+  if (np.length > 64) return res.status(400).json({ error: '新密码最长 64 位' });
+  if (np === String(oldPassword ?? '')) {
+    return res.status(400).json({ error: '新密码不能与旧密码相同' });
+  }
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(np), uid);
+  res.json({ ok: true });
 });
 
 module.exports = router;

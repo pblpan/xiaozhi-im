@@ -24,6 +24,8 @@ app.use('/files', express.static(config.FILES_DIR));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/friends', require('./routes/friends'));
+// 组织机构（工作模式）：工号即账号，同事自动互为好友
+app.use('/api/orgs', require('./routes/orgs'));
 app.use('/api/groups', require('./routes/groups'));
 app.use('/api/conversations', require('./routes/messages'));
 app.use('/api/favorites', require('./routes/favorites'));
@@ -46,6 +48,8 @@ app.use((req, res) => res.status(404).json({ error: 'not found' }));
 
 const server = http.createServer(app);
 initWs(server);
+// 局域网发现服务（UDP 广播应答，客户端首装自动找到服务器）
+require('./discover').start();
 // 出站 Webhook 失败重试巡检
 dispatcher.start();
 

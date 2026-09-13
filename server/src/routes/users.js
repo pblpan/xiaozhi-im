@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const db = require('../db');
 const { verifyToken } = require('../auth');
+const settings = require('../settings');
 
 function uidOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -38,6 +39,16 @@ router.get('/search', (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q) return res.json([]);
   const like = `%${escapeLike(q)}%`;
+  // 工作模式下员工只能搜到同组织同事：工号即账号，全库搜索等于把
+  // 全员通讯录暴露给每个账号（还能搜到机器人/历史账号），不放行
+  const me = db.prepare('SELECT role, org_id FROM users WHERE id=?').get(uid);
+  if (settings.get('friendMode') === 'work' && me.role !== 'admin') {
+    if (!me.org_id) return res.json([]);
+    const rows = db.prepare(`SELECT ${COLS} FROM users
+      WHERE org_id=? AND (username LIKE ? ESCAPE '\\' OR nickname LIKE ? ESCAPE '\\')
+      ORDER BY id LIMIT 20`).all(me.org_id, like, like);
+    return res.json(rows);
+  }
   const rows = db.prepare(`SELECT ${COLS} FROM users
     WHERE username LIKE ? ESCAPE '\\' OR nickname LIKE ? ESCAPE '\\'
     ORDER BY id LIMIT 20`).all(like, like);

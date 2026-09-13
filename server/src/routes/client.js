@@ -10,6 +10,7 @@ const router = require('express').Router();
 const { verifyToken } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
+const settings = require('../settings');
 const db = require('../db');
 const pkg = require('../../package.json');
 
@@ -37,6 +38,10 @@ router.get('/bootstrap', (req, res) => {
     configVersion: cur.version,
     serverVersion: pkg.version,
     payload: cur.payload,
+    // 公司名与好友模式是"这台服务器是谁"的公开信息：
+    // 登录页要显示「xxx小智」、注册页要按模式变文案 —— 都在登录前，必须免鉴权可取。
+    // 不含任何用户数据，符合 SPEC §6.1 的免鉴权硬边界。
+    ...settings.all(),
     modules: allModules,
     ts: Date.now(),
   });
@@ -51,6 +56,7 @@ router.get('/config', (req, res) => {
     configVersion: cur.version,
     serverVersion: pkg.version,
     payload: cur.payload,
+    ...settings.all(),
     modules: appmodules.listVisible({ userId: uid, role: roleOf(uid), clientVersion: cv }),
     ts: Date.now(),
   });
