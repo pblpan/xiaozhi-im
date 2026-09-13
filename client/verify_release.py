@@ -393,8 +393,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.10.1', 'v0.10.1'],
-        'src/package.json': ['"version": "0.10.1"'],
+        'manifest': ['version', '0.11.0', 'v0.11.0'],
+        'src/package.json': ['"version": "0.11.0"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；

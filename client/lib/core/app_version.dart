@@ -5,4 +5,4 @@
 ///   ② android/local.properties（flutter.versionName / versionCode）
 ///   ③ pack_win.py 里的产物名
 ///   ④ 这里
-const String kAppVersion = '0.9.3';
+const String kAppVersion = '0.10.0';
