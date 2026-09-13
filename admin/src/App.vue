@@ -1250,7 +1250,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </div>
 
         <!-- 系统设置 -->
-        <!-- 组织机构 -->
+        <!-- 组织机构（套用工厂 V2 人事模型：部门 → 岗位 → 员工 + 批量导入） -->
         <div v-else-if="tab === 'orgs'">
           <el-alert v-if="!orgWorkMode" type="warning" :closable="false" style="margin-bottom:14px">
             <template #title>
@@ -1274,27 +1274,84 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <template #header>
               <div class="card-hdr">
                 <span>组织机构：{{ orgData.org.name }}（{{ orgData.members.length }} 人）</span>
-                <div>
-                  <el-button size="small" type="primary" @click="orgDlg = true">录入员工</el-button>
-                  <el-button size="small" @click="loadOrgs">刷新</el-button>
-                </div>
+                <el-button size="small" @click="loadOrgs">刷新</el-button>
               </div>
             </template>
-            <el-table :data="orgData.members" border stripe>
-              <el-table-column prop="id" label="ID" width="70" />
-              <el-table-column prop="employee_no" label="工号" width="150">
-                <template #default="{ row }">{{ row.employee_no || '—' }}</template>
-              </el-table-column>
-              <el-table-column prop="username" label="账号" />
-              <el-table-column prop="nickname" label="昵称" />
-              <el-table-column label="操作" width="110">
-                <template #default="{ row }">
-                  <el-button size="small" type="danger" @click="removeMember(row)">移除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
+
+            <el-tabs v-model="orgTab">
+              <!-- ======== 部门管理 ======== -->
+              <el-tab-pane label="部门管理" name="depts">
+                <div style="margin-bottom:12px">
+                  <el-button size="small" type="primary" @click="openDeptDlg()">新增部门</el-button>
+                </div>
+                <el-table :data="orgData.depts || []" border stripe row-key="id">
+                  <el-table-column prop="id" label="ID" width="70" />
+                  <el-table-column prop="name" label="部门名称" min-width="160" />
+                  <el-table-column label="上级部门" min-width="140">
+                    <template #default="{ row }">{{ deptName(row.parent_id) || '—（顶级）' }}</template>
+                  </el-table-column>
+                  <el-table-column prop="sort" label="排序" width="80" />
+                  <el-table-column label="操作" width="150">
+                    <template #default="{ row }">
+                      <el-button size="small" @click="openDeptDlg(row)">编辑</el-button>
+                      <el-button size="small" type="danger" @click="removeDept(row)">删除</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+
+              <!-- ======== 岗位管理 ======== -->
+              <el-tab-pane label="岗位管理" name="positions">
+                <div style="margin-bottom:12px">
+                  <el-button size="small" type="primary" @click="openPosDlg()">新增岗位</el-button>
+                </div>
+                <el-table :data="orgData.positions || []" border stripe>
+                  <el-table-column prop="id" label="ID" width="70" />
+                  <el-table-column prop="name" label="岗位名称" min-width="160" />
+                  <el-table-column label="所属部门" min-width="140">
+                    <template #default="{ row }">{{ row.dept_name || '—（通用）' }}</template>
+                  </el-table-column>
+                  <el-table-column prop="sort" label="排序" width="80" />
+                  <el-table-column label="操作" width="150">
+                    <template #default="{ row }">
+                      <el-button size="small" @click="openPosDlg(row)">编辑</el-button>
+                      <el-button size="small" type="danger" @click="removePos(row)">删除</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+
+              <!-- ======== 员工管理 ======== -->
+              <el-tab-pane :label="`员工管理（${orgData.members.length}）`" name="members">
+                <div style="margin-bottom:12px">
+                  <el-button size="small" type="success" @click="orgImportDlg = true">批量导入</el-button>
+                  <el-button size="small" type="primary" @click="orgDlg = true">录入员工</el-button>
+                </div>
+                <el-table :data="orgData.members" border stripe>
+                  <el-table-column prop="id" label="ID" width="70" />
+                  <el-table-column prop="employee_no" label="工号" width="110">
+                    <template #default="{ row }">{{ row.employee_no || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column prop="username" label="账号" width="110" />
+                  <el-table-column prop="nickname" label="昵称" min-width="110" />
+                  <el-table-column label="部门" min-width="120">
+                    <template #default="{ row }">{{ row.dept_name || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="岗位" min-width="120">
+                    <template #default="{ row }">{{ row.position_name || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="150">
+                    <template #default="{ row }">
+                      <el-button size="small" @click="openMemberDlg(row)">编辑</el-button>
+                      <el-button size="small" type="danger" @click="removeMember(row)">移除</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+            </el-tabs>
           </el-card>
 
+          <!-- 录入员工 -->
           <el-dialog v-model="orgDlg" title="录入员工" width="460px">
             <el-alert type="info" :closable="false" style="margin-bottom:14px">
               <template #title>工号即登录账号，初始密码 = 工号；录入后自动与全员互为好友。</template>
@@ -1306,10 +1363,149 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <el-form-item label="昵称">
                 <el-input v-model="orgEmp.name" maxlength="24" placeholder="可选，默认同工号" />
               </el-form-item>
+              <el-form-item label="部门">
+                <el-select v-model="orgEmp.deptId" clearable placeholder="可选" style="width:100%">
+                  <el-option v-for="d in orgData.depts || []" :key="d.id" :label="deptName(d.parent_id) ? deptName(d.parent_id) + ' / ' + d.name : d.name" :value="d.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="岗位">
+                <el-select v-model="orgEmp.positionId" clearable placeholder="可选" style="width:100%">
+                  <el-option v-for="p in orgData.positions || []" :key="p.id" :label="p.name" :value="p.id" />
+                </el-select>
+              </el-form-item>
             </el-form>
             <template #footer>
               <el-button @click="orgDlg = false">取消</el-button>
               <el-button type="primary" :loading="orgBusy" @click="addMember">录入</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 部门 新增/编辑 -->
+          <el-dialog v-model="deptDlg" :title="deptForm.id ? '编辑部门' : '新增部门'" width="440px">
+            <el-form label-width="80px">
+              <el-form-item label="部门名称">
+                <el-input v-model="deptForm.name" maxlength="30" placeholder="如：生产部 / 包装车间" />
+              </el-form-item>
+              <el-form-item label="上级部门">
+                <el-select v-model="deptForm.parentId" clearable placeholder="不选 = 顶级部门" style="width:100%">
+                  <el-option v-for="d in (orgData.depts || []).filter((x) => x.id !== deptForm.id)" :key="d.id" :label="d.name" :value="d.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="排序">
+                <el-input-number v-model="deptForm.sort" :min="0" :max="999" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="deptDlg = false">取消</el-button>
+              <el-button type="primary" :loading="orgBusy" @click="saveDept">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 岗位 新增/编辑 -->
+          <el-dialog v-model="posDlg" :title="posForm.id ? '编辑岗位' : '新增岗位'" width="440px">
+            <el-form label-width="80px">
+              <el-form-item label="岗位名称">
+                <el-input v-model="posForm.name" maxlength="30" placeholder="如：包装工 / 质检员 / 组长" />
+              </el-form-item>
+              <el-form-item label="所属部门">
+                <el-select v-model="posForm.deptId" clearable placeholder="不选 = 全厂通用岗位" style="width:100%">
+                  <el-option v-for="d in orgData.depts || []" :key="d.id" :label="d.name" :value="d.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="排序">
+                <el-input-number v-model="posForm.sort" :min="0" :max="999" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="posDlg = false">取消</el-button>
+              <el-button type="primary" :loading="orgBusy" @click="savePos">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 编辑员工 -->
+          <el-dialog v-model="memberDlg" :title="`编辑员工：${memberForm.username || ''}`" width="440px">
+            <el-form label-width="80px">
+              <el-form-item label="昵称">
+                <el-input v-model="memberForm.nickname" maxlength="24" />
+              </el-form-item>
+              <el-form-item label="部门">
+                <el-select v-model="memberForm.deptId" clearable placeholder="未分配" style="width:100%">
+                  <el-option v-for="d in orgData.depts || []" :key="d.id" :label="d.name" :value="d.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="岗位">
+                <el-select v-model="memberForm.positionId" clearable placeholder="未分配" style="width:100%">
+                  <el-option v-for="p in orgData.positions || []" :key="p.id" :label="p.name" :value="p.id" />
+                </el-select>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="memberDlg = false">取消</el-button>
+              <el-button type="primary" :loading="orgBusy" @click="saveMember">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 批量导入 -->
+          <el-dialog v-model="orgImportDlg" title="批量导入员工" width="680px" top="6vh">
+            <el-alert type="info" :closable="false" style="margin-bottom:12px">
+              <template #title>
+                在 Excel 里按「工号、姓名、部门、岗位」四列排好 → 选中区域复制 → 直接粘贴到下面（也支持 CSV 文本）。
+                部门 / 岗位不存在会自动创建；工号重复或已录入的行自动跳过。
+              </template>
+            </el-alert>
+            <el-input
+              v-model="importText" type="textarea" :rows="9"
+              placeholder="emp010	王十	生产部	包装工&#10;emp011	王十一	生产部	包装工&#10;emp012	赵十二	销售部	业务员"
+              style="font-family:monospace" />
+            <div style="margin-top:8px;display:flex;gap:10px;align-items:center">
+              <input type="file" accept=".csv,.txt,.tsv" @change="onImportFile"
+                style="font-size:12px" />
+              <span style="font-size:12px;color:#909399">
+                解析出 {{ importRows.length }} 行有效数据（列不够按「工号、姓名」处理）
+              </span>
+            </div>
+            <el-table v-if="importRows.length" :data="importRows.slice(0, 8)" border size="small" style="margin-top:10px">
+              <el-table-column prop="employeeNo" label="工号" width="130" />
+              <el-table-column prop="nickname" label="姓名" width="130" />
+              <el-table-column prop="dept" label="部门" />
+              <el-table-column prop="position" label="岗位" />
+              <el-table-column label="校验" width="150">
+                <template #default="{ row }">
+                  <span v-if="row._bad" style="color:#f56c6c">{{ row._bad }}</span>
+                  <span v-else style="color:#67c23a">✓</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-if="importRows.length > 8" style="font-size:12px;color:#909399;margin-top:4px">
+              仅预览前 8 行，共 {{ importRows.length }} 行
+            </div>
+            <template #footer>
+              <el-button @click="orgImportDlg = false">取消</el-button>
+              <el-button type="primary" :loading="orgBusy" :disabled="!importRows.length" @click="doImport">
+                导入 {{ importRows.length }} 行
+              </el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 导入结果 -->
+          <el-dialog v-model="importResultDlg" title="导入结果" width="560px">
+            <el-result v-if="importResult" :icon="importResult.created ? 'success' : 'warning'"
+              :title="importResult.message">
+              <template #sub-title>
+                <div style="text-align:left;font-size:13px">
+                  <div v-if="importResult.newDepts?.length">自动创建部门：{{ importResult.newDepts.join('、') }}</div>
+                  <div v-if="importResult.newPositions?.length">自动创建岗位：{{ importResult.newPositions.join('、') }}</div>
+                  <div v-if="importResult.skipped?.length" style="margin-top:8px">
+                    <b>跳过 {{ importResult.skipped.length }} 行：</b>
+                    <div v-for="s in importResult.skipped.slice(0, 20)" :key="s.employeeNo" style="color:#e6a23c">
+                      {{ s.employeeNo || '（空工号）' }} —— {{ s.reason }}
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </el-result>
+            <template #footer>
+              <el-button type="primary" @click="importResultDlg = false">好的</el-button>
             </template>
           </el-dialog>
         </div>
@@ -2789,19 +2985,65 @@ async function runPubkeyTest() {
 }
 
 /* ====== Settings ====== */
-// ---- 组织机构 ----
-const orgData = ref({ org: null, members: [] });
+// ---- 组织机构（部门 / 岗位 / 员工 + 批量导入） ----
+const orgData = ref({ org: null, members: [], depts: [], positions: [] });
 const orgBusy = ref(false);
 const orgNewName = ref('');
 const orgDlg = ref(false);
-const orgEmp = ref({ no: '', name: '' });
+const orgEmp = ref({ no: '', name: '', deptId: null, positionId: null });
 const orgWorkMode = ref(false);
+const orgTab = ref('members');
+
+const deptDlg = ref(false);
+const deptForm = ref({ id: null, name: '', parentId: null, sort: 0 });
+const posDlg = ref(false);
+const posForm = ref({ id: null, name: '', deptId: null, sort: 0 });
+const memberDlg = ref(false);
+const memberForm = ref({ id: null, username: '', nickname: '', deptId: null, positionId: null });
+
+const orgImportDlg = ref(false);
+const importText = ref('');
+const importResultDlg = ref(false);
+const importResult = ref(null);
+
+function deptName(id) {
+  return orgData.value.depts?.find((d) => d.id === id)?.name || '';
+}
+
+// 解析粘贴的表格文本（Excel 复制 = TSV；也兼容逗号/CSV），列：工号 姓名 部门 岗位
+const importRows = computed(() => {
+  const lines = (importText.value || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const rows = [];
+  for (const line of lines) {
+    const cols = line.split(/\t|,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((c) => c.replace(/^"|"$/g, '').trim());
+    if (!cols[0]) continue;
+    // 首列表头行跳过
+    if (/工号|employee/i.test(cols[0])) continue;
+    rows.push({
+      employeeNo: cols[0] || '',
+      nickname: cols[1] || '',
+      dept: cols[2] || '',
+      position: cols[3] || '',
+      _bad: /^[A-Za-z0-9_]{3,20}$/.test(cols[0] || '') ? '' : '工号需 3-20 位字母/数字/下划线',
+    });
+  }
+  return rows;
+});
+
+function onImportFile(ev) {
+  const f = ev.target?.files?.[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => { importText.value = String(reader.result || ''); };
+  reader.readAsText(f, 'utf-8');
+}
+
 async function loadOrgs() {
   try {
-    // /orgs/my 带 admin token 走 admin 分支（返回服务器唯一的组织）；
+    // /orgs/my 带 admin token 走 admin 分支（返回服务器唯一的组织 + 部门/岗位全集）；
     // 顺带读一次好友模式，用来把"普通模式下操作会被 400"提前告诉管理员
     const [my, st] = await Promise.all([api.get('/orgs/my'), api.get('/admin/settings')]);
-    orgData.value = my.data;
+    orgData.value = { depts: [], positions: [], ...my.data };
     orgWorkMode.value = (st.data.friendMode || 'normal') === 'work';
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '加载组织机构失败');
@@ -2827,10 +3069,14 @@ async function addMember() {
   if (!/^[A-Za-z0-9_]{3,20}$/.test(no)) return ElMessage.warning('工号 3-20 位，仅限字母、数字、下划线');
   orgBusy.value = true;
   try {
-    const { data } = await api.post(`/orgs/${orgData.value.org.id}/members`,
-      { employeeNo: no, nickname: orgEmp.value.name.trim() });
+    const { data } = await api.post(`/orgs/${orgData.value.org.id}/members`, {
+      employeeNo: no,
+      nickname: orgEmp.value.name.trim(),
+      deptId: orgEmp.value.deptId || null,
+      positionId: orgEmp.value.positionId || null,
+    });
     ElMessage.success(`已录入 ${data.user.username}，初始密码 = 工号，请通知员工登录后修改`);
-    orgEmp.value = { no: '', name: '' };
+    orgEmp.value = { no: '', name: '', deptId: null, positionId: null };
     orgDlg.value = false;
     await loadOrgs();
   } catch (e) {
@@ -2853,6 +3099,121 @@ async function removeMember(row) {
     await loadOrgs();
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '移除失败');
+  }
+}
+
+// ---- 部门 ----
+function openDeptDlg(row) {
+  deptForm.value = row
+    ? { id: row.id, name: row.name, parentId: row.parent_id || null, sort: row.sort }
+    : { id: null, name: '', parentId: null, sort: 0 };
+  deptDlg.value = true;
+}
+async function saveDept() {
+  const f = deptForm.value;
+  if (!f.name.trim()) return ElMessage.warning('部门名称必填');
+  orgBusy.value = true;
+  try {
+    if (f.id) await api.put(`/orgs/depts/${f.id}`, { name: f.name.trim(), parentId: f.parentId, sort: f.sort });
+    else await api.post('/orgs/depts', { name: f.name.trim(), parentId: f.parentId, sort: f.sort });
+    ElMessage.success('已保存');
+    deptDlg.value = false;
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    orgBusy.value = false;
+  }
+}
+async function removeDept(row) {
+  try {
+    await ElMessageBox.confirm(`删除部门「${row.name}」？（部门下有员工或子部门时无法删除）`, '删除确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/orgs/depts/${row.id}`);
+    ElMessage.success('已删除');
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
+// ---- 岗位 ----
+function openPosDlg(row) {
+  posForm.value = row
+    ? { id: row.id, name: row.name, deptId: row.dept_id || null, sort: row.sort }
+    : { id: null, name: '', deptId: null, sort: 0 };
+  posDlg.value = true;
+}
+async function savePos() {
+  const f = posForm.value;
+  if (!f.name.trim()) return ElMessage.warning('岗位名称必填');
+  orgBusy.value = true;
+  try {
+    if (f.id) await api.put(`/orgs/positions/${f.id}`, { name: f.name.trim(), deptId: f.deptId, sort: f.sort });
+    else await api.post('/orgs/positions', { name: f.name.trim(), deptId: f.deptId, sort: f.sort });
+    ElMessage.success('已保存');
+    posDlg.value = false;
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    orgBusy.value = false;
+  }
+}
+async function removePos(row) {
+  try {
+    await ElMessageBox.confirm(`删除岗位「${row.name}」？（岗位下有员工时无法删除）`, '删除确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/orgs/positions/${row.id}`);
+    ElMessage.success('已删除');
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
+// ---- 编辑员工 ----
+function openMemberDlg(row) {
+  memberForm.value = { id: row.id, username: row.username, nickname: row.nickname || '', deptId: row.dept_id || null, positionId: row.position_id || null };
+  memberDlg.value = true;
+}
+async function saveMember() {
+  const f = memberForm.value;
+  orgBusy.value = true;
+  try {
+    await api.put(`/orgs/${orgData.value.org.id}/members/${f.id}`, {
+      nickname: f.nickname,
+      deptId: f.deptId,
+      positionId: f.positionId,
+    });
+    ElMessage.success('已保存');
+    memberDlg.value = false;
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    orgBusy.value = false;
+  }
+}
+
+// ---- 批量导入 ----
+async function doImport() {
+  const rows = importRows.value.map(({ employeeNo, nickname, dept, position }) => ({ employeeNo, nickname, dept, position }));
+  if (!rows.length) return;
+  orgBusy.value = true;
+  try {
+    const { data } = await api.post(`/orgs/${orgData.value.org.id}/members/import`, { rows });
+    importResult.value = data;
+    orgImportDlg.value = false;
+    importText.value = '';
+    importResultDlg.value = true;
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '导入失败');
+  } finally {
+    orgBusy.value = false;
   }
 }
 

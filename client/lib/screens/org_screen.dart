@@ -23,6 +23,10 @@ class OrgScreen extends StatefulWidget {
 class _OrgScreenState extends State<OrgScreen> {
   Map<String, dynamic>? _org;
   List<User> _members = [];
+  // uid → 部门/岗位名（服务端 my 接口附带；空 = 未分配）
+  Map<int, Map<String, String>> _extras = const {};
+  // 部门展示顺序（服务端按 sort 排好）
+  List<String> _deptOrder = const [];
   bool _isAdmin = false;
   int _myId = 0;
   bool _loading = true;
@@ -57,15 +61,30 @@ class _OrgScreenState extends State<OrgScreen> {
       _myId = ((me['user'] ?? const {})['id'] ?? 0) as int;
       final role = ((me['user'] ?? const {})['role'] ?? 'user').toString();
       final o = org['org'];
-      final list = (org['members'] as List? ?? const [])
-          .whereType<Map>()
+      final rawMembers = (org['members'] as List? ?? const []).whereType<Map>();
+      final list = rawMembers
           .map((m) => User.fromJson(m.cast<String, dynamic>()))
+          .toList();
+      // 部门/岗位名挂在原始 map 上（User 模型不带），uid → {dept, position}
+      final extras = <int, Map<String, String>>{
+        for (final m in rawMembers)
+          ((m['id'] ?? 0) as int): {
+            'dept': (m['dept_name'] ?? '').toString(),
+            'position': (m['position_name'] ?? '').toString(),
+          },
+      };
+      // 服务端 depts 全集（含没人部门），按 sort 排好 → 分组顺序以它为准
+      final deptOrder = (org['depts'] as List? ?? const [])
+          .whereType<Map>()
+          .map((d) => (d['name'] ?? '').toString())
           .toList();
       if (!mounted) return;
       setState(() {
         _isAdmin = role == 'admin';
         _org = o is Map ? Map<String, dynamic>.from(o) : null;
         _members = list;
+        _extras = extras;
+        _deptOrder = deptOrder;
         _loading = false;
       });
     } catch (e) {
@@ -283,13 +302,57 @@ class _OrgScreenState extends State<OrgScreen> {
                       style: TextStyle(color: AppColors.textWeak)))
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                  itemCount: _members.length,
-                  itemBuilder: (c, i) => _memberRow(_members[i]),
+                  itemCount: _flatRows.length,
+                  itemBuilder: (c, i) {
+                    final row = _flatRows[i];
+                    return row.header != null
+                        ? _deptHeader(row.header!)
+                        : _memberRow(row.user!);
+                  },
                 ),
         ),
       ],
     );
   }
+
+  // 分组行：header 非 null = 部门小标题，否则是成员
+  // （按服务端 depts 的 sort 顺序分组；未分配部门排最后）
+  List<({String? header, User? user})> get _flatRows {
+    final byDept = <String, List<User>>{};
+    for (final u in _members) {
+      final dept = _extras[u.id]?['dept'] ?? '';
+      (byDept[dept] ??= []).add(u);
+    }
+    final rows = <({String? header, User? user})>[];
+    for (final d in _deptOrder) {
+      final list = byDept.remove(d);
+      if (list == null) continue; // 没人的部门不占屏
+      rows.add((header: d, user: null));
+      rows.addAll(list.map((u) => (header: null, user: u)));
+    }
+    // 剩下的 = 未分配（'' 为 key）+ 数据里出现但不在 depts 全集的（防御）
+    for (final e in byDept.entries) {
+      rows.add((header: e.key.isEmpty ? '未分配部门' : e.key, user: null));
+      rows.addAll(e.value.map((u) => (header: null, user: u)));
+    }
+    return rows;
+  }
+
+  Widget _deptHeader(String name) => Padding(
+        padding: const EdgeInsets.only(top: 10, bottom: 6),
+        child: Row(
+          children: [
+            const Icon(Icons.folder_outlined,
+                size: 14, color: AppColors.textWeak),
+            const SizedBox(width: 5),
+            Text(name,
+                style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textWeak)),
+          ],
+        ),
+      );
 
   Widget _emptyOrg() => Center(
         child: Column(
@@ -321,6 +384,19 @@ class _OrgScreenState extends State<OrgScreen> {
         ),
       );
 
+  // 副标题：工号 + 部门/岗位（有才显示）
+  String _memberSub(User u) {
+    final ex = _extras[u.id] ?? const {};
+    final dept = ex['dept'] ?? '';
+    final pos = ex['position'] ?? '';
+    final org = [
+      if (dept.isNotEmpty) dept,
+      if (pos.isNotEmpty) pos,
+    ].join(' · ');
+    final no = u.username; // 工号=账号
+    return org.isEmpty ? '@$no' : '@$no · $org';
+  }
+
   Widget _memberRow(User u) {
     final mine = u.id == _myId;
     return Container(
@@ -337,7 +413,10 @@ class _OrgScreenState extends State<OrgScreen> {
           mine ? '${u.display}（我）' : u.display,
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
-        subtitle: Text('@${u.username}', style: const TextStyle(fontSize: 12.5)),
+        subtitle: Text(
+          _memberSub(u),
+          style: const TextStyle(fontSize: 12.5),
+        ),
         // 员工没有备注语义：组织内一律显示昵称/工号
         onTap: mine ? null : () => Navigator.pop(context, u),
         trailing: _isAdmin && !mine

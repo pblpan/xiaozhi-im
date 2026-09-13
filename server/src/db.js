@@ -210,6 +210,31 @@ CREATE TABLE IF NOT EXISTS orgs (
 ensureColumn('users', 'employee_no', 'employee_no TEXT');
 ensureColumn('users', 'org_id', 'org_id INTEGER');
 
+// 组织机构扩展（套用工厂管理系统 V2 人事模型：部门 → 岗位 → 员工）：
+// 部门支持父子层级（parent_id=0 为顶级），岗位可挂部门（也可全厂通用）。
+// 员工不单独建表 —— 就是 org_id 命中的 users，部门/岗位以列挂在 users 上，
+// 这样 IM 的账号体系（登录/好友）不用做两套身份。
+db.exec(`
+CREATE TABLE IF NOT EXISTS org_depts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  parent_id INTEGER NOT NULL DEFAULT 0,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS org_positions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  dept_id INTEGER,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_org_depts_org ON org_depts (org_id);
+CREATE INDEX IF NOT EXISTS idx_org_positions_org ON org_positions (org_id);
+`);
+ensureColumn('users', 'dept_id', 'dept_id INTEGER');
+ensureColumn('users', 'position_id', 'position_id INTEGER');
+
 // 机器人的归属人（谁创建的，便于后台追责与清理）
 ensureColumn('users', 'bot_owner_id', 'bot_owner_id INTEGER');
 
