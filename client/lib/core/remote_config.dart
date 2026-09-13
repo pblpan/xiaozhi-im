@@ -50,6 +50,23 @@ class RemoteConfig {
     return def;
   }
 
+  /// 拉取 bootstrap 顶层的公开字段（companyName / friendMode / serverVersion）。
+  /// 登录前就要用（登录页标题、注册页工作模式提示），所以单独走一次轻量请求。
+  /// 任何失败返回空 Map —— 这里抛异常就是写错了（SPEC §6.2 同款纪律）。
+  static Future<Map<String, dynamic>> fetchPublic() async {
+    try {
+      final r = await http
+          .get(Uri.parse('${Config.baseUrl}/api/client/bootstrap'))
+          .timeout(fetchTimeout);
+      if (r.statusCode != 200) return const {};
+      final body = jsonDecode(r.body);
+      if (body is! Map<String, dynamic>) return const {};
+      return body;
+    } catch (_) {
+      return const {};
+    }
+  }
+
   /// 初始化：冷启动调用（在 Settings.load 之后，地址候选才有意义）
   Future<void> init() async {
     await _loadCache();

@@ -1250,6 +1250,37 @@ docker compose up -d --force-recreate xiaozhi-im</div>
 
         <!-- 系统设置 -->
         <div v-else-if="tab === 'settings'">
+          <el-card style="margin-bottom:16px">
+            <template #header>公司与好友模式（对全服务器生效，客户端登录页/扫描结果即时可见）</template>
+            <el-form label-width="100px" style="max-width:640px">
+              <el-form-item label="公司名称">
+                <el-input v-model="compSetting.name" maxlength="20" show-word-limit
+                  placeholder="如：盛京 —— 客户端显示为「盛京小智」，留空则只显示「小智 IM」" />
+              </el-form-item>
+              <el-form-item label="好友模式">
+                <el-radio-group v-model="compSetting.mode">
+                  <el-radio value="normal">普通好友模式</el-radio>
+                  <el-radio value="work">工作模式</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label=" ">
+                <el-alert :closable="false" :type="compSetting.mode === 'work' ? 'warning' : 'info'"
+                  style="margin-bottom:12px">
+                  <template #title>
+                    <span v-if="compSetting.mode === 'work'">
+                      工作模式：关闭自助注册与好友互加，员工由管理员在「组织机构」按工号录入（工号即账号、初始密码=工号），
+                      录入后同事自动互为好友，搜索只能找到同组织的人。日常使用请配合组织机构功能。
+                    </span>
+                    <span v-else>
+                      普通好友模式：任何人可自助注册，自由搜索、互加好友。适合个人/小团队自用。
+                    </span>
+                  </template>
+                </el-alert>
+                <el-button type="primary" :loading="compBusy" @click="saveCompSetting">保存设置</el-button>
+              </el-form-item>
+            </el-form>
+          </el-card>
+
           <el-row :gutter="16">
             <el-col :span="12">
               <el-card>
@@ -1831,7 +1862,7 @@ async function loadTab() {
   else if (tab.value === 'integrations') await loadIntegrations();
   else if (tab.value === 'clientconfig') { await loadCc(); await loadCcApplied(); }
   else if (tab.value === 'modules') { await loadMm(); if (!users.value.length) await loadUsers(); }
-  else if (tab.value === 'settings') await loadInfo();
+  else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
 }
 async function loadUsers() { users.value = (await api.get('/admin/users')).data; }
 async function loadGroups() { groups.value = (await api.get('/admin/groups')).data; }
@@ -2694,6 +2725,32 @@ async function runPubkeyTest() {
 /* ====== Settings ====== */
 const pwd = ref({ old: '', neu: '', neu2: '' });
 const pwdBusy = ref(false);
+
+// ---- 公司与好友模式 ----
+const compSetting = ref({ name: '', mode: 'normal' });
+const compBusy = ref(false);
+async function loadCompSetting() {
+  try {
+    const { data } = await api.get('/admin/settings');
+    compSetting.value = { name: data.companyName || '', mode: data.friendMode || 'normal' };
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '读取设置失败');
+  }
+}
+async function saveCompSetting() {
+  const name = compSetting.value.name.trim();
+  if (/[<>"'\\]/.test(name)) return ElMessage.warning('公司名称不能包含 < > " \' \\ 字符');
+  compBusy.value = true;
+  try {
+    await api.put('/admin/settings', { companyName: name, friendMode: compSetting.value.mode });
+    ElMessage.success('设置已保存，客户端下次拉取即生效');
+    await loadCompSetting();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    compBusy.value = false;
+  }
+}
 async function changePassword() {
   if (!pwd.value.old || !pwd.value.neu) return ElMessage.warning('请填旧密码与新密码');
   if (pwd.value.neu !== pwd.value.neu2) return ElMessage.warning('两次新密码不一致');

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
+import 'package:xiaozhi_im_client/core/remote_config.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/screens/conversations.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
@@ -18,6 +19,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _load = false;
   bool _obscure = true;
   String? _err;
+
+  /// 工作模式下不允许自助注册（服务端会 403），提前提示别让人白填一遍
+  bool _workMode = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _probeMode();
+  }
+
+  Future<void> _probeMode() async {
+    final b = await RemoteConfig.fetchPublic();
+    final work = b['friendMode'].toString() == 'work';
+    if (mounted && work != _workMode) setState(() => _workMode = work);
+  }
 
   @override
   void dispose() {
@@ -104,6 +120,26 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 color: AppColors.textSub, fontSize: 13)),
                       ),
                       const SizedBox(height: 24),
+                      if (_workMode) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                                color: Colors.orange.withValues(alpha: 0.45)),
+                          ),
+                          child: const Text(
+                            '本服务器已开启工作模式：不开放自助注册。\n'
+                            '员工账号由管理员在组织机构中按工号录入（初始密码=工号），录入后即可登录。',
+                            style: TextStyle(
+                                fontSize: 12.5,
+                                color: Colors.orange,
+                                height: 1.55),
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                      ],
                       if (_err != null) _errorBox(_err!),
                       TextField(
                         controller: _u,

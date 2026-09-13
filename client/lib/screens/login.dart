@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
+import 'package:xiaozhi_im_client/core/remote_config.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/screens/register.dart';
 import 'package:xiaozhi_im_client/screens/conversations.dart';
@@ -23,6 +24,23 @@ class _LoginScreenState extends State<LoginScreen> {
   /// 最近一次登录异常的原始对象，用于决定要不要显示"切换服务器"按钮
   ApiException? _lastErr;
 
+  /// 服务器端设置的公司名；空 = 未设置，标题回落「小智 IM」。
+  /// 显示规则（xxxx小智）在客户端拼 —— 服务端只存公司原文。
+  String _companyTitle = '小智 IM';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCompany();
+  }
+
+  Future<void> _loadCompany() async {
+    final b = await RemoteConfig.fetchPublic();
+    final name = (b['companyName'] ?? '').toString().trim();
+    final title = name.isEmpty ? '小智 IM' : '$name小智';
+    if (mounted && title != _companyTitle) setState(() => _companyTitle = title);
+  }
+
   @override
   void dispose() {
     _u.dispose();
@@ -32,7 +50,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _openServer() async {
     final changed = await showServerSettings(context);
-    if (changed == true && mounted) setState(() {});
+    if (changed == true && mounted) {
+      setState(() {});
+      _loadCompany(); // 换了服务器，公司名可能也换了
+    }
   }
 
   void _login() async {
@@ -104,9 +125,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     children: [
                       const Center(child: BrandLogo(size: 68)),
                       const SizedBox(height: 20),
-                      const Center(
-                        child: Text('小智 IM',
-                            style: TextStyle(
+                      Center(
+                        child: Text(_companyTitle,
+                            style: const TextStyle(
                                 fontSize: 25,
                                 fontWeight: FontWeight.w700,
                                 letterSpacing: 1)),
