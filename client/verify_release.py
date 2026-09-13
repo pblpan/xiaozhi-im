@@ -91,6 +91,18 @@ WIN_MARKS = [
     #   '/api/client/modules'、'kVersionForGate'、'fetchModules'、'listVisible'
     #   → 路径由 Config.baseUrl 拼接 / 常量折叠，与 v0.8.0 那批同源问题
     #   中文串（如「动态模块」）只在 UTF-16LE 下能搜到，跨产物不稳，也别用。
+    # ---- v0.10.0 远程协助（SPEC-远程协助.md）----
+    # 经 2026-09-13 在 Windows 的 data/app.so 与 APK 三架构 libapp.so 上双向实测命中。
+    #   ⚠️ absoluteMousePos **不要加**：Win 的 app.so 里有，APK 的 libapp.so 里搜不到
+    #      （小函数被内联掉了），加进来会让 APK 校验恒失败。
+    'remote_assist.dart',       # WebRTC 屏幕轨 + control DataChannel
+    'input_inject.dart',        # 键鼠注入抽象层（Windows 走 Win32 SendInput）
+    'remote_models.dart',       # 访问码 / 会话审计的数据模型
+    'RemoteAssistWatcher',      # 全局壳：协作请求必须在任何页面之上弹出
+    'RemoteHubScreen',          # 入口页（会话列表菜单「远程协助」）
+    'parseRemoteInput',         # 控制协议解析（畸形报文不能把 App 搞崩）
+    'remoteKeyOf',              # 键盘映射（含 Ctrl/Shift/Alt——漏一格就按不出 Ctrl+C）
+    'createInputInjector',      # 按平台挑注入实现（Android 尚不支持时会如实说）
 ]
 
 # 必须**不再出现**的记号：功能下线 / 资源被替换。
@@ -239,8 +251,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.9.0', 'v0.9.0'],
-        'src/package.json': ['"version": "0.9.0"'],
+        'manifest': ['version', '0.10.0', 'v0.10.0'],
+        'src/package.json': ['"version": "0.10.0"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
@@ -255,7 +267,16 @@ def check_fpk(path):
                             'isOneToOne', "'call:joined'", 'roomOf'],
         'src/src/ws.js': ['isAlive', "case 'ping'",
                           # v0.7.0：群通话信令路由 + mesh 定向转发
-                          "case 'call:join'", 'frame.to'],
+                          "case 'call:join'", 'frame.to',
+                          # v0.10.0：远程协助信令（invite/accept/拒绝 + SDP 中继）
+                          #   'remote:redeem' 是访问码兑换，"case 'remote:offer'" ~
+                          #   'remote:ice' 三个共用一条 relay 分支
+                          "case 'remote:invite'", "case 'remote:redeem'",
+                          "case 'remote:accept'", "case 'remote:reject'",
+                          "case 'remote:offer'", "case 'remote:ice'",
+                          'remote.request', 'remote.relay', 'remote.handleOffline'],
+        # v0.10.0：远程协助的 REST 路由必须真的挂上去（没挂 = 客户端 404）
+        'src/src/index.js': ["'/api/remote'", "require('./routes/remote')"],
         # v0.6.3：Cloudflare 托管中继（免端口映射）—— 现场签凭据 + 缓存
         # v0.6.5：新增热加载与凭据探测（管理台向导用）
         'src/src/config.js': ['TURN_URLS', 'iceServers', 'CF_TURN_KEY_ID',
@@ -265,7 +286,29 @@ def check_fpk(path):
         # v0.6.3：好友备注（落在我这一侧，对方看不到）
         'src/src/db.js': ["ensureColumn('friendships', 'remark'",
                           # v0.9.0：动态模块的两张表（定义 + 提交记录）
-                          'app_modules', 'module_submissions'],
+                          'app_modules', 'module_submissions',
+                          # v0.10.0：远程协助的会话审计 + 访问码（只存慢哈希）
+                          #   remote_code_attempts 是限流表 —— 没有它就是无限次撞 9 位访问码
+                          'remote_sessions', 'remote_access_codes',
+                          'remote_code_attempts', 'code_hash', 'idx_remote_codes_user'],
+        # v0.10.0：远程协助信令本体（SPEC-远程协助.md）
+        #   判据挑的是**安全边界的存在证据**，不是业务流程函数名：
+        #     ABORT_WINDOW_MS  → 无人值守"有码也不是立刻能控"，还有 10 秒反悔
+        #     MAX_ATTEMPTS     → 兑换限流，掐断暴力撞码
+        #     scryptSync       → 访问码存慢哈希（用摘要的话库丢了等于钥匙丢了）
+        #     MAX_SESSION_MS   → 单次会话硬上限，防忘断长期挂着
+        'src/src/remote.js': ['ABORT_WINDOW_MS', 'MAX_ATTEMPTS', 'MAX_SESSION_MS',
+                              'scryptSync', 'remote_code_attempts',
+                              'MAX_CODE_SCAN', 'MAX_RELAY_BYTES',
+                              'genCode', 'recentAttempts', 'logAttempt',
+                              'createCode', 'redeem', 'createCode',
+                              # 三条硬边界：1v1 / 只允许发给会话内另一个人 / 掉线即拆
+                              'peerOf', 'handleOffline', 'busy',
+                              'END_REASON', 'persist', 'markActive'],
+        # v0.10.0：远程协助的管理 + 审计接口（也是屏幕上没有的部分）
+        'src/src/routes/remote.js': ["'/codes'", "'/codes/:id'", "'/sessions'",
+                                     "'/current'", 'listCodes', 'revokeCode',
+                                     'history', 'currentOf'],
         'src/src/routes/friends.js': ["'/:friendId/remark'", 'MAX_REMARK'],
         'src/src/chat.js': ['remarkOf'],
         # v0.6.5：管理台中继配置向导（读状态 / 校验 / 保存 / 移除）

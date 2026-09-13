@@ -355,10 +355,14 @@ router.post('/change-password', (req, res) => {
  * 保存接口直接 500，就算真写成功了也在容器层里，重建即丢。
  * 现在统一由 config.turnEnvPath() 提供（${DATA_DIR}/turn.env），
  * 落在共享数据目录，重建不丢、改完立即生效、无需 force-recreate。
- * 测试仍可用 TURN_ENV_PATH 覆盖。
+ *
+ * ⚠️ 这里**故意不提供环境变量覆盖**。曾经留过一个 TURN_ENV_PATH 覆盖口子，
+ * 结果「管理台显示的路径」和「实际写入的路径」可以是两个文件 —— 管理员按
+ * 提示去找根本改不到真正生效的那份，和当初凭据"看似存住了其实没存"是同一
+ * 类坑。只有一条真实路径，就对不上了也不可能有人走岔。
  */
 function envPath() {
-  return process.env.TURN_ENV_PATH || config.turnEnvPath();
+  return config.turnEnvPath();
 }
 
 /** 当前中继状态：来源、是否启用、遮盖后的值、静态 TURN */

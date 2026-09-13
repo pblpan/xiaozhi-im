@@ -2,22 +2,50 @@
 //
 //   node server/test/admin_turn_wizard_test.js
 //
-// 这套接口的破坏性在于**它会写 .env**，所以必须拿假文件测，绝不碰真配置。
-// 用 TURN_ENV_PATH 指到一个临时 .env，用 CF_TURN_API_BASE 指向本地假 CF。
+// 这套接口会**写文件**，所以必须拿临时目录测，绝不碰真配置。
+// 临时目录当 DATA_DIR（turn.env 也落在它里面），用 CF_TURN_API_BASE 指向本地假 CF。
 //
 // 覆盖：
 //   ① 读取状态：能报出未配置 / 已配置 + 遮盖值（绝不回传明文密钥）
 //   ② 校验接口：格式不对直接拦下，不打 CF；有效凭据返回 ok + 中继 url
 //   ③ 保存：**校验不过必须拒绝写盘**（这条最关键，防写坏生产）
-//   ④ 保存成功：只改目标两行，其余内容一字不动；且生成备份
-//   ⑤ 缺行时能追加（兼容老 .env）
+//   ④ 保存成功：写进 ${DATA_DIR}/turn.env、只写白名单键、立即生效不用重建容器
+//   ⑤ 缺行时能追加（兼容老配置）
 //   ⑥ 删除：把两行清空但保留 key（不会把文件改乱）
 //   ⑦ 权限：非管理员/未登录一律 401、403
+//   ⑧ **重启后凭据仍在**（当初"看似存住了其实没存过"的事故回归用例）
 //
 // 起真实 HTTP 服务，走完整 Express 栈（含鉴权中间件），比只测函数可信。
 
 const http = require('http');
 const assert = require('assert');
+const { spawnSync } = require('child_process');
+
+/**
+ * 在一个**全新的 Node 进程**里重新加载 config.js 并返回结果。
+ *
+ * 为什么必须新进程：config.js 在模块加载那一刻就读了 turn.env，
+ * 同一个进程里 require 第二次只会命中缓存 —— 那样跑出来的"重启后仍在"
+ * 是假通过。当初"凭据看似存住了其实从没写过"那次事故，就是因为没人
+ * 真正重新加载过一次。这条用例必须贵，它才有用。
+ */
+function withFreshConfig(fnSrc, extraEnv) {
+  const cfgPath = path.resolve(__dirname, '..', 'src', 'config.js');
+  const script = [
+    `const c = require(${JSON.stringify(cfgPath)});`,
+    `const f = ${fnSrc};`,
+    'process.stdout.write(JSON.stringify(f(c)));',
+  ].join('\n');
+  const p = spawnSync(process.execPath, ['-e', script], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, ...extraEnv },
+    encoding: 'utf8',
+  });
+  if (p.status !== 0) {
+    throw new Error('子进程加载 config 失败：' + (p.stderr || '').slice(0, 500));
+  }
+  return JSON.parse(String(p.stdout || '').trim());
+}
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -111,7 +139,6 @@ async function main() {
       FILES_DIR: path.join(tmpRoot, 'files'),
       ADMIN_USERNAME: 'admin',
       ADMIN_PASSWORD: 'admin123',
-      TURN_ENV_PATH: envFile,
       CF_TURN_API_BASE: `http://127.0.0.1:${cf.port}/v1/turn/keys`,
       ICE_STUN: 'stun:stun.miwifi.com:3478',
       TURN_URLS: '',
@@ -180,8 +207,9 @@ async function main() {
     ok('未配置时 sources 为空', Array.isArray(st0.data.sources) && st0.data.sources.length === 0,
       JSON.stringify(st0.data.sources));
     ok('未配置时 ready=false', st0.data.ready === false);
-    ok('回传了 .env 路径便于提示', typeof st0.data.envPath === 'string' && st0.data.envPath.includes('docker.env'),
-      st0.data.envPath);
+    // v0.8.0 起持久化文件是 ${DATA_DIR}/turn.env（共享目录），不再是 compose 的 .env
+    ok('回传的持久化路径是 turn.env', typeof st0.data.envPath === 'string' &&
+      st0.data.envPath.endsWith('turn.env'), st0.data.envPath);
 
     // ---- ③ 校验接口：格式拦截 ----
     console.log('\n[3] 校验接口（格式拦截，不该打 CF）');
@@ -205,12 +233,12 @@ async function main() {
 
     // ---- ⑤ 保存：错凭据必须拒绝 ----
     console.log('\n[5] 保存（错凭据必须拒绝写盘）');
-    const before = fs.readFileSync(envFile, 'utf8');
     const badSave = await j('POST', '/api/admin/turn',
       { key_id: VALID_KID, api_token: 'b'.repeat(64) }, token);
     ok('错 Token → 400', badSave.status === 400, `got=${badSave.status}`);
-    ok('错 Token 没有改动 .env',
-      fs.readFileSync(envFile, 'utf8') === before, '文件被改了！');
+    // 关键：写失败时**不该凭空创建**持久化文件，更不能落下半成品
+    ok('错 Token 没有生成 turn.env（写盘被拒）',
+      !fs.existsSync(path.join(tmpRoot, 'turn.env')), '不该存在却被创建了');
     ok('错误信息里带 CF 返回，便于排查',
       String(badSave.data.error || '').includes('Cloudflare'), badSave.data.error);
 
@@ -218,18 +246,30 @@ async function main() {
     console.log('\n[6] 保存（有效凭据就地改写）');
     const save = await j('POST', '/api/admin/turn', { key_id: VALID_KID, api_token: VALID_TOK }, token);
     ok('保存返回 200', save.status === 200, `got=${save.status}`);
-    ok('提示需要重建容器', save.data.needRecreate === true);
-    ok('给出了可复制的重建命令', String(save.data.command || '').includes('--force-recreate'),
-      save.data.command);
-    const after = fs.readFileSync(envFile, 'utf8');
-    ok('.env 写入了 Key ID', after.includes(`CF_TURN_KEY_ID=${VALID_KID}`));
-    ok('.env 写入了 API Token', after.includes(`CF_TURN_API_TOKEN=${VALID_TOK}`));
-    ok('原有其它配置未被破坏（PORT/JWT/TURN_URLS 都在）',
-      after.includes('PORT=3602') && after.includes('JWT_SECRET=test-secret') &&
-      after.includes('TURN_URLS=turn:1.2.3.4:3478?transport=udp'));
-    ok('生成了 .bak 备份文件',
-      fs.readdirSync(tmpRoot).some((n) => n.includes('.bak-admin-')),
-      fs.readdirSync(tmpRoot).join(','));
+    // v0.8.0 起：写共享目录的 turn.env，改完立即热加载，**不需要重建容器**。
+    // 以前这一节断言 needRecreate=true 并给出 --force-recreate 命令，那是老行为。
+    ok('保存后不需要重建容器', save.data.needRecreate === false, save.data.needRecreate);
+
+    const turnEnvFile = path.join(tmpRoot, 'turn.env');
+    ok('持久化文件确实建出来了', fs.existsSync(turnEnvFile), turnEnvFile);
+    const after = fs.readFileSync(turnEnvFile, 'utf8');
+    ok('turn.env 写入了 Key ID', after.includes(`CF_TURN_KEY_ID=${VALID_KID}`), after);
+    ok('turn.env 写入了 API Token', after.includes(`CF_TURN_API_TOKEN=${VALID_TOK}`), after);
+    // 只有白名单里的键能进这个文件，别的一概不该被写进来
+    ok('没有夹杂其它环境变量（白名单生效）',
+      Object.keys(after.split(/\r?\n/).filter((l) => l.includes('='))
+        .reduce((a, l) => ((a[l.slice(0, l.indexOf('='))] = 1), a), {}))
+        .every((k) => ['TURN_URLS', 'TURN_USERNAME', 'TURN_CREDENTIAL',
+          'CF_TURN_KEY_ID', 'CF_TURN_API_TOKEN'].includes(k)), after);
+
+    // ---- ⑥b 杀掉进程重开，凭据必须还在（当初的事故就是"看似存住了其实没存"）----
+    console.log('\n[6b] 模拟容器重启后凭据仍在（回归用例）');
+    const restarted = withFreshConfig(
+      '(c) => ({ sources: c.turnInfo().sources, ready: c.turnInfo().sources.length > 0 })',
+      { DATA_DIR: tmpRoot },
+    );
+    ok('重启后 CF 中继仍然在线', (restarted.sources || []).includes('cloudflare'),
+      JSON.stringify(restarted));
 
     // ---- ⑦ 读状态应反映已配置 + 遮盖（不重启也生效）----
     console.log('\n[7] 保存后立即生效（无需等重建）+ 不回传明文');
@@ -238,9 +278,13 @@ async function main() {
       JSON.stringify(st1.data.sources));
     ok('ready=true', st1.data.ready === true);
     ok('保存响应声明 applied=true', save.data.applied === true);
+    // ⚠️ 期望值**必须从 VALID_KID 推导**。曾经这里硬写成某个真实 Key ID 的前
+    // 四位，等于把生产凭据的片段永久留在了公开仓库里 —— 用变量推导就没有
+    // 这个风险，换任何一组假凭据测试都照样成立。
+    const expectHead = VALID_KID.slice(0, 4);
+    const expectTail = VALID_KID.slice(-4);
     ok('Key ID 以遮盖形式回传（头尾可见）',
-      st1.data.cloudflareKeyIdMasked && st1.data.cloudflareKeyIdMasked.startsWith('7839') &&
-      st1.data.cloudflareKeyIdMasked.includes('*'),
+      st1.data.cloudflareKeyIdMasked === `${expectHead}************${expectTail}`,
       st1.data.cloudflareKeyIdMasked);
     ok('\x1b[1m整个响应体里不含明文 API Token\x1b[0m',
       !JSON.stringify(st1.data).includes(VALID_TOK), '明文泄漏了！');
@@ -253,24 +297,30 @@ async function main() {
     ok('ICE 的 turnSources 含 cloudflare',
       (ice.turnSources || []).includes('cloudflare'), JSON.stringify(ice.turnSources));
 
-    // ---- ⑧ 缺行时能追加（兼容老版本 .env）----
-    console.log('\n[8] 兼容老 .env（没有 CF 那两行时自动追加）');
-    const legacy = tmpRoot + '/legacy.env';
-    fs.writeFileSync(legacy, 'PORT=3602\nJWT_SECRET=x\n', 'utf8');
-    // 直接换文件测：靠删除再写的方式模拟
-    process.env.TURN_ENV_PATH = legacy;
-    const legacySave = await j('POST', '/api/admin/turn/verify', { key_id: VALID_KID, api_token: VALID_TOK }, token);
-    ok('校验对老配置同样有效', legacySave.data.ok === true);
+    // ---- ⑧ 缺行时能追加（兼容老版本配置）----
+    console.log('\n[8] 兼容老配置（turn.env 只写了别的中继键时也能追加）');
+    fs.writeFileSync(turnEnvFile, 'TURN_URLS=turn:1.2.3.4:3478?transport=udp\n', 'utf8');
+    const legacySave = await j('POST', '/api/admin/turn',
+      { key_id: VALID_KID, api_token: VALID_TOK }, token);
+    ok('在已有中继配置上追加 CF 凭据成功', legacySave.status === 200, `got=${legacySave.status}`);
+    const legacyAfter = fs.readFileSync(turnEnvFile, 'utf8');
+    ok('原有 TURN_URLS 被保留', legacyAfter.includes('turn:1.2.3.4:3478'), legacyAfter);
+    ok('CF 凭据被追加进来', legacyAfter.includes(`CF_TURN_KEY_ID=${VALID_KID}`), legacyAfter);
 
     // ---- ⑨ 删除配置 ----
     console.log('\n[9] 移除配置');
     const del = await j('DELETE', '/api/admin/turn', null, token);
     ok('删除返回 200', del.status === 200, `got=${del.status}`);
-    ok('删除后也提示重建', del.data.needRecreate === true);
-    const afterDel = fs.readFileSync(envFile, 'utf8');
-    ok('Key ID 已清空但行还在（不破坏结构）',
-      /^\s*CF_TURN_KEY_ID=\s*$/m.test(afterDel), afterDel.slice(0, 200));
-    ok('API Token 已清空', /^\s*CF_TURN_API_TOKEN=\s*$/m.test(afterDel));
+    ok('删除后不需要重建（立即抹除）', del.data.needRecreate === false, del.data.needRecreate);
+    const afterDel = fs.readFileSync(path.join(tmpRoot, 'turn.env'), 'utf8');
+    ok('turn.env 里已不含 CF 凭据',
+      !afterDel.includes(VALID_KID) && !afterDel.includes(VALID_TOK), afterDel.slice(0, 200));
+    // DELETE 响应里本来就没有 sources 字段，靠"字段缺失"来断言等于假通过 ——
+    // 必须真去查一次状态接口。
+    const st2 = await j('GET', '/api/admin/turn', null, token);
+    ok('删除后状态回到未配置', (st2.data.sources || []).length === 0,
+      JSON.stringify(st2.data.sources));
+    ok('删除后 ready=false', st2.data.ready === false, st2.data.ready);
 
     console.log('\n' + '='.repeat(56));
     console.log(`通过 ${pass} 项`);

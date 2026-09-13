@@ -3,6 +3,7 @@ const hub = require('./hub');
 const { verifyToken } = require('./auth');
 const { sendMessage, recallMessage, markRead, typing } = require('./chat');
 const call = require('./call');
+const remote = require('./remote');
 
 /** 协议层心跳探测间隔：30 秒 */
 const PING_EVERY_MS = 30 * 1000;
@@ -131,6 +132,60 @@ function init(server) {
               to: frame.to,
             });
             break;
+          // ---- 远程协助信令（同样只转发 SDP/ICE，画面与控制命令走 P2P）----
+          // 与通话的关键差别这里的每一条都必须**有错就回 error**：
+          // 远程协助是"别人能不能动我电脑"的事，任何一步失败都要让发起端
+          // 立刻知道，不能让他盯着一个永远转圈的等待界面。
+          case 'remote:invite': {
+            const r = remote.request({ controllerId: userId, hostId: Number(frame.hostId) });
+            if (r.error) hub.send(ws, { type: 'error', message: r.error, ref: 'remote:invite' });
+            break;
+          }
+          // 用访问码连接（无人值守）。成功也不等于立刻能控 —— 被控端还有撤销窗口。
+          case 'remote:redeem': {
+            const r = remote.redeem({ userId, code: frame.code, device: frame.device });
+            if (r.error) hub.send(ws, { type: 'error', message: r.error, ref: 'remote:redeem' });
+            else hub.send(ws, { type: 'remote:redeem:ok', sessionId: r.sessionId, hostName: r.hostName });
+            break;
+          }
+          case 'remote:accept': {
+            const r = remote.accept({ sessionId: frame.sessionId, userId, device: frame.device });
+            if (r.error) hub.send(ws, { type: 'error', message: r.error, ref: 'remote:accept' });
+            break;
+          }
+          case 'remote:reject': {
+            const r = remote.reject({ sessionId: frame.sessionId, userId });
+            if (r.error) hub.send(ws, { type: 'error', message: r.error, ref: 'remote:reject' });
+            break;
+          }
+          case 'remote:cancel': {
+            const r = remote.cancel({ sessionId: frame.sessionId, userId });
+            if (r.error) hub.send(ws, { type: 'error', message: r.error, ref: 'remote:cancel' });
+            break;
+          }
+          case 'remote:end': {
+            const r = remote.end({ sessionId: frame.sessionId, userId });
+            if (r.error) hub.send(ws, { type: 'error', message: r.error, ref: 'remote:end' });
+            break;
+          }
+          // 双方确认媒体与控制通道真的通了才转 active（不以"点了同意"为准）
+          case 'remote:active': {
+            const r = remote.markActive({ sessionId: frame.sessionId, userId });
+            if (r.error) hub.send(ws, { type: 'error', message: r.error, ref: 'remote:active' });
+            break;
+          }
+          case 'remote:offer':
+          case 'remote:answer':
+          case 'remote:ice': {
+            const r = remote.relay({
+              sessionId: frame.sessionId,
+              userId,
+              type: frame.type.slice(7),
+              data: frame.data,
+            });
+            if (r.error) hub.send(ws, { type: 'error', message: r.error, ref: frame.type });
+            break;
+          }
           default:
             break;
         }
@@ -142,11 +197,18 @@ function init(server) {
     ws.on('close', () => {
       hub.removeSocket(userId, ws);
       // 该用户所有端都掉线了，才认为他真的离线（通话可能还挂在另一端）
-      if (!hub.userSockets.has(userId)) call.handleOffline(userId);
+      if (!hub.userSockets.has(userId)) {
+        call.handleOffline(userId);
+        // 掉线就拆 —— 远程协助绝不能留下"没人看着的控制权"
+        remote.handleOffline(userId);
+      }
     });
     ws.on('error', () => {
       hub.removeSocket(userId, ws);
-      if (!hub.userSockets.has(userId)) call.handleOffline(userId);
+      if (!hub.userSockets.has(userId)) {
+        call.handleOffline(userId);
+        remote.handleOffline(userId);
+      }
     });
   });
   return wss;

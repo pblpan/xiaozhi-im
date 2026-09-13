@@ -14,6 +14,7 @@ import 'package:xiaozhi_im_client/screens/favorites.dart';
 import 'package:xiaozhi_im_client/screens/friends_new.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
 import 'package:xiaozhi_im_client/screens/module_hub.dart';
+import 'package:xiaozhi_im_client/screens/remote.dart';
 import 'package:xiaozhi_im_client/screens/profile.dart';
 import 'package:xiaozhi_im_client/screens/search.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
@@ -323,6 +324,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     } catch (e) {
       _toast(_msg(e));
     }
+  }
+
+  // ---------------- 远程协助 ----------------
+  Future<void> _openRemote() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const RemoteHubScreen()),
+    );
   }
 
   // ---------------- 消息搜索 ----------------
@@ -865,6 +874,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'sound') _toggleSound();
                 if (v == 'about') _openAbout();
                 if (v == 'apps') _openApps();
+                if (v == 'remote') _openRemote();
                 if (v == 'profile') _openProfile();
                 if (v == 'newfriends') _openNewFriends();
               },
@@ -921,6 +931,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       Icon(Icons.widgets_outlined, size: 19),
                       SizedBox(width: 10),
                       Text('应用')
+                    ])),
+                const PopupMenuItem(
+                    value: 'remote',
+                    child: Row(children: [
+                      Icon(Icons.screenshot_monitor_outlined, size: 19),
+                      SizedBox(width: 10),
+                      Text('远程协助')
                     ])),
                 PopupMenuItem(
                     value: 'sound',

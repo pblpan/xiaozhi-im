@@ -266,6 +266,66 @@ CREATE TABLE IF NOT EXISTS module_submissions (
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_submissions_module ON module_submissions(module_id, created_at DESC);`);
 
+// ---- 远程协助（对标 UU 远程）----
+// 两张表，职责严格分开：
+//   remote_sessions        每次会话的**审计记录**（谁被谁控、多久、什么模式、怎么结束的）
+//   remote_access_codes    无人值守访问码
+//
+// 【为什么访问码只存哈希】
+// 访问码等价于"这台电脑的钥匙"。一旦明文入库，DB 被拷走就等于钥匙被拷走 ——
+// 而它不像登录密码那样可以强制所有人改。所以库里只有 scrypt(code, salt)，
+// 明文只在**生成的那一刻**返回给用户一次，之后谁也拿不回来（包括管理员）。
+//
+// ⚠️ 必须是慢哈希：9 位数字只有 10^9 种组合，用 SHA256 的话库被拷走就能
+// 离线枚举反推。详见 src/remote.js 里 hashCode() 的说明。
+db.exec(`
+CREATE TABLE IF NOT EXISTS remote_sessions (
+  id TEXT PRIMARY KEY,
+  host_id INTEGER NOT NULL,          -- 被控端（屏幕被看、键鼠被操作的一方）
+  controller_id INTEGER,             -- 控制端（无人值守兑换码之前可能还没有）
+  mode TEXT NOT NULL,                -- attended 有人值守 / unattended 无人值守
+  code_id INTEGER,                   -- 无人值守时兑换的是哪个码
+  status TEXT NOT NULL,              -- requesting | connecting | active | ended
+  end_reason TEXT,                   -- host_end | controller_end | timeout | rejected | canceled | failed
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,                -- 真正连通（active）的时刻
+  ended_at INTEGER,
+  duration_sec INTEGER NOT NULL DEFAULT 0,
+  host_device TEXT,                  -- 被控端上报的设备描述（Windows 10 / Android 14 ...）
+  controller_device TEXT
+);
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_sessions_host ON remote_sessions(host_id, created_at DESC);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_sessions_ctrl ON remote_sessions(controller_id, created_at DESC);`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS remote_access_codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,          -- 归属：这个码能开**这个人**的电脑
+  label TEXT NOT NULL DEFAULT '',    -- 备注（"门店前台那台"），方便自己认
+  code_hash TEXT NOT NULL,           -- scrypt(code, salt)；**绝不存明文**
+  salt TEXT NOT NULL,                -- 每行独立随机盐，同一明文在不同行也不同哈希
+  single_use INTEGER NOT NULL DEFAULT 0,  -- 一次性：用一次自动作废
+  expires_at INTEGER,                -- 过期时间，NULL=长期有效
+  revoked INTEGER NOT NULL DEFAULT 0,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  last_used_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_codes_user ON remote_access_codes(user_id, revoked);`);
+
+// 兑换失败记录 —— 用于**限流**。没有它就是无限次撞码：
+// 9 位数字虽有一亿种组合，但配上不限次尝试就是一个可被暴力枚举的门。
+db.exec(`
+CREATE TABLE IF NOT EXISTS remote_code_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  ts INTEGER NOT NULL
+);
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_attempts_user ON remote_code_attempts(user_id, ts DESC);`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

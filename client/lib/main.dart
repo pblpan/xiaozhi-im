@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'api.dart';
 import 'core/call_service.dart';
 import 'core/remote_config.dart';
+import 'screens/remote.dart';
 import 'core/settings.dart';
 import 'core/sound_service.dart';
 import 'core/storage.dart';
@@ -44,6 +45,11 @@ class MyApp extends StatelessWidget {
         title: '小智 IM',
         navigatorKey: appNavigatorKey,
         theme: AppTheme.dark(),
+        // 挂在 builder 而不是包某一条路由：协作请求必须**在任何页面之上**
+        // 弹出来（用户在聊天页里照样要能看到），"正在被协助"的警示条同理。
+        // 包 login 或 home 都做不到 —— 一旦 push 了新路由就盖不住了。
+        builder: (ctx, child) =>
+            RemoteAssistWatcher(child: child ?? const SizedBox.shrink()),
         home: const AuthGate(),
         debugShowCheckedModeBanner: false,
       );

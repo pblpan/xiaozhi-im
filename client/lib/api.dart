@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'core/app_version.dart';
 import 'core/config.dart';
+import 'core/remote_models.dart';
 import 'core/storage.dart';
 
 /// REST 异常（带 HTTP 状态码）。
@@ -343,6 +344,55 @@ class ImApi {
   Future<Map<String, dynamic>> callIce() async {
     final d = await _get('/call/ice');
     return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+  }
+
+  // ---- 远程协助 ----
+  // 注意：这里只有「访问码管理」和「会话审计」两类接口。
+  // 屏幕画面和键鼠操作**不走服务端** —— 那是 WebRTC P2P 的事。
+
+  /// 我名下的无人值守访问码列表（不含明文，明文只在生成时返回一次）
+  Future<List<RemoteCode>> remoteCodes() async {
+    final d = await _get('/remote/codes');
+    final items = d is Map && d['items'] is List ? d['items'] as List : <dynamic>[];
+    return items
+        .whereType<Map>()
+        .map((e) => RemoteCode.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// 生成一个新访问码。**返回的 code 是唯一一次能看到的明文。**
+  Future<Map<String, dynamic>> createRemoteCode({
+    String label = '',
+    bool singleUse = false,
+    int? ttlMinutes,
+  }) async {
+    final d = await _post('/remote/codes', {
+      'label': label,
+      'singleUse': singleUse,
+      if (ttlMinutes != null) 'ttlMinutes': ttlMinutes,
+    });
+    return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+  }
+
+  Future<void> revokeRemoteCode(int id) async {
+    await _delete('/remote/codes/$id');
+  }
+
+  /// 我的远程协助会话历史（被控 + 控制都算），按时间倒序
+  Future<List<RemoteSessionRecord>> remoteSessions({int limit = 50}) async {
+    final d = await _get('/remote/sessions?limit=$limit');
+    final items = d is Map && d['items'] is List ? d['items'] as List : <dynamic>[];
+    return items
+        .whereType<Map>()
+        .map((e) => RemoteSessionRecord.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// 当前进行中的会话（App 重连后可回到控制界面）
+  Future<Map<String, dynamic>?> remoteCurrent() async {
+    final d = await _get('/remote/current');
+    final s = d is Map ? d['session'] : null;
+    return s is Map ? Map<String, dynamic>.from(s) : null;
   }
 
   // ---- 文件 ----
