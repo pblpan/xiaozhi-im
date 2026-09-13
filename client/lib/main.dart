@@ -9,6 +9,7 @@ import 'core/settings.dart';
 import 'core/sound_service.dart';
 import 'core/storage.dart';
 import 'core/theme.dart';
+import 'core/tray_service.dart';
 import 'screens/login.dart';
 import 'screens/conversations.dart';
 import 'widgets/avatar.dart';
@@ -34,6 +35,11 @@ void main() async {
   SoundService().attach(); // 全局监听新消息，收到就响一声
   CallService().navKey = appNavigatorKey;
   await CallService().attach(); // 订阅通话信令，随时能接来电
+  // 桌面端：托盘 + "关闭=缩到托盘"，必须赶在 runApp 之前装好拦截，
+  // 否则用户可能在监听还没挂上的那半秒里把窗口关掉（这时程序会真的退出）。
+  // 来电要把缩在托盘里的窗口拉回来，所以先把导航 key 交出去。
+  TrayService.instance.attachNavigator(appNavigatorKey);
+  await TrayService.instance.init();
   runApp(const MyApp());
 }
 

@@ -9,6 +9,7 @@ import '../api.dart';
 import '../screens/call.dart';
 import '../socket.dart';
 import 'sound_service.dart';
+import 'tray_service.dart';
 
 /// 通话阶段
 enum CallPhase {
@@ -634,6 +635,9 @@ class CallService {
       status.value = video ? '邀请你视频通话' : '邀请你语音通话';
     }
     camOn.value = video;
+    // ⚠️ 桌面端：窗口这会儿可能正缩在系统托盘里。不把它叫回来的话，
+    // 铃声明明在响、用户却什么也看不到 —— 等于漏接。
+    TrayService.instance.showFromTray();
     _buzz();
     _pushScreen();
   }

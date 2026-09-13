@@ -8,10 +8,20 @@ AOT 会保留类名/方法名/字符串常量，所以这些记号命中就说�
 用法：
     python verify_release.py <文件路径> [特征串...]
 不加特征串时用下面的默认集合（对应 v0.5.1 的 Windows 黑屏修复）。
+
+三种产物：
+    *.fpk   服务端安装包（tar.gz，拆两层）
+    *.apk   Android 安装包
+    *.exe   Windows **NSIS 安装包**（v0.9.2 起，取代原先的 zip 绿色版）
+            → 用 7-Zip 解出里面的待安装内容，再按原来的判据校验
+            → 需要 7-Zip： winget install -e --id 7zip.7zip
 """
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import zipfile
 
 # v0.5.1「Windows 端视频通话黑屏」修复 + v0.5.2「提示音」的关键记号
@@ -103,6 +113,30 @@ WIN_MARKS = [
     'parseRemoteInput',         # 控制协议解析（畸形报文不能把 App 搞崩）
     'remoteKeyOf',              # 键盘映射（含 Ctrl/Shift/Alt——漏一格就按不出 Ctrl+C）
     'createInputInjector',      # 按平台挑注入实现（Android 尚不支持时会如实说）
+    # ---- v0.9.2 桌面端「关闭=缩到托盘」----
+    # 下面 4 条两端（Windows app.so / APK libapp.so）都实测命中；
+    # 只活在 Windows 上的另 3 条放在 WIN_ONLY_MARKS。
+    # ⚠️ 实测**搜不到**的（本轮踩了一遍，别再往里加）：
+    #   attachNavigator / closeAction / setAction → 被 AOT 内联掉
+    #   '缩到托盘' 等中文串 → 只有 UTF-16LE 才留，跨产物不稳
+    #   教训同源：判据先两端实测，再写进清单。
+    'TrayService',              # 托盘 + 关闭行为的服务（类名，AOT 保留）
+    'showFromTray',             # 来电时把窗口从托盘拉回来（不拉 = 漏接）
+    'actionLabel',              # 菜单「点×时：缩到托盘」的当前值展示
+    'xz_close_action',          # 记住的选择存在这个 key 里（能改回去，不做绑架）
+]
+
+# 只有 Windows 产物才有的记号。**绝不许混进 APK_MARKS**。
+#
+# 实测（2026-09-13）：minimizeToTray / tray_manager.dart / window_manager.dart
+# 在 APK 的 libapp.so 里一律搜不到 —— 因为 TrayService.supported 在 Android 上恒为
+# false，AOT 把「缩到托盘」整条调用链当死代码剔了。这是**预期的好事**（没往移动端
+# 塞无用的桌面逻辑），把它当「缺失」去查是浪费时间。反过来 TrayService /
+# showFromTray 两端都在，所以留在上面的公共清单里。
+WIN_ONLY_MARKS = [
+    'minimizeToTray',           # 「关闭 ≠ 退出」的主体动作
+    'tray_manager.dart',        # 托盘能力所在文件
+    'window_manager.dart',      # 拦截 WM_CLOSE 用的库
 ]
 
 # 必须**不再出现**的记号：功能下线 / 资源被替换。
@@ -123,7 +157,8 @@ SOUND_ASSETS = [
 # 原生库是否齐三个架构，由 check_apk 单独按条目名判定。
 APK_MARKS = list(WIN_MARKS)
 
-# 绿色版必须整体分发，缺一个都起不来
+# v0.9.2 起 Windows 走 NSIS 安装程序；下面这些也必须老实躺在安装包里，
+# 少一个都起不来（其中托盘图标缺失的表现是：运行时托盘区一片空白）。
 WIN_REQUIRED = [
     'xiaozhi_im_client.exe',
     'flutter_windows.dll',
@@ -131,7 +166,69 @@ WIN_REQUIRED = [
     'data/icudtl.dat',
     'flutter_webrtc_plugin.dll',
     'libwebrtc.dll',
+    # 托盘三件套：插件 DLL 缺了功能直接没有，图标缺了只在运行时才看得出来
+    'tray_manager_plugin.dll',
+    'window_manager_plugin.dll',
+    'data/flutter_assets/assets/tray.ico',
 ]
+
+
+def find_7z():
+    """NSIS 安装包得靠 7-Zip 解，没有就明说怎么装（别让人对着乱猜）。"""
+    for cand in (
+        os.environ.get('SEVEN_ZIP'),
+        os.path.join('C:', os.sep, 'Program Files', '7-Zip', '7z.exe'),
+        os.path.join('C:', os.sep, 'Program Files (x86)', '7-Zip', '7z.exe'),
+    ):
+        if cand and os.path.isfile(cand):
+            return cand
+    p = shutil.which('7z') or shutil.which('7z.exe')
+    if p:
+        return p
+    raise SystemExit(
+        '校验 NSIS 安装包需要 7-Zip：\n'
+        '  winget install -e --id 7zip.7zip\n'
+        '（或设 SEVEN_ZIP 环境变量指到 7z.exe）'
+    )
+
+
+class SevenZipDir(object):
+    """把一个归档解到临时目录，包装成 zipfile.ZipFile 的最小子集（namelist/read/getinfo）。
+
+    这样 check_win 不用改就知道怎么读 —— Windows 产物从 zip 换成 NSIS exe，
+    校验逻辑本身不需要动。
+    """
+
+    def __init__(self, path, seven_zip=None):
+        self._sz = seven_zip or find_7z()
+        self._tmp = tempfile.mkdtemp(prefix='xzwin_')
+        r = subprocess.run([self._sz, 'x', '-y', '-bso0', '-bsp0',
+                            '-o' + self._tmp, path],
+                           capture_output=True, text=True, errors='replace')
+        if r.returncode != 0:
+            shutil.rmtree(self._tmp, ignore_errors=True)
+            raise SystemExit('7-Zip 解包失败：%s\n%s' % (r.stdout or '', r.stderr or ''))
+        self._files = {}
+        for root, _dirs, files in os.walk(self._tmp):
+            for f in files:
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, self._tmp).replace(os.sep, '/')
+                self._files[rel] = full
+
+    def close(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def namelist(self):
+        return list(self._files.keys())
+
+    def read(self, name):
+        with open(self._files[name], 'rb') as f:
+            return f.read()
+
+    def getinfo(self, name):
+        class Info(object):
+            file_size = os.path.getsize(self._files[name])
+        return Info()
 
 
 def scan_bytes(data, marks):
@@ -187,6 +284,33 @@ def check_sounds(zf, names, prefix):
     return not miss
 
 
+def check_installer_meta(path):
+    """确认这真的是个「正规安装程序」，而不是把 zip 改个后缀凑数。
+
+    判据是 NSIS 写进 PE 版本资源的那几个字段（pack_win.py 里用 VIAddVersionKey 填的）。
+    少了它们，用户右键「属性」看不到版本号 —— 分发几版之后就再也分不清手上的是哪一版。
+    """
+    print('\n-- 安装包自身属性 --')
+    with open(path, 'rb') as f:
+        d = f.read()
+
+    want = ['VS_VERSION_INFO', 'ProductVersion', 'FileDescription', 'LegalCopyright']
+    miss = [w for w in want if d.count(w.encode('utf-16-le')) == 0]
+    print('  %-24s %s' % ('PE 版本资源', '已写入 ✓' if not miss else '缺失 %s ✗' % miss))
+
+    # 版本号要跟文件名对得上，否则是"改了代码忘了升版本号"或"装的是旧包"
+    m = re.search(r'v([0-9]+\.[0-9]+\.[0-9]+)', os.path.basename(path))
+    ver_ok = True
+    if m:
+        want_ver = (m.group(1) + '.0').encode('utf-16-le')
+        hit = d.count(want_ver) > 0
+        print('  %-24s %s' % ('文件名版本号 %s' % m.group(1),
+                              '与包内一致 ✓' if hit else '包内找不到 ✗'))
+        ver_ok = hit
+    all_ok = not miss and ver_ok
+    return all_ok
+
+
 def check_win(zf, marks):
     names = zf.namelist()
     print('条目数: %d' % len(names))
@@ -204,7 +328,7 @@ def check_win(zf, marks):
     data = zf.read(target)
     print('校验对象: %s (%.1f MB)' % (target, len(data) / 1048576.0))
 
-    hits = scan_bytes(data, marks)
+    hits = scan_bytes(data, list(marks) + WIN_ONLY_MARKS)
     bad = [k for k, v in hits.items() if v == 0]
     for k, v in hits.items():
         print('  %-24s %s' % (k, '命中 x%d' % v if v else '未命中 ✗'))
@@ -538,6 +662,18 @@ def main():
         return check_fpk(path)
 
     marks = sys.argv[2:] or (APK_MARKS if path.lower().endswith('.apk') else WIN_MARKS)
+    if path.lower().endswith('.exe'):
+        # NSIS 安装程序：内容压缩在里面，先解出来再按同一套判据校验。
+        # 7z 的项名不带盘符，Windows 这边源码结构和以前 zip 版一致，可直接复用。
+        sz = SevenZipDir(path)
+        try:
+            rc = check_win(sz, marks)
+            meta_ok = check_installer_meta(path)
+        finally:
+            sz.close()
+        print('=' * 56)
+        return rc or (0 if meta_ok else 1)
+
     with zipfile.ZipFile(path) as zf:
         if path.lower().endswith('.apk'):
             rc = check_apk(zf, marks)

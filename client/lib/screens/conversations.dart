@@ -7,6 +7,7 @@ import 'package:xiaozhi_im_client/core/sound_service.dart';
 import 'package:xiaozhi_im_client/core/storage.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
+import 'package:xiaozhi_im_client/core/tray_service.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/screens/chat.dart';
@@ -165,6 +166,22 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     if (!mounted) return;
     setState(() => _soundOn = nv);
     if (nv) SoundService().playMessage();
+  }
+
+  /// 桌面端：点右上角 × 之后的落点（每次询问 / 缩到托盘 / 直接退出）。
+  ///
+  /// 做成三态循环而不是单独开关：**用户一旦在关闭对话框里勾了"记住选择"，
+  /// 必须还能在这里改回来**，否则那句"记住"就成了单程票。
+  Future<void> _cycleCloseAction() async {
+    const order = <CloseAction>[
+      CloseAction.ask,
+      CloseAction.minimize,
+      CloseAction.exit,
+    ];
+    final i = order.indexOf(TrayService.instance.action);
+    await TrayService.instance.setAction(order[(i + 1) % order.length]);
+    if (!mounted) return;
+    setState(() {});
   }
 
   void _logout() async {
@@ -871,6 +888,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'fav') _openFavorites();
                 if (v == 'server') _openServer();
                 if (v == 'logout') _logout();
+                if (v == 'tray') _cycleCloseAction();
                 if (v == 'sound') _toggleSound();
                 if (v == 'about') _openAbout();
                 if (v == 'apps') _openApps();
@@ -939,6 +957,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       SizedBox(width: 10),
                       Text('远程协助')
                     ])),
+                // 只在桌面端出现：托盘是桌面概念，手机上讲"缩到托盘"没有意义
+                if (TrayService.supported)
+                  PopupMenuItem(
+                      value: 'tray',
+                      child: Row(children: [
+                        const Icon(Icons.cancel_outlined, size: 19),
+                        const SizedBox(width: 10),
+                        Text('点×时：${TrayService.instance.actionLabel}')
+                      ])),
                 PopupMenuItem(
                     value: 'sound',
                     child: Row(children: [
