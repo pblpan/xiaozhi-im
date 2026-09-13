@@ -18,6 +18,7 @@
         <el-menu-item index="users">用户管理</el-menu-item>
         <el-menu-item index="groups">群组管理</el-menu-item>
         <el-menu-item index="friends">好友关系</el-menu-item>
+        <el-menu-item index="orgs">组织机构</el-menu-item>
         <el-menu-item index="files">文件管理</el-menu-item>
         <el-menu-item index="messages">消息管理</el-menu-item>
         <el-menu-item index="integrations">集成对接</el-menu-item>
@@ -1249,6 +1250,70 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </div>
 
         <!-- 系统设置 -->
+        <!-- 组织机构 -->
+        <div v-else-if="tab === 'orgs'">
+          <el-alert v-if="!orgWorkMode" type="warning" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              当前是普通好友模式：组织信息可查看，创建组织 / 录入员工前请先到「系统设置」开启工作模式。
+            </template>
+          </el-alert>
+
+          <el-card v-if="!orgData.org">
+            <template #header>创建组织（一个服务器一个组织）</template>
+            <el-form inline label-width="80px" style="max-width:560px">
+              <el-form-item label="组织名">
+                <el-input v-model="orgNewName" maxlength="30" placeholder="2-30 个字，如：盛京食品厂" style="width:260px" />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="orgBusy" @click="createOrg">创建组织</el-button>
+              </el-form-item>
+            </el-form>
+          </el-card>
+
+          <el-card v-else>
+            <template #header>
+              <div class="card-hdr">
+                <span>组织机构：{{ orgData.org.name }}（{{ orgData.members.length }} 人）</span>
+                <div>
+                  <el-button size="small" type="primary" @click="orgDlg = true">录入员工</el-button>
+                  <el-button size="small" @click="loadOrgs">刷新</el-button>
+                </div>
+              </div>
+            </template>
+            <el-table :data="orgData.members" border stripe>
+              <el-table-column prop="id" label="ID" width="70" />
+              <el-table-column prop="employee_no" label="工号" width="150">
+                <template #default="{ row }">{{ row.employee_no || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="username" label="账号" />
+              <el-table-column prop="nickname" label="昵称" />
+              <el-table-column label="操作" width="110">
+                <template #default="{ row }">
+                  <el-button size="small" type="danger" @click="removeMember(row)">移除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+
+          <el-dialog v-model="orgDlg" title="录入员工" width="460px">
+            <el-alert type="info" :closable="false" style="margin-bottom:14px">
+              <template #title>工号即登录账号，初始密码 = 工号；录入后自动与全员互为好友。</template>
+            </el-alert>
+            <el-form label-width="70px">
+              <el-form-item label="工号">
+                <el-input v-model="orgEmp.no" maxlength="20" placeholder="3-20 位字母/数字/下划线，如 001 或 emp001" />
+              </el-form-item>
+              <el-form-item label="昵称">
+                <el-input v-model="orgEmp.name" maxlength="24" placeholder="可选，默认同工号" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="orgDlg = false">取消</el-button>
+              <el-button type="primary" :loading="orgBusy" @click="addMember">录入</el-button>
+            </template>
+          </el-dialog>
+        </div>
+
         <div v-else-if="tab === 'settings'">
           <el-card style="margin-bottom:16px">
             <template #header>公司与好友模式（对全服务器生效，客户端登录页/扫描结果即时可见）</template>
@@ -1857,6 +1922,7 @@ async function loadTab() {
   } else if (tab.value === 'users') await loadUsers();
   else if (tab.value === 'groups') await loadGroups();
   else if (tab.value === 'friends') await loadFriends();
+  else if (tab.value === 'orgs') await loadOrgs();
   else if (tab.value === 'files') await loadFiles();
   else if (tab.value === 'messages') await loadMessages();
   else if (tab.value === 'integrations') await loadIntegrations();
@@ -2723,6 +2789,73 @@ async function runPubkeyTest() {
 }
 
 /* ====== Settings ====== */
+// ---- 组织机构 ----
+const orgData = ref({ org: null, members: [] });
+const orgBusy = ref(false);
+const orgNewName = ref('');
+const orgDlg = ref(false);
+const orgEmp = ref({ no: '', name: '' });
+const orgWorkMode = ref(false);
+async function loadOrgs() {
+  try {
+    // /orgs/my 带 admin token 走 admin 分支（返回服务器唯一的组织）；
+    // 顺带读一次好友模式，用来把"普通模式下操作会被 400"提前告诉管理员
+    const [my, st] = await Promise.all([api.get('/orgs/my'), api.get('/admin/settings')]);
+    orgData.value = my.data;
+    orgWorkMode.value = (st.data.friendMode || 'normal') === 'work';
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载组织机构失败');
+  }
+}
+async function createOrg() {
+  const name = orgNewName.value.trim();
+  if (name.length < 2) return ElMessage.warning('组织名至少 2 个字');
+  orgBusy.value = true;
+  try {
+    await api.post('/orgs', { name });
+    ElMessage.success('组织已创建，可以录入员工了');
+    orgNewName.value = '';
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '创建失败');
+  } finally {
+    orgBusy.value = false;
+  }
+}
+async function addMember() {
+  const no = orgEmp.value.no.trim();
+  if (!/^[A-Za-z0-9_]{3,20}$/.test(no)) return ElMessage.warning('工号 3-20 位，仅限字母、数字、下划线');
+  orgBusy.value = true;
+  try {
+    const { data } = await api.post(`/orgs/${orgData.value.org.id}/members`,
+      { employeeNo: no, nickname: orgEmp.value.name.trim() });
+    ElMessage.success(`已录入 ${data.user.username}，初始密码 = 工号，请通知员工登录后修改`);
+    orgEmp.value = { no: '', name: '' };
+    orgDlg.value = false;
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '录入失败');
+  } finally {
+    orgBusy.value = false;
+  }
+}
+async function removeMember(row) {
+  try {
+    await ElMessageBox.confirm(
+      `移除员工 ${row.username}？其账号将退出组织并解除组织内好友关系（账号本身保留、可重新录入）。`,
+      '移除确认', { type: 'warning' });
+  } catch {
+    return; // 用户点了取消
+  }
+  try {
+    await api.delete(`/orgs/${orgData.value.org.id}/members/${row.id}`);
+    ElMessage.success('已移除');
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '移除失败');
+  }
+}
+
 const pwd = ref({ old: '', neu: '', neu2: '' });
 const pwdBusy = ref(false);
 
