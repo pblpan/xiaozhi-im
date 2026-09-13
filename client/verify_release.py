@@ -307,7 +307,25 @@ def check_installer_meta(path):
         print('  %-24s %s' % ('文件名版本号 %s' % m.group(1),
                               '与包内一致 ✓' if hit else '包内找不到 ✗'))
         ver_ok = hit
-    all_ok = not miss and ver_ok
+
+    # 安装范围：per-user（asInvoker，免 UAC）还是全局（requireAdministrator）。
+    # 期望值跟 pack_win.py 的默认值绑死 —— 有人把 --machine 版当默认发出去时，
+    # 这里必须要红，否则「双击就装、不弹 UAC」这条承诺会悄悄失效。
+    # NSIS 会把 manifest 明文写进 exe，直接数就够（实测 asInvoker 命中 1 次）。
+    as_invoker = d.count(b'asInvoker')
+    require_admin = d.count(b'requireAdministrator')
+    if as_invoker and not require_admin:
+        print('  %-24s %s' % ('安装范围', '用户级 · 免 UAC ✓'))
+        level_ok = True
+    elif require_admin:
+        print('  %-24s %s' % ('安装范围', '全局 · 需 UAC ✗（若确实要发 --machine 版，'
+                                          '改 verify_release.py 里这条期望）'))
+        level_ok = False
+    else:
+        print('  %-24s %s' % ('安装范围', '读不到 manifest ✗'))
+        level_ok = False
+
+    all_ok = not miss and ver_ok and level_ok
     return all_ok
 
 
