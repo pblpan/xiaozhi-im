@@ -58,8 +58,31 @@ function loadHook(token) {
  *   2. { title, text, fields, ... }    —— 卡片（工厂日报/预警就用这个）
  *   3. { kind, content }               —— 完全显式控制
  */
+/**
+ * 把可能是对象的"文本字段"取出来。
+ *
+ * 【为什么必须显式拦住对象】之前这里是 `String(v)`：
+ * 对接方若照抄钉钉/企微/飞书的报文格式（`{"msgtype":"text","text":{"content":"..."}}`），
+ * `String({content:'x'})` 得到的是字符串 `"[object Object]"` —— 于是**返回 200 成功**，
+ * 群里却出现一条内容是 `[object Object]` 的消息。发送方看到 200 以为通了，
+ * 接收方看到乱码不知道哪来的，是最难排查的一类"假成功"。
+ * 宁可 400 并说清楚，也不要让垃圾进群。
+ */
+function coerceText(v, field) {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === 'object') {
+    const kind = Array.isArray(v) ? '数组' : '对象';
+    throw new Error(
+      `${field} 必须是字符串，收到的是${kind}。`
+      + '如果你在对接钉钉/企微/飞书的报文格式（如 {"msgtype":"text","text":{"content":"..."}}），'
+      + `请把纯文本提到顶层：{"text":"..."} —— IM 不解析各家的嵌套结构。`,
+    );
+  }
+  return String(v);
+}
+
 function normalizeBody(body) {
-  const b = body && typeof body === 'object' ? body : {};
+  const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   const mentions = Array.isArray(b.mentions) ? b.mentions : [];
 
   if (b.kind) {
@@ -68,13 +91,18 @@ function normalizeBody(body) {
   const hasCardShape = b.title !== undefined || b.fields !== undefined
     || b.color !== undefined || b.footer !== undefined;
   if (hasCardShape) {
+    // 具体到字段的类型检查交给 normalizeCard（它更清楚每个字段的上限）
     return { kind: 'card', content: b, mentions };
   }
-  const text = b.text !== undefined ? b.text : (b.markdown !== undefined ? b.markdown : b.message);
-  if (text === undefined || text === null || String(text).trim() === '') {
+  // 三个别名按优先级取第一个出现的；报错时用真实字段名，别让对接方去猜是哪个键
+  const [field, raw] = b.text !== undefined ? ['text', b.text]
+    : b.markdown !== undefined ? ['markdown', b.markdown]
+      : ['message', b.message];
+  const text = coerceText(raw, field);
+  if (text === undefined || text.trim() === '') {
     throw new Error('请求体需要 text / title+fields / kind+content 之一');
   }
-  return { kind: 'text', content: String(text), mentions };
+  return { kind: 'text', content: text, mentions };
 }
 
 /** @ 提及：允许传用户 id、用户名、昵称，或 'all'；最终仍由 chat 层按群成员二次过滤 */

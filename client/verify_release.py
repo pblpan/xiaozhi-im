@@ -251,8 +251,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.10.0', 'v0.10.0'],
-        'src/package.json': ['"version": "0.10.0"'],
+        'manifest': ['version', '0.10.1', 'v0.10.1'],
+        'src/package.json': ['"version": "0.10.1"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
@@ -310,7 +310,17 @@ def check_fpk(path):
                                      "'/current'", 'listCodes', 'revokeCode',
                                      'history', 'currentOf'],
         'src/src/routes/friends.js': ["'/:friendId/remark'", 'MAX_REMARK'],
-        'src/src/chat.js': ['remarkOf'],
+        'src/src/chat.js': ['remarkOf',
+                            # v0.10.1：告警级别 → 卡片颜色的兼容映射。
+                            # 没有它，所有只传 severity 的第三方告警卡片都是默认蓝，
+                            # 严重告警和普通通知长得一样（值班时看不出轻重）。
+                            'severityToColor', 'SEVERITY_COLORS',
+                            # v0.10.1：clip 不再把对象 String 成 "[object Object]"
+                            'asText'],
+        # v0.10.1：入站推送必须拦住"嵌套报文"这种假成功。
+        # 老行为是 String({content:'x'}) → "[object Object]" 且返回 200，
+        # 群里出乱码而发送方以为通了。
+        'src/src/routes/hooks.js': ['coerceText', 'normalizeBody', 'verifySignature'],
         # v0.6.5：管理台中继配置向导（读状态 / 校验 / 保存 / 移除）
         # v0.8.0：客户端配置中心的管理台接口（读 / 发布 / 回滚 / 同步状态）
         'src/src/routes/admin.js': ["'/turn'", "'/turn/verify'", 'envPath',

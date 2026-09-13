@@ -86,6 +86,24 @@ curl -X POST "http://192.168.31.44:3602/api/hooks/incoming/<token>" \
 `title` / `text` / `fields` 至少要有一个，否则返回 400。
 超出上限的内容会被**自动截断**而不是报错，对接方不必自己裁剪。
 
+**颜色可以不给。** 只传 `severity` / `level` / `status` 时，服务端会自动推出语义色 ——
+因为绝大多数告警系统（Alertmanager / Grafana / 各家自建巡检）传的都是级别而不是颜色名：
+
+| 传进来的级别 | 推导出的颜色 |
+|---|---|
+| `critical` `fatal` `emergency` `alert` `error` `severe` `major` `high` `down` `fail` | `red` |
+| `warning` `warn` `medium` `minor` `degraded` | `orange` |
+| `ok` `success` `resolved` `recovered` `normal` `up` `healthy` `pass` | `green` |
+| `info` `notice` `debug` `low` `unknown` | `blue` |
+| `disabled` `maintenance` `silent` `ignored` `closed` | `gray` |
+
+> 明确传了 `color` 的一律以对接方为准，不会被 `severity` 覆盖。级别名大小写不敏感，
+> 认不出的级别回落默认 `blue`（不报错）。
+
+⚠️ **`text` / `title` / `footer` / `url` 必须是字符串，`fields[].label` / `value` 同理。**
+传对象会返回 400 并指名是哪个字段坏了。**不要照搬钉钉/企微/飞书的嵌套报文**
+（`{"msgtype":"text","text":{"content":"..."}}`）—— 各家格式互不相同，IM 不做解析。
+
 ### 2.4 @ 某人 / @所有人
 
 ```json
@@ -318,3 +336,23 @@ A：都能。Android / Windows 客户端都会渲染成同一套卡片样式。
 
 **Q：想改卡片配色？**
 A：对接方只传语义色名（`red`/`orange`/…），具体色值由客户端决定。IM 换肤不会影响对接。
+
+**Q：我明明推成功了（200），群里却出现一条内容是 `[object Object]` 的消息？**
+A：你的报文是钉钉/企微/飞书那种嵌套结构（`{"text":{"content":"..."}}`）。
+v0.10.1 起这种报文会直接 **400 并说明是哪个字段**，不会再产生 `[object Object]`。
+把纯文本提到顶层：`{"text":"..."}`。
+
+**Q：告警推上来了，但所有卡片都是蓝色的？**
+A：报文里既没有 `color`，`severity`/`level`/`status` 也用的是我们没收录的名字。
+把级别名改成上表里的常用写法，或者直接传 `color` 语义色名。
+
+**Q：开了「签名校验」之后第三方系统推不进来了？**
+A：签名必须是 `X-Xiaozhi-Signature: sha256=<HMAC-SHA256(原始请求体, secret)>`。
+很多系统的"密钥"字段是它自己协议专用的（例如发 `X-Netops-Token` 之类的自有请求头），
+两边算的不是同一个东西。要么关掉签名校验（靠"地址即凭证"+ 随时可停用来兜底），
+要么在中间加一层转发负责签名。
+
+**Q：网络运维自用工具箱怎么接？**
+A：它的「告警中心 → 通知配置 → 新增通道」里选 **通用 Webhook**，地址填入站推送地址、
+密钥留空即可。完整步骤（含实测现象与踩坑）见 `GUIDE-接入引导.md`。
+回归测试：`node server/test/netops_hook_test.js`（用工具箱真实报文跑端到端）。

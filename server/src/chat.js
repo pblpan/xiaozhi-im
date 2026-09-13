@@ -45,12 +45,54 @@ const KINDS = ['text', 'image', 'file', 'emoji', 'audio', 'card', 'call'];
 /** 卡片配色：外部系统只需给语义色名，具体色值由客户端决定（换肤不用改对接方） */
 const CARD_COLORS = ['blue', 'green', 'orange', 'red', 'purple', 'gray'];
 
+/**
+ * 告警级别 → 语义色的兜底映射。
+ *
+ * 【为什么要有这一层】第三方告警系统传的几乎都是 severity / level，而不是 color
+ * （网络运维工具箱、Alertmanager、Grafana、各家自建脚本都一样）。没有这层的话，
+ * 它们推过来的卡片全部落成默认蓝 —— **严重告警和普通通知长得一模一样**，
+ * 值班的人扫一眼分不出轻重，这比"没推"更危险。
+ *
+ * 只在对接方**没给** color 时生效：明确给了 color 的一律以对接方为准。
+ * 级别名从宽收录（大小写不敏感），认不出的回落默认蓝。
+ */
+const SEVERITY_COLORS = {
+  red: ['critical', 'fatal', 'emergency', 'alert', 'error', 'severe', 'major', 'high', 'down', 'fail', 'failed'],
+  orange: ['warning', 'warn', 'medium', 'minor', 'degraded'],
+  green: ['ok', 'success', 'resolved', 'recovery', 'recovered', 'normal', 'up', 'healthy', 'pass'],
+  blue: ['info', 'notice', 'debug', 'low', 'unknown'],
+  gray: ['disabled', 'maintenance', 'silent', 'ignored', 'none', 'closed'],
+};
+
+function severityToColor(sev) {
+  const s = String(sev === null || sev === undefined ? '' : sev).trim().toLowerCase();
+  if (!s) return '';
+  for (const [color, names] of Object.entries(SEVERITY_COLORS)) {
+    if (names.includes(s)) return color;
+  }
+  return '';
+}
+
 /** 单条文字消息上限。留足长文本空间，同时挡住误推整篇日志的情况 */
 const MAX_TEXT_LEN = 8000;
 
+/**
+ * 只认"本来就是文本"的值：对象/数组一律当空。
+ *
+ * 【为什么不能直接 String(v)】外部系统（尤其照抄钉钉/企微/飞书格式的对接方）
+ * 很爱把文本塞进嵌套对象里。`String({content:'x'})` 得到的是 `"[object Object]"`，
+ * 这个字符串会被当成正常内容存库、广播、渲染 —— 一条内容是 `[object Object]` 的
+ * 消息就这么进群了，而且看不出是谁发的错。这里拦成空串，
+ * 让下层的"至少要有 title/text/fields 之一"或卡片的显式类型检查去报错。
+ */
+function asText(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'object') return '';
+  return String(v);
+}
+
 function clip(v, n) {
-  const s = v === null || v === undefined ? '' : String(v);
-  return s.trim().slice(0, n);
+  return asText(v).trim().slice(0, n);
 }
 
 /**
@@ -67,22 +109,49 @@ function normalizeCard(content) {
   }
   if (!c || typeof c !== 'object' || Array.isArray(c)) throw new Error('卡片必须是 JSON 对象');
 
+  // 文本类字段显式要求是字符串。不拦的话 clip() 会把对象擦成空串，
+  // 报错就退化成含糊的「卡片至少要有 title / text / fields 之一」，
+  // 对接方根本看不出是"字段类型不对"而不是"字段没填"。
+  for (const k of ['title', 'text', 'footer', 'url']) {
+    const v = c[k];
+    if (v !== undefined && v !== null && typeof v === 'object') {
+      throw new Error(`卡片字段 ${k} 必须是字符串，收到的是${Array.isArray(v) ? '数组' : '对象'}`);
+    }
+  }
+
   const title = clip(c.title, 80);
   const text = clip(c.text, 2000);
   const fields = (Array.isArray(c.fields) ? c.fields : [])
     .slice(0, 12)
-    .map((f) => ({
-      label: clip(f && f.label, 24),
-      value: clip(f && f.value, 200),
-      short: !!(f && f.short),
-    }))
+    .map((f, i) => {
+      for (const k of ['label', 'value']) {
+        const v = f && f[k];
+        if (v !== undefined && v !== null && typeof v === 'object') {
+          throw new Error(
+            `fields[${i}].${k} 必须是字符串，收到的是${Array.isArray(v) ? '数组' : '对象'}`,
+          );
+        }
+      }
+      return {
+        label: clip(f && f.label, 24),
+        value: clip(f && f.value, 200),
+        short: !!(f && f.short),
+      };
+    })
     .filter((f) => f.label || f.value);
 
   if (!title && !text && !fields.length) {
     throw new Error('卡片至少要有 title / text / fields 之一');
   }
 
-  const color = CARD_COLORS.includes(String(c.color)) ? String(c.color) : 'blue';
+  // 对接方给了 color 就用它；没给才尝试从 severity / level / status 推导，
+  // 这样"只填个地址"接进来的告警系统也能推出正确的红/橙/绿，而不是一律蓝。
+  const rawColor = String(c.color === null || c.color === undefined ? '' : c.color)
+    .trim().toLowerCase();
+  const color = CARD_COLORS.includes(rawColor)
+    ? rawColor
+    : (severityToColor(c.severity !== undefined ? c.severity
+      : (c.level !== undefined ? c.level : c.status)) || 'blue');
   const url = clip(c.url, 500);
   const out = {
     title, text, fields, color,
