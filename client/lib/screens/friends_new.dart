@@ -10,8 +10,14 @@ import 'package:xiaozhi_im_client/widgets/avatar.dart';
 ///
 /// 点击某个好友时 `Navigator.pop(context, user)`，由会话列表页负责
 /// 打开对应的单聊（它持有会话列表与自己的 id）。
+///
+/// 作为「通讯录」标签页内容（嵌入模式）时改用 [onPick] 回调 —— 那种场景下本页
+/// 不是被 push 进来的，`Navigator.pop` 会把整个首页弹掉。
 class NewFriendsScreen extends StatefulWidget {
-  const NewFriendsScreen({super.key});
+  const NewFriendsScreen({super.key, this.onPick});
+
+  /// 嵌入模式下的"选中某个人"回调，见类注释
+  final ValueChanged<User>? onPick;
 
   @override
   State<NewFriendsScreen> createState() => _NewFriendsScreenState();
@@ -27,6 +33,17 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  /// 选中一个好友。嵌入模式（通讯录标签）走回调，独立打开时才是 pop 返回值。
+  /// 见 [NewFriendsScreen.onPick]：嵌入时 pop 会把整个首页弹掉。
+  void _pick(User u) {
+    final cb = widget.onPick;
+    if (cb != null) {
+      cb(u);
+      return;
+    }
+    Navigator.pop(context, u);
   }
 
   String _errText(Object e) => e is ApiException
@@ -364,7 +381,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
                     size: 19, color: AppColors.textSub),
               ],
             ),
-            onTap: () => Navigator.pop(context, u),
+            onTap: () => _pick(u),
             onLongPress: () => _editRemark(u),
           );
         },

@@ -43,6 +43,16 @@
       <el-main>
         <!-- 仪表盘 -->
         <div v-if="tab === 'dashboard'">
+          <!-- 异常提醒：只在真出问题时出现，平时不占地方 -->
+          <el-alert v-for="a in dashAlerts" :key="a.key" :type="a.type" show-icon :closable="false"
+                    class="dash-alert">
+            <template #title>
+              <span class="dash-alert-title">{{ a.title }}</span>
+              <el-button type="primary" link @click="tab = a.tab">{{ a.action }} →</el-button>
+            </template>
+            <div class="dash-alert-desc">{{ a.desc }}</div>
+          </el-alert>
+
           <!-- 上手向导：按服务器真实状态动态打勾。新手进来先看这块，
                不用读文档也知道下一步该做什么、点哪儿。 -->
           <el-card class="setup" shadow="never">
@@ -80,26 +90,60 @@
             </div>
           </el-card>
 
-          <el-row :gutter="16">
-            <el-col :span="6" v-for="c in cards" :key="c.label">
-              <el-card shadow="hover" class="stat">
-                <div class="stat-num">{{ stats[c.key] ?? '—' }}</div>
-                <div class="stat-label">{{ c.label }}</div>
-              </el-card>
-            </el-col>
-          </el-row>
-          <el-card style="margin-top:18px">
+          <!-- 指标：按用途分组，每组一个图标 + 一种配色；带「今日」的显示今天新增；
+               带 tab 的整块可点，直达对应页面 -->
+          <div class="dash-groups">
+            <el-card v-for="g in metricGroups" :key="g.key" shadow="never" class="mgroup">
+              <template #header>
+                <div class="card-hdr">
+                  <span class="mgroup-title">
+                    <span class="mgroup-ic" :class="'tone-' + g.tone">{{ g.glyph }}</span>
+                    {{ g.title }}
+                  </span>
+                  <el-button type="primary" link @click="tab = g.tab">{{ g.link }} →</el-button>
+                </div>
+              </template>
+              <div class="mtiles">
+                <div v-for="it in g.items" :key="it.key" class="mtile"
+                     :class="{
+                       clickable: !!it.tab,
+                       'mtile-warn': it.warn && (stats[it.key] || 0) > 0,
+                       'mtile-dim': it.dim,
+                     }"
+                     :title="it.tab ? '点击进入' + (it.label) : ''"
+                     @click="it.tab && (tab = it.tab)">
+                  <div class="mtile-k">{{ it.label }}</div>
+                  <div class="mtile-v">{{ it.raw ?? (stats[it.key] ?? '—') }}</div>
+                  <div class="mtile-d" v-if="it.today && (stats[it.today] || 0) > 0">
+                    今日 +{{ stats[it.today] }}
+                  </div>
+                  <div class="mtile-d muted" v-else-if="it.today">今日 0</div>
+                  <div class="mtile-d muted" v-else-if="it.hint">{{ it.hint }}</div>
+                </div>
+              </div>
+            </el-card>
+          </div>
+
+          <!-- 系统说明：读一次就够的内容，默认收起，不占首屏 -->
+          <el-card shadow="never" class="dash-doc">
             <template #header>
               <div class="card-hdr">
                 <span>系统说明</span>
-                <el-button type="primary" link @click="tab = 'help'">查看完整系统帮助 →</el-button>
+                <div>
+                  <el-button type="primary" link @click="docOpen = !docOpen">
+                    {{ docOpen ? '收起' : '展开' }}
+                  </el-button>
+                  <el-button type="primary" link @click="tab = 'help'">完整系统帮助 →</el-button>
+                </div>
               </div>
             </template>
-            <p>· <b>小智 IM</b> 是私有化部署的即时通讯服务，数据 100% 存储于本机（飞牛 / 群晖 / 绿联 / 麒麟等私有服务器），不经任何第三方云。</p>
-            <p>· <b>客户端</b>支持 Windows / Android（宽屏双栏 / 窄屏跳转自适应布局），后续扩展 Mac / iOS；支持文字、图片、文件、语音、表情、卡片消息，以及单聊 / 群聊、已读回执、撤回、收藏、转发、全局搜索、好友备注与音视频通话。</p>
-            <p>· <b>本管理台</b>用于管用户、群组、好友关系、文件、消息，以及对接外部系统的入站推送与事件订阅。</p>
-            <p>· <b>上手步骤</b>：见上方<b>上手向导</b>（按服务器当前状态自动判断还差哪几步，一键跳到对应页面）。开户方式取决于模式：普通模式在「用户管理 → 新建用户」、或让同事自己在客户端注册；<b>工作模式</b>在「组织机构 → 员工管理」按工号录入（工号 = 登录账号、初始密码 = 工号），人多就用 Excel 批量导入。</p>
-            <p>· <b>两个高频注意点</b>：改管理员密码在「系统设置」（无需重启）；外网通话要通，必须先配好音视频中继（见「系统帮助 → 音视频通话与网络穿透」）。</p>
+            <div v-show="docOpen">
+              <p>· <b>小智 IM</b> 是私有化部署的即时通讯服务，数据 100% 存储于本机（飞牛 / 群晖 / 绿联 / 麒麟等私有服务器），不经任何第三方云。</p>
+              <p>· <b>客户端</b>支持 Windows / Android（宽屏双栏 / 窄屏跳转自适应布局），后续扩展 Mac / iOS；支持文字、图片、文件、语音、表情、卡片消息，以及单聊 / 群聊、已读回执、撤回、收藏、转发、全局搜索、好友备注与音视频通话。</p>
+              <p>· <b>本管理台</b>用于管用户、群组、好友关系、文件、消息，以及对接外部系统的入站推送与事件订阅。</p>
+              <p>· <b>上手步骤</b>：见上方<b>上手向导</b>（按服务器当前状态自动判断还差哪几步，一键跳到对应页面）。开户方式取决于模式：普通模式在「用户管理 → 新建用户」、或让同事自己在客户端注册；<b>工作模式</b>在「组织机构 → 员工管理」按工号录入（工号 = 登录账号、初始密码 = 工号），人多就用 Excel 批量导入。</p>
+              <p>· <b>两个高频注意点</b>：改管理员密码在「系统设置」（无需重启）；外网通话要通，必须先配好音视频中继（见「系统帮助 → 音视频通话与网络穿透」）。</p>
+            </div>
           </el-card>
         </div>
 
@@ -3219,25 +3263,108 @@ const tab = ref('dashboard');
 const stats = ref({});
 const info = ref({});
 
-const baseCards = [
-  { key: 'users', label: '用户数' },
-  { key: 'groups', label: '群组数' },
-  { key: 'messages', label: '消息总数' },
-  { key: 'text', label: '文字消息' },
-  { key: 'images', label: '图片消息' },
-  { key: 'audios', label: '语音消息' },
-  { key: 'cards', label: '卡片消息' },
-  { key: 'files', label: '文件数' },
-  { key: 'friendships', label: '好友关系' },
-  { key: 'bots', label: '机器人' },
-  { key: 'hooks_in', label: '入站推送' },
-  { key: 'hooks_out', label: '事件订阅' },
-  { key: 'pubkeys', label: '公钥接入' },
-];
-// 组织人数只在工作模式下有意义，普通模式下显示 0 反而让人以为坏了
-const cards = computed(() => compSetting.value.mode === 'work'
-  ? [...baseCards, { key: 'orgMembers', label: '组织人数' }, { key: 'attPending', label: '待审批申请' }]
-  : baseCards);
+/* ====== 仪表盘指标分组（v0.15.0 重做）======
+   原来这里是 13 个一模一样的「大绿数字 + 灰标签」平铺四行 —— 数字之间没有关系，
+   也没有参照，管理员既看不出"这一块是管什么的"，也判断不出"今天到底有没有人用"。
+   现在按用途分成几组，每组一个图标 + 一种配色；带 today 的指标在总数下面显示今日增量；
+   带 tab 的指标整块可点，直达对应页面。 */
+const metricGroups = computed(() => {
+  const s = stats.value;
+  const work = compSetting.value.mode === 'work';
+  const groups = [
+    {
+      key: 'people', title: '人员', glyph: '人', tone: 'blue',
+      tab: 'users', link: '用户管理',
+      items: [
+        // 每组的主指标可点，直达该页面；细分类型（文字/图片/语音）没有独立页面，就不给点击
+        { key: 'users', label: '用户总数', today: 'usersToday', tab: 'users' },
+        { key: 'activeUsers7d', label: '近 7 天活跃', hint: '实际发过消息的人' },
+        { key: 'groups', label: '群组', tab: 'groups' },
+        { key: 'friendships', label: '好友关系' },
+      ],
+    },
+    {
+      key: 'msg', title: '消息', glyph: '讯', tone: 'green',
+      tab: 'messages', link: '消息管理',
+      items: [
+        { key: 'messages', label: '消息总数', today: 'msgsToday', tab: 'messages' },
+        { key: 'text', label: '文字' },
+        { key: 'images', label: '图片' },
+        { key: 'audios', label: '语音' },
+        { key: 'cards', label: '卡片' },
+        { key: 'recalled', label: '已撤回', dim: true },
+      ],
+    },
+    {
+      key: 'file', title: '文件', glyph: '件', tone: 'amber',
+      tab: 'files', link: '文件管理',
+      items: [
+        { key: 'files', label: '文件数', today: 'filesToday', tab: 'files' },
+        // 磁盘占用来自 /admin/info 的 files_disk_bytes（实际盘上占用，与库里记录可能不一致）
+        { key: '_disk', label: '磁盘占用', raw: fmtBytes(info.value.files_disk_bytes) },
+      ],
+    },
+    {
+      key: 'integration', title: '集成对接', glyph: '联', tone: 'purple',
+      tab: 'integrations', link: '集成对接',
+      items: [
+        { key: 'bots', label: '机器人', tab: 'integrations' },
+        { key: 'hooks_in', label: '入站推送' },
+        { key: 'hooks_out', label: '事件订阅' },
+        { key: 'pubkeys', label: '公钥接入' },
+        { key: 'tokens', label: '接入令牌' },
+        { key: 'deliveries_failed', label: '投递失败', warn: true },
+      ],
+    },
+  ];
+  // 工作模式下「组织与考勤」放最前面：这类服务器上它才是管理员每天要看的东西
+  if (work) {
+    groups.unshift({
+      key: 'org', title: '组织与考勤', glyph: '勤', tone: 'cyan',
+      tab: 'orgs', link: '组织机构',
+      items: [
+        { key: 'orgs', label: '组织', tab: 'orgs' },
+        { key: 'depts', label: '部门' },
+        { key: 'orgMembers', label: '组织人数' },
+        { key: 'attShifts', label: '班次', tab: 'attendance' },
+        { key: 'attGroups', label: '考勤组', tab: 'attendance' },
+        // 待审批是"每天都有活要干"，属正常状态，不标红（标红的是真异常）；
+        // 它靠顶部提醒条提示，这里保持安静，否则满屏都是红的。
+        { key: 'attPending', label: '待审批申请', tab: 'attendance' },
+      ],
+    });
+  }
+  return groups;
+});
+
+/* 该报警的数字自己跳出来（没异常就不占地方）。
+   投递失败是最典型的"不显示就等于没有"：外部系统没收到通知，界面上一片绿。 */
+const dashAlerts = computed(() => {
+  const s = stats.value;
+  const list = [];
+  if ((s.deliveries_failed || 0) > 0) {
+    list.push({
+      key: 'deliveries', type: 'error',
+      title: `有 ${s.deliveries_failed} 条事件投递失败`,
+      desc: '外部系统没有收到通知（对方服务不可用、地址填错或被网络拦截）。失败的事件不会自动补发，'
+        + '需要的可以到「集成对接 → 投递日志」里查看原因并重发。',
+      tab: 'integrations', action: '去看投递日志',
+    });
+  }
+  if (compSetting.value.mode === 'work' && (s.attPending || 0) > 0) {
+    list.push({
+      key: 'att', type: 'warning',
+      title: `有 ${s.attPending} 张考勤申请待审批`,
+      desc: '请假 / 补卡 / 外出 / 加班申请还等着处理。补卡审批通过后会自动补写当天的打卡记录，'
+        + '不批的话那天就会一直算缺卡。',
+      tab: 'attendance', action: '去审批',
+    });
+  }
+  return list;
+});
+
+// 系统说明默认收起：它是"读一次就够"的内容，不该占仪表盘首屏
+const docOpen = ref(false);
 
 /* ====== 上手向导 ======
    每一步都用服务器真实状态判断，纯前端计算、不新增接口。
@@ -5372,6 +5499,52 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .stat { text-align: center; }
 .stat-num { font-size: 28px; font-weight: 700; color: #10B981; }
 .stat-label { color: #909399; margin-top: 6px; }
+
+/* ====== 仪表盘：分组指标卡（v0.15.0 重做）====== */
+.dash-alert { margin-bottom: 12px; }
+.dash-alert-title { font-weight: 600; margin-right: 10px; }
+.dash-alert-desc { font-size: 12.5px; line-height: 1.75; margin-top: 2px; }
+
+.dash-groups { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
+.mgroup-title { display: inline-flex; align-items: center; gap: 9px; font-weight: 600; }
+/* 图标用单字色块：不引图标库也有辨识度，且不会因为主题变化糊掉 */
+.mgroup-ic {
+  width: 24px; height: 24px; border-radius: 6px; color: #fff;
+  font-size: 13px; font-weight: 700; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.tone-blue   { background: #3B82F6; }
+.tone-green  { background: #10B981; }
+.tone-amber  { background: #F59E0B; }
+.tone-purple { background: #8B5CF6; }
+.tone-cyan   { background: #06B6D4; }
+
+.mtiles { display: flex; flex-wrap: wrap; gap: 12px; }
+.mtile {
+  flex: 1 1 132px; min-width: 132px;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-fill-color-blank);
+  transition: border-color .18s, box-shadow .18s, transform .18s;
+}
+.mtile.clickable { cursor: pointer; }
+.mtile.clickable:hover {
+  border-color: var(--el-color-primary-light-5);
+  box-shadow: 0 2px 10px rgba(16, 185, 129, .13);
+  transform: translateY(-1px);
+}
+.mtile-k { font-size: 12px; color: var(--el-text-color-secondary); }
+.mtile-v { font-size: 24px; font-weight: 700; line-height: 1.35; margin: 2px 0 1px; }
+.mtile-d { font-size: 11.5px; color: var(--el-color-success); }
+.mtile-d.muted { color: var(--el-text-color-placeholder); }
+/* 真异常才变红（如投递失败）。日常正常的数字保持安静，否则满屏都在喊。 */
+.mtile-warn { border-color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
+.mtile-warn .mtile-v { color: var(--el-color-danger); }
+.mtile-dim .mtile-v { color: var(--el-text-color-secondary); }
+
+.dash-doc { margin-top: 18px; }
+.dash-doc p { margin: 6px 0; line-height: 1.8; font-size: 13px; }
 .page-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .hint { color: #909399; font-size: 12px; }
 

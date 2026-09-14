@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/remote_config.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
-import 'package:xiaozhi_im_client/screens/conversations.dart';
+import 'package:xiaozhi_im_client/screens/home_shell.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/gradient_button.dart';
 
@@ -59,9 +59,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
     try {
       await ImApi().register(_u.text.trim(), _p.text, _n.text.trim());
+      // 注册成功同样进导航外壳（HomeShell），与登录一致
       if (mounted) {
-        Navigator.pushReplacement(context,
-            MaterialPageRoute(builder: (_) => const ConversationsScreen()));
+        Navigator.pushReplacement(
+            context, MaterialPageRoute(builder: (_) => const HomeShell()));
       }
     } catch (e) {
       if (mounted) {

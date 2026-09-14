@@ -10,8 +10,9 @@ import 'core/sound_service.dart';
 import 'core/storage.dart';
 import 'core/theme.dart';
 import 'core/tray_service.dart';
+import 'core/workspace.dart';
+import 'screens/home_shell.dart';
 import 'screens/login.dart';
-import 'screens/conversations.dart';
 import 'widgets/avatar.dart';
 
 /// 全局导航 key：来电时用户可能在任意页面（甚至聊天页里），
@@ -29,6 +30,10 @@ void main() async {
     ));
   }
   await Settings.load(); // 载入用户自定义的服务器地址
+  // 好友模式（普通/工作）+ 公司名：主界面靠它决定导航形态（工作模式才有
+  // 工作台/组织通讯录的一级入口）。先吃本地缓存保证离线也能定形态，
+  // 网络那次在后台拉，不阻塞启动。
+  await Workspace.load();
   await RemoteConfig().init(); // 配置中心：先吃本地缓存，再后台拉最新（含地址候选）
   await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
   await SoundService().init(); // 读提示音开关 + 预加载音频
@@ -100,6 +105,6 @@ class _AuthGateState extends State<AuthGate> {
         ),
       );
     }
-    return _has! ? const ConversationsScreen() : const LoginScreen();
+    return _has! ? const HomeShell() : const LoginScreen();
   }
 }

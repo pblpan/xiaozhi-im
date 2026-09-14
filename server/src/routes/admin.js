@@ -10,6 +10,10 @@ const appregistry = require('../apps');
 const settings = require('../settings');
 const orgs = require('./orgs');
 const paging = require('../paging');
+// 只是借它的时区工具算"今天"的边界：容器 TZ 常是 UTC，
+// 用 date('now') 会把北京时间当天 0-8 点算进"昨天"，仪表盘的"今日新增"就整体偏。
+// 复用考勤那套已按 ATT_TIMEZONE 校准的 tsOfDay，不再自己造一份。
+const att = require('../attendance');
 const pkg = require('../../package.json');
 
 // 单次批量清理的条数上限：防止一条条件写宽了把整个库删掉。
@@ -107,6 +111,13 @@ function fileFilter(query) {
 router.get('/stats', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
   const c = (sql) => db.prepare(sql).get().c;
+  // 「今日」边界（毫秒）：走 ATT_TIMEZONE，与考勤同一套口径。
+  // 用 addDays 推明天 0 点而不是 dayStart+86400000 —— 有夏令时的时区那样子会差一小时。
+  const day = att.today();
+  const dayStart = att.tsOfDay(day, '00:00');
+  const dayEnd = att.tsOfDay(att.addDays(day, 1), '00:00');
+  const weekStart = att.tsOfDay(att.addDays(day, -6), '00:00');
+  const inDay = (col) => c(`SELECT COUNT(*) c FROM ${col} WHERE created_at>=${dayStart} AND created_at<${dayEnd}`);
   res.json({
     users: c('SELECT COUNT(*) c FROM users'),
     groups: c('SELECT COUNT(*) c FROM groups'),
@@ -138,6 +149,17 @@ router.get('/stats', (req, res) => {
     attPending: c("SELECT COUNT(*) c FROM att_requests WHERE status='pending'"),
     attShifts: c('SELECT COUNT(*) c FROM att_shifts'),
     attGroups: c('SELECT COUNT(*) c FROM att_groups'),
+
+    // ── 时间维度（v0.15.0）──────────────────────────────
+    // 只有累计总数的话，仪表盘就是个计分板：管理员看不出"今天有没有人用"。
+    // 给出今日增量 + 近 7 天实际发过消息的人数，让数字有参照。
+    day,
+    tz: att.TZ,
+    msgsToday: inDay('messages'),
+    usersToday: inDay('users'),
+    filesToday: inDay('files'),
+    // 近 7 天真正发过消息的人（去重）——比"用户总数"更能说明这套系统在被使用
+    activeUsers7d: c(`SELECT COUNT(DISTINCT sender_id) c FROM messages WHERE created_at>=${weekStart}`),
   });
 });
 

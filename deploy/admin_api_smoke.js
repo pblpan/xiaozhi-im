@@ -1,4 +1,4 @@
-// 生产「列表分页 / 筛选 / 批量清理」接口只读冒烟（v0.14.0）
+// 生产「列表分页 / 筛选 / 批量清理 / 仪表盘统计」接口只读冒烟（v0.15.0）
 //
 // 只调 GET，绝不落任何写操作 —— 其中 purge-preview 是"只算不删"，
 // 也就是用来验证「三步安全模型的第 1 步在真实部署下是只读的」。
@@ -43,7 +43,7 @@ const ok = (name, cond, extra) => {
   console.log('== 版本 ==');
   let r = await get('/api/admin/info');
   ok('GET /info → 200', r.status === 200);
-  ok('  服务端版本 0.14.0', r.body?.version === '0.14.0', String(r.body?.version));
+  ok('  服务端版本 0.15.0', r.body?.version === '0.15.0', String(r.body?.version));
 
   /* ==================== 2. 列表统一是 {items,total} ==================== */
   console.log('\n== 列表响应形状（{items,total,page,pageSize}） ==');
@@ -159,7 +159,35 @@ const ok = (name, cond, extra) => {
   r = await get('/api/admin/purge-backups/..%2F..%2Fetc%2Fpasswd');
   ok('  非法文件名被拦（挡路径穿越）', r.status === 400 || r.status === 404, String(r.status));
 
-  /* ==================== 10. 未鉴权 ==================== */
+  /* ==================== 10. 仪表盘统计的时间维度（v0.15.0） ==================== */
+  // 为什么值得单独验：这一块的坑是**时区**。容器里通常是 UTC，而业务时区是
+  // Asia/Shanghai —— 若「今日」边界用 SQLite 的 date('now') 算，北京时间的
+  // 00:00~08:00 会被算进"昨天"，今日新增看起来永远偏低，且不会报任何错。
+  // 这里在**真实部署**上确认字段存在、口径自洽。
+  console.log('\n== /stats 时间维度（今日新增 / 近 7 天活跃） ==');
+  r = await get('/api/admin/stats');
+  ok('GET /stats → 200', r.status === 200, String(r.status));
+  const st = r.body || {};
+  const num = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+  for (const k of ['msgsToday', 'usersToday', 'filesToday', 'activeUsers7d']) {
+    ok(`  ${k} 是非负数字`, num(st[k]), JSON.stringify(st[k]));
+  }
+  ok('  day 是 YYYY-MM-DD', /^\d{4}-\d{2}-\d{2}$/.test(st.day || ''), String(st.day));
+  ok('  tz 是 IANA 时区名（走 ATT_TIMEZONE，不是容器 UTC）',
+    typeof st.tz === 'string' && st.tz.includes('/'), String(st.tz));
+  // 口径自洽：今日增量不可能超过累计总数；近 7 天活跃至少覆盖今日活跃
+  ok('  msgsToday ≤ messages', num(st.msgsToday) && num(st.messages) ? st.msgsToday <= st.messages : true,
+    `${st.msgsToday} / ${st.messages}`);
+  ok('  filesToday ≤ files', num(st.filesToday) && num(st.files) ? st.filesToday <= st.files : true,
+    `${st.filesToday} / ${st.files}`);
+  ok('  usersToday ≤ users', num(st.usersToday) && num(st.users) ? st.usersToday <= st.users : true,
+    `${st.usersToday} / ${st.users}`);
+  ok('  activeUsers7d ≥ usersToday', num(st.activeUsers7d) && num(st.usersToday)
+    ? st.activeUsers7d >= st.usersToday : true, `${st.activeUsers7d} / ${st.usersToday}`);
+  console.log(`  参考：${st.day}（${st.tz}）消息今日 ${st.msgsToday} / 累计 ${st.messages}，`
+    + `文件今日 ${st.filesToday}，近 7 天活跃 ${st.activeUsers7d} 人`);
+
+  /* ==================== 11. 未鉴权 ==================== */
   console.log('\n== 未鉴权 ==');
   const anon = await fetch(BASE + '/api/admin/users/options');
   ok('无 token 访问 /users/options → 401', anon.status === 401, String(anon.status));

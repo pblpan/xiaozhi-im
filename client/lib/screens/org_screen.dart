@@ -14,7 +14,12 @@ import 'package:xiaozhi_im_client/widgets/avatar.dart';
 ///   （与 NewFriendsScreen 相同，调用方据此直接建会话）。
 /// - admin 额外可用：添加员工（工号=账号、初始密码=工号）、移除员工。
 class OrgScreen extends StatefulWidget {
-  const OrgScreen({super.key});
+  const OrgScreen({super.key, this.onPick});
+
+  /// 嵌入模式：把它作为「通讯录」标签页的内容时，点成员**不能**走 Navigator.pop
+  /// —— 那种场景下本页不是被 push 进来的，pop 会把整个首页弹掉（退到登录页那种）。
+  /// 传了这个回调就改为回调出去，由外壳负责切到消息页并打开会话。
+  final ValueChanged<User>? onPick;
 
   @override
   State<OrgScreen> createState() => _OrgScreenState();
@@ -37,6 +42,17 @@ class _OrgScreenState extends State<OrgScreen> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  /// 选中一个成员。嵌入模式（通讯录标签）走回调，独立打开时才是 pop 返回值 ——
+  /// 见 [OrgScreen.onPick] 的说明：嵌入时 pop 会把整个首页弹掉。
+  void _pick(User u) {
+    final cb = widget.onPick;
+    if (cb != null) {
+      cb(u);
+      return;
+    }
+    Navigator.pop(context, u);
   }
 
   String _errText(Object e) =>
@@ -418,7 +434,7 @@ class _OrgScreenState extends State<OrgScreen> {
           style: const TextStyle(fontSize: 12.5),
         ),
         // 员工没有备注语义：组织内一律显示昵称/工号
-        onTap: mine ? null : () => Navigator.pop(context, u),
+        onTap: mine ? null : () => _pick(u),
         trailing: _isAdmin && !mine
             ? IconButton(
                 tooltip: '移除员工',

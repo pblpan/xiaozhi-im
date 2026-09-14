@@ -4,7 +4,7 @@ import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/remote_config.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/screens/register.dart';
-import 'package:xiaozhi_im_client/screens/conversations.dart';
+import 'package:xiaozhi_im_client/screens/home_shell.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/gradient_button.dart';
 import 'package:xiaozhi_im_client/widgets/server_settings.dart';
@@ -69,9 +69,11 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     try {
       await ImApi().login(_u.text.trim(), _p.text);
+      // 登录后进的是导航外壳（HomeShell），不是会话列表本身 ——
+      // 外壳按服务器的工作/普通模式决定给哪些一级入口。
       if (mounted) {
-        Navigator.pushReplacement(context,
-            MaterialPageRoute(builder: (_) => const ConversationsScreen()));
+        Navigator.pushReplacement(
+            context, MaterialPageRoute(builder: (_) => const HomeShell()));
       }
     } catch (e) {
       if (mounted) {

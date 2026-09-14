@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
+import 'package:xiaozhi_im_client/core/badges.dart';
 import 'package:xiaozhi_im_client/core/call_service.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
 import 'package:xiaozhi_im_client/core/remote_config.dart';
@@ -8,16 +9,14 @@ import 'package:xiaozhi_im_client/core/storage.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/core/tray_service.dart';
+import 'package:xiaozhi_im_client/core/workspace.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/screens/chat.dart';
 import 'package:xiaozhi_im_client/screens/favorites.dart';
 import 'package:xiaozhi_im_client/screens/friends_new.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
-import 'package:xiaozhi_im_client/screens/workbench.dart';
-import 'package:xiaozhi_im_client/screens/org_screen.dart';
 import 'package:xiaozhi_im_client/screens/remote.dart';
-import 'package:xiaozhi_im_client/screens/profile.dart';
 import 'package:xiaozhi_im_client/screens/search.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/friend_auth_sheet.dart';
@@ -26,10 +25,13 @@ import 'package:xiaozhi_im_client/widgets/server_settings.dart';
 class ConversationsScreen extends StatefulWidget {
   const ConversationsScreen({super.key});
   @override
-  State<ConversationsScreen> createState() => _ConversationsScreenState();
+  State<ConversationsScreen> createState() => ConversationsScreenState();
 }
 
-class _ConversationsScreenState extends State<ConversationsScreen> {
+/// State 是**公开**的：外壳（HomeShell）要拿 `GlobalKey<ConversationsScreenState>`
+/// 在通讯录里点人时切到消息 Tab 并打开与该人的会话。不这么做的话，通讯录就只能
+/// "点一下没反应"，或者被迫自己复制一份建会话的逻辑（两份逻辑必然走歪）。
+class ConversationsScreenState extends State<ConversationsScreen> {
   List<Conversation> _all = [];
   Conversation? _sel;
   int _myId = 0;
@@ -77,6 +79,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         SocketService().disconnect();
         await CallService().resetAll();
     await SoundService().reset(); // 清掉 myId 与正在响的提示音
+        Badges.instance.clear(); // 同上：token 失效也要清角标
         if (mounted) {
           Navigator.pushReplacement(
               context, MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -98,11 +101,22 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   Future<void> _load() async {
     final list = await ImApi().conversations();
     if (!mounted) return;
+    final convs = list.map((e) => Conversation.fromJson(e)).toList();
     setState(() {
-      _all = list.map((e) => Conversation.fromJson(e)).toList();
+      _all = convs;
       // 按最后活跃时间倒序
       _all.sort((a, b) => (b.lastAt ?? b.id).compareTo(a.lastAt ?? a.id));
     });
+    // 未读角标：免打扰的会话不计入（用户明确表示不想被这条打扰，
+    // 还在标签上标红点等于没听他的）
+    var n = 0;
+    var at = false;
+    for (final c in convs) {
+      if (c.muted) continue;
+      n += c.unread;
+      if (c.hasMention) at = true;
+    }
+    Badges.instance.setUnread(n, hasMention: at);
   }
 
   void _onEvent(dynamic e) {
@@ -158,6 +172,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     try {
       final d = await ImApi().friends();
       final n = ((d['pending'] as List?) ?? const []).length;
+      Badges.instance.setPendingFriends(n); // 通讯录标签的角标
       if (mounted && n != _pendingCount) setState(() => _pendingCount = n);
     } catch (_) {
       // 静默失败：这只是个数字提示，不该弹错误打扰用户
@@ -208,6 +223,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     SocketService().disconnect();
     await CallService().resetAll();
     await SoundService().reset(); // 清掉 myId 与正在响的提示音
+    // 角标是跨页共享的单例，不清的话换个账号登进来会先看到上一个人的未读数
+    Badges.instance.clear();
     if (mounted) {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -244,16 +261,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   /// 配置中心"出问题保持现状"（SPEC §6.2），这里拉取失败也只是文案提示，不报错弹窗。
   /// 工作台：统一的应用入口（钉钉/企微/飞书都叫工作台）。
   ///
-  /// 它把两类应用放在一起，**列表由服务端算好下发**：
-  ///   · 内置应用（考勤打卡 / 我的申请 / 组织通讯录）—— 随安装包发布
-  ///   · 自定义应用（管理台拼 JSON 发布的动态模块）—— 不重装就能长出功能
-  /// 所以这一个入口同时取代了原「应用」页，不是两个各管一摊。
-  Future<void> _openWorkbench() async {
-    await Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const WorkbenchPage()));
-    if (mounted) _load();
-  }
-
   Future<void> _openAbout() async {
     final rc = RemoteConfig();
     // ⚠️ fetchTip 必须放在 builder 外面：StatefulBuilder 每次重建都会重新执行
@@ -334,14 +341,21 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     _load(); // 返回后刷新最后消息
   }
 
-  // ---------------- 个人信息 / 新的朋友 ----------------
-  Future<void> _openProfile() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const ProfileScreen()),
-    );
-    // 昵称或头像可能改过，回来刷新列表里的显示
-    if (mounted) _load();
+  // ---------------- 新的朋友 ----------------
+
+  /// 打开与某个人的单聊。**外壳（HomeShell）在通讯录里点人时调用它** ——
+  /// 建会话的逻辑只有这一份，通讯录 Tab 不复制第二份（否则两处必然走歪）。
+  Future<void> openWithUser(User u) async {
+    try {
+      final r = await ImApi().dm(u.id);
+      if (!mounted) return;
+      // 用 noteName：设过备注就显示备注，跟会话列表的标题保持一致
+      await _openChat(
+          Conversation(id: r['conversationId'], type: 'dm', title: u.noteName));
+      if (mounted) _load(); // 打开后未读数变了，顺手刷角标
+    } catch (e) {
+      _toast(_msg(e));
+    }
   }
 
   Future<void> _openNewFriends() async {
@@ -354,15 +368,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     _load();
     _refreshPendingCount();
     if (u == null) return;
-    try {
-      final r = await ImApi().dm(u.id);
-      if (!mounted) return;
-      // 用 noteName：设过备注就显示备注，跟会话列表的标题保持一致
-      await _openChat(
-          Conversation(id: r['conversationId'], type: 'dm', title: u.noteName));
-    } catch (e) {
-      _toast(_msg(e));
-    }
+    await openWithUser(u);
   }
 
   // ---------------- 远程协助 ----------------
@@ -408,26 +414,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       }
     }
     if (cv != null) await _openChat(cv);
-  }
-
-  // ---------------- 组织机构 ----------------
-  Future<void> _openOrg() async {
-    // 在组织页点某个成员时返回该 User，语义是「打开跟 TA 的聊天」
-    final u = await Navigator.push<User>(
-      context,
-      MaterialPageRoute(builder: (_) => const OrgScreen()),
-    );
-    if (!mounted) return;
-    _load();
-    if (u == null) return;
-    try {
-      final r = await ImApi().dm(u.id);
-      if (!mounted) return;
-      await _openChat(
-          Conversation(id: r['conversationId'], type: 'dm', title: u.display));
-    } catch (e) {
-      _toast(_msg(e));
-    }
   }
 
   // ---------------- 添加好友 / 发起聊天 ----------------
@@ -609,6 +595,18 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   void _toast(String s) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
+
+  /// 菜单里的分组小标题。不可点、也不占正常行高 ——
+  /// 只是把"功能"和"设置"分开，让人一眼知道哪些是干活用的、哪些是调设置的。
+  PopupMenuItem<String> _menuGroup(String t) => PopupMenuItem<String>(
+        enabled: false,
+        height: 30,
+        child: Text(t,
+            style: const TextStyle(
+                fontSize: 11.5,
+                color: AppColors.textWeak,
+                letterSpacing: 0.6)),
+      );
 
   // ---------------- 侧边栏 ----------------
   String _preview(Conversation cv) {
@@ -926,66 +924,50 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert_rounded),
               onSelected: (v) {
-                if (v == 'refresh') _load();
                 if (v == 'fav') _openFavorites();
                 if (v == 'server') _openServer();
                 if (v == 'logout') _logout();
                 if (v == 'tray') _cycleCloseAction();
                 if (v == 'sound') _toggleSound();
                 if (v == 'about') _openAbout();
-                if (v == 'workbench') _openWorkbench();
                 if (v == 'remote') _openRemote();
-                if (v == 'profile') _openProfile();
                 if (v == 'newfriends') _openNewFriends();
-                if (v == 'org') _openOrg();
               },
+              // 菜单只放"不常用的功能 + 设置"。
+              // 工作台 / 组织机构 / 个人信息已经提到一级导航（见 HomeShell），
+              // 从菜单里删掉，免得同一个功能两个入口、用户还得猜哪个是"正门"。
+              // 也删掉了「刷新列表」—— 列表本来就支持下拉刷新，菜单里再放一个是重复。
               itemBuilder: (_) => [
-                const PopupMenuItem(
-                    value: 'profile',
-                    child: Row(children: [
-                      Icon(Icons.person_outline_rounded, size: 19),
-                      SizedBox(width: 10),
-                      Text('个人信息')
-                    ])),
-                PopupMenuItem(
-                    value: 'newfriends',
-                    child: Row(children: [
-                      const Icon(Icons.person_add_alt_1_rounded, size: 19),
-                      const SizedBox(width: 10),
-                      const Text('新的朋友'),
-                      if (_pendingCount > 0) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: AppColors.danger,
-                            borderRadius: BorderRadius.circular(AppRadii.pill),
+                _menuGroup('功能'),
+                // 工作模式下「通讯录」标签是组织架构，不含好友申请，所以"新的朋友"
+                // 留在菜单里，否则切换模式前收到的申请就再也点不到了；
+                // 普通模式下它就是「通讯录」标签本身，菜单里不再重复放一份。
+                if (Workspace.isWork)
+                  PopupMenuItem(
+                      value: 'newfriends',
+                      child: Row(children: [
+                        const Icon(Icons.person_add_alt_1_rounded, size: 19),
+                        const SizedBox(width: 10),
+                        const Text('新的朋友'),
+                        if (_pendingCount > 0) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppColors.danger,
+                              borderRadius: BorderRadius.circular(AppRadii.pill),
+                            ),
+                            child: Text(
+                              '$_pendingCount',
+                              style: const TextStyle(
+                                  fontSize: 10.5,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700),
+                            ),
                           ),
-                          child: Text(
-                            '$_pendingCount',
-                            style: const TextStyle(
-                                fontSize: 10.5,
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ],
-                    ])),
-                const PopupMenuItem(
-                    value: 'org',
-                    child: Row(children: [
-                      Icon(Icons.corporate_fare_rounded, size: 19),
-                      SizedBox(width: 10),
-                      Text('组织机构')
-                    ])),
-                const PopupMenuItem(
-                    value: 'refresh',
-                    child: Row(children: [
-                      Icon(Icons.refresh_rounded, size: 19),
-                      SizedBox(width: 10),
-                      Text('刷新列表')
-                    ])),
+                        ],
+                      ])),
                 const PopupMenuItem(
                     value: 'fav',
                     child: Row(children: [
@@ -994,28 +976,21 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       Text('我的收藏')
                     ])),
                 const PopupMenuItem(
-                    value: 'workbench',
-                    child: Row(children: [
-                      Icon(Icons.grid_view_rounded, size: 19),
-                      SizedBox(width: 10),
-                      Text('工作台')
-                    ])),
-                const PopupMenuItem(
                     value: 'remote',
                     child: Row(children: [
                       Icon(Icons.screenshot_monitor_outlined, size: 19),
                       SizedBox(width: 10),
                       Text('远程协助')
                     ])),
-                // 只在桌面端出现：托盘是桌面概念，手机上讲"缩到托盘"没有意义
-                if (TrayService.supported)
-                  PopupMenuItem(
-                      value: 'tray',
-                      child: Row(children: [
-                        const Icon(Icons.cancel_outlined, size: 19),
-                        const SizedBox(width: 10),
-                        Text('点×时：${TrayService.instance.actionLabel}')
-                      ])),
+                const PopupMenuDivider(),
+                _menuGroup('设置'),
+                const PopupMenuItem(
+                    value: 'server',
+                    child: Row(children: [
+                      Icon(Icons.dns_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('服务器设置')
+                    ])),
                 PopupMenuItem(
                     value: 'sound',
                     child: Row(children: [
@@ -1027,13 +1002,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       const SizedBox(width: 10),
                       Text(_soundOn ? '提示音：开' : '提示音：关')
                     ])),
-                const PopupMenuItem(
-                    value: 'server',
-                    child: Row(children: [
-                      Icon(Icons.dns_rounded, size: 19),
-                      SizedBox(width: 10),
-                      Text('服务器设置')
-                    ])),
+                // 只在桌面端出现：托盘是桌面概念，手机上讲"缩到托盘"没有意义
+                if (TrayService.supported)
+                  PopupMenuItem(
+                      value: 'tray',
+                      child: Row(children: [
+                        const Icon(Icons.cancel_outlined, size: 19),
+                        const SizedBox(width: 10),
+                        Text('点×时：${TrayService.instance.actionLabel}')
+                      ])),
                 const PopupMenuItem(
                     value: 'about',
                     child: Row(children: [
@@ -1041,6 +1018,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       SizedBox(width: 10),
                       Text('关于 / 检查配置')
                     ])),
+                const PopupMenuDivider(),
                 const PopupMenuItem(
                     value: 'logout',
                     child: Row(children: [

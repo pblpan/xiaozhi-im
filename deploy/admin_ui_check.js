@@ -65,6 +65,13 @@ function seed() {
   const insMem = d.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)');
   const insMsg = d.prepare('INSERT INTO messages (conversation_id,sender_id,kind,content,created_at,edited,deleted) VALUES (?,?,?,?,?,0,0)');
   const insFile = d.prepare('INSERT INTO files (owner_id,name,mime,size,path,created_at) VALUES (?,?,?,?,?,?)');
+  // 造一条投递失败 + 一个出站订阅：用来验仪表盘的「异常提醒条」真的会出现。
+  // 这行数据是关键 —— 没有它，"该报警的数字会自己跳出来"这条就无从验证，
+  // 断言只能在"没有异常"的空状态下通过（等于没测）。
+  const insHook = d.prepare(`INSERT INTO outgoing_hooks (name,url,events,active,created_by,created_at)
+    VALUES (?,?,?,1,?,?)`);
+  const insDel = d.prepare(`INSERT INTO webhook_deliveries (hook_id,event,payload,status,error,attempts,ok,created_at)
+    VALUES (?,?,?,?,?,?,0,?)`);
 
   d.exec('BEGIN');
   const userIds = [1];
@@ -87,6 +94,9 @@ function seed() {
     fs.writeFileSync(path.join(DATA_DIR, 'files', fn), Buffer.alloc(1024 * i, 1));
     insFile.run(1, `ui-file-${i}.png`, 'image/png', 1024 * i, fn, now - i * 1000);
   }
+  // 一条失败的投递（外部系统 500）→ 仪表盘必须弹出红色提醒条
+  const hookId = Number(insHook.run('界面检查订阅', 'https://example.invalid/hook', '*', 1, now).lastInsertRowid);
+  insDel.run(hookId, 'message.created', '{"probe":1}', 500, 'HTTP 500', 3, now - 5000);
   d.exec('COMMIT');
   d.close();
 }
@@ -159,6 +169,70 @@ function seed() {
     if (extra) await extra(txt);
     await page.screenshot({ path: `${SHOT_DIR}/admin-${slug}.png`, fullPage: true }).catch(() => {});
     return txt;
+  }
+
+  /* ====== 仪表盘（v0.15.0 重做）====== */
+  console.log('\n== 仪表盘 ==');
+  {
+    const txt = await page.innerText('body');
+    ok('仪表盘可打开且渲染出内容', txt.length > 150, 'len=' + txt.length);
+    ok('  无运行时错误文案',
+      !/Cannot read|undefined is not|null is not|is not a function/.test(txt));
+
+    // 分组：按用途组织，而不是一堆同质数字平铺
+    for (const g of ['组织与考勤', '人员', '消息', '文件', '集成对接']) {
+      ok(`  分组「${g}」存在`, txt.includes(g));
+    }
+    const icCount = await page.locator('.mgroup-ic').count();
+    ok('  每个分组都有图标色块', icCount >= 5, 'count=' + icCount);
+    const tileCount = await page.locator('.mtile').count();
+    ok('  指标块数量合理', tileCount >= 20, 'count=' + tileCount);
+
+    // 今日新增：种的数据都是"现在"，所以必然有今日增量
+    ok('  显示「今日 +N」增量', /今日 \+\d+/.test(txt), txt.match(/今日 \+\d+/)?.[0]);
+    ok('  有「近 7 天活跃」而不是只有总数', txt.includes('近 7 天活跃'));
+
+    // 异常提醒：seed 专门造了一条投递失败
+    ok('  投递失败弹出异常提醒条', txt.includes('条事件投递失败'));
+    ok('  提醒条带跳转入口', txt.includes('去看投递日志'));
+
+    // 系统说明默认收起，不占首屏
+    const docVisible = await page.locator('.dash-doc p:visible').count();
+    ok('  系统说明默认收起（正文不可见）', docVisible === 0, 'visible p=' + docVisible);
+
+    await page.screenshot({ path: `${SHOT_DIR}/admin-dashboard.png`, fullPage: true }).catch(() => {});
+    // 再滚到底拍一张：分组卡片要往下看才看得到，"今日 +N"与可点提示都在下面，
+    // 只拍首屏等于没验证后半部分
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${SHOT_DIR}/admin-dashboard-bottom.png` }).catch(() => {});
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(400);
+
+    // ① 点分组标题右侧入口 → 跳文件页
+    const fileGroup = page.locator('.mgroup').filter({ hasText: '磁盘占用' }).first();
+    await fileGroup.locator('button:has-text("文件管理")').click();
+    await page.waitForTimeout(1600);
+    ok('  点分组「文件管理 →」跳到文件页',
+      (await page.innerText('body')).includes('磁盘实际占用'));
+    await page.locator('.el-menu-item:has-text("仪表盘")').first().click();
+    await page.waitForTimeout(1300);
+
+    // ② 点指标块本身也要能跳
+    await page.locator('.mtile:has-text("消息总数")').first().click();
+    await page.waitForTimeout(1600);
+    ok('  点指标块「消息总数」跳到消息页',
+      (await page.innerText('body')).includes('批量清理'));
+    await page.locator('.el-menu-item:has-text("仪表盘")').first().click();
+    await page.waitForTimeout(1300);
+
+    // ③ 投递失败提醒条的跳转入口
+    await page.locator('.dash-alert button:has-text("去看投递日志")').first().click();
+    await page.waitForTimeout(1600);
+    ok('  提醒条「去看投递日志」跳到集成对接',
+      (await page.innerText('body')).includes('投递日志'));
+    await page.locator('.el-menu-item:has-text("仪表盘")').first().click();
+    await page.waitForTimeout(1300);
   }
 
   await openTab('用户管理', 'users', async (txt) => {

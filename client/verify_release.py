@@ -426,8 +426,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.14.0', 'v0.14.0'],
-        'src/package.json': ['"version": "0.14.0"'],
+        'manifest': ['version', '0.15.0', 'v0.15.0'],
+        'src/package.json': ['"version": "0.15.0"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
@@ -552,7 +552,16 @@ def check_fpk(path):
                                     "'/purge-backups'", 'writePurgeBackup', 'MAX_PURGE',
                                     'scanOrphans', 'dbOnly', 'diskOnly', 'refCount',
                                     'DELETE FROM favorites WHERE message_id',
-                                    'pinned_message_id=NULL', 'paging.parseList'],
+                                    'pinned_message_id=NULL', 'paging.parseList',
+                                    # v0.15.0：仪表盘的时间维度。判据挑的是**口径正确**的证据，
+                                    #   不是"有没有这个字段"：
+                                    #     msgsToday/usersToday/filesToday → 今日增量三个字段
+                                    #     activeUsers7d  → 近 7 天实际发过消息的人数（去重）
+                                    #     att.tsOfDay / att.addDays → 时区边界必须复用考勤那套
+                                    #       （容器 TZ 常是 UTC，自己用 date('now') 会整体偏 8 小时，
+                                    #        且界面上一片正常、只是数字偏小，极难发现）
+                                    'msgsToday', 'usersToday', 'filesToday',
+                                    'activeUsers7d', 'att.tsOfDay', 'att.addDays'],
         # v0.14.0：全站统一分页约定。这个新文件是"消灭静默截断"的本体 ——
         #   判据要盖住四件事：参数护栏（pageSize 截断 + from>to 报错）、
         #   默认时间窗（不传时间就是最近 30 天）、统一响应形状、LIKE 转义。
@@ -811,6 +820,26 @@ def check_fpk(path):
     print('%-30s %s' % ('src/public/assets(分页/批量清理 UI)',
                         '命中 ✓' if list_hit else '缺失 ✗'))
     all_ok = all_ok and bool(list_hit)
+
+    # v0.15.0：管理台必须真把"分组指标卡 + 异常提醒条"的界面打进去。
+    #   判据已按纪律在**已构建产物**里逐个实测命中过（grep index-*.js 各 1 次），
+    #   不是"看着代码里有就写上"。
+    #   近 7 天活跃       = 唯一能说明"系统真在被使用"的指标卡（原来只有用户总数）
+    #   条事件投递失败    = 异常提醒条的标题模板（拼出来的，正文里没有）
+    #   去看投递日志      = 提醒条上的跳转按钮
+    #   组织与考勤        = 仪表盘分组标题（工作模式才出现的那一组）
+    #   mgroup-ic         = 分组图标色块的 class（不引图标库的做法）
+    #   mtile-warn        = "真异常才标红"的样式类（待审批那种日常数字不该标红）
+    dash_hit = [n for n in admin_js
+                if '近 7 天活跃'.encode('utf-8') in blob[n]
+                and '条事件投递失败'.encode('utf-8') in blob[n]
+                and '去看投递日志'.encode('utf-8') in blob[n]
+                and '组织与考勤'.encode('utf-8') in blob[n]
+                and b'mgroup-ic' in blob[n]
+                and b'mtile-warn' in blob[n]]
+    print('%-30s %s' % ('src/public/assets(仪表盘分组卡)',
+                        '命中 ✓' if dash_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(dash_hit)
 
     # v0.8.0：bootstrap 免鉴权是硬要求，但绝不能因此把用户定向内容漏出去。
     # 判据：bootstrap 分支里不得出现 verifyToken（只有 /config 与上报才鉴权）。
