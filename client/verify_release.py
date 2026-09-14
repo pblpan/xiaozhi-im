@@ -140,6 +140,18 @@ WIN_MARKS = [
     'attendanceToday',          # api.dart：今日考勤
     'attendanceClock',          # api.dart：打卡（**不传时间**，时刻由服务端定）
     'clientApps',               # api.dart：工作台应用列表
+    # ---- v0.13.0 一天 4 次卡（含午休窗口） ----
+    # 下面这几个是**2026-09-14 在 Windows app.so 上逐个实测过**才写进来的：
+    #   命中：punchPlan / expectTime / punchLabel / minutesAsHours / restStart
+    #   不命中（已排除，别再加）：'in2' 'out2' —— 纯 Dart 标识符被 AOT 内联掉了；
+    #                           中文串（'午休下班' '应打' 等）只有 UTF-16LE 才有。
+    # 判据挑的是"客户端真的在按服务端下发的计划渲染"的证据：客户端自己判
+    # "今天几次卡"是这一期最容易出的错（与报表口径分家），所以这层要卡住。
+    'punchPlan',                # attendance.dart / attendance_request.dart：一日打卡计划
+    'expectTime',               # 每张卡的应打时刻（按钮上直接写"应打 12:00"）
+    'punchLabel',               # "午休下班"这类叫法由服务端下发，客户端不按 type 猜
+    'minutesAsHours',           # TimeFmt：在岗时长（480 分钟 → "8 小时"）
+    'restStart',                # 午休窗口（有它才谈得上 4 次卡）
     # ⚠️ 下面这些**实测搜不到，禁止当判据**（2026-09-14 在 Windows app.so 上探测确认）：
     #   '/api/client/apps' → 由 Config.baseUrl 拼接，完整串不存在（同 v0.8.0/v0.9.0 那批）
     #   资源路径 'assets/...' 类判据见 SOUND_ASSETS —— 那是单独校验的，别混进来。
@@ -414,8 +426,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.12.0', 'v0.12.0'],
-        'src/package.json': ['"version": "0.12.0"'],
+        'manifest': ['version', '0.13.0', 'v0.13.0'],
+        'src/package.json': ['"version": "0.13.0"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
@@ -465,7 +477,13 @@ def check_fpk(path):
                           # v0.12.0：考勤
                           'att_shifts', 'att_groups', 'att_group_members',
                           'att_group_depts', 'att_records', 'att_requests',
-                          "ensureColumn('att_shifts', 'early_grace'"],
+                          "ensureColumn('att_shifts', 'early_grace'",
+                          # v0.13.0：4 次卡的三处结构变更。
+                          #   老库没有这三列 —— 少一列就是启动即崩或在内存里算着玩。
+                          "ensureColumn('att_shifts', 'rest_start'",
+                          "ensureColumn('att_shifts', 'rest_end'",
+                          "ensureColumn('att_records', 'slot'",
+                          "ensureColumn('att_requests', 'slot'"],
         # v0.10.0：远程协助信令本体（SPEC-远程协助.md）
         #   判据挑的是**安全边界的存在证据**，不是业务流程函数名：
         #     ABORT_WINDOW_MS  → 无人值守"有码也不是立刻能控"，还有 10 秒反悔
@@ -524,7 +542,24 @@ def check_fpk(path):
                                   'clock', 'recordsOn', 'recordsRange',
                                   'judgeDay', 'judgeRange', 'summarize', 'myRange',
                                   'isValidDay', 'createRequest', 'listRequests',
-                                  'reviewRequest', 'overview'],
+                                  'reviewRequest', 'overview',
+                                  # v0.13.0：一天 4 次卡（含午休窗口）
+                                  #   punchPlan/windowOf 是唯一口径源：客户端按钮、补卡、判定、
+                                  #   报表全部读它，任何一处自己再判"今天几次卡"都会对不上。
+                                  #   restWindowOf/workedMinutes/expectedMinutes 是工时口径；
+                                  #   slotOf 是**边界校验**：写成 Number(x)===2?2:1 会把 slot=3
+                                  #   静默收编成 1，于是补卡补到错误的段上（曾经真踩过）。
+                                  'punchPlan', 'windowOf', 'restWindowOf', 'slotOf',
+                                  'workedMinutes', 'expectedMinutes',
+                                  'punchesPerDay', 'segments', 'restStart', 'restEnd',
+                                  "'in2'", "'out2'"],
+        # v0.13.0：默认班次的午休窗口校验。
+        #   判据挑的是**校验证据**而不是字段名：两个都填/两个都空/只填一个的
+        #   三分支必须都在，且错误文案真的提到了"午休"—— 只判 restStart 存在的话，
+        #   把校验删掉照样通过，而"只填一个"会静默算错在岗时长。
+        'src/src/settings.js': ['attDefaultShift', 'cleanShift',
+                                'restStart', 'restEnd', '午休开始', '午休结束',
+                                '跨天班（夜班）不支持午休窗口'],
         # 应用中心注册表：内置应用清单 + 按业务状态过滤可见性
         'src/src/apps.js': ['BUILTIN_APPS', 'listFor', 'catalog', 'GROUPS',
                             "'attendance'", "'my_requests'", "'work_org'"],
@@ -536,7 +571,14 @@ def check_fpk(path):
                                          "'/shifts'", "'/shifts/:id'",
                                          "'/groups'", "'/groups/:id'",
                                          'admin.get', 'admin.put', 'admin.post',
-                                         'admin.delete', 'express.Router()'],
+                                         'admin.delete', 'express.Router()',
+                                         # v0.13.0：把"该打几次卡"与"这是第几次卡"下发出去。
+                                         #   punchView/shiftView 是给客户端与报表的展示形态，
+                                         #   punchLabel 让同一个 type=out 在 4 次卡里显示成
+                                         #   "午休下班"、在 2 次卡里显示成"下班"（客户端按 type
+                                         #   猜只会猜错）。
+                                         'punchPlan', 'punchView', 'shiftView',
+                                         'punchLabel', 'expectedWorkMinutes'],
         # v0.8.0：客户端配置下发（SPEC-动态配置与模块.md 第一期）
         #   clientconfig.js 是配置中心本体：白名单校验 / 只增不改的版本快照 /
         #   回滚=用旧内容发新版。routes/client.js 是下发出去的口子：
@@ -706,6 +748,22 @@ def check_fpk(path):
     print('%-30s %s' % ('src/public/assets(考勤管理页)',
                         '命中 ✓' if att_hit else '缺失 ✗'))
     all_ok = all_ok and bool(att_hit)
+
+    # v0.13.0：管理台必须真把"一天 4 次卡"的界面打进去。
+    #   判据挑**只出现在页面标记里**的串（帮助文档里没有），否则"帮助写到了但
+    #   页面没打进去"也会假通过 —— 这一条与上一段同样踩过坑。
+    #   清空（改回 2 次卡）= 考勤设置的午休清空按钮
+    #   补哪张卡         = 补卡弹窗的卡选择项（带 slot，4 次卡的关键）
+    #   今日打卡         = 看板列头（逐张卡渲染取代原"上班/下班"两列）
+    #   在岗/应出勤      = 报表列头（工时口径）
+    rest_hit = [n for n in admin_js
+                if '清空（改回 2 次卡）'.encode('utf-8') in blob[n]
+                and '补哪张卡'.encode('utf-8') in blob[n]
+                and '今日打卡'.encode('utf-8') in blob[n]
+                and '在岗/应出勤'.encode('utf-8') in blob[n]]
+    print('%-30s %s' % ('src/public/assets(一天4次卡 UI)',
+                        '命中 ✓' if rest_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(rest_hit)
 
     # v0.8.0：bootstrap 免鉴权是硬要求，但绝不能因此把用户定向内容漏出去。
     # 判据：bootstrap 分支里不得出现 verifyToken（只有 /config 与上报才鉴权）。

@@ -20,7 +20,10 @@ services:
       # 中继地址下发给客户端：改了不用重发客户端包
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USER:-xiaozhi}
-      - TURN_CREDENTIAL=${TURN_PASSWORD:-xiaozhi-turn-2026}
+      # 中继口令**只在 .env 里给**，这里不再兜底默认值 —— 本仓库是 Public，
+      # 写在这里等于公开送人。安装脚本首次安装生成强随机口令、升级复用；
+      # 万一真的缺了，coturn 的 entrypoint 会拒绝启动并明确告诉你补哪一行。
+      - TURN_CREDENTIAL=${TURN_PASSWORD:-}
       # Cloudflare Realtime TURN：只走出站、走 443/TLS，不需要任何端口映射，
       # 免费额度 1TB/月。家宽没有公网 IP 时的首选通路。
       # 凭据由服务端现签现发（GET /api/call/ice），客户端无需任何改动。
@@ -66,7 +69,9 @@ services:
       # "公网/内网" 双地址形式，两路都走本中继时直接在内部投递，不绕公网回环
       - TURN_INTERNAL_IP=${TURN_INTERNAL_IP:-}
       - TURN_USER=${TURN_USER:-xiaozhi}
-      - TURN_PASSWORD=${TURN_PASSWORD:-xiaozhi-turn-2026}
+      # 同服务端：口令只在 .env 里给（安装脚本生成）。留空时 entrypoint 会
+      # 直接报错退出，不会带着空口令或公开默认口令把中继跑起来。
+      - TURN_PASSWORD=${TURN_PASSWORD:-}
       - TURN_REALM=${TURN_REALM:-xiaozhi.im}
       - TURN_MIN_PORT=${TURN_MIN_PORT:-49160}
       - TURN_MAX_PORT=${TURN_MAX_PORT:-49200}

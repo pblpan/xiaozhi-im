@@ -98,9 +98,19 @@ router.get('/apps', (req, res) => {
       const day = attendance.dayOf(now);
       const workdays = settings.get('attWorkdays') || [1, 2, 3, 4, 5];
       const isWorkday = workdays.includes(attendance.weekdayOf(day));
-      const ins = db.prepare("SELECT COUNT(*) AS c FROM att_records WHERE user_id=? AND day=? AND type='in'")
-        .get(uid, day).c;
-      if (isWorkday && !ins) a.badge = '待打卡';
+      if (isWorkday) {
+        // 口径**不能**写死成"有没有上班卡"：一天 4 次卡的班次里，
+        // 打了上班卡就消角标，等于中午、下午漏打都没人提醒；
+        // 反过来若按"今天还剩几张卡"算，早上 8 点就在催下午 1 点的卡，同样烦人。
+        // 正确的问法是"**已经到点却还没打**的卡有几张"—— 直接复用判定引擎，
+        // 免得这里再判一次"今天几次卡"而和报表口径分家。
+        const { shift } = attendance.shiftFor(uid, me.org_id);
+        const recs = attendance.recordsOn(uid, day);
+        const reqs = db.prepare("SELECT * FROM att_requests WHERE user_id=? AND status='approved'").all(uid);
+        const judged = attendance.judgeDay({ day, now, shift, recs, reqs, workdays });
+        const dueMissing = judged.punches.filter((p) => p.due && !p.done && !p.exempt).length;
+        if (dueMissing > 0) a.badge = '待打卡';
+      }
     }
     if (a.id === 'my_requests' && me.org_id) {
       const c = db.prepare("SELECT COUNT(*) AS c FROM att_requests WHERE user_id=? AND status='pending'").get(uid).c;

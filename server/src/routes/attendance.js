@@ -78,6 +78,36 @@ function needClockToday(day = att.today()) {
  * 员工端
  * ============================================================ */
 
+/** 班次对客户端的展示形态（含"一天几次卡"与午休窗口） */
+function shiftView(s) {
+  return {
+    name: s.name, workStart: s.workStart, workEnd: s.workEnd,
+    restStart: s.restStart, restEnd: s.restEnd,
+    segments: s.segments, punchesPerDay: s.punchesPerDay,
+    crossDay: s.crossDay, restMinutes: s.restMinutes,
+    flexMinutes: s.flexMinutes, lateGrace: s.lateGrace, earlyGrace: s.earlyGrace,
+    // 一个班次应出勤多少分钟（两个在岗段之和）。客户端拿它显示"应出勤 8 小时"，
+    // 不用自己拿 下班-上班-午休 再算一遍 —— 少一处能算错的地方
+    expectedWorkMinutes: s.expectedWorkMinutes,
+  };
+}
+
+/**
+ * 打卡计划的展示形态 —— 客户端打卡页的按钮直接照它渲染。
+ * 每个 item 都带齐"该打几点、打没打、打的几点、什么状态、迟到早退几分钟"，
+ * 客户端一条判断都不用自己写：口径只存在服务端一处，才不会出现
+ * "我这边显示正常、后台报表显示迟到"这种互相打脸的情况。
+ */
+function punchView(day) {
+  return (day.punches || []).map((p) => ({
+    key: p.key, type: p.type, slot: p.slot, label: p.label,
+    expectTime: p.expectTime, expectAt: p.expectAt,
+    time: p.at == null ? null : att.hhmmOf(p.at), at: p.at,
+    done: p.done, due: p.due, exempt: p.exempt, status: p.status,
+    lateMinutes: p.lateMinutes, earlyMinutes: p.earlyMinutes,
+  }));
+}
+
 /** 今日状态：客户端打卡页一次拉全（班次、我的卡、今日判定、本月汇总、待办） */
 router.get('/today', (req, res) => {
   const u = authOf(req, res); if (!u) return;
@@ -112,14 +142,15 @@ router.get('/today', (req, res) => {
     date: day,
     dayOfWeek: att.weekdayOf(day),
     isWorkday: needClockToday(day),
-    shift: {
-      name: shift.name, workStart: shift.workStart, workEnd: shift.workEnd,
-      crossDay: shift.crossDay, restMinutes: shift.restMinutes,
-      flexMinutes: shift.flexMinutes, lateGrace: shift.lateGrace, earlyGrace: shift.earlyGrace,
-    },
+    shift: shiftView(shift),
+    /** 今天该打哪几次卡 + 每次的实况。按钮就照这个渲染 */
+    punchPlan: punchView(today),
     group: group ? { id: group.id, name: group.name, locationMode: group.locationMode } : null,
     shiftSource: source,
-    /** 今日已打的卡（可能有多条流水，这里给"最早上班/最晚下班"两张有效卡） */
+    /**
+     * 兼容字段：最早上班卡 / 最晚下班卡。
+     * 老客户端还在读它，别删 —— 但新客户端请用 punchPlan，那张表才认得"午休下班"。
+     */
     cards: {
       in: today.firstIn == null ? null : { at: today.firstIn, time: today.firstInTime, count: recs.filter((r) => r.type === 'in' && r.day === day).length },
       out: today.lastOut == null ? null : { at: today.lastOut, time: today.lastOutTime, count: recs.filter((r) => r.type === 'out' && r.day === day).length },
@@ -128,6 +159,9 @@ router.get('/today', (req, res) => {
       status: today.status, statusLabel: att.STATUS_LABEL[today.status] || today.status,
       note: today.note, lateMinutes: today.lateMinutes, earlyMinutes: today.earlyMinutes,
       leave: today.leave, outing: today.outing,
+      donePunches: today.donePunches, expectedPunches: today.expectedPunches,
+      missingLabels: today.missingLabels,
+      workedMinutes: today.workedMinutes, expectedWorkMinutes: today.expectedWorkMinutes,
     },
     monthSummary: month.summary,
     pendingRequests: db.prepare("SELECT COUNT(*) AS c FROM att_requests WHERE user_id=? AND status='pending'").get(u.id).c,
@@ -137,7 +171,7 @@ router.get('/today', (req, res) => {
 
 /**
  * 打卡。
- * body: { type:'in'|'out', lat, lng, address, device }
+ * body: { type:'in'|'out', slot:1|2, lat, lng, address, device }
  * 时间一律以**服务器时钟**为准（客户端传 at 会被忽略）——
  * 否则改一次手机时间就能随便补卡，考勤数据立刻失去意义。
  */
@@ -150,6 +184,16 @@ router.post('/clock', (req, res) => {
   const day = att.dayOf(now);
   const { shift, group } = att.shiftFor(g.u.id, g.org.id);
 
+  // 一天 4 次卡的班次才有第 2 段。不拦的话会凭空多出"下午上班卡"，
+  // 而判定计划里根本没有它 —— 员工以为自己打了卡，报表上还是缺卡。
+  const slot = att.slotOf(req.body?.slot);
+  if (slot == null) return res.status(400).json({ error: '第几次卡只能是 1 或 2' });
+  if (slot > shift.segments) {
+    return res.status(400).json({
+      error: `当前班次一天打 ${shift.punchesPerDay} 次卡（${shift.workStart}-${shift.workEnd}），没有第 ${slot} 次卡`,
+    });
+  }
+
   // 定位要求：required 时必须有坐标；optional/off 有就记下来
   const mode = group?.locationMode || 'off';
   const hasLoc = Number.isFinite(Number(req.body?.lat)) && Number.isFinite(Number(req.body?.lng))
@@ -159,7 +203,7 @@ router.post('/clock', (req, res) => {
   }
 
   const r = att.clock({
-    userId: g.u.id, orgId: g.org.id, type, at: now,
+    userId: g.u.id, orgId: g.org.id, type, slot, at: now,
     lat: hasLoc ? Number(req.body.lat) : null,
     lng: hasLoc ? Number(req.body.lng) : null,
     address: req.body?.address ? String(req.body.address).slice(0, MAX_ADDRESS) : null,
@@ -179,11 +223,14 @@ router.post('/clock', (req, res) => {
     updated: !!r.updated,
     record: r.record,
     serverTime: now,
+    punchPlan: punchView(today),
     today: {
       status: today.status, statusLabel: att.STATUS_LABEL[today.status] || today.status,
       note: today.note, lateMinutes: today.lateMinutes, earlyMinutes: today.earlyMinutes,
+      donePunches: today.donePunches, expectedPunches: today.expectedPunches,
+      workedMinutes: today.workedMinutes,
     },
-    message: `${type === 'in' ? '上班' : '下班'}打卡成功 ${att.hhmmOf(now)}${r.updated ? '（已更新今日打卡）' : ''}`,
+    message: `${att.punchLabelOf(shift, type + slot)}打卡成功 ${att.hhmmOf(now)}${r.updated ? '（已更新今天这张卡）' : ''}`,
   });
 });
 
@@ -206,9 +253,7 @@ router.get('/my', (req, res) => {
     month, from, to,
     serverTime: now,
     timezone: att.TZ,
-    shift: {
-      name: r.shift.name, workStart: r.shift.workStart, workEnd: r.shift.workEnd, crossDay: r.shift.crossDay,
-    },
+    shift: shiftView(r.shift),
     group: r.group ? { id: r.group.id, name: r.group.name, locationMode: r.group.locationMode } : null,
     days: r.days.map((d) => ({
       day: d.day, weekday: d.weekday, isWorkday: d.isWorkday, status: d.status,
@@ -216,6 +261,11 @@ router.get('/my', (req, res) => {
       firstInTime: d.firstInTime, lastOutTime: d.lastOutTime,
       lateMinutes: d.lateMinutes, earlyMinutes: d.earlyMinutes, leave: d.leave, outing: d.outing,
       overtimeMinutes: d.overtimeMinutes,
+      // 4 次卡：明细页要能一条条列出"上午上班 / 午休下班 / 午休上班 / 下班"
+      punches: punchView(d),
+      donePunches: d.donePunches, expectedPunches: d.expectedPunches,
+      missingLabels: d.missingLabels,
+      workedMinutes: d.workedMinutes, expectedWorkMinutes: d.expectedWorkMinutes,
     })),
     summary: r.summary,
   });
@@ -227,7 +277,20 @@ router.get('/records', (req, res) => {
   const st = state();
   if (!st.org || !u.org_id) return res.json({ available: false, items: [] });
   const day = att.isValidDay(req.query.day) ? String(req.query.day) : att.today();
-  res.json({ available: true, day, items: att.recordsOn(u.id, day) });
+  // 带上班次：同一张 out/1 在 2 次卡里叫"下班"、在 4 次卡里叫"午休下班"，
+  // 不把班次一起给出来，客户端就只能显示一个含糊的"下班卡"。
+  const shift = att.shiftFor(u.id, st.org.id).shift;
+  const items = att.recordsOn(u.id, day)
+    .map((r) => ({ ...r, punchLabel: att.punchLabelOf(shift, r.punchKey) }));
+  res.json({
+    available: true, day,
+    shift: shiftView(shift),
+    plan: att.punchPlan(shift, day).map((p) => ({
+      key: p.key, type: p.type, slot: p.slot, label: att.punchLabelOf(shift, p.key),
+      expectTime: p.hhmm, expectAt: p.at,
+    })),
+    items,
+  });
 });
 
 /* ---------------- 申请（请假 / 补卡 / 外出 / 加班） ---------------- */
@@ -253,7 +316,7 @@ router.post('/requests', (req, res) => {
     kind: String(b.kind || ''),
     reason: b.reason,
     startDay: b.startDay, endDay: b.endDay, half: b.half, leaveType: b.leaveType,
-    day: b.day, clockType: b.clockType, at: Number(b.at) || null,
+    day: b.day, clockType: b.clockType, slot: b.slot, at: Number(b.at) || null,
     startAt: Number(b.startAt) || null, endAt: Number(b.endAt) || null,
   });
   if (r.error) return res.status(400).json({ error: r.error });
@@ -278,15 +341,22 @@ router.post('/requests/:id/cancel', (req, res) => {
 /** 考勤配置总览（含服务器时间与时区 —— 打卡时间对不上时第一个要看这里） */
 admin.get('/config', (req, res) => {
   const g = adminGuard(req, res); if (!g) return;
+  const eff = att.defaultShift();
   res.json({
     org: g.org,
     friendMode: settings.get('friendMode'),
     enabled: settings.get('attendanceEnabled') !== false,
-    defaultShift: settings.get('attDefaultShift'),
+    // 默认班次：**可编辑的存储值 + 归一化后的派生值合并成一个对象**。
+    //   只给存储值的话，管理台就不知道"这个班次一天打几次卡、应出勤多少小时"，
+    //   只能自己拿 上班/下班/午休 再减一遍 —— 那正是口径分家的起点。
+    //   归一化值覆盖同名键（restStart 等在午休窗口不成立时会是 null），
+    //   所以界面看到的永远是**真正生效**的形状。
+    //   写回时 cleanShift 只认它自己那几个键，多出来的派生字段会被忽略，往返安全。
+    defaultShift: { ...(settings.get('attDefaultShift') || {}), ...shiftView(eff) },
     workdays: settings.get('attWorkdays'),
     serverTime: Date.now(),
     timezone: att.TZ,
-    effectiveDefaultShift: att.defaultShift(),
+    effectiveDefaultShift: shiftView(eff),
   });
 });
 
@@ -362,7 +432,18 @@ admin.get('/records', (req, res) => {
   const rows = db.prepare(`SELECT r.*, u.username, u.nickname, u.employee_no
     FROM att_records r LEFT JOIN users u ON u.id=r.user_id
     WHERE ${where.join(' AND ')} ORDER BY r.at DESC LIMIT 1000`).all(...args);
-  res.json({ items: rows.map(att.decorateRecord) });
+  // 带上"这是哪一张卡"：光看 in/out 分不清"午休下班"和"下班"，
+  // 管理员修正时点错一张，员工当天就多一条错记录
+  const shiftCache = new Map();
+  const items = rows.map((r) => {
+    const rec = att.decorateRecord(r);
+    const { shift } = att.shiftForCached
+      ? att.shiftForCached(r.user_id, g.org.id, shiftCache)
+      : att.shiftFor(r.user_id, g.org.id);
+    rec.punchLabel = att.punchLabelOf(shift, rec.punchKey);
+    return rec;
+  });
+  res.json({ items });
 });
 
 /** 管理员补卡/修正：直接写一条记录（source='admin'） */
@@ -378,9 +459,17 @@ admin.post('/records', (req, res) => {
   if (!u || u.org_id !== g.org.id) return res.status(404).json({ error: '该用户不是本组织员工' });
   const hhmm = String(b.time || '');
   if (!att.parseHHMM(hhmm)) return res.status(400).json({ error: '时间需为 HH:MM' });
+  // 第几段：4 次卡的班次才有第 2 段。不管的话管理员能给 2 次卡的人补出一张
+  // 永远不被判定的孤儿卡（看着补上了，考勤结果没变）
+  const slot = att.slotOf(b.slot);
+  if (slot == null) return res.status(400).json({ error: '第几次卡只能是 1 或 2' });
+  const { shift } = att.shiftFor(userId, g.org.id);
+  if (slot > shift.segments) {
+    return res.status(400).json({ error: `该员工班次一天打 ${shift.punchesPerDay} 次卡，没有第 ${slot} 次卡` });
+  }
   const at = att.tsOfDay(day, hhmm);
   const r = att.clock({
-    userId, orgId: g.org.id, type, at, source: 'admin',
+    userId, orgId: g.org.id, type, slot, at, source: 'admin',
     addressNote: b.note ? String(b.note).slice(0, 100) : '管理员修正',
   });
   if (r.error) return res.status(400).json({ error: r.error });
@@ -404,25 +493,27 @@ admin.get('/shifts', (req, res) => {
 function shiftPayload(b) {
   const name = String(b.name || '').trim();
   if (!name || [...name].length > 20) return { error: '班次名称必填，最多 20 个字' };
-  if (!att.parseHHMM(b.workStart)) return { error: '上班时间需为 HH:MM' };
-  if (!att.parseHHMM(b.workEnd)) return { error: '下班时间需为 HH:MM' };
-  const num = (v, max, label) => {
-    const n = Number(v || 0);
-    if (!Number.isFinite(n) || n < 0 || n > max) return { error: `${label} 需在 0~${max} 之间` };
-    return { value: Math.trunc(n) };
-  };
-  const rest = num(b.restMinutes, 480, '休息时长'); if (rest.error) return rest;
-  const flex = num(b.flexMinutes, 240, '弹性打卡'); if (flex.error) return flex;
-  const late = num(b.lateGrace, 120, '迟到宽限'); if (late.error) return late;
-  const early = num(b.earlyGrace, 240, '提前打卡'); if (early.error) return early;
+  // 时间与午休窗口的校验**复用** settings.cleanShift：
+  // 默认班次和命名班次必须是同一套规则，否则迟早出现
+  // "默认班次能存午休 12:00、命名班次却报错"这种自相矛盾的行为。
+  const c = settings.cleanShift({
+    workStart: b.workStart, workEnd: b.workEnd,
+    restStart: b.restStart, restEnd: b.restEnd,
+    restMinutes: b.restMinutes, flexMinutes: b.flexMinutes,
+    lateGrace: b.lateGrace, earlyGrace: b.earlyGrace,
+  });
+  if (c.error) return c;
+  const v = c.value;
   return {
     value: {
       name,
-      work_start: String(b.workStart),
-      work_end: String(b.workEnd),
-      rest_minutes: rest.value, flex_minutes: flex.value,
-      late_grace: late.value, early_grace: early.value,
-      cross_day: att.parseHHMM(b.workEnd) <= att.parseHHMM(b.workStart) ? 1 : 0,
+      work_start: v.workStart,
+      work_end: v.workEnd,
+      rest_start: v.restStart || null,
+      rest_end: v.restEnd || null,
+      rest_minutes: v.restMinutes, flex_minutes: v.flexMinutes,
+      late_grace: v.lateGrace, early_grace: v.earlyGrace,
+      cross_day: att.parseHHMM(v.workEnd) <= att.parseHHMM(v.workStart) ? 1 : 0,
       enabled: b.enabled === undefined ? 1 : (b.enabled ? 1 : 0),
       sort: Number(b.sort) || 0,
     },
@@ -435,10 +526,10 @@ admin.post('/shifts', (req, res) => {
   if (p.error) return res.status(400).json({ error: p.error });
   const v = p.value;
   const info = db.prepare(`INSERT INTO att_shifts
-    (org_id,name,work_start,work_end,rest_minutes,flex_minutes,late_grace,early_grace,cross_day,enabled,sort,created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(g.org.id, v.name, v.work_start, v.work_end, v.rest_minutes, v.flex_minutes,
-      v.late_grace, v.early_grace, v.cross_day, v.enabled, v.sort, Date.now());
+    (org_id,name,work_start,work_end,rest_start,rest_end,rest_minutes,flex_minutes,late_grace,early_grace,cross_day,enabled,sort,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(g.org.id, v.name, v.work_start, v.work_end, v.rest_start, v.rest_end,
+      v.rest_minutes, v.flex_minutes, v.late_grace, v.early_grace, v.cross_day, v.enabled, v.sort, Date.now());
   res.json({ ok: true, id: info.lastInsertRowid, message: '班次已新增' });
 });
 
@@ -451,10 +542,10 @@ admin.put('/shifts/:id', (req, res) => {
   const p = shiftPayload(req.body || {});
   if (p.error) return res.status(400).json({ error: p.error });
   const v = p.value;
-  db.prepare(`UPDATE att_shifts SET name=?,work_start=?,work_end=?,rest_minutes=?,flex_minutes=?,
-    late_grace=?,early_grace=?,cross_day=?,enabled=?,sort=? WHERE id=?`)
-    .run(v.name, v.work_start, v.work_end, v.rest_minutes, v.flex_minutes,
-      v.late_grace, v.early_grace, v.cross_day, v.enabled, v.sort, id);
+  db.prepare(`UPDATE att_shifts SET name=?,work_start=?,work_end=?,rest_start=?,rest_end=?,
+    rest_minutes=?,flex_minutes=?,late_grace=?,early_grace=?,cross_day=?,enabled=?,sort=? WHERE id=?`)
+    .run(v.name, v.work_start, v.work_end, v.rest_start, v.rest_end,
+      v.rest_minutes, v.flex_minutes, v.late_grace, v.early_grace, v.cross_day, v.enabled, v.sort, id);
   res.json({ ok: true, message: '已保存' });
 });
 
@@ -474,14 +565,28 @@ admin.delete('/shifts/:id', (req, res) => {
 function groupDetail(row) {
   const deptIds = db.prepare('SELECT dept_id FROM att_group_depts WHERE group_id=?').all(row.id).map((r) => r.dept_id);
   const memberIds = db.prepare('SELECT user_id FROM att_group_members WHERE group_id=?').all(row.id).map((r) => r.user_id);
-  const shift = row.shift_id ? db.prepare('SELECT id,name,work_start,work_end FROM att_shifts WHERE id=?').get(row.shift_id) : null;
+  const shift = row.shift_id ? db.prepare('SELECT * FROM att_shifts WHERE id=?').get(row.shift_id) : null;
   // 实际人数必须与判定口径一致（显式成员 ∪ 部门含子部门内的人），
   // 否则会出现"界面显示 5 人、实际按 7 人算考勤"这种对不上的情况
   const memberCount = att.groupMemberIds(row, row.org_id).size;
+  const shiftViewObj = shift ? att.listShifts(row.org_id).find((s) => s.id === shift.id) : null;
   return {
     id: row.id, name: row.name, shiftId: row.shift_id,
     shiftName: shift ? shift.name : '默认班次',
-    shift: shift ? { workStart: shift.work_start, workEnd: shift.work_end } : att.defaultShift(),
+    // 给完整的班次形态（含午休窗口与"一天几次卡"），管理台才显示得清
+    // "这个组是一天 4 次卡还是一天 2 次卡"
+    shift: shiftViewObj ? {
+      name: shiftViewObj.name, workStart: shiftViewObj.workStart, workEnd: shiftViewObj.workEnd,
+      restStart: shiftViewObj.restStart, restEnd: shiftViewObj.restEnd,
+      segments: shiftViewObj.segments, punchesPerDay: shiftViewObj.punchesPerDay,
+    } : (() => {
+      const d = att.defaultShift();
+      return {
+        name: d.name, workStart: d.workStart, workEnd: d.workEnd,
+        restStart: d.restStart, restEnd: d.restEnd,
+        segments: d.segments, punchesPerDay: d.punchesPerDay,
+      };
+    })(),
     locationMode: row.location_mode || 'off',
     deptIds, memberIds, memberCount,
   };

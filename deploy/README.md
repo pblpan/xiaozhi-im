@@ -31,7 +31,18 @@ bash deploy/fpk/build_fpk.sh
 > `ICON.png` 需自行放置到 `deploy/fpk/ICON.png`（建议 256x256）。
 
 ## 三、重要安全提醒
+
 - 上线前务必修改 `JWT_SECRET` 与 `ADMIN_PASSWORD`（环境变量）。
+- **`TURN_PASSWORD` 没有默认值，这是刻意的**。中继口令等于「谁拿到谁就能用你家上行
+  带宽转发音视频」，而这个仓库是公开的 —— 所以 compose 里不再兜底任何默认口令，
+  缺了 coturn 会**拒绝启动**并在日志里指出该补哪一行。
+  · 用 fpk 安装包：安装脚本首次安装自动生成强随机口令，写进 `docker/.env`，
+    同时同步到共享目录的 `turn.env`（服务端优先读它），升级时沿用不换；
+  · 手工 docker 部署：自己生成一个，`TURN_PASSWORD=$(openssl rand -hex 32)` 传给 compose，
+    并把同一个值写进 `turn.env` 的 `TURN_CREDENTIAL`。**两边不一致时中继会认证失败**，
+    表现为「同 WiFi 通话正常、跨网一连就断」，很难查。
+  · 只改 `.env` 不改 `turn.env` 同样会不一致 —— 改完务必
+    `docker compose up -d --force-recreate coturn xiaozhi-im`（环境变量只在容器创建时生效）。
 - 对外暴露建议前置 Nginx + HTTPS，客户端 `BASE_URL` 指向 `https://域名`，
   Android 端即可去掉明文 HTTP 配置。
 - 数据库与上传文件均在 `/data`（飞牛映射到 `/volx/@appdata/xiaozhi-im`），记得备份。

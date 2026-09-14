@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../core/theme.dart';
+import '../core/time.dart';
 import 'attendance.dart' show statusColor;
 
 /// 我的考勤记录（按月）。
@@ -83,7 +84,8 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> {
                 Text('$day 打卡流水',
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 6),
-                Text('同一天同一类型可以有多条（更新打卡会保留历史），统计只取上班最早、下班最晚。',
+                Text('同一天同一张卡可以有多条（更新打卡会保留历史），统计只取到点的那一次。'
+                    '一天 4 次卡的班次：上班 / 午休下班 / 午休上班 / 下班。',
                     style: TextStyle(fontSize: 11.5, height: 1.5, color: sem.muted)),
                 const SizedBox(height: 12),
                 if (items.isEmpty)
@@ -105,7 +107,11 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> {
                                     .withValues(alpha: 0.16),
                                 borderRadius: BorderRadius.circular(AppRadii.pill),
                               ),
-                              child: Text(it['type'] == 'in' ? '上班' : '下班',
+                              // 标签一律用服务端下发的 punchLabel：同一个 type=out，
+                              // 4 次卡里可能是"午休下班"也可能是"下班"，客户端按 type
+                              // 猜只会猜错（中午那张被显示成下班，员工以为已经下班了）
+                              child: Text(
+                                  (it['punchLabel'] ?? (it['type'] == 'in' ? '上班' : '下班')).toString(),
                                   style: TextStyle(
                                       fontSize: 11.5,
                                       fontWeight: FontWeight.w600,
@@ -263,6 +269,9 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> {
       ['缺勤', '${sum['absent'] ?? 0}'],
       ['请假', '${sum['leave'] ?? 0}'],
     ];
+    final worked = (sum['workedMinutes'] as num?)?.toInt() ?? 0;
+    final expectWork = (sum['expectedWorkMinutes'] as num?)?.toInt() ?? 0;
+    final fullDays = (sum['fullDays'] as num?)?.toInt() ?? 0;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
       decoration: BoxDecoration(
@@ -270,24 +279,47 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> {
         borderRadius: BorderRadius.circular(AppRadii.md),
         border: Border.all(color: sem.cardBorder),
       ),
-      child: Row(
-        children: items.map((it) {
-          final bad = it[0] != '出勤';
-          final v = num.tryParse(it[1]) ?? 0;
-          return Expanded(
-            child: Column(
+      child: Column(
+        children: [
+          Row(
+            children: items.map((it) {
+              final bad = it[0] != '出勤';
+              final v = num.tryParse(it[1]) ?? 0;
+              return Expanded(
+                child: Column(
+                  children: [
+                    Text(it[1],
+                        style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            color: bad && v > 0 ? AppColors.danger : AppColors.brand)),
+                    const SizedBox(height: 2),
+                    Text(it[0], style: TextStyle(fontSize: 11, color: sem.muted)),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+          // 4 次卡的班次，"缺卡"这个计数会明显变大（一天最多缺 4 张），
+          // 所以额外把"在岗多少小时 / 应出勤多少小时"摆出来：
+          // 员工真正想知道的是"我够不够工时"，不是"我少打了几次指纹"
+          if (expectWork > 0) ...[
+            const Divider(height: 18),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(it[1],
-                    style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        color: bad && v > 0 ? AppColors.danger : AppColors.brand)),
-                const SizedBox(height: 2),
-                Text(it[0], style: TextStyle(fontSize: 11, color: sem.muted)),
+                Text('本月在岗 ${TimeFmt.minutesAsHours(worked)}',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                Text(' / 应出勤 ${TimeFmt.minutesAsHours(expectWork)}',
+                    style: TextStyle(fontSize: 12, color: sem.muted)),
+                if (fullDays > 0) ...[
+                  Text(' · 全勤 $fullDays 天',
+                      style: TextStyle(fontSize: 12, color: sem.muted)),
+                ],
               ],
             ),
-          );
-        }).toList(),
+          ],
+        ],
       ),
     );
   }
@@ -340,6 +372,23 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> {
                   style: const TextStyle(fontSize: 12.5),
                 ),
               ),
+              // 4 次卡的班次光看"上班最早/下班最晚"看不出中间两次打没打
+              // （中午那两张缺了也照样有 08:00 和 17:00），所以补一个打卡计数
+              if (((d['expectedPunches'] as num?)?.toInt() ?? 0) >= 4) ...[
+                SizedBox(
+                  width: 44,
+                  child: Text(
+                    '${(d['donePunches'] as num?)?.toInt() ?? 0}/${(d['expectedPunches'] as num?)?.toInt() ?? 0}次',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: ((d['missingPunches'] as List?) ?? const []).isEmpty
+                          ? AppColors.brand
+                          : AppColors.danger,
+                    ),
+                  ),
+                ),
+              ],
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(

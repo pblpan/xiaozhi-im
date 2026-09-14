@@ -336,12 +336,19 @@ class ImApi {
   /// 未启用时返回 available=false + reason（不是错误），客户端据此显示说明页。
   Future<Map<String, dynamic>> attendanceToday() async => await _get('/attendance/today');
 
-  /// 打卡。type = 'in' | 'out'。
+  /// 打卡。type = 'in' | 'out'；slot = 1 | 2（第几段）。
+  ///
+  /// 一天 4 次卡的班次（上班 / 午休下班 / 午休上班 / 下班）靠 slot 区分：
+  /// 同样是 'out'，slot=1 是"午休下班"、slot=2 是"下班"，服务端按两张不同的卡
+  /// 存（去重口径带 slot），只发 type 会把中午那张覆盖掉。
+  /// 2 次卡的班次只用 slot=1，传 2 会被服务端拒（400）。
+  ///
   /// **不传时间** —— 时刻一律由服务端决定，客户端改本机时间无效。
   Future<Map<String, dynamic>> attendanceClock(String type,
-          {double? lat, double? lng, String? address, String? device}) async =>
+          {int slot = 1, double? lat, double? lng, String? address, String? device}) async =>
       await _post('/attendance/clock', {
         'type': type,
+        'slot': slot,
         if (lat != null) 'lat': lat,
         if (lng != null) 'lng': lng,
         if (address != null) 'address': address,

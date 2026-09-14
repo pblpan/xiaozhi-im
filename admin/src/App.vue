@@ -280,56 +280,90 @@
               <p>
                 <b>不用额外开启</b>：切到工作模式、建好组织并录入员工后，考勤即生效 ——
                 员工端工作台出现「考勤打卡」，管理台出现「考勤管理」。
-                默认班次 <code class="mono">09:00-18:00</code>、工作日为周一至周五，不改也能用。
+                默认班次 <code class="mono">08:00-17:00</code>、午休 <code class="mono">12:00-13:00</code>、
+                工作日为周一至周五，不改也能用。
               </p>
 
-              <p><b>1. 打卡怎么算</b></p>
+              <p><b>1. 一天打几次卡：2 次 还是 4 次</b></p>
+              <p>
+                由班次里<b>有没有填午休开始/结束</b>决定，员工端与管理台都会跟着变，不用手工配第二遍：
+              </p>
+              <table class="help-table">
+                <thead><tr><th style="width:120px">午休窗口</th><th style="width:90px">一天几次卡</th><th>怎么打</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td>两个都填</td><td><b>4 次</b></td>
+                    <td>上班 → <b>午休下班</b> → <b>午休上班</b> → 下班。两个在岗段<b>各算各的</b>：<br />
+                      08:00-12:00 与 13:00-17:00 就是上午 4 小时 + 下午 4 小时 = 在岗 <b>8 小时</b>。</td>
+                  </tr>
+                  <tr><td>两个都空</td><td>2 次</td><td>传统的上班 / 下班。</td></tr>
+                  <tr><td>只填一个</td><td colspan="2"><b>会被拒绝</b>。只填一个没法判断该打几次，静默忽略等于"我配了但它没生效"。</td></tr>
+                </tbody>
+              </table>
               <ul>
-                <li>上班卡取当天<b>最早</b>一条、下班卡取<b>最晚</b>一条；员工重复点打卡是<b>更新</b>当天那张卡（旧流水仍保留，管理台可查）。</li>
-                <li>打卡时刻一律按<b>服务器时钟</b>记录，客户端改本机时间无效（否则考勤数据没有意义）。</li>
-                <li>迟到 = 上班时间 + 弹性 + 迟到宽限之后才算；早退 = 下班时间 − 可提前打卡之前才算。</li>
+                <li>午休必须<b>严格落在上班与下班之间</b>（上班 &lt; 午休开始 &lt; 午休结束 &lt; 下班）。</li>
+                <li><b>跨天夜班不支持午休窗口</b>：凌晨那顿"午休"跨了日期，算不出正确的在岗时长，与其算错不如明确拒绝。</li>
+                <li>同一个组织里<b>2 次卡与 4 次卡的人可以共存</b> —— 取决于各自命中的班次。</li>
+                <li>4 次卡下「午休下班」和「下班」是<b>两张不同的卡</b>：中午打的那次不会把下班卡覆盖掉，
+                  补卡时也必须指明补<b>第几次</b>卡。</li>
               </ul>
 
-              <p><b>2. 每天的状态含义</b></p>
+              <p><b>2. 打卡怎么算</b></p>
+              <ul>
+                <li>每张卡各判各的：上班卡取当天最早、午休下班/午休上班/下班各取对应那一段的记录；
+                  员工重复点同一张卡是<b>更新</b>那张卡（旧流水仍保留，管理台可查）。</li>
+                <li>打卡时刻一律按<b>服务器时钟</b>记录，客户端改本机时间无效（否则考勤数据没有意义）。</li>
+                <li>迟到 = 上班时间 + 弹性 + 迟到宽限之后才算；早退 = 下班时间 − 可提前打卡之前才算。
+                  <b>弹性只作用于当天第一次上班卡</b> —— 下午那次若也给弹性，"晚到两小时"就变成合法了。</li>
+                <li><b>在岗时长</b> = 两个在岗段之和（打完的段才算），班次上的"应出勤"是标准的 8 小时；
+                  班次里填了午休窗口后，「休息时长」那个数字不再参与计算。</li>
+              </ul>
+
+              <p><b>3. 每天的状态含义</b></p>
               <table class="help-table">
                 <thead><tr><th style="width:110px">状态</th><th>含义</th></tr></thead>
                 <tbody>
-                  <tr><td>正常</td><td>两张卡都在允许的时间范围内</td></tr>
-                  <tr><td>迟到 / 早退</td><td>超出弹性与宽限；两个都有则显示「迟到早退」，并给出分钟数</td></tr>
-                  <tr><td>缺卡</td><td>只打了一张卡（缺上班或缺下班）——下班时间还没到时<b>不判缺卡</b>，显示「进行中」</td></tr>
+                  <tr><td>正常</td><td>该打的卡都在允许的时间范围内</td></tr>
+                  <tr><td>迟到 / 早退</td><td>超出弹性与宽限；并给出分钟数。4 次卡会指明是哪一次卡迟到/早退</td></tr>
+                  <tr><td>缺卡</td><td>有卡没打 —— 会<b>点名</b>缺的是哪张（如"缺午休上班、下班卡"）；
+                    该到点但没到点的不判缺卡，显示「进行中」</td></tr>
                   <tr><td>缺勤</td><td>当天一张卡都没打、也没有请假/外出覆盖</td></tr>
-                  <tr><td>请假 / 外出</td><td>当天有审批通过的请假或外出申请，不再判缺勤</td></tr>
+                  <tr><td>请假 / 外出</td><td>当天有审批通过的请假或外出申请，不再判缺勤。
+                    半天假只豁免对应那半天的卡（上午假 → 免上班与午休下班卡）</td></tr>
                   <tr><td>休息</td><td>该星期不在「工作日」里（可在考勤设置里改），不判缺勤</td></tr>
-                  <tr><td>进行中</td><td>今天还没到下班时间，尚未发生的事不预先判异常（所以上午打开不会满屏"缺卡"）</td></tr>
+                  <tr><td>进行中</td><td>今天还有卡没到点，尚未发生的事不预先判异常（所以上午打开不会满屏"缺卡"）</td></tr>
                 </tbody>
               </table>
 
-              <p><b>3. 班次与考勤组（不同人群不同作息时用）</b></p>
+              <p><b>4. 班次与考勤组（不同人群不同作息时用）</b></p>
               <ul>
-                <li><b>班次</b>：几点上下班、休息时长、弹性打卡、迟到宽限、可提前打卡。
+                <li><b>班次</b>：几点上下班、午休窗口、弹性打卡、迟到宽限、可提前打卡。
                   <b>下班时间早于或等于上班时间即视为跨天夜班</b>（如 22:00-06:00），次日凌晨打的下班卡会正确算进前一天。</li>
                 <li><b>考勤组</b>：把某些人归到某个班次。成员可以<b>按部门</b>纳入（含子部门，新员工入职自动进组），也可以<b>点名到人</b>。</li>
                 <li>一个人同时命中多个组时：<b>点名优先</b>，其次按考勤组创建顺序取第一个。<b>不在任何组的人</b>按组织默认班次打卡。</li>
               </ul>
 
-              <p><b>4. 请假 / 补卡 / 外出 / 加班</b></p>
+              <p><b>5. 请假 / 补卡 / 外出 / 加班</b></p>
               <ul>
                 <li>员工在客户端「我的申请」提交，管理台「考勤管理 → 申请审批」里通过或驳回（驳回需填原因）。</li>
-                <li><b>补卡</b>通过后立即写入当天对应打卡记录（来源标记为"补卡审批"），当天状态随之修正。</li>
+                <li><b>补卡</b>通过后立即写入当天对应打卡记录（来源标记为"补卡审批"），当天状态随之修正。
+                  4 次卡下补卡要指明补<b>第几次</b>（员工端直接点"午休上班"这类按钮即可）——
+                  只给类型的话，卡会补到错误的段上，看着补了、报表上那天依旧缺卡。</li>
                 <li><b>请假</b>支持单日半天（上午/下午）；多日请假按整天计，单次最多 30 天。</li>
                 <li><b>外出</b>覆盖其时段碰到的那张卡（上午外出就不判缺上班卡）；<b>加班</b>计入统计的加班时长。</li>
               </ul>
 
-              <p><b>5. 员工漏打卡怎么办</b></p>
+              <p><b>6. 员工漏打卡怎么办</b></p>
               <ol>
                 <li>让员工自己提交<b>补卡</b>申请（客户端 → 我的申请 → 补卡），管理员审批通过即修正 —— 推荐，留痕清楚。</li>
-                <li>或管理员在「打卡看板」那行点<b>「补卡」</b>直接补录（来源标记为"管理员补录"）。</li>
+                <li>或管理员在「打卡看板」那行点<b>「补卡」</b>直接补录：弹窗会默认选中<b>缺的那张卡</b>，也可以换（来源标记为"管理员补录"）。</li>
                 <li>点<b>「明细」</b>可看某人当天的全部打卡流水（含被更新掉的旧流水），必要时删除某条。</li>
               </ol>
 
               <p class="help-tip">
-                统计报表选部门会<b>连子部门一起算</b>；点人员行首的展开箭头可看该人每天的明细。
-                停用考勤（考勤设置里）只是让员工端入口消失，<b>历史打卡与申请记录都保留</b>。
+                统计报表选部门会<b>连子部门一起算</b>；点人员行首的展开箭头可看该人每天的明细（每张卡一个标签）。
+                报表上的「漏打卡」按<b>张</b>统计 —— 4 次卡下一天缺 3 张也只算 1 天「缺卡」，
+                按张看才知道谁没打满。停用考勤（考勤设置里）只是让员工端入口消失，<b>历史打卡与申请记录都保留</b>。
               </p>
             </section>
 
@@ -1856,17 +1890,37 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <el-table-column label="部门" min-width="105">
                     <template #default="{ row }">{{ row.deptName || '—' }}</template>
                   </el-table-column>
-                  <el-table-column label="班次" min-width="165">
+                  <el-table-column label="班次" min-width="200">
                     <template #default="{ row }">
                       {{ row.shiftName || '默认班次' }}
-                      <span v-if="row.shift" class="hint">（{{ row.shift.workStart }}-{{ row.shift.workEnd }}）</span>
+                      <span v-if="row.shift" class="hint">
+                        （{{ row.shift.workStart }}-{{ row.shift.workEnd }}<template
+                          v-if="row.shift.restStart">，午休 {{ row.shift.restStart }}-{{ row.shift.restEnd }}</template>）
+                      </span>
+                      <el-tag v-if="(row.shift?.punchesPerDay || 0) >= 4" size="small" effect="plain" type="success">4次卡</el-tag>
                     </template>
                   </el-table-column>
-                  <el-table-column label="上班" width="72">
-                    <template #default="{ row }"><span :class="{ 'att-bad': row.lateMinutes > 0 }">{{ row.firstInTime || '—' }}</span></template>
+                  <!-- 逐张卡展示：4 次卡必须一眼看出"缺的是午休下班还是下午上班"，
+                       只给最早的上班和最晚的下班是看不出来的 -->
+                  <el-table-column label="今日打卡" min-width="252">
+                    <template #default="{ row }">
+                      <template v-if="(row.punches || []).length">
+                        <el-tag v-for="p in row.punches" :key="p.key" size="small" effect="plain"
+                                :type="attPunchTagType(p)" style="margin:1px 3px 1px 0">
+                          {{ p.label }} {{ attPunchText(p) }}
+                        </el-tag>
+                        <span class="hint" style="margin-left:4px">{{ attPunchCount(row) }} 张</span>
+                      </template>
+                      <span v-else>—</span>
+                    </template>
                   </el-table-column>
-                  <el-table-column label="下班" width="72">
-                    <template #default="{ row }"><span :class="{ 'att-bad': row.earlyMinutes > 0 }">{{ row.lastOutTime || '—' }}</span></template>
+                  <el-table-column label="在岗" width="82" align="center">
+                    <template #default="{ row }">
+                      <span :class="{ 'att-bad': (row.workedMinutes || 0) > 0 && row.workedMinutes < (row.expectedWorkMinutes || 0) }">
+                        {{ attHours(row.workedMinutes) }}
+                      </span>
+                      <span v-if="row.expectedWorkMinutes" class="hint">/{{ attHours(row.expectedWorkMinutes) }}</span>
+                    </template>
                   </el-table-column>
                   <el-table-column label="状态" width="92">
                     <template #default="{ row }">
@@ -1901,7 +1955,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-row :gutter="10" style="margin-bottom:14px">
                   <el-col :span="3" v-for="c in attRepCards" :key="c.k">
                     <el-card shadow="never" class="stat">
-                      <div class="stat-num">{{ attReport.totals ? (attReport.totals[c.k] ?? 0) : '—' }}</div>
+                      <div class="stat-num">{{ attCardVal(attReport.totals, c) }}</div>
                       <div class="stat-label">{{ c.label }}</div>
                     </el-card>
                   </el-col>
@@ -1911,7 +1965,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     <template #default="{ row }">
                       <div style="padding:8px 14px 14px">
                         <div class="hint" style="margin-bottom:6px">
-                          班次：{{ row.shiftName }}（{{ row.shift.workStart }}-{{ row.shift.workEnd }}）·
+                          班次：{{ row.shiftName }}（{{ row.shift.workStart }}-{{ row.shift.workEnd }}<template
+                            v-if="row.shift.restStart">，午休 {{ row.shift.restStart }}-{{ row.shift.restEnd }}</template>）·
+                          一天 {{ row.shift.punchesPerDay || 2 }} 次卡 ·
                           来源：{{ row.shiftSource === 'group' ? '考勤组点名' : (row.shiftSource === 'dept' ? '考勤组（部门）' : '组织默认班次') }}
                           {{ row.groupName ? '· 考勤组「' + row.groupName + '」' : '' }}
                         </div>
@@ -1920,18 +1976,31 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                           <el-table-column label="星期" width="70">
                             <template #default="{ row: d }">{{ attWeekName(d.weekday) }}</template>
                           </el-table-column>
-                          <el-table-column label="上班" width="72">
-                            <template #default="{ row: d }">{{ d.firstInTime || '—' }}</template>
+                          <!-- 4 次卡与 2 次卡共用这一列：几张卡就渲染几个标签 -->
+                          <el-table-column label="打卡明细" min-width="268">
+                            <template #default="{ row: d }">
+                              <template v-if="(d.punches || []).length">
+                                <el-tag v-for="p in d.punches" :key="p.key" size="small" effect="plain"
+                                        :type="attPunchTagType(p)" style="margin:1px 3px 1px 0">
+                                  {{ p.label }} {{ attPunchText(p) }}
+                                </el-tag>
+                              </template>
+                              <span v-else>—</span>
+                            </template>
                           </el-table-column>
-                          <el-table-column label="下班" width="72">
-                            <template #default="{ row: d }">{{ d.lastOutTime || '—' }}</template>
+                          <el-table-column label="在岗" width="76" align="center">
+                            <template #default="{ row: d }">
+                              <span :class="{ 'att-bad': (d.workedMinutes || 0) < (d.expectedWorkMinutes || 0) }">
+                                {{ attHours(d.workedMinutes) }}
+                              </span>
+                            </template>
                           </el-table-column>
                           <el-table-column label="状态" width="95">
                             <template #default="{ row: d }">
                               <el-tag size="small" :type="attStatusType(d.status)" effect="plain">{{ d.statusLabel }}</el-tag>
                             </template>
                           </el-table-column>
-                          <el-table-column prop="note" label="说明" min-width="200" />
+                          <el-table-column prop="note" label="说明" min-width="180" />
                         </el-table>
                       </div>
                     </template>
@@ -1960,8 +2029,23 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                       <span :class="{ 'att-bad': row.summary.early > 0 }">{{ row.summary.early }}</span>
                     </template>
                   </el-table-column>
-                  <el-table-column label="缺卡" width="66" align="center">
-                    <template #default="{ row }"><span :class="{ 'att-bad': row.summary.missing > 0 }">{{ row.summary.missing }}</span></template>
+                  <!-- 4 次卡下"缺卡(天)"会掩盖问题：一天缺 3 张也只算 1 天，
+                       所以按**张**统计漏打卡，与"在岗时长"一起才看得出谁没打满 -->
+                  <el-table-column label="漏打卡" width="72" align="center">
+                    <template #default="{ row }">
+                      <span :class="{ 'att-bad': row.summary.missingPunches > 0 }"
+                            :title="'缺卡' + row.summary.missing + ' 天 / 漏打 ' + row.summary.missingPunches + ' 张'">
+                        {{ row.summary.missingPunches }}张
+                      </span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="在岗/应出勤" width="112" align="center">
+                    <template #default="{ row }">
+                      <span :class="{ 'att-bad': row.summary.workedMinutes < row.summary.expectedWorkMinutes }">
+                        {{ attHours(row.summary.workedMinutes) }}
+                      </span>
+                      <span class="hint">/{{ attHours(row.summary.expectedWorkMinutes) }}</span>
+                    </template>
                   </el-table-column>
                   <el-table-column label="缺勤" width="66" align="center">
                     <template #default="{ row }"><span :class="{ 'att-bad': row.summary.absent > 0 }">{{ row.summary.absent }}</span></template>
@@ -1985,8 +2069,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 </div>
                 <div class="hint" style="margin-bottom:10px">
                   不建班次也能用：没被任何考勤组纳入的员工按「组织默认班次」
-                  （{{ attConfig.defaultShift ? attConfig.defaultShift.workStart + '-' + attConfig.defaultShift.workEnd : '09:00-18:00' }}）打卡。
-                  班次是精细化，不是使用前提。
+                  （{{ attConfig.defaultShift ? attConfig.defaultShift.workStart + '-' + attConfig.defaultShift.workEnd : '08:00-17:00' }}<template
+                    v-if="attConfig.defaultShift && attConfig.defaultShift.restStart">，午休 {{ attConfig.defaultShift.restStart }}-{{ attConfig.defaultShift.restEnd }}</template>）打卡。
+                  班次是精细化，不是使用前提。<br />
+                  <b>午休开始 / 结束都填上 = 一天 4 次卡</b>（上班 → 午休下班 → 午休上班 → 下班，
+                  两个在岗段各算各的）；两个都空 = 传统的一天 2 次卡。只填一个会被拒绝。
                 </div>
                 <el-table :data="attShifts" border stripe size="small" style="margin-bottom:22px">
                   <el-table-column prop="name" label="班次名称" min-width="120" />
@@ -1999,8 +2086,21 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                       <span v-else>—</span>
                     </template>
                   </el-table-column>
-                  <el-table-column label="休息" width="76">
-                    <template #default="{ row }">{{ row.restMinutes }} 分</template>
+                  <el-table-column label="一天几次卡" width="98" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" effect="plain" :type="row.punchesPerDay >= 4 ? 'success' : 'info'">
+                        {{ row.punchesPerDay || 2 }} 次
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="午休" width="128">
+                    <template #default="{ row }">
+                      <span v-if="row.restStart">{{ row.restStart }} - {{ row.restEnd }}</span>
+                      <span v-else class="hint">未设置</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="在岗时长" width="88" align="center">
+                    <template #default="{ row }">{{ attHours(row.expectedWorkMinutes) }}</template>
                   </el-table-column>
                   <el-table-column label="弹性打卡" width="88">
                     <template #default="{ row }">{{ row.flexMinutes }} 分</template>
@@ -2130,6 +2230,20 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     <el-input v-model="attConfig.defaultShift.workEnd" style="width:100px" placeholder="18:00" />
                     <div class="hint">下班时间<b>早于或等于</b>上班时间即视为跨天夜班（如 22:00 - 06:00），下班卡会算到次日凌晨。</div>
                   </el-form-item>
+                  <el-form-item label="默认班次 午休">
+                    <el-input v-model="attConfig.defaultShift.restStart" style="width:100px" placeholder="12:00" />
+                    <span style="margin:0 8px">—</span>
+                    <el-input v-model="attConfig.defaultShift.restEnd" style="width:100px" placeholder="13:00" />
+                    <el-button size="small" style="margin-left:10px"
+                               @click="attConfig.defaultShift.restStart = ''; attConfig.defaultShift.restEnd = ''">
+                      清空（改回 2 次卡）
+                    </el-button>
+                    <div class="hint">
+                      两个都填 = <b>一天 4 次卡</b>：上班 → 午休下班 → 午休上班 → 下班，两个在岗段各算各的
+                      （08:00-12:00 / 13:00-17:00 就是各 4 小时、合计 8 小时）；两个都空 = 传统 2 次卡；<b>只填一个会被拒绝</b>。<br />
+                      午休必须严格落在上班与下班之间，且跨天夜班不支持午休（凌晨那顿"午休"跨了日期，算不清）。
+                    </div>
+                  </el-form-item>
                   <el-form-item label="弹性打卡 / 迟到宽限">
                     <el-input-number v-model="attConfig.defaultShift.flexMinutes" :min="0" :max="240" :step="5" />
                     <el-input-number v-model="attConfig.defaultShift.lateGrace" :min="0" :max="120" :step="5" style="margin-left:10px" />
@@ -2140,8 +2254,15 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     <span class="hint" style="margin-left:8px">分钟：下班前这么多分钟内打卡不算早退（设 10 就是 17:50 打下班卡也正常）</span>
                   </el-form-item>
                   <el-form-item label="休息时长">
-                    <el-input-number v-model="attConfig.defaultShift.restMinutes" :min="0" :max="480" :step="15" />
-                    <span class="hint" style="margin-left:8px">分钟，仅作展示，不参与迟到早退判定</span>
+                    <!-- 填了午休窗口后，在岗时长按窗口算，这个数字就没用了。
+                         让两个地方都能"设定午休多久"只会有一天对不上，所以直接禁掉 -->
+                    <el-input-number v-model="attConfig.defaultShift.restMinutes" :min="0" :max="480" :step="15"
+                                     :disabled="!!attConfig.defaultShift.restStart" />
+                    <span class="hint" style="margin-left:8px">
+                      {{ attConfig.defaultShift.restStart
+                        ? '已按上面的午休窗口计算在岗时长，这里不用管'
+                        : '分钟，仅作展示，不参与迟到早退判定' }}
+                    </span>
                   </el-form-item>
                   <el-form-item label="工作日">
                     <el-checkbox-group v-model="attConfig.workdays">
@@ -2173,9 +2294,21 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <span style="margin:0 8px">—</span>
                 <el-input v-model="attShiftForm.workEnd" style="width:100px" placeholder="18:00" />
               </el-form-item>
+              <el-form-item label="午休开始 / 结束">
+                <el-input v-model="attShiftForm.restStart" style="width:100px" placeholder="12:00" />
+                <span style="margin:0 8px">—</span>
+                <el-input v-model="attShiftForm.restEnd" style="width:100px" placeholder="13:00" />
+                <div class="hint">
+                  两个都填 = 这个班次一天打 <b>4 次</b>卡（上班 / 午休下班 / 午休上班 / 下班）；
+                  两个都空 = 一天 2 次卡。必须落在上班与下班之间，跨天夜班不支持。
+                </div>
+              </el-form-item>
               <el-form-item label="休息时长">
-                <el-input-number v-model="attShiftForm.restMinutes" :min="0" :max="480" :step="15" />
-                <span class="hint" style="margin-left:8px">分钟</span>
+                <el-input-number v-model="attShiftForm.restMinutes" :min="0" :max="480" :step="15"
+                                 :disabled="!!attShiftForm.restStart" />
+                <span class="hint" style="margin-left:8px">
+                  {{ attShiftForm.restStart ? '已由午休窗口决定' : '分钟（仅作展示）' }}
+                </span>
               </el-form-item>
               <el-form-item label="弹性打卡">
                 <el-input-number v-model="attShiftForm.flexMinutes" :min="0" :max="240" :step="5" />
@@ -2240,7 +2373,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <el-dialog v-model="attRecDlg" title="补卡 / 修正打卡" width="480px">
             <el-alert type="info" :closable="false" style="margin-bottom:12px">
               <template #title>
-                以管理员身份直接写入打卡记录（来源标记为 admin，可追溯）。同一天同一类型已有记录时会被覆盖。
+                以管理员身份直接写入打卡记录（来源标记为 admin，可追溯）。同一天同一张卡已有记录时会被覆盖。
               </template>
             </el-alert>
             <el-form label-width="90px">
@@ -2250,10 +2383,14 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <el-form-item label="日期">
                 <el-date-picker v-model="attRecForm.day" type="date" value-format="YYYY-MM-DD" :clearable="false" style="width:160px" />
               </el-form-item>
-              <el-form-item label="类型">
-                <el-radio-group v-model="attRecForm.type">
-                  <el-radio label="in">上班卡</el-radio>
-                  <el-radio label="out">下班卡</el-radio>
+              <el-form-item label="补哪张卡">
+                <!-- 选项照该员工的打卡计划来：2 次卡两项、4 次卡四项。
+                     必须带 slot —— 4 次卡里"午休下班"和"下班"都是 out，
+                     只填类型会把卡补到错误的段上（看着补了，报表上还是缺卡） -->
+                <el-radio-group v-model="attRecForm.key" @change="onAttRecPick">
+                  <el-radio v-for="p in (attRecForm.options || [])" :key="p.key" :label="p.key">
+                    {{ p.label }}
+                  </el-radio>
                 </el-radio-group>
               </el-form-item>
               <el-form-item label="时间">
@@ -2270,10 +2407,10 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <!-- 打卡明细 -->
           <el-dialog v-model="attDetailDlg" :title="`打卡明细 · ${attDetail.nickname || ''} · ${attDetail.day}`" width="620px">
             <el-table :data="attDetail.items" border size="small">
-              <el-table-column label="类型" width="90">
+              <el-table-column label="卡" width="104">
                 <template #default="{ row }">
                   <el-tag size="small" :type="row.type === 'in' ? 'success' : 'info'" effect="plain">
-                    {{ row.type === 'in' ? '上班卡' : '下班卡' }}
+                    {{ row.punchLabel || (row.type === 'in' ? '上班卡' : '下班卡') }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -2915,7 +3052,7 @@ const setupSteps = computed(() => {
       tab: 'orgs',
       primary: orgMembers === 0,
     });
-    // 考勤随工作模式自动启用（默认 09:00-18:00 / 周一至周五），所以这一步"默认就是完成的"。
+    // 考勤随工作模式自动启用（默认 08:00-17:00 含午休，一天 4 次卡 / 周一至周五），所以这一步"默认就是完成的"。
     // 放进向导的目的不是催办，而是让管理员**知道有这个功能**、知道去哪儿按自己厂里的
     // 作息去调 —— 否则很容易出现"系统有考勤，但所有人都在按 9 点标准被算迟到"。
     steps.push({
@@ -2924,7 +3061,7 @@ const setupSteps = computed(() => {
       title: '考勤打卡（已随工作模式启用）',
       desc: stats.value.attendanceEnabled === false
         ? '考勤当前被停用，员工端看不到打卡入口'
-        : '员工端已有「考勤打卡」：默认 09:00-18:00、周一至周五。'
+        : '员工端已有「考勤打卡」：默认 08:00-17:00（午休 12:00-13:00，一天 4 次卡）、周一至周五。'
           + '厂里作息不同（夜班、两班倒、周六上班）就去配班次与考勤组；不配也能用',
       actionText: '去查看',
       tab: 'attendance',
@@ -4318,7 +4455,8 @@ const attWeekLabels = [
 ];
 const attConfig = ref({
   enabled: true,
-  defaultShift: { workStart: '09:00', workEnd: '18:00', restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 },
+  // 与服务端 attDefaultShift 的默认值保持一致（08:00-12:00 / 13:00-17:00，一天 4 次卡）
+  defaultShift: { workStart: '08:00', restStart: '12:00', restEnd: '13:00', workEnd: '17:00', restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 },
   workdays: [1, 2, 3, 4, 5],
   serverTime: 0,
   timezone: '',
@@ -4347,12 +4485,21 @@ const attOvCards = computed(() => [
   { k: 'early', label: '早退' }, { k: 'missing', label: '缺卡' },
   { k: 'absent', label: '缺勤' }, { k: 'leave', label: '请假' },
 ]);
+// 报表卡片：4 次卡的班次下"缺卡(次)"会因为一天 4 张卡而虚高，
+// 所以把"漏打卡(张)"和总计"在岗(小时)"摆出来 —— 管理者真正要看的是工时
 const attRepCards = computed(() => [
   { k: 'people', label: '人数' }, { k: 'workdays', label: '应出勤(人日)' },
   { k: 'present', label: '出勤(人日)' }, { k: 'late', label: '迟到(次)' },
-  { k: 'early', label: '早退(次)' }, { k: 'missing', label: '缺卡(次)' },
-  { k: 'absent', label: '缺勤(天)' }, { k: 'leave', label: '请假(天)' },
+  { k: 'early', label: '早退(次)' }, { k: 'missingPunches', label: '漏打卡(张)' },
+  { k: 'absent', label: '缺勤(天)' },
+  { k: 'workedMinutes', label: '在岗(小时)', fmt: 'hours' },
 ]);
+// 合计卡片的取值：分钟转小时走 fmt，其余原样
+function attCardVal(totals, c) {
+  if (!totals) return '—';
+  if (c.fmt === 'hours') return (Math.round((Number(totals[c.k]) || 0) / 6) / 10) + 'h';
+  return totals[c.k] ?? 0;
+}
 
 function attDayStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -4365,6 +4512,32 @@ function attFmtTs(ts) {
 }
 function attWeekName(w) {
   return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][w] || '';
+}
+// 在岗时长：管理台是横向密集表格，"8h / 7.5h" 比"8 小时 0 分"省地方
+function attHours(min) {
+  const m = Number(min) || 0;
+  if (m <= 0) return '—';
+  return (Math.round(m / 6) / 10) + 'h';
+}
+// 一天打了几张卡："3/4"。2 次卡的班次自然是 "2/2"，同一个写法能兼容
+function attPunchCount(row) {
+  const exp = Number(row?.expectedPunches) || 0;
+  if (!exp) return '—';
+  return `${Number(row?.donePunches) || 0}/${exp}`;
+}
+// 单张卡的小标签样式：缺卡=红、迟到/早退=黄、请假豁免=灰、已打=绿
+function attPunchTagType(p) {
+  if (p?.exempt) return 'info';
+  if (p?.status === 'missing') return 'danger';
+  if (p?.status === 'late' || p?.status === 'early') return 'warning';
+  if (p?.done) return 'success';
+  return 'info';
+}
+function attPunchText(p) {
+  if (!p) return '—';
+  if (p.exempt) return '免';
+  if (!p.done) return p.due ? '缺' : '待';
+  return p.time || '—';
 }
 function attStatusType(s) {
   return {
@@ -4455,14 +4628,18 @@ async function loadAttendance() {
 async function saveAttConfig() {
   attBusy.value = true;
   try {
+    const shift = { ...attConfig.value.defaultShift };
+    if (shift.restStart) shift.restMinutes = attRestSpan(shift);
     const { data } = await api.put('/admin/attendance/config', {
       enabled: attConfig.value.enabled,
-      defaultShift: attConfig.value.defaultShift,
+      defaultShift: shift,
       workdays: attConfig.value.workdays,
     });
-    ElMessage.success('考勤设置已保存');
+    const n = Number(data.defaultShift?.punchesPerDay) || 2;
+    ElMessage.success(`考勤设置已保存（默认班次一天 ${n} 次卡）`);
     attConfig.value = { ...attConfig.value, enabled: data.enabled, defaultShift: data.defaultShift, workdays: data.workdays };
     await loadAttOverview();
+    await loadAttShifts();
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '保存失败');
   } finally {
@@ -4472,15 +4649,19 @@ async function saveAttConfig() {
 
 // ---- 班次 ----
 function openShiftDlg(row) {
+  // 新增班次默认带上 12:00-13:00 的午休窗口＝一天 4 次卡（龙哥这边的常见作息）；
+  // 不想要的把两个框清空即可，会退回 2 次卡
   attShiftForm.value = row
     ? { ...row }
-    : { id: null, name: '', workStart: '09:00', workEnd: '18:00', restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 };
+    : { id: null, name: '', workStart: '09:00', workEnd: '18:00', restStart: '12:00', restEnd: '13:00',
+        restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 };
   attShiftDlg.value = true;
 }
 async function saveShift() {
   attBusy.value = true;
   try {
-    const b = attShiftForm.value;
+    const b = { ...attShiftForm.value };
+    if (b.restStart) b.restMinutes = attRestSpan(b);
     if (b.id) await api.put(`/admin/attendance/shifts/${b.id}`, b);
     else await api.post('/admin/attendance/shifts', b);
     ElMessage.success('班次已保存');
@@ -4491,6 +4672,13 @@ async function saveShift() {
   } finally {
     attBusy.value = false;
   }
+}
+// 午休窗口跨多少分钟。填了窗口后 restMinutes 只作展示，但让它跟窗口一致，
+// 免得后台数据里留着一个"午休 60 分"、窗口却是 12:00-13:30 的自相矛盾数字
+function attRestSpan(f) {
+  const toMin = (t) => Number(String(t).slice(0, 2)) * 60 + Number(String(t).slice(3, 5));
+  const a = toMin(f.restStart), b = toMin(f.restEnd);
+  return Number.isFinite(a) && Number.isFinite(b) && b > a ? b - a : 0;
 }
 async function removeShift(row) {
   try {
@@ -4569,16 +4757,39 @@ async function reviewAtt(row, approve) {
 
 // ---- 补卡 / 明细 ----
 function openAttRecordDlg(row) {
+  // 默认选中"缺的那张卡"：管理员点「补卡」十有八九就是为了补缺失的卡，
+  // 让他再挑一次是多余动作。4 次卡下缺哪张都能直接点名。
+  const ps = row.punches || [];
+  const options = ps.length ? ps : [
+    { key: 'in1', type: 'in', slot: 1, label: '上班卡', expectTime: '' },
+    { key: 'out1', type: 'out', slot: 1, label: '下班卡', expectTime: '' },
+  ];
+  const pick = ps.find((p) => !p.done && !p.exempt) || options[0];
   attRecForm.value = {
     userId: row.userId, nickname: row.nickname, employeeNo: row.employeeNo,
-    day: attDay.value, type: row.firstInTime ? 'out' : 'in', time: '',
+    day: attDay.value,
+    key: pick.key, type: pick.type, slot: pick.slot,
+    time: pick.expectTime || '',
+    options,
   };
   attRecDlg.value = true;
+}
+// 换卡：类型/段位/默认时刻一起跟着换，避免"选了午休下班、时间还留着 08:00"
+function onAttRecPick(key) {
+  const p = (attRecForm.value.options || []).find((x) => x.key === key);
+  if (!p) return;
+  attRecForm.value.type = p.type;
+  attRecForm.value.slot = p.slot;
+  attRecForm.value.time = p.expectTime || '';
 }
 async function saveAttRecord() {
   attBusy.value = true;
   try {
-    await api.post('/admin/attendance/records', attRecForm.value);
+    // 只发服务端认识的字段（options 是给弹窗渲染用的，发过去纯属噪音）
+    const f = attRecForm.value;
+    await api.post('/admin/attendance/records', {
+      userId: f.userId, day: f.day, type: f.type, slot: f.slot, time: f.time,
+    });
     ElMessage.success('打卡记录已写入');
     attRecDlg.value = false;
     await loadAttOverview();
@@ -4599,7 +4810,7 @@ async function openAttDetail(row) {
 }
 async function deleteAttRecord(row) {
   try {
-    await ElMessageBox.confirm(`删除这条${row.type === 'in' ? '上班' : '下班'}卡（${row.time}）？删除后当天的判定会跟着变。`, '删除确认', { type: 'warning' });
+    await ElMessageBox.confirm(`删除这张「${row.punchLabel || (row.type === 'in' ? '上班卡' : '下班卡')}」（${row.time}）？删除后当天的判定会跟着变。`, '删除确认', { type: 'warning' });
   } catch { return; }
   try {
     await api.delete(`/admin/attendance/records/${row.id}`);

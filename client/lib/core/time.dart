@@ -61,5 +61,16 @@ class TimeFmt {
     return '${(bytes / 1024).toStringAsFixed(0)}KB';
   }
 
+  /// 时长（分钟）→ "8 小时" / "6 小时 30 分" / "45 分"。
+  /// 考勤的在岗时长用它：给员工看的数字不该写成 "480 分钟"。
+  static String minutesAsHours(num? minutes) {
+    final m = (minutes ?? 0).toInt();
+    if (m <= 0) return '0 小时';
+    final h = m ~/ 60;
+    final r = m % 60;
+    if (h == 0) return '$r 分';
+    return r == 0 ? '$h 小时' : '$h 小时 $r 分';
+  }
+
   const TimeFmt._();
 }

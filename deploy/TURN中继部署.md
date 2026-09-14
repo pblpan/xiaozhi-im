@@ -280,6 +280,58 @@ sudo docker exec xiaozhi-im-turn turnutils_uclient -T -y \
 
 ---
 
+## 六·补、中继口令（TURN_PASSWORD）怎么定
+
+**没有默认值，这是故意的。** 中继口令 = 「谁拿到谁就能用你家上行带宽转发音视频」。
+本项目仓库是 Public，历史上这里写死过一个默认口令，等于把它公开送人 —— 现在
+compose 里改成 `${TURN_PASSWORD:-}`，缺了 coturn 的 entrypoint **直接报错退出**，
+并告诉你该补哪一行。宁可中继起不来（日志里一眼能看到），也不要静默用公开口令跑着。
+
+### 两端必须一致
+
+| 谁用 | 从哪读 |
+| --- | --- |
+| coturn | `docker/.env` 的 `TURN_PASSWORD`（容器创建时烘进环境变量） |
+| 服务端 | **优先** `/data/turn.env` 的 `TURN_CREDENTIAL`，没有才退回环境变量 |
+
+所以两边不一致时：coturn 用 A 口令，下发给客户端的却是 B 口令 → 客户端拿着 B 去
+认证 A → 失败 → ICE 悄悄丢掉中继候选 → **同 WiFi 通话一切正常，跨网一连就断**。
+这是本项目最难查的一类故障（2026-09 踩过），因此：
+
+> 改口令必须**同时**改 `docker/.env` 和 `/data/turn.env`，然后
+> `docker compose up -d --force-recreate coturn xiaozhi-im`。
+> 只改一个、或者只 `restart`（环境变量只在**创建**时生效）都会留下不一致。
+
+用 fpk 安装包的不必手工管：安装脚本首次安装生成强随机口令并同时写入这两处，
+升级时沿用旧值不换（不会因为升级把正在通话的用户踢掉）。脚本认得历史上那个公开
+默认值 —— 见到它就当成「没设」，自动换成一个新的。
+
+### 手工部署时自己生成
+
+```bash
+# 1) 生成
+TURNPASS=$(openssl rand -hex 32)      # hex，避免 sed 替换时的转义坑
+echo "$TURNPASS"
+
+# 2) 写进 docker/.env（没有就加一行）
+cd /vol1/@appcenter/xiaozhi-im/docker
+grep -q '^TURN_PASSWORD=' .env && sed -i "s|^TURN_PASSWORD=.*|TURN_PASSWORD=$TURNPASS|" .env \
+  || echo "TURN_PASSWORD=$TURNPASS" >> .env
+
+# 3) 写进服务端那份（两者必须一致）
+TURNENV=/vol1/@appshare/xiaozhi-im/data/turn.env
+grep -q '^TURN_CREDENTIAL=' "$TURNENV" && sed -i "s|^TURN_CREDENTIAL=.*|TURN_CREDENTIAL=$TURNPASS|" "$TURNENV" \
+  || echo "TURN_CREDENTIAL=$TURNPASS" >> "$TURNENV"
+
+# 4) 重建（必须 force-recreate，不能只 restart）
+docker compose up -d --force-recreate coturn xiaozhi-im
+
+# 5) 验证：自检脚本会自动从 coturn 容器里取实际口令，不用你手填
+python deploy/turn_status.py
+```
+
+---
+
 ## 七、常见问题
 
 **Q：`turnConfigured` 是 `true`，中继也下发了，外网还是打不通？**

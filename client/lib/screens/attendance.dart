@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../core/theme.dart';
+import '../core/time.dart';
 import 'attendance_records.dart';
 import 'attendance_request.dart';
 
@@ -64,10 +65,12 @@ class _AttendancePageState extends State<AttendancePage> {
     return 'unknown';
   }
 
-  Future<void> _clock(String type) async {
+  /// 打卡。slot = 第几段（1 = 上班/午休下班，2 = 午休上班/下班）。
+  /// 一天 4 次卡的班次里，"午休下班"和"下班"都是 type=out，靠 slot 区分。
+  Future<void> _clock(String type, int slot) async {
     setState(() => _busy = true);
     try {
-      final r = await ImApi().attendanceClock(type, device: _deviceName());
+      final r = await ImApi().attendanceClock(type, slot: slot, device: _deviceName());
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text((r['message'] ?? '打卡成功').toString()),
@@ -166,6 +169,10 @@ class _AttendancePageState extends State<AttendancePage> {
     final status = (today['status'] ?? '').toString();
     final statusLabel = (today['statusLabel'] ?? '').toString();
     final note = (today['note'] ?? '').toString();
+    final donePunches = (today['donePunches'] as num?)?.toInt() ?? 0;
+    final expectedPunches = (today['expectedPunches'] as num?)?.toInt() ?? 0;
+    final workedMinutes = (today['workedMinutes'] as num?)?.toInt() ?? 0;
+    final expectedWorkMinutes = (today['expectedWorkMinutes'] as num?)?.toInt() ?? 0;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -196,9 +203,21 @@ class _AttendancePageState extends State<AttendancePage> {
           const SizedBox(height: 10),
           Text(
             '班次 ${shift['name'] ?? '默认班次'} · ${shift['workStart'] ?? ''} - ${shift['workEnd'] ?? ''}'
+            '${shift['restStart'] != null ? '（午休 ${shift['restStart']}-${shift['restEnd']}）' : ''}'
             '${shift['crossDay'] == true ? '（跨天）' : ''}',
             style: const TextStyle(fontSize: 13, color: Colors.white70),
           ),
+          // 4 次卡的班次光有"状态"不够用：员工真正想知道的是"今天还差几次、
+          // 在岗时长够不够"。服务端算好的数直接显示，客户端不重复算。
+          if (expectedPunches > 0) ...[
+            const SizedBox(height: 10),
+            Text(
+              '已打 $donePunches/$expectedPunches 次'
+              '${workedMinutes > 0 ? ' · 在岗 ${TimeFmt.minutesAsHours(workedMinutes)}' : ''}'
+              '${expectedWorkMinutes > 0 ? '（应出勤 ${TimeFmt.minutesAsHours(expectedWorkMinutes)}）' : ''}',
+              style: const TextStyle(fontSize: 12.5, color: Colors.white),
+            ),
+          ],
           if (status.isNotEmpty) ...[
             const SizedBox(height: 12),
             Row(
@@ -235,48 +254,116 @@ class _AttendancePageState extends State<AttendancePage> {
     );
   }
 
-  /// 两个打卡按钮。已打的显示时刻，并允许"更新打卡"（钉钉同语义）。
+  /// 打卡按钮组：**照服务端下发的一日打卡计划渲染**。
+  ///
+  /// 客户端不判断"今天该打几次卡"—— 2 次卡给两张按钮、4 次卡给四张，
+  /// 全由 punchPlan 决定。客户端自己再算一遍"是不是 4 次卡"，迟早会和报表口径打起来
+  /// （班次带不带午休窗口、有没有跨天降级，只有服务端说得准）。
+  ///
+  /// 老服务端不返回 punchPlan 时退回 cards.in / cards.out 两张按钮 —— 向前兼容，
+  /// 免得客户端先发了、服务端还没热更，打卡页直接空白。
   Widget _clockRow() {
-    final cards = (_d['cards'] as Map?) ?? const {};
-    return Row(
-      children: [
-        Expanded(child: _clockBtn('in', '上班打卡', cards['in'] as Map?)),
+    final plan = (_d['punchPlan'] as List?) ?? const [];
+    if (plan.isEmpty) {
+      final cards = (_d['cards'] as Map?) ?? const {};
+      return Row(children: [
+        Expanded(child: _clockBtn(type: 'in', slot: 1, label: '上班打卡', card: cards['in'] as Map?)),
         const SizedBox(width: 12),
-        Expanded(child: _clockBtn('out', '下班打卡', cards['out'] as Map?)),
-      ],
-    );
+        Expanded(child: _clockBtn(type: 'out', slot: 1, label: '下班打卡', card: cards['out'] as Map?)),
+      ]);
+    }
+    final rows = <Widget>[];
+    for (var i = 0; i < plan.length; i += 2) {
+      if (i > 0) rows.add(const SizedBox(height: 12));
+      rows.add(Row(children: [
+        Expanded(child: _clockBtn(type: '', slot: 0, label: '', plan: plan[i] as Map)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: i + 1 < plan.length
+              ? _clockBtn(type: '', slot: 0, label: '', plan: plan[i + 1] as Map)
+              : const SizedBox.shrink(),
+        ),
+      ]));
+    }
+    return Column(children: rows);
   }
 
-  Widget _clockBtn(String type, String label, Map? card) {
+  /// 打卡按钮。两种来源共用一套外观：
+  ///   · plan 非空 —— 走服务端打卡计划（4 次卡走这里）
+  ///   · 只有 card —— 老服务端的 cards.in/out 兜底（2 张按钮）
+  Widget _clockBtn({
+    required String type,
+    required int slot,
+    required String label,
+    Map? card,
+    Map? plan,
+  }) {
     final sem = AppSemantic.of(context);
-    final done = card != null;
-    final time = done ? (card['time'] ?? '').toString() : '';
+    final p = plan ?? const {};
+    final fromPlan = plan != null;
+    final done = fromPlan ? p['done'] == true : card != null;
+    final exempt = fromPlan && p['exempt'] == true;
+    final time = fromPlan ? (p['time'] ?? '').toString() : (card?['time'] ?? '').toString();
+    final late = fromPlan ? ((p['lateMinutes'] as num?)?.toInt() ?? 0) : 0;
+    final early = fromPlan ? ((p['earlyMinutes'] as num?)?.toInt() ?? 0) : 0;
+    final expect = fromPlan ? (p['expectTime'] ?? '').toString() : '';
+    final btnLabel = fromPlan ? (p['label'] ?? '打卡').toString() : label;
+    final t = fromPlan ? ((p['type'] ?? '') as String) : type;
+    final s = fromPlan ? ((p['slot'] as num?)?.toInt() ?? 1) : slot;
+
+    // 副标题按"请假 > 已打 > 迟到/早退 > 应打几点"的优先级给一句话，不堆术语
+    String sub;
+    if (exempt) {
+      sub = '已请假，免打卡';
+    } else if (done) {
+      final tag = late > 0 ? ' 迟到$late分' : (early > 0 ? ' 早退$early分' : '');
+      sub = '$time 已打卡$tag';
+    } else {
+      sub = _busy ? '处理中…' : (expect.isEmpty ? '点击打卡' : '应打 $expect');
+    }
+    final warn = late > 0 || early > 0;
+
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadii.md),
-      onTap: _busy ? null : () => _clock(type),
+      // 请假豁免的卡不能打（打了服务端也不认），禁用掉比让员工白点一次强
+      onTap: (_busy || exempt) ? null : () => _clock(t, s),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 12),
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 10),
         decoration: BoxDecoration(
-          color: done ? sem.cardBg : null,
-          gradient: done ? null : AppTheme.brandGradient,
+          color: (done || exempt) ? sem.cardBg : null,
+          gradient: (done || exempt) ? null : AppTheme.brandGradient,
           borderRadius: BorderRadius.circular(AppRadii.md),
-          border: Border.all(color: done ? sem.cardBorder : Colors.transparent),
+          border: Border.all(color: (done || exempt) ? sem.cardBorder : Colors.transparent),
         ),
         child: Column(
           children: [
-            Icon(done ? Icons.check_circle : Icons.touch_app_outlined,
-                size: 26, color: done ? AppColors.brand : Colors.white),
+            Icon(
+              exempt
+                  ? Icons.event_busy_outlined
+                  : (done ? (warn ? Icons.error_outline : Icons.check_circle) : Icons.touch_app_outlined),
+              size: 24,
+              color: (done || exempt)
+                  ? (warn ? AppColors.danger : (exempt ? AppColors.textWeak : AppColors.brand))
+                  : Colors.white,
+            ),
             const SizedBox(height: 8),
-            Text(label,
+            Text(btnLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                    fontSize: 15,
+                    fontSize: 14.5,
                     fontWeight: FontWeight.w700,
-                    color: done ? AppColors.text : Colors.white)),
+                    color: (done || exempt) ? AppColors.text : Colors.white)),
             const SizedBox(height: 4),
-            Text(done ? '$time 已打卡' : (_busy ? '处理中…' : '点击打卡'),
+            Text(sub,
+                textAlign: TextAlign.center,
+                maxLines: 2,
                 style: TextStyle(
-                    fontSize: 12.5, color: done ? AppColors.textSub : Colors.white70)),
-            if (done) ...[
+                    fontSize: 12,
+                    color: (done || exempt)
+                        ? (warn ? AppColors.danger : AppColors.textSub)
+                        : Colors.white70)),
+            if (done && !exempt) ...[
               const SizedBox(height: 2),
               const Text('可再次点击更新',
                   style: TextStyle(fontSize: 10.5, color: AppColors.textWeak)),

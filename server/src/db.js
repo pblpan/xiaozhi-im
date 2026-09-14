@@ -387,17 +387,25 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_attempts_user ON remote_code_atte
 /* ==================== 考勤（工作模式的标配能力，对标钉钉考勤）====================
  *
  * 六张表，职责互不重叠：
- *   att_shifts        班次：几点上下班、弹性与宽限（一个组织可有多套）
+ *   att_shifts        班次：几点上下班、午休窗口、弹性与宽限（一个组织可有多套）
  *   att_groups        考勤组：一批人用哪套班次、要不要定位、允不允许外勤
  *   att_group_members 考勤组的「点名」成员
  *   att_group_depts   考勤组按部门纳入（部门内所有人自动算成员，新员工自动进组）
  *   att_records       打卡流水
  *   att_requests      请假/补卡/外出/加班申请单
  *
+ * 【一天打几次卡，由班次有没有午休窗口决定】
+ *   填了午休开始/结束（如 12:00 / 13:00）→ 一天 4 次：
+ *       上班(in,1) 午休下班(out,1) 午休上班(in,2) 下班(out,2)
+ *       在岗时长 = (12:00-08:00) + (17:00-13:00) = 8 小时
+ *   没填 → 一天 2 次（上班/下班），老行为不变。
+ *   两种模式共用同一套判定代码，只差"期望打卡计划"这张表（见 attendance.js
+ *   的 punchPlan）—— 判定逻辑写两套的话，改了这边忘那边，迟早对不上。
+ *
  * 【为什么打卡流水允许一人一天多条】
  * 钉钉的语义是「更新打卡」而不是「一天只能打一次」：员工手滑打早了会再打一次。
  * 库里保留全部流水（审计需要，管理台能看到"他 8:31 打过又 9:02 补打"），
- * 统计只在服务端取上班卡最早、下班卡最晚 —— 口径集中在一处，客户端不参与计算。
+ * 统计只在服务端按 (type, slot) 各取一条 —— 口径集中在一处，客户端不参与计算。
  *
  * 【为什么考勤组要存部门而不是存"展开后的成员"】
  * 存成员的话，每次录入新员工都得回头把十几个考勤组重新展开一遍，漏一个就是
@@ -410,8 +418,10 @@ CREATE TABLE IF NOT EXISTS att_shifts (
   name TEXT NOT NULL,
   work_start TEXT NOT NULL,              -- 'HH:MM'
   work_end TEXT NOT NULL,                -- 'HH:MM'；work_end<=work_start 表示跨天班（cross_day=1）
-  rest_minutes INTEGER NOT NULL DEFAULT 0,   -- 休息时长（不计入工作时长，只做展示）
-  flex_minutes INTEGER NOT NULL DEFAULT 0,   -- 弹性上班分钟数：0=不弹性
+  rest_start TEXT,                       -- 'HH:MM' 午休开始(上午下班)。与 rest_end 同时有值 = 一天 4 次卡
+  rest_end TEXT,                         -- 'HH:MM' 午休结束(下午上班)
+  rest_minutes INTEGER NOT NULL DEFAULT 0,   -- 不填午休窗口时的休息时长（仅展示/扣工时）
+  flex_minutes INTEGER NOT NULL DEFAULT 0,   -- 弹性上班分钟数：0=不弹性（只作用于当天第一次上班）
   late_grace INTEGER NOT NULL DEFAULT 0,     -- 迟到宽限（分钟）：宽限内不算迟到
   early_grace INTEGER NOT NULL DEFAULT 0,    -- 可提前打卡分钟数：下班前 N 分钟打不算早退
   cross_day INTEGER NOT NULL DEFAULT 0,      -- 夜班：下班时间在次日
@@ -444,8 +454,9 @@ CREATE TABLE IF NOT EXISTS att_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   org_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL,
-  day TEXT NOT NULL,                     -- 'YYYY-MM-DD'，按**服务器本地日**切分，不用 UTC
+  day TEXT NOT NULL,                     -- 'YYYY-MM-DD'，按**服务器指定时区日**切分，不用容器本地时区
   type TEXT NOT NULL,                    -- 'in' 上班卡 | 'out' 下班卡
+  slot INTEGER NOT NULL DEFAULT 1,       -- 第几段：1=上午(或两段班的唯一那段) 2=下午
   at INTEGER NOT NULL,                   -- 打卡时刻（时间戳）
   source TEXT NOT NULL DEFAULT 'app',    -- app 客户端 | admin 管理员代打 | makeup 补卡审批通过
   lat REAL, lng REAL, address TEXT,
@@ -466,6 +477,7 @@ CREATE TABLE IF NOT EXISTS att_requests (
   half INTEGER NOT NULL DEFAULT 0,       -- 请假 0=全天 1=上午半天 2=下午半天
   leave_type TEXT,                       -- personal 事假 | sick 病假 | annual 年假 | comp 调休
   day TEXT, clock_type TEXT, at INTEGER, -- 补卡：哪天的哪张卡、补在什么时刻
+  slot INTEGER NOT NULL DEFAULT 1,       -- 补卡：补的是第几段（4 次卡时 1=上午 2=下午）
   start_at INTEGER, end_at INTEGER,      -- 外出/加班：起止时刻
   reviewed_by INTEGER, reviewed_at INTEGER, review_note TEXT,
   created_at INTEGER NOT NULL
@@ -473,8 +485,12 @@ CREATE TABLE IF NOT EXISTS att_requests (
 CREATE INDEX IF NOT EXISTS idx_att_requests_user ON att_requests (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_att_requests_org ON att_requests (org_id, status, created_at DESC);
 `);
-// 老库升级：att_shifts 最早没有 early_grace，补列（否则早退宽限永远存不住）
+// 老库升级：早期版本没有这几列，补上（否则新功能在已装环境里永远存不住值）
 ensureColumn('att_shifts', 'early_grace', 'early_grace INTEGER NOT NULL DEFAULT 0');
+ensureColumn('att_shifts', 'rest_start', 'rest_start TEXT');
+ensureColumn('att_shifts', 'rest_end', 'rest_end TEXT');
+ensureColumn('att_records', 'slot', 'slot INTEGER NOT NULL DEFAULT 1');
+ensureColumn('att_requests', 'slot', 'slot INTEGER NOT NULL DEFAULT 1');
 
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);

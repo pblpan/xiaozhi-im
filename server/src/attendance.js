@@ -138,13 +138,15 @@ function isValidDay(s) {
 /** 默认班次（settings 里那份）—— 用 shift 的统一形状表示，id=null 表示"不是库里的班次" */
 function defaultShift() {
   const s = settings.get('attDefaultShift') || {};
-  const ws = s.workStart || '09:00';
-  const we = s.workEnd || '18:00';
+  const ws = s.workStart || '08:00';
+  const we = s.workEnd || '17:00';
   return normalizeShift({
     id: null,
     name: '默认班次',
     work_start: ws,
     work_end: we,
+    rest_start: s.restStart || null,
+    rest_end: s.restEnd || null,
     rest_minutes: s.restMinutes || 0,
     flex_minutes: s.flexMinutes || 0,
     late_grace: s.lateGrace || 0,
@@ -153,20 +155,49 @@ function defaultShift() {
   });
 }
 
+/**
+ * 班次归一化。
+ *
+ * `segments` 是这个模块的核心开关：
+ *   2 = 填了午休窗口 → 一天 4 次卡（上班 / 午休下班 / 午休上班 / 下班）
+ *   1 = 没填        → 一天 2 次卡（上班 / 下班）
+ * 其它所有逻辑（判定、补卡、报表、客户端按钮）都只读这一处结论，
+ * 不各自再判一遍"到底几次卡"—— 那种写法改一处漏一处，迟早对不上。
+ *
+ * 午休窗口要"严格落在班次内 + 非跨天"才算成立。不成立时**静默降级为 2 次卡**：
+ * 与其拿一个矛盾的班次去算在岗时长（会得出负数），不如退回老行为。
+ * 写入侧的校验在 settings.cleanShift / 班次接口里做，那里才该报错给用户看。
+ */
 function normalizeShift(r) {
   const workStart = r.work_start;
   const workEnd = r.work_end;
   const endMin = parseHHMM(workEnd);
   const startMin = parseHHMM(workStart);
-  return {
+  // 下班 <= 上班 ⇒ 夜班跨天。允许显式 cross_day 覆盖（如 08:00-08:00 的 24h 班）
+  const crossDay = !!r.cross_day || (endMin != null && startMin != null && endMin <= startMin);
+
+  const rsRaw = r.rest_start ? String(r.rest_start).trim() : '';
+  const reRaw = r.rest_end ? String(r.rest_end).trim() : '';
+  const rsMin = rsRaw ? parseHHMM(rsRaw) : null;
+  const reMin = reRaw ? parseHHMM(reRaw) : null;
+  const hasRest = rsMin != null && reMin != null && !crossDay
+    && startMin != null && endMin != null
+    && startMin < rsMin && rsMin < reMin && reMin < endMin;
+
+  const out = {
     id: r.id == null ? null : Number(r.id),
     name: r.name || '班次',
     workStart,
     workEnd,
     startMin,
     endMin,
-    // 下班 <= 上班 ⇒ 夜班跨天。允许显式 cross_day 覆盖（如 08:00-08:00 的 24h 班）
-    crossDay: !!r.cross_day || (endMin != null && startMin != null && endMin <= startMin),
+    restStart: hasRest ? rsRaw : null,
+    restEnd: hasRest ? reRaw : null,
+    restStartMin: hasRest ? rsMin : null,
+    restEndMin: hasRest ? reMin : null,
+    segments: hasRest ? 2 : 1,
+    punchesPerDay: hasRest ? 4 : 2,
+    crossDay,
     restMinutes: Number(r.rest_minutes) || 0,
     flexMinutes: Number(r.flex_minutes) || 0,
     lateGrace: Number(r.late_grace) || 0,
@@ -174,11 +205,33 @@ function normalizeShift(r) {
     enabled: r.enabled === undefined ? true : !!r.enabled,
     sort: Number(r.sort) || 0,
   };
+  // 附上一个班次应出勤多少分钟：管理台班次表、客户端"应出勤 8 小时"都要用。
+  // 放在这里算，是为了让它跟着 segments 一起出来 —— 让各处自己拿
+  // 上班/下班/午休再减一遍，就是给"两处口径不一致"留后门。
+  out.expectedWorkMinutes = expectedMinutes(out);
+  return out;
 }
 
 function shiftRow(id, orgId) {
   const r = db.prepare('SELECT * FROM att_shifts WHERE id=? AND org_id=?').get(Number(id), Number(orgId));
   return r ? normalizeShift(r) : null;
+}
+
+/**
+ * 解析"这是今天第几次卡"。
+ *
+ * 只能传 1 或 2（一个班次最多两段）。**不要**写成 `Number(x) === 2 ? 2 : 1`
+ * 这种兜底 —— slot=3 会被静默收编成 1：用户以为补的是第 3 次卡，实际补出一张
+ * 第 1 段的卡，报表上那天依旧缺卡，而他明明"补过了"。宁可报错，也别悄悄记错。
+ *
+ * 不传 / 传空 = 1（老客户端只发 type，那会儿还没有 segment 的概念）。
+ * 返回 null 表示非法，调用方自己决定报什么错。
+ */
+function slotOf(input) {
+  if (input == null || input === '') return 1;
+  const n = Number(input);
+  if (!Number.isInteger(n) || n < 1 || n > 2) return null;
+  return n;
 }
 
 function listShifts(orgId) {
@@ -293,49 +346,45 @@ function groupMemberIds(groupRow, orgId) {
 
 /* ==================== 3. 打卡 ==================== */
 
-const MAX_RECORDS_PER_DAY_TYPE = 20; // 防手滑：同一天同一类型留太多流水没有意义
-
 /**
- * 打卡。type='in'|'out'。
- * 语义对齐钉钉的「更新打卡」：同一天同类型已存在时**覆盖最近一条**（返回 updated=true），
- * 而不是新增一条 —— 员工手滑打早了会再打一次，多出来的流水只会让统计和审计都变脏。
+ * 打卡。type='in'|'out'，slot=1|2（第几段：1=上午，2=下午；2 次卡的班次只有 slot 1）。
+ *
+ * 语义对齐钉钉的「更新打卡」：同一天**同一张卡**（type+slot 相同）已存在时
+ * **覆盖最近一条**（返回 updated=true），而不是新增一条 —— 员工手滑打早了会再打一次，
+ * 多出来的流水只会让统计和审计都变脏。
  * 但**保留**最近 24 小时内的旧流水（管理台能看到"8:31 打过又 9:02 补打"），
  * 所以这里的"覆盖"是 UPDATE，不是"删掉旧的"。
+ *
+ * ⚠️ 一天 4 次卡时,"午休下班(out,1)" 和 "下班(out,2)" 是两张**不同的卡**：
+ * 只看 type 不看 slot 的话，中午打的那次会把下班卡覆盖掉 —— 员工下午明明打了卡，
+ * 报表上却是缺卡。所以下面的去重口径必须带上 slot。
  */
-function clock({ userId, orgId, type, at = Date.now(), lat = null, lng = null, address = null, device = null, source = 'app', addressNote = null }) {
+function clock({ userId, orgId, type, slot = 1, at = Date.now(), lat = null, lng = null, address = null, device = null, source = 'app', addressNote = null }) {
   if (!['in', 'out'].includes(type)) return { error: '打卡类型只能是 in 或 out' };
+  // 这里的兜底只负责"把脏值收敛到 1"，不做合法性判断 —— clock() 是内部函数，
+  // 边界上的 400 由调用方（路由 / createRequest）用 slotOf() 拦掉。
+  const sl = Number(slot) === 2 ? 2 : 1;
   const day = dayOf(at);
-  const cnt = db.prepare('SELECT COUNT(*) AS c FROM att_records WHERE user_id=? AND day=? AND type=?')
-    .get(Number(userId), day, type).c;
+  const cnt = db.prepare('SELECT COUNT(*) AS c FROM att_records WHERE user_id=? AND day=? AND type=? AND slot=?')
+    .get(Number(userId), day, type, sl).c;
+  const addr = address ? String(address).slice(0, 120) : null;
+  const dev = device ? String(device).slice(0, 80) : null;
+  const note = addressNote ? String(addressNote).slice(0, 120) : null;
   if (cnt === 0) {
     const r = db.prepare(`INSERT INTO att_records
-      (org_id,user_id,day,type,at,source,lat,lng,address,device,note,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(Number(orgId), Number(userId), day, type, at, source,
+      (org_id,user_id,day,type,slot,at,source,lat,lng,address,device,note,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(Number(orgId), Number(userId), day, type, sl, at, source,
         lat == null ? null : Number(lat), lng == null ? null : Number(lng),
-        address ? String(address).slice(0, 120) : null,
-        device ? String(device).slice(0, 80) : null,
-        addressNote ? String(addressNote).slice(0, 120) : null, Date.now());
+        addr, dev, note, Date.now());
     return { record: recordById(r.lastInsertRowid), updated: false };
   }
-  if (cnt >= MAX_RECORDS_PER_DAY_TYPE) {
-    // 覆盖最近一条即可，不再新增：一天打 20 次卡显然是程序在重放请求
-    const last = db.prepare('SELECT id FROM att_records WHERE user_id=? AND day=? AND type=? ORDER BY at DESC LIMIT 1')
-      .get(Number(userId), day, type);
-    db.prepare('UPDATE att_records SET at=?, lat=?, lng=?, address=?, device=?, source=?, note=? WHERE id=?')
-      .run(at, lat == null ? null : Number(lat), lng == null ? null : Number(lng),
-        address ? String(address).slice(0, 120) : null,
-        device ? String(device).slice(0, 80) : null, source,
-        addressNote ? String(addressNote).slice(0, 120) : null, last.id);
-    return { record: recordById(last.id), updated: true };
-  }
-  const last = db.prepare('SELECT id FROM att_records WHERE user_id=? AND day=? AND type=? ORDER BY at DESC LIMIT 1')
-    .get(Number(userId), day, type);
+  // 一天同一张卡打 20 次显然是程序在重放请求，不再新增，只覆盖最近一条
+  const last = db.prepare('SELECT id FROM att_records WHERE user_id=? AND day=? AND type=? AND slot=? ORDER BY at DESC LIMIT 1')
+    .get(Number(userId), day, type, sl);
   db.prepare('UPDATE att_records SET at=?, lat=?, lng=?, address=?, device=?, source=?, note=? WHERE id=?')
     .run(at, lat == null ? null : Number(lat), lng == null ? null : Number(lng),
-      address ? String(address).slice(0, 120) : null,
-      device ? String(device).slice(0, 80) : null, source,
-      addressNote ? String(addressNote).slice(0, 120) : null, last.id);
+      addr, dev, source, note, last.id);
   return { record: recordById(last.id), updated: true };
 }
 
@@ -346,11 +395,17 @@ function recordById(id) {
 }
 
 function decorateRecord(r) {
+  const slot = Number(r.slot) === 2 ? 2 : 1;
   return {
     id: r.id,
     userId: r.user_id,
     day: r.day,
     type: r.type,
+    slot,
+    // punchKey 是这张卡的身份（前端按钮、补卡单、测试断言都用它）。
+    // 不给显示名：out1 在 2 次卡里是"下班"、在 4 次卡里是"午休下班"，
+    // 只有拿到班次才说得准 —— 谁需要名字谁用 punchLabelOf(shift, key) 取。
+    punchKey: r.type + slot,
     at: r.at,
     time: hhmmOf(r.at),
     source: r.source,
@@ -387,6 +442,19 @@ function recordsRange(orgId, from, to, userIds = null) {
 const LEAVE_TYPES = ['personal', 'sick', 'annual', 'comp'];
 const REQUEST_KINDS = ['leave', 'makeup', 'outing', 'overtime'];
 
+/**
+ * 打卡卡片的显示名。同一个 key 在不同班次下含义不同：
+ *   · 4 次卡：out1 是"午休下班"（上午那段结束），out2 才是"下班"
+ *   · 2 次卡：out1 就是"下班"
+ * 所以必须连着班次一起问，不能写死一张表 —— 写死必然在另一种班次下显示错。
+ */
+function punchLabelOf(shift, key) {
+  if (shift && shift.segments === 2) {
+    return { in1: '上班', out1: '午休下班', in2: '午休上班', out2: '下班' }[key] || key;
+  }
+  return { in1: '上班', out1: '下班' }[key] || key;
+}
+
 /** 一天的请假覆盖。half 仅对单日请假生效（多日请假一定是整天） */
 function leaveCoverage(req, day) {
   if (!req || req.kind !== 'leave') return { full: false, am: false, pm: false };
@@ -407,26 +475,50 @@ function leaveDaysOf(req, day) {
 }
 
 /**
- * 一天的请假 + 外出覆盖：
- * - leave 覆盖整张卡（am 管上班卡、pm 管下班卡）
- * - outing 覆盖"它的时段碰到的那张卡"（上午外出 → 上班卡不判缺）
+ * 一天的请假 + 外出豁免，**按"哪一张卡"给出**。
+ *
+ * 4 次卡比 2 次卡多一层"哪一段"的语义：
+ *   · 上午半天假 = 免 in1/out1（上午那一段），下午照常打 in2/out2
+ *   · 下午半天假 = 免 in2/out2
+ *   · 整天假     = 四张全免
+ * 2 次卡没有"段"的概念，半天假只能沿用它唯一的那套卡：
+ *   上午半天假 → 免上班卡，下午半天假 → 免下班卡（老行为，保持兼容）。
+ *
+ * 外出：只要这张卡的**应打卡时刻**落在外出时段内，就免打。
  */
 function coverageOn(reqs, day, win) {
-  const out = { leaveFull: false, leaveAm: false, leavePm: false, inExempt: false, outExempt: false, hasOuting: false };
+  const cov = {
+    leaveFull: false, leaveAm: false, leavePm: false,
+    hasOuting: false,
+    exempt: {},
+  };
+  for (const p of win.plan) cov.exempt[p.key] = false;
+
   for (const r of reqs || []) {
     if (r.status !== 'approved') continue;
     if (r.kind === 'leave') {
       const c = leaveCoverage(r, day);
-      if (c.full) { out.leaveFull = true; out.leaveAm = true; out.leavePm = true; }
-      if (c.am) out.leaveAm = true;
-      if (c.pm) out.leavePm = true;
+      if (c.full) { cov.leaveFull = true; cov.leaveAm = true; cov.leavePm = true; }
+      if (c.am) cov.leaveAm = true;
+      if (c.pm) cov.leavePm = true;
     }
     if (r.kind === 'outing' && r.start_at && r.end_at) {
-      if (win.startAt >= r.start_at && win.startAt <= r.end_at) { out.inExempt = true; out.hasOuting = true; }
-      if (win.endAt >= r.start_at && win.endAt <= r.end_at) { out.outExempt = true; out.hasOuting = true; }
+      for (const p of win.plan) {
+        if (p.at >= r.start_at && p.at <= r.end_at) { cov.exempt[p.key] = true; cov.hasOuting = true; }
+      }
     }
   }
-  return out;
+
+  if (win.segments === 1) {
+    if (cov.leaveAm) cov.exempt.in1 = true;
+    if (cov.leavePm) cov.exempt.out1 = true;
+  } else {
+    for (const p of win.plan) {
+      if (p.slot === 1 && cov.leaveAm) cov.exempt[p.key] = true;
+      if (p.slot === 2 && cov.leavePm) cov.exempt[p.key] = true;
+    }
+  }
+  return cov;
 }
 
 /** 加班分钟数（与班次窗口的重叠部分之外都算？—— 简化：取加班单时长） */
@@ -443,27 +535,116 @@ function overtimeMinutesOn(reqs, day) {
 /* ==================== 5. 单日判定（纯函数，便于测试） ==================== */
 
 /**
+ * 一天里该打哪几次卡 —— 全模块唯一的"打卡计划"来源。
+ *
+ * 2 次卡：in1 上班、out1 下班
+ * 4 次卡：in1 上班、out1 午休下班、in2 午休上班、out2 下班
+ *
+ * key 的命名刻意保持 `in1/out1/in2/out2`：它同时是前端的按钮身份、
+ * 补卡单里的"补哪一张"、以及测试里的断言名。改名 = 老客户端点错按钮。
+ */
+function punchPlan(shift, day) {
+  const mk = (key, type, slot, hhmm, label) => ({
+    key, type, slot, hhmm, label, at: tsOfDay(day, hhmm),
+  });
+  const plan = shift.segments === 2
+    ? [
+      mk('in1', 'in', 1, shift.workStart, '上班'),
+      mk('out1', 'out', 1, shift.restStart, '午休下班'),
+      mk('in2', 'in', 2, shift.restEnd, '午休上班'),
+      mk('out2', 'out', 2, shift.workEnd, '下班'),
+    ]
+    : [
+      mk('in1', 'in', 1, shift.workStart, '上班'),
+      mk('out1', 'out', 1, shift.workEnd, '下班'),
+    ];
+  // 跨天班：下班（以及 4 次卡里任何早于上班的时刻）落在**次日**。
+  // 这里统一把"比第一张卡还早"的时刻 +24h 拉直，下游就只需前后比大小。
+  const first = plan[0].at;
+  for (const p of plan) if (p.at < first) p.at += DAY_MS;
+  return plan;
+}
+
+/**
  * 班次在某天的绝对时间窗。
  * endAt 一定晚于 startAt —— 跨天班在这里被"拉直"，下游所有比较都只需前后比大小，
  * 不用再各写一遍"到底算不算次日"。
  */
 function windowOf(shift, day) {
-  const startAt = tsOfDay(day, shift.workStart);
-  let endAt = tsOfDay(day, shift.workEnd);
-  if (shift.crossDay || endAt <= startAt) endAt += DAY_MS;
-  return { day, startAt, endAt };
+  const plan = punchPlan(shift, day);
+  return {
+    day,
+    segments: shift.segments,
+    plan,
+    startAt: plan[0].at,
+    endAt: plan[plan.length - 1].at,
+  };
+}
+
+/** 午休窗口的绝对时刻（只有 4 次卡才有），没有则 null */
+function restWindowOf(shift, day) {
+  if (shift.segments !== 2) return null;
+  return { startAt: tsOfDay(day, shift.restStart), endAt: tsOfDay(day, shift.restEnd) };
+}
+
+/** 在岗时长（分钟）：把每一段的 下班-上班 加起来；缺一边的段不计入 */
+function workedMinutes(shift, day, punches) {
+  const get = (key) => {
+    const p = (punches || []).find((x) => x.key === key);
+    return p && p.at != null ? p.at : null;
+  };
+  if (shift.segments === 2) {
+    let sum = 0;
+    const a = get('in1'); const b = get('out1'); const c = get('in2'); const d = get('out2');
+    if (a != null && b != null && b > a) sum += Math.round((b - a) / 60000);
+    if (c != null && d != null && d > c) sum += Math.round((d - c) / 60000);
+    return sum;
+  }
+  const a = get('in1'); const b = get('out1');
+  if (a != null && b != null && b > a) return Math.round((b - a) / 60000);
+  return 0;
+}
+
+/** 应出勤时长（分钟）：4 次卡 = 两段之和；2 次卡 = 班次跨度 - 休息时长 */
+function expectedMinutes(shift) {
+  if (shift.segments === 2) {
+    return (shift.restStartMin - shift.startMin) + (shift.endMin - shift.restEndMin);
+  }
+  const span = shift.crossDay ? (DAY_MS / 60000) + shift.endMin - shift.startMin : shift.endMin - shift.startMin;
+  return Math.max(0, span - shift.restMinutes);
+}
+
+/** "待打 X 卡"这类进行中的说明文字 */
+function pendingNote(punches, cov) {
+  if (cov.leaveAm && !cov.leavePm) return '上午请假';
+  const next = punches.find((p) => p.status === 'pending');
+  if (!next) return '进行中';
+  const done = punches.filter((p) => p.done).length;
+  if (done === 0) return `待打${next.label}卡`;
+  return `已打 ${done} 次，待打${next.label}卡`;
+}
+
+/** 迟到/早退带上"是哪一张卡"，否则 4 次卡下"迟到 5 分钟"根本看不出是上午还是下午 */
+function punchNote(prefix, minutes, items) {
+  const parts = items.map((p) => `${p.label} ${p.lateMinutes || p.earlyMinutes} 分`);
+  return `${prefix} ${minutes} 分钟（${parts.join('，')}）`;
 }
 
 /**
  * 判定某人在某天的考勤状态。
  * 入参全是"已经取好的数据"，不碰数据库 —— 这样它既能被报表批量调用（几万次），
- * 也能被测试直接喂各种边界（迟到一分钟、跨天班、半天假）。
+ * 也能被测试直接喂各种边界（迟到一分钟、跨天班、半天假、四段卡）。
  *
- * status:
+ * 【判定粒度是"每一张卡"，不是"一天"】
+ * 4 次卡的班次里，上午迟到和下午迟到是两件事，中午忘了打午休下班也是缺卡。
+ * 所以先逐张卡算出 { 应打时刻、实打时刻、状态、迟到/早退分钟 }，再由这些卡片
+ * 汇总出整天状态。好处是"缺的到底是哪一张"永远说得清楚，报表也能给出"3/4"。
+ *
+ * status（整天；取值与旧版一致，前端不用改）：
  *   rest     休息日        normal  正常        late     迟到
  *   early    早退          late_early 迟到+早退
- *   missing  缺卡（缺一边） absent  缺勤（两边都没打）
- *   leave    请假          outing  外出        pending  进行中（今天还没到下班）
+ *   missing  缺卡（缺部分）  absent  缺勤（一张都没打）
+ *   leave    请假          outing  外出        pending  进行中（今天还有卡没到点）
  *   future   未来日期（不判）
  */
 function judgeDay({ day, now, shift, recs, reqs, workdays }) {
@@ -472,18 +653,74 @@ function judgeDay({ day, now, shift, recs, reqs, workdays }) {
   const win = windowOf(shift, day);
   const cov = coverageOn(reqs, day, win);
   const todayStr = dayOf(now);
+  const isToday = day === todayStr;
 
-  // 用时间窗取记录，而不是用 day 字段：跨天班的下班卡落在次日，
+  // 用时间窗取记录，而不是只用 day 字段：跨天班的下班卡落在次日，
   // 按 day 取就会"下班卡凭空消失"，然后全组被判缺卡。
   const inWin = (recs || []).filter((r) => r.at >= win.startAt - 6 * 3600e3 && r.at <= win.endAt + 6 * 3600e3);
-  const ins = inWin.filter((r) => r.type === 'in');
-  const outs = inWin.filter((r) => r.type === 'out');
-  const firstIn = ins.length ? Math.min(...ins.map((r) => r.at)) : null;
-  const lastOut = outs.length ? Math.max(...outs.map((r) => r.at)) : null;
+  const latest = (type, slot) => {
+    const hits = inWin.filter((r) => r.type === type && (Number(r.slot) === 2 ? 2 : 1) === slot);
+    return hits.length ? Math.max(...hits.map((r) => r.at)) : null;
+  };
+
+  // 逐张卡判定。弹性只作用于**当天第一次上班**（in1）：下午那次若也给弹性，
+  // "晚到两小时"就变成合法了 —— 那不叫弹性，叫没规定下午上班时间。
+  const punches = win.plan.map((p) => {
+    const at = latest(p.type, p.slot);
+    const exempt = !!cov.exempt[p.key];
+    const due = now >= p.at;                    // 这张卡到点了没有
+    const item = {
+      key: p.key, type: p.type, slot: p.slot,
+      label: punchLabelOf(shift, p.key),
+      expectTime: p.hhmm, expectAt: p.at,
+      at, done: at != null, due, exempt,
+      lateMinutes: 0, earlyMinutes: 0, status: 'pending',
+    };
+    if (at == null) {
+      item.status = exempt ? 'exempt' : (due ? 'missing' : 'pending');
+      return item;
+    }
+    const m = minutesOfDay(at);
+    const expectMin = minutesOfDay(p.at);
+    if (p.type === 'in') {
+      const flex = p.key === 'in1' ? shift.flexMinutes : 0;
+      item.lateMinutes = Math.max(0, m - (expectMin + flex + shift.lateGrace));
+      item.status = item.lateMinutes > 0 ? 'late' : 'ok';
+    } else {
+      // 早退只有"这张卡已经到点"才算得出来。上午 10:41 打了一张下班卡，
+      // 若拿 17:00 去减会得出"早退 379 分钟"这种荒唐数字 —— 他可能只是提前
+      // 收工，也可能点错了按钮，但无论哪种，现在给的都是一个肯定错的数。
+      const earlyMin = due ? Math.max(0, (expectMin - shift.earlyGrace) - m) : 0;
+      item.earlyMinutes = earlyMin;
+      item.status = earlyMin > 0 ? 'early' : 'ok';
+    }
+    return item;
+  });
+
+  const doneItems = punches.filter((p) => p.done);
+  const missingItems = punches.filter((p) => p.status === 'missing');
+  const pendingItems = punches.filter((p) => p.status === 'pending');
+  const lateItems = punches.filter((p) => p.lateMinutes > 0);
+  const earlyItems = punches.filter((p) => p.earlyMinutes > 0);
+  const lateMinutes = punches.reduce((s, p) => s + p.lateMinutes, 0);
+  const earlyMinutes = punches.reduce((s, p) => s + p.earlyMinutes, 0);
+  const inAts = punches.filter((p) => p.type === 'in' && p.at != null).map((p) => p.at);
+  const outAts = punches.filter((p) => p.type === 'out' && p.at != null).map((p) => p.at);
+  const firstIn = inAts.length ? Math.min(...inAts) : null;
+  const lastOut = outAts.length ? Math.max(...outAts) : null;
 
   const base = {
     day, weekday: wd, isWorkday,
-    shift: { name: shift.name, workStart: shift.workStart, workEnd: shift.workEnd },
+    shift: {
+      name: shift.name, workStart: shift.workStart, workEnd: shift.workEnd,
+      restStart: shift.restStart, restEnd: shift.restEnd,
+      segments: shift.segments, punchesPerDay: shift.punchesPerDay,
+    },
+    punches,
+    expectedPunches: shift.punchesPerDay,
+    donePunches: doneItems.length,
+    missingPunches: missingItems.map((p) => p.key),
+    missingLabels: missingItems.map((p) => p.label),
     firstIn, lastOut,
     firstInTime: firstIn == null ? null : hhmmOf(firstIn),
     lastOutTime: lastOut == null ? null : hhmmOf(lastOut),
@@ -492,71 +729,63 @@ function judgeDay({ day, now, shift, recs, reqs, workdays }) {
     leave: cov.leaveFull ? 'full' : (cov.leaveAm ? 'am' : (cov.leavePm ? 'pm' : null)),
     outing: cov.hasOuting,
     overtimeMinutes: overtimeMinutesOn(reqs, day),
+    workedMinutes: workedMinutes(shift, day, punches),
+    expectedWorkMinutes: expectedMinutes(shift),
   };
 
-  if (day > todayStr) return { ...base, status: 'future', note: '尚未到来' };
+  if (day > todayStr) {
+    return {
+      ...base, status: 'future', note: '尚未到来',
+      punches: punches.map((p) => ({ ...p, status: p.exempt ? 'exempt' : 'future' })),
+    };
+  }
 
   if (!isWorkday) {
     // 休息日：不判出勤，只记录有没有来加班
     return { ...base, status: 'rest', note: base.overtimeMinutes ? `加班 ${Math.round(base.overtimeMinutes / 60 * 10) / 10} 小时` : '休息日' };
   }
 
+  base.lateMinutes = lateMinutes;
+
   if (cov.leaveFull) return { ...base, status: 'leave', note: '请假' };
 
-  // 迟到：上班时间 + 弹性 + 宽限之后才算
-  const lateThreshold = shift.startMin + shift.flexMinutes + shift.lateGrace;
-  let lateMinutes = 0;
-  if (firstIn != null) {
-    const m = minutesOfDay(firstIn);
-    // 跨天班（22:00 上班）时 minutesOfDay 会给出 22:00 之后的值，直接相减即可
-    lateMinutes = Math.max(0, m - lateThreshold);
-  }
-  // 早退：下班时间 - 提前打卡宽限之前才算
-  const earlyThreshold = shift.endMin - shift.earlyGrace;
-  let earlyMinutes = 0;
-  if (lastOut != null) {
-    const m = minutesOfDay(lastOut);
-    earlyMinutes = Math.max(0, earlyThreshold - m);
-  }
-  base.lateMinutes = lateMinutes;
-  // 早退**先不写**：今天还没到下班时间时"早退"根本不成立 —— 拿一张 10:41 打的下班卡
-  // 去比 18:00，会得出"早退 438 分钟"这种荒唐数字，客户端照直显示就成了笑话。
-  // 只有走到下面的常规判定（确认下班时间已过）才把它落进结果。
-  base.earlyMinutes = 0;
-
-  const isToday = day === todayStr;
-  const inDue = now >= win.startAt;                       // 上班卡"该打了"
-  const outDue = now >= win.endAt;                        // 下班卡"该打了"
-  const missingIn = firstIn == null && !cov.leaveAm && !cov.inExempt;
-  const missingOut = lastOut == null && !cov.leavePm && !cov.outExempt;
-
-  // 今天且还没到下班时间：只报既成事实（迟到），其余算"进行中"。
-  // 否则每天上午全公司都是"缺卡"，这个功能第一次打开就会被骂。
-  if (isToday && now < win.endAt) {
-    if (lateMinutes > 0) return { ...base, status: 'late', note: `迟到 ${lateMinutes} 分钟` };
-    if (cov.leaveAm && !cov.leavePm) return { ...base, status: 'pending', note: '上午请假' };
-    if (firstIn != null) return { ...base, status: 'pending', note: '已打上班卡，进行中' };
-    if (!inDue) return { ...base, status: 'pending', note: '未到上班时间' };
-    return { ...base, status: 'pending', note: '待打上班卡' };
+  // 今天还有卡没到点：只报既成事实，别把"还没到点"说成缺卡
+  // （否则每天上午全公司都是"缺卡"，这功能第一次打开就会被骂）
+  if (isToday && pendingItems.length > 0) {
+    if (now < win.startAt) return { ...base, status: 'pending', note: '未到上班时间' };
+    if (missingItems.length > 0) {
+      // 中间那几张已经到点却没打 —— 这是真的缺卡（比如中午忘了打午休下班），
+      // 不能因为"后面还有卡没到点"就整天空着不报
+      return {
+        ...base, status: 'missing',
+        note: `缺${missingItems.map((p) => p.label).join('、')}卡，其余进行中`,
+      };
+    }
+    if (lateItems.length > 0) {
+      return { ...base, status: 'late', note: punchNote('迟到', lateMinutes, lateItems) };
+    }
+    return { ...base, status: 'pending', note: pendingNote(punches, cov) };
   }
 
-  // 走到这里说明这天已经过完（或已过下班时间），早退才成立
+  // 走到这里说明这天已经过完（或所有卡都到点了），早退才成立
   base.earlyMinutes = earlyMinutes;
 
-  if (missingIn && missingOut) return { ...base, status: 'absent', note: '未打卡' };
-  if (missingIn || missingOut) {
-    const who = missingIn ? '上班' : '下班';
-    // 今天还没到下班时间时，缺的下班卡只是"还没打"，不要判成异常
-    if (isToday && missingOut && !outDue) return { ...base, status: 'pending', note: `已打上班卡，待打下班卡` };
-    return { ...base, status: 'missing', note: `缺${who}卡` };
+  if (doneItems.length === 0 && punches.some((p) => !p.exempt)) {
+    return { ...base, status: 'absent', note: '未打卡' };
   }
-  // 请假半天 + 已打卡：只要没迟到早退就算正常（半天假只豁免对应那张卡）
-  if (lateMinutes > 0 && earlyMinutes > 0) {
-    return { ...base, status: 'late_early', note: `迟到 ${lateMinutes} 分钟，早退 ${earlyMinutes} 分钟` };
+  if (missingItems.length > 0) {
+    return { ...base, status: 'missing', note: `缺${missingItems.map((p) => p.label).join('、')}卡` };
   }
-  if (lateMinutes > 0) return { ...base, status: 'late', note: `迟到 ${lateMinutes} 分钟` };
-  if (earlyMinutes > 0) return { ...base, status: 'early', note: `早退 ${earlyMinutes} 分钟` };
-  if (cov.inExempt || cov.outExempt) return { ...base, status: 'outing', note: '外出' };
+  // 半天假 + 其余卡都打齐了：只要没迟到早退就算正常
+  if (lateItems.length > 0 && earlyItems.length > 0) {
+    return {
+      ...base, status: 'late_early',
+      note: `${punchNote('迟到', lateMinutes, lateItems)}，${punchNote('早退', earlyMinutes, earlyItems)}`,
+    };
+  }
+  if (lateItems.length > 0) return { ...base, status: 'late', note: punchNote('迟到', lateMinutes, lateItems) };
+  if (earlyItems.length > 0) return { ...base, status: 'early', note: punchNote('早退', earlyMinutes, earlyItems) };
+  if (cov.hasOuting) return { ...base, status: 'outing', note: '外出' };
   return { ...base, status: 'normal', note: '正常' };
 }
 
@@ -609,7 +838,13 @@ function judgeRange({ orgId, users, from, to, now = Date.now() }) {
       deptName: u.dept_name || null,
       positionName: u.position_name || null,
       shiftName: shift.name,
-      shift: { workStart: shift.workStart, workEnd: shift.workEnd, name: shift.name },
+      // 报表要按"这人一天打几次卡"渲染列，所以分段信息必须跟着人走 ——
+      // 同一个组织里 2 次卡和 4 次卡的人可以共存（不同考勤组）
+      shift: {
+        name: shift.name, workStart: shift.workStart, workEnd: shift.workEnd,
+        restStart: shift.restStart, restEnd: shift.restEnd,
+        segments: shift.segments, punchesPerDay: shift.punchesPerDay,
+      },
       groupName: group ? group.name : null,
       shiftSource,
       days: dayList,
@@ -627,6 +862,11 @@ function summarize(dayList) {
     leave: 0, outing: 0, rest: 0, pending: 0,
     lateMinutes: 0, earlyMinutes: 0,
     overtimeMinutes: 0, overtimeDays: 0,
+    // 打卡次数与在岗时长：4 次卡的班次下，"来了没有"不够用，
+    // 管理者要知道"应该打 4 次、实际打了 3 次"和"在岗几小时"。
+    expectedPunches: 0, donePunches: 0, missingPunches: 0,
+    workedMinutes: 0, expectedWorkMinutes: 0,
+    fullDays: 0,     // 当日卡片全部打齐的天数
   };
   for (const d of dayList) {
     if (d.isWorkday) s.workdays++;
@@ -645,6 +885,18 @@ function summarize(dayList) {
     s.lateMinutes += d.lateMinutes || 0;
     s.earlyMinutes += d.earlyMinutes || 0;
     if (d.overtimeMinutes > 0) { s.overtimeMinutes += d.overtimeMinutes; s.overtimeDays++; }
+
+    // 次数/工时只在"确实该出勤且已经过完"的日子上累计 ——
+    // 把休息日和未来日期算进来会让"应打 88 次"这种数字看着就不对
+    const countable = d.isWorkday && d.status !== 'rest' && d.status !== 'future';
+    if (countable) {
+      s.expectedPunches += d.expectedPunches || 0;
+      s.donePunches += d.donePunches || 0;
+      s.missingPunches += (d.missingPunches || []).length;
+      s.workedMinutes += d.workedMinutes || 0;
+      s.expectedWorkMinutes += d.expectedWorkMinutes || 0;
+      if ((d.expectedPunches || 0) > 0 && d.donePunches >= d.expectedPunches) s.fullDays++;
+    }
   }
   s.leave = Math.round(s.leave * 10) / 10;
   return s;
@@ -665,7 +917,7 @@ function myRange(user, orgId, from, to, now = Date.now()) {
 
 /* ==================== 7. 申请单 ==================== */
 
-function createRequest({ orgId, userId, kind, reason, startDay, endDay, half, leaveType, day, clockType, at, startAt, endAt }) {
+function createRequest({ orgId, userId, kind, reason, startDay, endDay, half, leaveType, day, clockType, at, slot, startAt, endAt }) {
   if (!REQUEST_KINDS.includes(kind)) return { error: '申请类型不支持' };
   const base = { orgId: Number(orgId), userId: Number(userId), kind, reason: String(reason || '').slice(0, 200) };
   if (kind === 'leave') {
@@ -684,32 +936,65 @@ function createRequest({ orgId, userId, kind, reason, startDay, endDay, half, le
     if (!Number.isFinite(ts) || ts <= 0) return { error: '补卡时间不合法' };
     if (dayOf(ts) !== day) return { error: '补卡时刻必须落在所选日期当天' };
     if (day > today()) return { error: '不能给未来日期补卡' };
-    Object.assign(base, { day, clock_type: clockType, at: ts });
+    // 一天 2 次卡的班次没有"第 2 段"。不拦的话会写出一张**没有任何判定会看它**的
+    // 孤儿卡：审批通过了、管理台也显示"已补"，但考勤结果一点没变。
+    const sl = slotOf(slot);
+    if (sl == null) return { error: '补卡只能补第 1 次卡或第 2 次卡' };
+    const { shift } = shiftFor(userId, orgId);
+    if (sl > shift.segments) {
+      return {
+        error: `当前班次（${shift.workStart}-${shift.workEnd}${shift.restStart ? ` / 午休 ${shift.restStart}-${shift.restEnd}` : ''}）`
+          + `一天打 ${shift.punchesPerDay} 次卡，没有第 ${sl} 次卡可补`,
+      };
+    }
+    Object.assign(base, { day, clock_type: clockType, at: ts, slot: sl });
   } else {
     const s = Number(startAt); const e = Number(endAt);
     if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return { error: '请选择正确的起止时间' };
     if (Math.round((e - s) / 60000) > 24 * 60) return { error: '单次时长不能超过 24 小时' };
     Object.assign(base, { start_at: s, end_at: e, day: dayOf(s) });
   }
+  // ⚠️ slot 是整数列，兜底必须用 0 而不是 ''（SQLite 里 INTEGER 恒小于 TEXT，
+  // `0 = ''` 永远为假 —— 一旦写成 IFNULL(?,'') 去重就静默失效，重复申请照样进库）
   const dup = db.prepare(`SELECT id FROM att_requests WHERE user_id=? AND kind=? AND status='pending'
-    AND IFNULL(start_day,'')=IFNULL(?,'') AND IFNULL(day,'')=IFNULL(?,'')`)
-    .get(base.userId, kind, base.start_day || null, base.day || null);
+    AND IFNULL(start_day,'')=IFNULL(?,'') AND IFNULL(day,'')=IFNULL(?,'')
+    AND IFNULL(clock_type,'')=IFNULL(?,'') AND IFNULL(slot,0)=IFNULL(?,0)`)
+    .get(base.userId, kind, base.start_day || null, base.day || null,
+      base.clock_type || null, base.slot || null);
   if (dup) return { error: '同类型的申请正在审批中，请勿重复提交' };
 
   const info = db.prepare(`INSERT INTO att_requests
-    (org_id,user_id,kind,status,reason,start_day,end_day,half,leave_type,day,clock_type,at,start_at,end_at,created_at)
-    VALUES (?,?,?,'pending',?,?,?,?,?,?,?,?,?,?,?)`)
+    (org_id,user_id,kind,status,reason,start_day,end_day,half,leave_type,day,clock_type,at,slot,start_at,end_at,created_at)
+    VALUES (?,?,?,'pending',?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(base.orgId, base.userId, kind, base.reason || null,
       base.start_day || null, base.end_day || null, base.half || 0, base.leave_type || null,
-      base.day || null, base.clock_type || null, base.at || null, base.start_at || null, base.end_at || null,
+      base.day || null, base.clock_type || null, base.at || null, base.slot || 0,
+      base.start_at || null, base.end_at || null,
       Date.now());
   return { id: info.lastInsertRowid };
 }
 
-function decorateRequest(r) {
+/** shiftFor 的短时记忆：列表里同一人可能出现在多行，没必要反复查库 */
+function shiftForCached(userId, orgId, cache) {
+  const k = Number(userId);
+  if (cache.has(k)) return cache.get(k);
+  const v = shiftFor(k, orgId);
+  cache.set(k, v);
+  return v;
+}
+
+/**
+ * 申请单的展示形态。
+ * `shift` 可选：给了才能把"补卡"写成"补午休下班卡"这种人话
+ * （同一张 out/1，2 次卡里叫"下班卡"、4 次卡里叫"午休下班卡"，只有班次说得准）。
+ */
+function decorateRequest(r, shift = null) {
   const km = { leave: '请假', makeup: '补卡', outing: '外出', overtime: '加班' };
   const lm = { personal: '事假', sick: '病假', annual: '年假', comp: '调休' };
   const half = Number(r.half) || 0;
+  const slot = Number(r.slot) === 2 ? 2 : 1;
+  const punchKey = r.clock_type ? r.clock_type + slot : null;
+  const punchLabel = punchKey ? punchLabelOf(shift, punchKey) : null;
   let desc = '';
   if (r.kind === 'leave') {
     desc = r.start_day === r.end_day
@@ -717,7 +1002,8 @@ function decorateRequest(r) {
       : `${r.start_day} ~ ${r.end_day}`;
     if (r.leave_type) desc += `（${lm[r.leave_type] || r.leave_type}）`;
   } else if (r.kind === 'makeup') {
-    desc = `${r.day} ${r.clock_type === 'in' ? '上班卡' : '下班卡'} 补 ${r.at ? hhmmOf(r.at) : ''}`;
+    const who = punchLabel || (r.clock_type === 'in' ? '上班卡' : '下班卡');
+    desc = `${r.day} ${who}${punchLabel ? '卡' : ''} 补 ${r.at ? hhmmOf(r.at) : ''}`;
   } else if (r.start_at && r.end_at) {
     desc = `${dayOf(r.start_at)} ${hhmmOf(r.start_at)} ~ ${hhmmOf(r.end_at)}`;
   }
@@ -731,7 +1017,8 @@ function decorateRequest(r) {
     reason: r.reason,
     desc,
     startDay: r.start_day, endDay: r.end_day, half: Number(r.half) || 0, leaveType: r.leave_type,
-    day: r.day, clockType: r.clock_type, at: r.at, startAt: r.start_at, endAt: r.end_at,
+    day: r.day, clockType: r.clock_type, clockSlot: slot, punchKey, punchLabel,
+    at: r.at, startAt: r.start_at, endAt: r.end_at,
     reviewedBy: r.reviewed_by, reviewedAt: r.reviewed_at, reviewNote: r.review_note,
     createdAt: r.created_at,
     username: r.username, nickname: r.nickname, employeeNo: r.employee_no,
@@ -745,9 +1032,11 @@ function listRequests({ orgId, userId = null, status = null, kind = null, limit 
   if (status) { where.push('r.status=?'); args.push(status); }
   if (kind) { where.push('r.kind=?'); args.push(kind); }
   args.push(Math.min(Number(limit) || 200, 1000));
+  const cache = new Map();
   return db.prepare(`SELECT r.*, u.username, u.nickname, u.employee_no
     FROM att_requests r LEFT JOIN users u ON u.id=r.user_id
-    WHERE ${where.join(' AND ')} ORDER BY r.created_at DESC LIMIT ?`).all(...args).map(decorateRequest);
+    WHERE ${where.join(' AND ')} ORDER BY r.created_at DESC LIMIT ?`).all(...args)
+    .map((r) => decorateRequest(r, shiftForCached(r.user_id, orgId, cache).shift));
 }
 
 /**
@@ -764,10 +1053,13 @@ function reviewRequest({ orgId, id, approve, reviewerId, note = null }) {
   if (approve && r.kind === 'makeup') {
     const user = db.prepare('SELECT org_id FROM users WHERE id=?').get(r.user_id);
     if (!user || !user.org_id) return { error: '该员工已离职或不在组织中，无法补卡' };
-    db.prepare('DELETE FROM att_records WHERE user_id=? AND day=? AND type=? AND source=?')
-      .run(r.user_id, r.day, r.clock_type, 'makeup');
+    // 补的是哪一张卡必须带上 slot：4 次卡里"午休下班(out,1)"和"下班(out,2)"
+    // 是两张卡，只按 type 删旧记录、只按 type 写入，会把下班卡覆盖成中午那次。
+    const slot = Number(r.slot) === 2 ? 2 : 1;
+    db.prepare('DELETE FROM att_records WHERE user_id=? AND day=? AND type=? AND slot=? AND source=?')
+      .run(r.user_id, r.day, r.clock_type, slot, 'makeup');
     clock({
-      userId: r.user_id, orgId: Number(orgId), type: r.clock_type, at: r.at,
+      userId: r.user_id, orgId: Number(orgId), type: r.clock_type, slot, at: r.at,
       source: 'makeup', addressNote: note || '补卡审批通过',
     });
   }
@@ -776,7 +1068,8 @@ function reviewRequest({ orgId, id, approve, reviewerId, note = null }) {
     .run(approve ? 'approved' : 'rejected', Number(reviewerId), Date.now(), note ? String(note).slice(0, 120) : null, Number(id));
   const row = db.prepare(`SELECT r.*, u.username, u.nickname, u.employee_no
     FROM att_requests r LEFT JOIN users u ON u.id=r.user_id WHERE r.id=?`).get(Number(id));
-  return { ok: true, request: decorateRequest(row) };
+  const { shift } = shiftFor(row.user_id, Number(orgId));
+  return { ok: true, request: decorateRequest(row, shift) };
 }
 
 /* ==================== 8. 今日总览（管理台看板） ==================== */
@@ -802,6 +1095,19 @@ function overview({ orgId, day, now = Date.now() }) {
       employeeNo: u.employeeNo, deptName: u.deptName,
       shiftName: u.shiftName, shift: d.shift, groupName: u.groupName,
       firstInTime: d.firstInTime, lastOutTime: d.lastOutTime,
+      // 逐张卡的实况：4 次卡的看板必须能一眼看出"缺的是午休下班还是下午上班"，
+      // 只给最早的上班和最晚的下班是看不出来的
+      punches: d.punches.map((p) => ({
+        key: p.key, type: p.type, slot: p.slot, label: p.label,
+        expectTime: p.expectTime, time: p.at == null ? null : hhmmOf(p.at),
+        at: p.at, status: p.status, due: p.due, exempt: p.exempt,
+        lateMinutes: p.lateMinutes, earlyMinutes: p.earlyMinutes,
+      })),
+      expectedPunches: d.expectedPunches,
+      donePunches: d.donePunches,
+      missingLabels: d.missingLabels,
+      workedMinutes: d.workedMinutes,
+      expectedWorkMinutes: d.expectedWorkMinutes,
       status: d.status, statusLabel: STATUS_LABEL[d.status] || d.status,
       note: d.note, lateMinutes: d.lateMinutes, earlyMinutes: d.earlyMinutes,
       address: null, location: null,
@@ -809,19 +1115,20 @@ function overview({ orgId, day, now = Date.now() }) {
   });
 
   // 打卡地址：只有看板需要在列表里直接看到，单独查一次（带定位的打卡）
-  const locRows = db.prepare(`SELECT user_id, type, address, lat, lng, source FROM att_records
+  const locRows = db.prepare(`SELECT user_id, type, slot, address, lat, lng, source FROM att_records
     WHERE org_id=? AND day=? AND (address IS NOT NULL OR lat IS NOT NULL)`).all(Number(orgId), day);
   const locMap = new Map();
   for (const l of locRows) {
     const cur = locMap.get(l.user_id) || {};
-    cur[l.type] = { address: l.address, lat: l.lat, lng: l.lng, source: l.source };
+    cur[l.type + (Number(l.slot) === 2 ? 2 : 1)] = { address: l.address, lat: l.lat, lng: l.lng, source: l.source };
     locMap.set(l.user_id, cur);
   }
   for (const it of items) {
     const l = locMap.get(it.userId);
     if (l) {
       it.location = l;
-      it.address = (l.in && l.in.address) || (l.out && l.out.address) || null;
+      const withAddr = it.punches.filter((p) => l[p.key] && l[p.key].address);
+      it.address = withAddr.length ? l[withAddr[0].key].address : null;
     }
   }
 
@@ -842,6 +1149,10 @@ function overview({ orgId, day, now = Date.now() }) {
       outing: cnt('outing'),
       rest: cnt('rest'),
       pending: cnt('pending') + cnt('future'),
+      // 打卡次数维度：4 次卡下"出勤率"看人数已经不够，还要看次数
+      punchesDone: items.reduce((s, i) => s + (i.donePunches || 0), 0),
+      punchesExpected: items.reduce((s, i) => s + (i.expectedPunches || 0), 0),
+      missingPunches: items.reduce((s, i) => s + (i.missingLabels || []).length, 0),
     },
     items,
   };
@@ -850,7 +1161,8 @@ function overview({ orgId, day, now = Date.now() }) {
 module.exports = {
   TZ, STATUS_LABEL, LEAVE_TYPES, REQUEST_KINDS,
   dayOf, minutesOfDay, tsOfDay, today, weekdayOf, addDays, isValidDay, hhmmOf, fmtHHMM, parseHHMM,
-  defaultShift, listShifts, shiftFor, deptChain, deptWithDescendants, groupMemberIds, windowOf,
+  defaultShift, listShifts, shiftFor, shiftForCached, deptChain, deptWithDescendants, groupMemberIds, windowOf,
+  restWindowOf, punchPlan, punchLabelOf, slotOf, workedMinutes, expectedMinutes,
   clock, recordsOn, recordsRange, decorateRecord,
   judgeDay, judgeRange, summarize, myRange,
   coverageOn, leaveCoverage, leaveDaysOf,

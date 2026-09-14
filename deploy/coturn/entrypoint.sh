@@ -16,9 +16,25 @@ MIN_PORT="${TURN_MIN_PORT:-49160}"
 MAX_PORT="${TURN_MAX_PORT:-49200}"
 REALM="${TURN_REALM:-xiaozhi.im}"
 TUSER="${TURN_USER:-xiaozhi}"
-# ⚠️ 默认口令在公开仓库可见（弱口令）。生产请通过 docker/.env 传 TURN_PASSWORD 覆盖，
-#    且必须与服务端 /data/turn.env 的 TURN_CREDENTIAL 一致，否则中继认证会失败。
-TPASS="${TURN_PASSWORD:-xiaozhi-turn-2026}"
+
+# ---- 中继口令：不给默认值，缺了就直接不启动 ----
+# 历史坑：这里曾经写死过一个默认口令，而本仓库是 Public —— 等于把中继口令
+# 公开送人。拿到它的人可以用你家宽带做中继转发（跑满上行，流量算你的），
+# 而且不会在日志里留下任何异常。所以现在**宁可起不来**，也不静默用一个公开口令。
+TPASS="${TURN_PASSWORD:-}"
+if [ -z "$TPASS" ]; then
+  echo "[turn] ✖ 未设置 TURN_PASSWORD，拒绝以空口令启动（不再有内置默认口令）。" >&2
+  echo "[turn]   修法：在 docker/.env 写一行 TURN_PASSWORD=<强口令>，" >&2
+  echo "[turn]   并保证与服务端 /data/turn.env 的 TURN_CREDENTIAL 一致，" >&2
+  echo "[turn]   然后：docker compose up -d --force-recreate coturn" >&2
+  exit 1
+fi
+# 老安装可能还留着那个公开默认值（等于没改）。不拦，但必须喊出来 ——
+# 静默沿用才是真正危险的地方。
+if [ "$TPASS" = "xiaozhi-turn-2026" ]; then
+  echo "[turn] ⚠ 仍在用公开仓库里的默认口令，中继对全网开放。"
+  echo "[turn]   请在 docker/.env 换掉 TURN_PASSWORD（并同步 /data/turn.env 的 TURN_CREDENTIAL）。"
+fi
 
 # ---- 探测公网出口 IP ----
 # 飞牛安装脚本通常已经把结果放进 TURN_EXTERNAL_IP，这里只是兜底
