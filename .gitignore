@@ -43,3 +43,7 @@ Thumbs.db
 
 # vite 构建临时文件（配置打时间戳的中间产物，不该进版本库）
 admin/vite.config.js.timestamp-*.mjs
+
+# 验证脚本产出的截图等二进制证据（只对本机那一次运行有意义，不入版本库）
+deploy/_prod_shots/
+deploy/_ui_check/

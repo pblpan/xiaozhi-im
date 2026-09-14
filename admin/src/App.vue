@@ -30,8 +30,8 @@
         <el-menu-item index="help">系统帮助</el-menu-item>
       </el-menu>
       <div class="aside-foot">
-        <span>服务端运行中</span>
-        <el-button text type="danger" size="small" @click="logout">退出</el-button>
+        <span class="aside-status"><i class="dot"></i>服务端运行中</span>
+        <el-button text size="small" class="aside-out" @click="logout">退出</el-button>
       </div>
     </el-aside>
 
@@ -5494,7 +5494,17 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .login-card { width: 340px; }
 .aside { background: #0F2620; display: flex; flex-direction: column; }
 .logo { color: #fff; font-size: 20px; font-weight: 700; text-align: center; padding: 18px 0; }
-.aside-foot { margin-top: auto; padding: 12px; color: #8a8f99; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
+.aside-foot { margin-top: auto; padding: 11px 14px; color: #8a8f99; font-size: 12px;
+  display: flex; justify-content: space-between; align-items: center;
+  border-top: 1px solid rgba(255,255,255,.08); }
+/* 运行状态：小绿点代替干巴巴一行字（与仪表盘的绿色语义一致） */
+.aside-status { display: inline-flex; align-items: center; gap: 6px; }
+.aside-status .dot { width: 6px; height: 6px; border-radius: 50%; background: #10B981;
+  box-shadow: 0 0 0 3px rgba(16,185,129,.15); }
+/* 退出登录：默认低调灰、hover 才提示红色。
+   原来常亮的 danger 红是深色侧栏上最扎眼的一处，跟"美化"的意图相反。 */
+.aside-foot .aside-out { color: #8a8f99; }
+.aside-foot .aside-out:hover { color: #f56c6c; background: transparent; }
 .hdr { background: #fff; border-bottom: 1px solid #ebeef5; display: flex; align-items: center; justify-content: space-between; font-weight: 600; }
 .stat { text-align: center; }
 .stat-num { font-size: 28px; font-weight: 700; color: #10B981; }

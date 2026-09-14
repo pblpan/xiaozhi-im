@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/preserve-outdir.cjs",
     "build": "vite build"
   },
   "dependencies": {
