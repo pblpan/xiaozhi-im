@@ -137,12 +137,68 @@
                 </div>
               </div>
             </template>
-            <div v-show="docOpen">
-              <p>· <b>小智 IM</b> 是私有化部署的即时通讯服务，数据 100% 存储于本机（飞牛 / 群晖 / 绿联 / 麒麟等私有服务器），不经任何第三方云。</p>
-              <p>· <b>客户端</b>支持 Windows / Android（宽屏双栏 / 窄屏跳转自适应布局），后续扩展 Mac / iOS；支持文字、图片、文件、语音、表情、卡片消息，以及单聊 / 群聊、已读回执、撤回、收藏、转发、全局搜索、好友备注与音视频通话。</p>
-              <p>· <b>本管理台</b>用于管用户、群组、好友关系、文件、消息，以及对接外部系统的入站推送与事件订阅。</p>
-              <p>· <b>上手步骤</b>：见上方<b>上手向导</b>（按服务器当前状态自动判断还差哪几步，一键跳到对应页面）。开户方式取决于模式：普通模式在「用户管理 → 新建用户」、或让同事自己在客户端注册；<b>工作模式</b>在「组织机构 → 员工管理」按工号录入（工号 = 登录账号、初始密码 = 工号），人多就用 Excel 批量导入。</p>
-              <p>· <b>两个高频注意点</b>：改管理员密码在「系统设置」（无需重启）；外网通话要通，必须先配好音视频中继（见「系统帮助 → 音视频通话与网络穿透」）。</p>
+            <div v-show="docOpen" class="doc-body">
+              <!-- 一句话定位：这是与公有云 IM 的根本区别，放最上面 -->
+              <div class="doc-lead">
+                <b>私有化部署</b>：服务端就是你家 NAS（飞牛 / 群晖 / 绿联 / 麒麟）上的一个 Docker 应用，
+                数据 100% 存在你自己的机器上，<b>不经任何第三方云</b>；管理台就是当前这个网页。
+              </div>
+
+              <div class="doc-grid">
+                <section class="doc-card">
+                  <div class="doc-card-h">
+                    <span class="mgroup-ic tone-blue">端</span>客户端
+                    <span class="doc-tag">Windows / Android</span>
+                  </div>
+                  <ul>
+                    <li><b>导航</b>：手机是底部标签栏、电脑是左侧导航条。普通模式「消息 / 通讯录 / 我」；
+                      <b>工作模式多一个「工作台」</b>——考勤打卡、我的申请等入口都在里面。</li>
+                    <li><b>消息</b>：文字 / 图片 / 文件 / 语音 / 表情 / 卡片；单聊与群聊、@ 提及、已读回执、
+                      撤回、转发、收藏、置顶、免打扰、全局搜索。</li>
+                    <li><b>群管理</b>：群公告、成员管理、禁言、群主转让。</li>
+                    <li><b>通话与远程</b>：语音 / 视频通话（群内最多 6 人）；Windows 端可被<b>远程协助</b>接管屏幕。</li>
+                    <li><b>安装</b>：Windows 装 exe、安卓装 APK，首次启动自动扫描局域网找服务器。
+                      iOS 仍在开发中（需 Mac 打包），暂未提供安装包。</li>
+                  </ul>
+                </section>
+
+                <section class="doc-card">
+                  <div class="doc-card-h">
+                    <span class="mgroup-ic tone-green">台</span>管理台
+                    <span class="doc-tag">就是本页</span>
+                  </div>
+                  <ul>
+                    <li><b>人员与组织</b>：用户、群组、好友关系；<b>工作模式</b>下另有组织机构
+                      （部门 / 岗位 / 员工，支持 Excel 批量导入）与<b>考勤打卡</b>。</li>
+                    <li><b>内容与存储</b>：消息检索与批量清理、文件查看与批量清理、
+                      存储占用分析、孤儿文件巡检。</li>
+                    <li><b>集成与下发</b>：入站推送、事件订阅、公钥接入；客户端配置（含强制升级）、
+                      动态模块按人下发。</li>
+                    <li><b>总览</b>：仪表盘 —— 今日新增、近 7 天活跃、异常提醒、上手向导。</li>
+                  </ul>
+                </section>
+              </div>
+
+              <div class="doc-grid">
+                <section class="doc-card doc-soft">
+                  <div class="doc-card-h"><span class="mgroup-ic tone-purple">启</span>从哪里开始</div>
+                  <ul>
+                    <li>回「<b>仪表盘</b>」看顶部<b>上手向导</b>：按服务器当前状态列出还差哪几步，点一下直达对应页面。</li>
+                    <li><b>开户</b>：普通模式在「用户管理 → 新建用户」，或让同事自己在客户端注册；
+                      工作模式在「组织机构 → 员工管理」按工号录入（工号 = 登录账号、初始密码 = 工号），人多用 Excel 批量导入。</li>
+                    <li>细节问题（考勤怎么算、外网通话怎么通）见「<b>系统帮助</b>」页。</li>
+                  </ul>
+                </section>
+
+                <section class="doc-card doc-soft">
+                  <div class="doc-card-h"><span class="mgroup-ic tone-amber">!</span>两个高频注意点</div>
+                  <ul>
+                    <li><b>管理员密码</b>在「系统设置」里改，改完即生效，不用重启。</li>
+                    <li><b>外网通话</b>要通，必须先配好音视频中继（见「系统帮助 → 音视频通话与网络穿透」）。
+                      注意：两台都在同一个 Wi-Fi 下测不出问题，要用手机流量实测。</li>
+                  </ul>
+                </section>
+              </div>
             </div>
           </el-card>
         </div>
@@ -167,7 +223,10 @@
               <h3>一、这是什么</h3>
               <ul>
                 <li><b>服务端</b>跑在自家 NAS（飞牛 FnOS，Docker 方式），提供消息收发、文件存储、通话信令与中继、以及对外集成接口。</li>
-                <li><b>客户端</b>是 Windows / Android 应用，采用宽屏双栏 / 窄屏跳转的自适应布局；首次启动会自动探测服务器地址，也可在 App 内「服务器设置」手动指定。</li>
+                <li><b>客户端</b>是 Windows / Android 应用，采用宽屏双栏 / 窄屏跳转的自适应布局
+                  （手机底部标签栏、电脑左侧导航条；工作模式多一个「工作台」）；
+                  首次启动会自动探测服务器地址，也可在 App 内「服务器设置」手动指定。
+                  <b>iOS 仍在开发中</b>（需要 Mac 打包），暂未提供安装包。</li>
                 <li><b>管理台</b>就是当前这个网页，管用户、群组、好友关系、文件、消息，以及和外部系统的对接。</li>
               </ul>
             </section>
@@ -210,6 +269,9 @@
               <table class="help-table">
                 <thead><tr><th style="width:130px">能力</th><th>说明</th></tr></thead>
                 <tbody>
+                  <tr><td>界面结构</td><td>手机底部标签栏、电脑左侧导航条。<b>普通模式</b>：消息 / 通讯录 / 我；
+                    <b>工作模式</b>：消息 / <b>工作台</b> / 通讯录 / 我 —— 考勤打卡、我的申请、自定义应用都在「工作台」里。
+                    原来收在右上角「⋮」菜单里的工作台、组织机构、个人信息，现在都是一级入口。</td></tr>
                   <tr><td>消息类型</td><td>文字 / 图片 / 文件 / 语音 / 表情 / 卡片（卡片由外部系统推送，用于告警、日报等结构化信息）</td></tr>
                   <tr><td>会话</td><td>单聊、群聊、群公告、群成员管理、禁言、群主转让；免打扰</td></tr>
                   <tr><td>@ 提及</td><td>群内 @某人 / @所有人，被 @ 的人会在会话列表看到红字提示</td></tr>
@@ -5554,7 +5616,45 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .mtile-dim .mtile-v { color: var(--el-text-color-secondary); }
 
 .dash-doc { margin-top: 18px; }
-.dash-doc p { margin: 6px 0; line-height: 1.8; font-size: 13px; }
+/* ---- 系统说明：分区卡片 + 双栏 ----
+   原来是 5 行 `· xxx` 的平铺 bullet，信息混在一起、没有层次，读起来像附录。
+   现在按「定位 → 能力（客户端 / 管理台）→ 从哪里开始 / 注意点」分区，
+   图标块直接复用仪表盘的 .mgroup-ic + .tone-*，与上方分组卡是同一套视觉语言。 */
+.doc-body { display: flex; flex-direction: column; gap: 14px; }
+.doc-lead {
+  padding: 11px 14px; border-radius: 8px; font-size: 13px; line-height: 1.85;
+  background: #F5FBF8; border: 1px solid #D6EEE4; border-left: 3px solid #10B981;
+  color: #3F5148;
+}
+.doc-lead b { color: #0F2620; }
+.doc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 900px) { .doc-grid { grid-template-columns: 1fr; } }
+.doc-card {
+  border: 1px solid var(--el-border-color); border-radius: 8px;
+  padding: 12px 14px; background: var(--el-fill-color-blank);
+}
+.doc-soft { background: #FAFBFC; }
+.doc-card-h {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13.5px; font-weight: 600; color: #0F2620; margin-bottom: 9px;
+}
+/* 图标块在 flex 行里不能被压缩成椭圆 */
+.doc-card-h .mgroup-ic, .doc-lead .mgroup-ic { flex: none; }
+.doc-tag {
+  font-weight: 400; font-size: 11px; color: #8a8f99;
+  border: 1px solid var(--el-border-color); border-radius: 10px; padding: 1px 8px;
+}
+/* 条目用自绘小圆点：默认 list-style 的圆点在这些紧凑卡片里偏大、且与行高不齐 */
+.doc-card ul { margin: 0; padding: 0; list-style: none; }
+.doc-card li {
+  position: relative; padding-left: 12px; margin: 6px 0;
+  font-size: 12.5px; line-height: 1.8; color: #4B5563;
+}
+.doc-card li::before {
+  content: ''; position: absolute; left: 1px; top: 9px;
+  width: 4px; height: 4px; border-radius: 50%; background: #C7D6D0;
+}
+.doc-card li b { color: #253830; }
 .page-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .hint { color: #909399; font-size: 12px; }
 

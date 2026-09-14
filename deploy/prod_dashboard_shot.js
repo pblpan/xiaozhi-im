@@ -94,6 +94,26 @@ const ok = (name, cond, extra) => {
   console.log('\n== 异常提醒条（无异常时不该占位） ==');
   console.log(`  当前提醒条数量: ${alerts}${alerts ? '（生产确实有异常，会显示）' : '（无异常，符合预期）'}`);
 
+  console.log('\n== 系统说明（默认收起，展开后校验） ==');
+  await page.locator('.dash-doc').getByRole('button', { name: /展开/ }).click();
+  await page.waitForSelector('.doc-body .doc-card', { timeout: 10000 });
+  const docText = await page.locator('.doc-body').innerText();
+  const docCards = await page.locator('.doc-card').count();
+  const docIcons = await page.locator('.doc-body .mgroup-ic').count();
+  ok('展开后 4 张说明卡（客户端 / 管理台 / 上手 / 注意点）', docCards === 4, String(docCards));
+  ok('图标块 4 个（复用仪表盘视觉语言）', docIcons === 4, String(docIcons));
+  // 逐条对着"这次为什么说它跟不上"来验：导航形态、内容/存储管理、考勤、iOS 表述
+  ok('  内容已更新 · 提到导航形态（标签栏/导航条）', /标签栏|导航条/.test(docText));
+  ok('  内容已更新 · 提到消息/文件批量清理', /批量清理/.test(docText));
+  ok('  内容已更新 · 提到考勤打卡', /考勤/.test(docText));
+  ok('  内容已更新 · iOS 说法准确（开发中，非"后续扩展 Mac"）',
+    /iOS/.test(docText) && !/后续扩展/.test(docText));
+  ok('  保留上手路径（上手向导 + 分模式开户）', /上手向导/.test(docText) && /工号/.test(docText));
+  ok('  保留两个高频注意点', /注意点/.test(docText));
+  const docShot = path.join(OUT_DIR, 'sysdoc-prod.png');
+  await page.locator('.dash-doc').screenshot({ path: docShot });
+  console.log('系统说明区域截图: ' + docShot);
+
   console.log('\n== 渲染健康度 ==');
   ok('无 JS 运行时异常（白屏就靠这个抓）', pageErrors.length === 0, pageErrors.join(' | '));
   ok('无 console.error', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
