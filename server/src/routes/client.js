@@ -10,6 +10,8 @@ const router = require('express').Router();
 const { verifyToken } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
+const appregistry = require('../apps');
+const attendance = require('../attendance');
 const settings = require('../settings');
 const db = require('../db');
 const pkg = require('../../package.json');
@@ -62,8 +64,70 @@ router.get('/config', (req, res) => {
   });
 });
 
-/** 客户端上报已生效版本（写 config_applied，管理台"同步状态"的数据来源） */
-router.post('/report-applied', (req, res) => {
+/**
+ * 应用中心（客户端「工作台」的一次性取数入口）
+ *
+ * 把两类应用合并在一个列表里下发：
+ *   kind='builtin'  内置应用（考勤打卡 / 我的申请 / 组织通讯录）—— 随安装包发布
+ *   kind='dynamic'  自定义应用（管理台用 JSON 拼的动态模块）
+ * 客户端用同一个工作台渲染，用户看到的是"一个应用中心"。
+ *
+ * 可见性由**业务状态**决定，不由开关决定：没开工作模式就没有考勤入口，
+ * 考勤被停用就没有打卡入口 —— 服务端算好再下发，客户端不做判断（SPEC 拍板项 1）。
+ * 这样也杜绝了"入口在、点进去报错"的状态。
+ */
+router.get('/apps', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const me = db.prepare('SELECT id, role, org_id FROM users WHERE id=?').get(uid);
+  const org = db.prepare('SELECT id, name FROM orgs LIMIT 1').get() || null;
+  const friendMode = settings.get('friendMode');
+  const attEnabled = settings.get('attendanceEnabled') !== false;
+  // 组织成员 = 有 org_id 且归属当前组织；管理员没有 org_id，但仍应看到
+  // 「组织通讯录」这类只读入口（他要看全员），所以单独放行 role='admin'
+  const hasOrg = !!org && (me.org_id === org.id || me.role === 'admin');
+
+  const builtin = appregistry.listFor({
+    friendMode, attendanceEnabled: attEnabled, hasOrg, role: me.role,
+  });
+
+  // 角标：管理者的第一诉求是"有没有待处理"，员工的第一诉求是"我打卡了没"。
+  // 只给这两处算角标 —— 每个应用都算就是给每次冷启动加一串查询。
+  const now = Date.now();
+  for (const a of builtin) {
+    if (a.id === 'attendance' && me.org_id) {
+      const day = attendance.dayOf(now);
+      const workdays = settings.get('attWorkdays') || [1, 2, 3, 4, 5];
+      const isWorkday = workdays.includes(attendance.weekdayOf(day));
+      const ins = db.prepare("SELECT COUNT(*) AS c FROM att_records WHERE user_id=? AND day=? AND type='in'")
+        .get(uid, day).c;
+      if (isWorkday && !ins) a.badge = '待打卡';
+    }
+    if (a.id === 'my_requests' && me.org_id) {
+      const c = db.prepare("SELECT COUNT(*) AS c FROM att_requests WHERE user_id=? AND status='pending'").get(uid).c;
+      if (c > 0) a.badge = String(c);
+    }
+  }
+
+  const cv = String(req.query.clientVersion || '');
+  const dynamic = appmodules.listVisible({ userId: uid, role: me.role, clientVersion: cv })
+    .map((m) => ({
+      id: m.moduleId, title: m.title, icon: m.icon, group: 'custom',
+      desc: '', kind: 'dynamic', sort: m.sort,
+      // 把最低版本要求一起下发：服务端已经按 cv 过滤过，客户端仍会**再卡一次**
+      // （老客户端连 `?clientVersion=` 都可能没带，那时 cv 为空、这里全部被过滤掉，
+      //  这是服务端侧的兜底；客户端侧的兜底见 workbench.dart）。
+      minVersion: m.minClientVersion || '',
+    }));
+
+  res.json({
+    apps: [...builtin, ...dynamic],
+    groups: appregistry.GROUPS,
+    workMode: friendMode,
+    ts: now,
+  });
+});
+
+/** 客户端上报已生效版本（写 config_applied，管理台"同步状态"的数据来源） */router.post('/report-applied', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const ok = clientconfig.reportApplied(uid, req.body?.deviceId, req.body?.configVersion);
   if (!ok) return res.status(400).json({ error: 'configVersion 不合法' });

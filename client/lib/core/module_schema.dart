@@ -354,28 +354,31 @@ class ModuleDef {
   bool get valid => moduleId.isNotEmpty;
 
   /// 客户端侧的版本闸门：版本不够直接不显示（服务端已过滤，这里是双保险）。
-  /// 传空/非法版本一律当作"不满足" —— 宁可不显示，也不要显示一个跑不起来的页面。
-  bool supports(String clientVersion) {
-    final min = minClientVersion;
-    if (min == null || min.isEmpty) return true;
-    if (!_versionRe.hasMatch(min) || !_versionRe.hasMatch(clientVersion)) return false;
-    return !_versionLess(clientVersion, min);
-  }
+  bool supports(String clientVersion) =>
+      clientSatisfiesVersion(minClientVersion, clientVersion);
+}
 
-  static final _versionRe = RegExp(r'^\d+\.\d+\.\d+$');
-
-  /// a < b 返回 true（与 remote_config.versionLess 同语义，这里独立实现以免循环依赖）
-  static bool _versionLess(String a, String b) {
-    final pa = a.split('.').map((s) => int.tryParse(s) ?? 0).toList();
-    final pb = b.split('.').map((s) => int.tryParse(s) ?? 0).toList();
-    final n = pa.length > pb.length ? pa.length : pb.length;
-    for (var i = 0; i < n; i++) {
-      final x = i < pa.length ? pa[i] : 0;
-      final y = i < pb.length ? pb[i] : 0;
-      if (x != y) return x < y;
-    }
-    return false;
+/// 客户端侧版本闸门（独立函数版）。
+///
+/// 为什么单独抽出来：工作台的应用列表里只有一个 `minVersion` 字符串，
+/// 没有完整的 ModuleDef，但**同样**需要这一道闸门 —— 服务端一定过滤过，
+/// 可客户端不能假设它一定对（老客户端 + 新模块的组合迟早会出现）。
+///
+/// 传空/非法版本一律当作"不满足" —— 宁可不显示，也不要显示一个跑不起来的页面
+/// （与 remote_config.versionLess 同语义，这里独立实现以免循环依赖）。
+bool clientSatisfiesVersion(String? minVersion, String clientVersion) {
+  if (minVersion == null || minVersion.isEmpty) return true;
+  final re = RegExp(r'^\d+\.\d+\.\d+$');
+  if (!re.hasMatch(minVersion) || !re.hasMatch(clientVersion)) return false;
+  final pa = clientVersion.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+  final pb = minVersion.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+  final n = pa.length > pb.length ? pa.length : pb.length;
+  for (var i = 0; i < n; i++) {
+    final x = i < pa.length ? pa[i] : 0;
+    final y = i < pb.length ? pb[i] : 0;
+    if (x != y) return x > y;
   }
+  return true;
 }
 
 /// 模板串渲染：`{{name}}` → 取 data 里的 name 字段。

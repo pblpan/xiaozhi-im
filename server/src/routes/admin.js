@@ -6,6 +6,7 @@ const config = require('../config');
 const { verifyToken, hashPassword, verifyPassword } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
+const appregistry = require('../apps');
 const settings = require('../settings');
 const orgs = require('./orgs');
 const pkg = require('../../package.json');
@@ -46,6 +47,12 @@ router.get('/stats', (req, res) => {
     orgs: c('SELECT COUNT(*) c FROM orgs'),
     orgMembers: c('SELECT COUNT(*) c FROM users WHERE org_id IS NOT NULL'),
     depts: c('SELECT COUNT(*) c FROM org_depts'),
+    // 考勤：仪表盘要显示"今天到了几个人、有几张待批的假条"，
+    // 向导也靠 attendanceEnabled 判断考勤这一步做没做
+    attendanceEnabled: settings.get('attendanceEnabled') !== false,
+    attPending: c("SELECT COUNT(*) c FROM att_requests WHERE status='pending'"),
+    attShifts: c('SELECT COUNT(*) c FROM att_shifts'),
+    attGroups: c('SELECT COUNT(*) c FROM att_groups'),
   });
 });
 
@@ -504,6 +511,55 @@ router.get('/client-config/applied', (req, res) => {
     latest: cur.version,
     devices: clientconfig.appliedStatus(cur.version),
   });
+});
+
+/* ==================== 应用中心（工作台的统一视图） ==================== */
+
+/**
+ * 内置应用 + 自定义应用（动态模块）的统一清单。
+ *
+ * 返回值刻意带上 builtin 每个应用的 `need` 条件，让管理台能直接说明
+ * "为什么这个应用现在不显示"（没开工作模式 / 没建组织 / 考勤被停用）——
+ * 否则管理员只会看到"客户端里没有考勤"，然后来问是不是坏了。
+ */
+router.get('/apps', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const org = db.prepare('SELECT id, name FROM orgs LIMIT 1').get() || null;
+  const friendMode = settings.get('friendMode');
+  const attEnabled = settings.get('attendanceEnabled') !== false;
+  const visibleIds = appregistry.listFor({
+    friendMode, attendanceEnabled: attEnabled, hasOrg: !!org, role: 'admin',
+  }).map((a) => a.id);
+  res.json({
+    builtin: appregistry.catalog().map((a) => ({
+      ...a,
+      // 对"管理员视角"的可见性；员工视角可能更少（如考勤打卡管理员就看不到）
+      visibleForAdmin: visibleIds.includes(a.id),
+    })),
+    dynamic: appmodules.list(),
+    context: {
+      friendMode,
+      attendanceEnabled: attEnabled,
+      hasOrg: !!org,
+      orgName: org ? org.name : null,
+    },
+  });
+});
+
+/** 某个内置应用"对员工是否可见"的判定说明（管理台用来解释缺入口的原因） */
+router.get('/apps/why', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const id = String(req.query.id || '');
+  const app = appregistry.catalog().find((a) => a.id === id);
+  if (!app) return res.status(404).json({ error: '内置应用不存在' });
+  const org = db.prepare('SELECT id FROM orgs LIMIT 1').get() || null;
+  const reasons = [];
+  const n = app.need || {};
+  if (n.workMode && settings.get('friendMode') !== 'work') reasons.push('当前是普通好友模式（需在「系统设置」切换为工作模式）');
+  if (n.attendance && settings.get('attendanceEnabled') === false) reasons.push('考勤已被停用（可在「考勤管理 → 考勤设置」开启）');
+  if (n.orgMember && !org) reasons.push('尚未创建组织（需在「组织机构」创建）');
+  if (n.role === 'employee') reasons.push('管理员账号本身不参与考勤，属正常');
+  res.json({ id, title: app.title, visible: reasons.length === 0, reasons });
 });
 
 /* ==================== 动态模块（v0.9.0 第二期） ==================== */

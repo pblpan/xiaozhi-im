@@ -384,6 +384,98 @@ CREATE TABLE IF NOT EXISTS remote_code_attempts (
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_attempts_user ON remote_code_attempts(user_id, ts DESC);`);
 
+/* ==================== 考勤（工作模式的标配能力，对标钉钉考勤）====================
+ *
+ * 六张表，职责互不重叠：
+ *   att_shifts        班次：几点上下班、弹性与宽限（一个组织可有多套）
+ *   att_groups        考勤组：一批人用哪套班次、要不要定位、允不允许外勤
+ *   att_group_members 考勤组的「点名」成员
+ *   att_group_depts   考勤组按部门纳入（部门内所有人自动算成员，新员工自动进组）
+ *   att_records       打卡流水
+ *   att_requests      请假/补卡/外出/加班申请单
+ *
+ * 【为什么打卡流水允许一人一天多条】
+ * 钉钉的语义是「更新打卡」而不是「一天只能打一次」：员工手滑打早了会再打一次。
+ * 库里保留全部流水（审计需要，管理台能看到"他 8:31 打过又 9:02 补打"），
+ * 统计只在服务端取上班卡最早、下班卡最晚 —— 口径集中在一处，客户端不参与计算。
+ *
+ * 【为什么考勤组要存部门而不是存"展开后的成员"】
+ * 存成员的话，每次录入新员工都得回头把十几个考勤组重新展开一遍，漏一个就是
+ * "新来的不用打卡"。存部门则新员工一入职就自动在组里，人事少做一件事。
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS att_shifts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  work_start TEXT NOT NULL,              -- 'HH:MM'
+  work_end TEXT NOT NULL,                -- 'HH:MM'；work_end<=work_start 表示跨天班（cross_day=1）
+  rest_minutes INTEGER NOT NULL DEFAULT 0,   -- 休息时长（不计入工作时长，只做展示）
+  flex_minutes INTEGER NOT NULL DEFAULT 0,   -- 弹性上班分钟数：0=不弹性
+  late_grace INTEGER NOT NULL DEFAULT 0,     -- 迟到宽限（分钟）：宽限内不算迟到
+  early_grace INTEGER NOT NULL DEFAULT 0,    -- 可提前打卡分钟数：下班前 N 分钟打不算早退
+  cross_day INTEGER NOT NULL DEFAULT 0,      -- 夜班：下班时间在次日
+  enabled INTEGER NOT NULL DEFAULT 1,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS att_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  shift_id INTEGER,                          -- NULL = 用组织默认班次
+  -- 定位要求：off 不校验 | optional 有就记、没有算外勤 | required 必须带定位
+  -- 刻意**不做地理围栏**（公司坐标+半径）：桌面端拿不到定位、内网场景意义有限，
+  -- 而围栏要配坐标与地图，是"配了也不准"的功能。只记录地点，由管理者判断。
+  location_mode TEXT NOT NULL DEFAULT 'off',
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS att_group_members (
+  group_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  PRIMARY KEY(group_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS att_group_depts (
+  group_id INTEGER NOT NULL,
+  dept_id INTEGER NOT NULL,
+  PRIMARY KEY(group_id, dept_id)
+);
+CREATE TABLE IF NOT EXISTS att_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,                     -- 'YYYY-MM-DD'，按**服务器本地日**切分，不用 UTC
+  type TEXT NOT NULL,                    -- 'in' 上班卡 | 'out' 下班卡
+  at INTEGER NOT NULL,                   -- 打卡时刻（时间戳）
+  source TEXT NOT NULL DEFAULT 'app',    -- app 客户端 | admin 管理员代打 | makeup 补卡审批通过
+  lat REAL, lng REAL, address TEXT,
+  device TEXT,
+  note TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_att_records_user_day ON att_records (user_id, day);
+CREATE INDEX IF NOT EXISTS idx_att_records_org_day ON att_records (org_id, day);
+CREATE TABLE IF NOT EXISTS att_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,                    -- leave 请假 | makeup 补卡 | outing 外出 | overtime 加班
+  status TEXT NOT NULL DEFAULT 'pending',-- pending | approved | rejected | canceled
+  reason TEXT,
+  start_day TEXT, end_day TEXT,          -- 请假：起止日期（含）
+  half INTEGER NOT NULL DEFAULT 0,       -- 请假 0=全天 1=上午半天 2=下午半天
+  leave_type TEXT,                       -- personal 事假 | sick 病假 | annual 年假 | comp 调休
+  day TEXT, clock_type TEXT, at INTEGER, -- 补卡：哪天的哪张卡、补在什么时刻
+  start_at INTEGER, end_at INTEGER,      -- 外出/加班：起止时刻
+  reviewed_by INTEGER, reviewed_at INTEGER, review_note TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_att_requests_user ON att_requests (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_att_requests_org ON att_requests (org_id, status, created_at DESC);
+`);
+// 老库升级：att_shifts 最早没有 early_grace，补列（否则早退宽限永远存不住）
+ensureColumn('att_shifts', 'early_grace', 'early_grace INTEGER NOT NULL DEFAULT 0');
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

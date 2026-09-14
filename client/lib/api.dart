@@ -316,6 +316,58 @@ class ImApi {
     return _get(p);
   }
 
+  // ---- 应用中心（工作台）----
+
+  /// 工作台应用清单：内置应用（考勤打卡 / 我的申请 / 组织通讯录）+ 动态模块。
+  /// 服务端已按当前用户的模式/组织/角色过滤好 —— 客户端不做可见性判断，
+  /// 只是**认不认识的自己会忽略**（见 core/apps.dart），这样服务端上新应用
+  /// 不需要先升级客户端。
+  /// 工作台应用列表（内置应用 + 动态模块，服务端合并后下发）。
+  ///
+  /// ⚠️ **必须带上 clientVersion**：服务端要拿它过滤动态模块的 minClientVersion。
+  /// 漏传会被当成"版本不合法"，凡是设了最低版本要求的模块**全部消失** ——
+  /// 现象是"管理台明明发布了，客户端工作台里就是没有"。
+  Future<Map<String, dynamic>> clientApps() async =>
+      await _get('/client/apps?clientVersion=${Uri.encodeComponent(kAppVersion)}');
+
+  // ---- 考勤（工作模式下随工作模式启用）----
+
+  /// 今日考勤：班次、今日已打的卡、今日判定、本月汇总、待审批数。
+  /// 未启用时返回 available=false + reason（不是错误），客户端据此显示说明页。
+  Future<Map<String, dynamic>> attendanceToday() async => await _get('/attendance/today');
+
+  /// 打卡。type = 'in' | 'out'。
+  /// **不传时间** —— 时刻一律由服务端决定，客户端改本机时间无效。
+  Future<Map<String, dynamic>> attendanceClock(String type,
+          {double? lat, double? lng, String? address, String? device}) async =>
+      await _post('/attendance/clock', {
+        'type': type,
+        if (lat != null) 'lat': lat,
+        if (lng != null) 'lng': lng,
+        if (address != null) 'address': address,
+        if (device != null) 'device': device,
+      });
+
+  /// 我的月度考勤（month = 'YYYY-MM'，不传为当月）
+  Future<Map<String, dynamic>> attendanceMy({String? month}) async =>
+      await _get('/attendance/my${month != null ? '?month=$month' : ''}');
+
+  /// 我的打卡流水（某天，含被更新掉的旧流水）
+  Future<Map<String, dynamic>> attendanceRecords({String? day}) async =>
+      await _get('/attendance/records${day != null ? '?day=$day' : ''}');
+
+  /// 我的申请列表
+  Future<Map<String, dynamic>> attendanceRequests({String? status}) async =>
+      await _get('/attendance/requests${status != null ? '?status=$status' : ''}');
+
+  /// 提交申请（请假 / 补卡 / 外出 / 加班）
+  Future<Map<String, dynamic>> createAttendanceRequest(Map<String, dynamic> body) async =>
+      await _post('/attendance/requests', body);
+
+  /// 撤销待审批的申请
+  Future<void> cancelAttendanceRequest(int id) async =>
+      await _post('/attendance/requests/$id/cancel', const {});
+
   // ---- 群组 ----
   Future<Map<String, dynamic>> createGroup(String name) async =>
       await _post('/groups', {'name': name});

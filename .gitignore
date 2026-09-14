@@ -29,6 +29,10 @@ data/
 # 飞牛 NAS 连接凭据（绝不入库；本仓库是 Public）
 deploy/.fnos.env
 
+# 本机环境快照（如清场前备份的注册表项）—— 只对某台机器有意义，
+# 换台机器就是垃圾，且可能带上本机路径，不该进版本库
+deploy/backup/
+
 # OS
 .DS_Store
 Thumbs.db

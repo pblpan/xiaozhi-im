@@ -158,6 +158,25 @@ def reg_query(key):
     return r.returncode == 0 and r.stdout.strip() != ''
 
 
+def reg_value(key, name):
+    """读一个注册表值，读不到返回 ''。
+
+    ⚠️ 这里必须读 InstallLocation：NSIS 模板里有 `InstallDirRegKey`，
+    它让安装器**优先使用注册表里记的旧位置**，而不是 InstallDir 的默认值。
+    所以只要这台机器以前装到过别处（比如 zip 绿色版时代的桌面目录），
+    新包就会**静默装到旧位置**，而本脚本按 INSTALL_DIR 去找，必然报
+    "安装目录已创建 ✗" —— 只看这一条根本猜不到真因，白查一轮。
+    """
+    r = run(['reg', 'query', key, '/v', name], encoding='gbk')
+    if r.returncode != 0:
+        return ''
+    for line in (r.stdout or '').splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == name:
+            return parts[-1]
+    return ''
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('installer')
@@ -191,6 +210,21 @@ def main():
     else:
         print('  [OK]   现场没有正在运行的旧实例（断言环境最干净）')
 
+    # 残留的 InstallLocation 会把这次安装**引到别处**去（见 reg_value 的注释）。
+    # 必须在清场阶段就把它揪出来：要么清掉它，要么明确知道本次装到了哪，
+    # 否则后面"目录没创建 / 缺 24 个文件"的失败全都指向错误的方向。
+    stale = reg_value(UNINST_KEY, 'InstallLocation')
+    if stale and os.path.normcase(os.path.normpath(stale)) != os.path.normcase(os.path.normpath(INSTALL_DIR)):
+        warn('检测到残留的安装位置，本次安装会被它劫持', stale)
+        warn('  → 该位置与预期不同：%s' % INSTALL_DIR)
+        old_un = os.path.join(stale, 'uninst.exe')
+        if os.path.isfile(old_un):
+            run([old_un, '/S'])
+            time.sleep(2)
+            print('  [OK]   已用旧位置的卸载器清掉它（顺带验证卸载能删干净）')
+        else:
+            warn('  旧位置没有 uninst.exe，无法自动清理，请人工确认后删除')
+
     if os.path.isdir(INSTALL_DIR):
         un = os.path.join(INSTALL_DIR, 'uninst.exe')
         if os.path.isfile(un):
@@ -212,7 +246,17 @@ def main():
         return 1
     dur = time.time() - t0
     check(r.returncode == 0, '安装器退出码 = 0', '实际 %s' % r.returncode)
-    check(os.path.isdir(INSTALL_DIR), '安装目录已创建（%.1fs）' % dur, INSTALL_DIR)
+    # 失败时把"到底装到哪了"直接写进 detail：安装器退出码 0 但目录不在预期位置，
+    # 九成是 InstallDirRegKey 读了残留值（见 reg_value 注释），不是安装器坏了。
+    dir_ok = os.path.isdir(INSTALL_DIR)
+    dir_detail = INSTALL_DIR
+    if not dir_ok:
+        actual = reg_value(UNINST_KEY, 'InstallLocation')
+        if actual and os.path.normcase(os.path.normpath(actual)) != os.path.normcase(os.path.normpath(INSTALL_DIR)):
+            dir_detail = '实际装到了 %s —— 注册表残留的 InstallLocation 劫持了本次安装' % actual
+        else:
+            dir_detail = '%s（不存在，且注册表里也没有别的 InstallLocation）' % INSTALL_DIR
+    check(dir_ok, '安装目录已创建（%.1fs）' % dur, dir_detail)
 
     # 顺带验证「覆盖安装会先把旧实例请出去」这个功能本身
     if pre:
@@ -258,22 +302,29 @@ def main():
     # ---------- 4. 跑起来 ----------
     print('\n[4] 启动装好的程序（这一步只有真装才测得到）')
     exe = os.path.join(INSTALL_DIR, EXE_NAME)
-    p = subprocess.Popen([exe], cwd=INSTALL_DIR)
-    time.sleep(12)
-    alive = p.poll() is None
-    check(alive, '启动的进程存活 12s 未崩（dll / data 都在位）',
-          '已退出，退出码 %s' % p.poll() if not alive else 'PID %d' % p.pid)
-    if alive:
-        # 认准自己启动的那个 PID，再核对可执行路径 —— 只看"进程名存在"会假绿
-        mine = [x for x in procs() if x[0] == p.pid]
-        check(bool(mine), '刚才那个 PID 确实在进程表里', 'PID %d' % p.pid)
-        if mine:
-            got_path = os.path.normcase(mine[0][1])
-            want_path = os.path.normcase(exe)
-            check(got_path == want_path, '跑的是装出来的那份（不是别处的旧版）',
-                  got_path or '路径读不到')
-    ran_pid = p.pid
-    kill_app()
+    ran_pid = None
+    if not os.path.isfile(exe):
+        # 这里**不要**抛 FileNotFoundError：崩溃会跳过第 5/6 步的卸载与用户数据核对，
+        # 现场留一堆"半装"痕迹，下次再跑互相干扰、越查越乱。
+        # 如实记一条失败，然后照常走完收尾流程。
+        check(False, '装好的程序存在（能被启动）', '%s 不存在' % exe)
+    else:
+        p = subprocess.Popen([exe], cwd=INSTALL_DIR)
+        time.sleep(12)
+        alive = p.poll() is None
+        check(alive, '启动的进程存活 12s 未崩（dll / data 都在位）',
+              '已退出，退出码 %s' % p.poll() if not alive else 'PID %d' % p.pid)
+        if alive:
+            # 认准自己启动的那个 PID，再核对可执行路径 —— 只看"进程名存在"会假绿
+            mine = [x for x in procs() if x[0] == p.pid]
+            check(bool(mine), '刚才那个 PID 确实在进程表里', 'PID %d' % p.pid)
+            if mine:
+                got_path = os.path.normcase(mine[0][1])
+                want_path = os.path.normcase(exe)
+                check(got_path == want_path, '跑的是装出来的那份（不是别处的旧版）',
+                      got_path or '路径读不到')
+        ran_pid = p.pid
+        kill_app()
 
     if args.keep:
         print('\n--keep：保留安装结果，不做卸载')

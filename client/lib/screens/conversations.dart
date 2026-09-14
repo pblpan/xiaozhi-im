@@ -14,7 +14,7 @@ import 'package:xiaozhi_im_client/screens/chat.dart';
 import 'package:xiaozhi_im_client/screens/favorites.dart';
 import 'package:xiaozhi_im_client/screens/friends_new.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
-import 'package:xiaozhi_im_client/screens/module_hub.dart';
+import 'package:xiaozhi_im_client/screens/workbench.dart';
 import 'package:xiaozhi_im_client/screens/org_screen.dart';
 import 'package:xiaozhi_im_client/screens/remote.dart';
 import 'package:xiaozhi_im_client/screens/profile.dart';
@@ -242,11 +242,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   /// 关于 / 检查配置：显示客户端版本 + 已生效配置版本，可手动拉一次配置。
   /// 配置中心"出问题保持现状"（SPEC §6.2），这里拉取失败也只是文案提示，不报错弹窗。
-  /// 应用（动态模块）：服务端下发什么就显示什么，客户端不重装即可出现新入口。
-  /// 列表页自己处理加载/失败/空态，这里只管导航。
-  Future<void> _openApps() async {
+  /// 工作台：统一的应用入口（钉钉/企微/飞书都叫工作台）。
+  ///
+  /// 它把两类应用放在一起，**列表由服务端算好下发**：
+  ///   · 内置应用（考勤打卡 / 我的申请 / 组织通讯录）—— 随安装包发布
+  ///   · 自定义应用（管理台拼 JSON 发布的动态模块）—— 不重装就能长出功能
+  /// 所以这一个入口同时取代了原「应用」页，不是两个各管一摊。
+  Future<void> _openWorkbench() async {
     await Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const ModuleHubPage()));
+        .push(MaterialPageRoute(builder: (_) => const WorkbenchPage()));
     if (mounted) _load();
   }
 
@@ -929,7 +933,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'tray') _cycleCloseAction();
                 if (v == 'sound') _toggleSound();
                 if (v == 'about') _openAbout();
-                if (v == 'apps') _openApps();
+                if (v == 'workbench') _openWorkbench();
                 if (v == 'remote') _openRemote();
                 if (v == 'profile') _openProfile();
                 if (v == 'newfriends') _openNewFriends();
@@ -990,11 +994,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       Text('我的收藏')
                     ])),
                 const PopupMenuItem(
-                    value: 'apps',
+                    value: 'workbench',
                     child: Row(children: [
-                      Icon(Icons.widgets_outlined, size: 19),
+                      Icon(Icons.grid_view_rounded, size: 19),
                       SizedBox(width: 10),
-                      Text('应用')
+                      Text('工作台')
                     ])),
                 const PopupMenuItem(
                     value: 'remote',

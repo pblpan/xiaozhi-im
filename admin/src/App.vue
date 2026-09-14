@@ -20,6 +20,7 @@
         <el-menu-item index="groups">群组管理</el-menu-item>
         <el-menu-item index="friends">好友关系</el-menu-item>
         <el-menu-item index="orgs">组织机构</el-menu-item>
+        <el-menu-item index="attendance">考勤管理</el-menu-item>
         <el-menu-item index="files">文件管理</el-menu-item>
         <el-menu-item index="messages">消息管理</el-menu-item>
         <el-menu-item index="integrations">集成对接</el-menu-item>
@@ -190,6 +191,7 @@
                   <tr><td>群组管理</td><td>查看群与成员，必要时解散</td></tr>
                   <tr><td>好友关系</td><td>查看好友关系与备注，可解除关系</td></tr>
                   <tr><td>组织机构</td><td>工作模式专用：部门管理（支持父子层级）/ 岗位管理 / 员工管理（含 Excel 粘贴批量导入）。用法见「四之二」</td></tr>
+                  <tr><td>考勤管理</td><td>工作模式专用（<b>随工作模式自动启用</b>）：打卡看板 / 统计报表 / 班次与考勤组 / 请假·补卡·外出·加班审批 / 考勤设置。用法见「四之四」</td></tr>
                   <tr><td>文件管理</td><td>查看磁盘占用与上传的文件，可删除</td></tr>
                   <tr><td>消息管理</td><td>按类型 / 关键词检索消息，用于排查与审计</td></tr>
                   <tr><td>集成对接</td><td>入站推送地址、事件订阅、公钥接入（详见第六节）</td></tr>
@@ -270,6 +272,64 @@
               <p class="help-tip">
                 扫描依赖服务端 UDP <code class="mono">3616</code> 端口可达：Docker 部署时端口映射要有
                 <code class="mono">3616:3616/udp</code>。<b>扫不到也不影响使用</b>，手填地址一样能连上。
+              </p>
+            </section>
+
+            <section class="help-sec">
+              <h3>四之四、考勤打卡（开启工作模式后自动启用）</h3>
+              <p>
+                <b>不用额外开启</b>：切到工作模式、建好组织并录入员工后，考勤即生效 ——
+                员工端工作台出现「考勤打卡」，管理台出现「考勤管理」。
+                默认班次 <code class="mono">09:00-18:00</code>、工作日为周一至周五，不改也能用。
+              </p>
+
+              <p><b>1. 打卡怎么算</b></p>
+              <ul>
+                <li>上班卡取当天<b>最早</b>一条、下班卡取<b>最晚</b>一条；员工重复点打卡是<b>更新</b>当天那张卡（旧流水仍保留，管理台可查）。</li>
+                <li>打卡时刻一律按<b>服务器时钟</b>记录，客户端改本机时间无效（否则考勤数据没有意义）。</li>
+                <li>迟到 = 上班时间 + 弹性 + 迟到宽限之后才算；早退 = 下班时间 − 可提前打卡之前才算。</li>
+              </ul>
+
+              <p><b>2. 每天的状态含义</b></p>
+              <table class="help-table">
+                <thead><tr><th style="width:110px">状态</th><th>含义</th></tr></thead>
+                <tbody>
+                  <tr><td>正常</td><td>两张卡都在允许的时间范围内</td></tr>
+                  <tr><td>迟到 / 早退</td><td>超出弹性与宽限；两个都有则显示「迟到早退」，并给出分钟数</td></tr>
+                  <tr><td>缺卡</td><td>只打了一张卡（缺上班或缺下班）——下班时间还没到时<b>不判缺卡</b>，显示「进行中」</td></tr>
+                  <tr><td>缺勤</td><td>当天一张卡都没打、也没有请假/外出覆盖</td></tr>
+                  <tr><td>请假 / 外出</td><td>当天有审批通过的请假或外出申请，不再判缺勤</td></tr>
+                  <tr><td>休息</td><td>该星期不在「工作日」里（可在考勤设置里改），不判缺勤</td></tr>
+                  <tr><td>进行中</td><td>今天还没到下班时间，尚未发生的事不预先判异常（所以上午打开不会满屏"缺卡"）</td></tr>
+                </tbody>
+              </table>
+
+              <p><b>3. 班次与考勤组（不同人群不同作息时用）</b></p>
+              <ul>
+                <li><b>班次</b>：几点上下班、休息时长、弹性打卡、迟到宽限、可提前打卡。
+                  <b>下班时间早于或等于上班时间即视为跨天夜班</b>（如 22:00-06:00），次日凌晨打的下班卡会正确算进前一天。</li>
+                <li><b>考勤组</b>：把某些人归到某个班次。成员可以<b>按部门</b>纳入（含子部门，新员工入职自动进组），也可以<b>点名到人</b>。</li>
+                <li>一个人同时命中多个组时：<b>点名优先</b>，其次按考勤组创建顺序取第一个。<b>不在任何组的人</b>按组织默认班次打卡。</li>
+              </ul>
+
+              <p><b>4. 请假 / 补卡 / 外出 / 加班</b></p>
+              <ul>
+                <li>员工在客户端「我的申请」提交，管理台「考勤管理 → 申请审批」里通过或驳回（驳回需填原因）。</li>
+                <li><b>补卡</b>通过后立即写入当天对应打卡记录（来源标记为"补卡审批"），当天状态随之修正。</li>
+                <li><b>请假</b>支持单日半天（上午/下午）；多日请假按整天计，单次最多 30 天。</li>
+                <li><b>外出</b>覆盖其时段碰到的那张卡（上午外出就不判缺上班卡）；<b>加班</b>计入统计的加班时长。</li>
+              </ul>
+
+              <p><b>5. 员工漏打卡怎么办</b></p>
+              <ol>
+                <li>让员工自己提交<b>补卡</b>申请（客户端 → 我的申请 → 补卡），管理员审批通过即修正 —— 推荐，留痕清楚。</li>
+                <li>或管理员在「打卡看板」那行点<b>「补卡」</b>直接补录（来源标记为"管理员补录"）。</li>
+                <li>点<b>「明细」</b>可看某人当天的全部打卡流水（含被更新掉的旧流水），必要时删除某条。</li>
+              </ol>
+
+              <p class="help-tip">
+                统计报表选部门会<b>连子部门一起算</b>；点人员行首的展开箭头可看该人每天的明细。
+                停用考勤（考勤设置里）只是让员工端入口消失，<b>历史打卡与申请记录都保留</b>。
               </p>
             </section>
 
@@ -480,6 +540,29 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-collapse-item title="普通模式切成工作模式，原来的人还能用吗" name="10">
                   <p>能登录，和已有好友也能照常聊天（好友关系保留）。但<b>没进组织的人搜不到新同事</b>，
                     因为工作模式下搜索被限定为同组织。把他们收编进组织即可，见「四之二」。</p>
+                </el-collapse-item>
+                <el-collapse-item title="员工端看不到「考勤打卡」入口" name="11">
+                  <p>考勤入口由服务端按<b>业务状态</b>决定是否下发，三个条件缺一不可：</p>
+                  <ol>
+                    <li>好友模式是<b>工作模式</b>（系统设置）；</li>
+                    <li>已经<b>创建组织</b>（组织机构）；</li>
+                    <li>该账号<b>是组织员工</b>（有工号）。管理员账号本身不参与考勤，所以管理员看不到打卡入口是<b>正常</b>的。</li>
+                  </ol>
+                  <p>另外确认「考勤管理 → 考勤设置」里的<b>启用考勤</b>没有被关掉。客户端下拉刷新工作台即可。</p>
+                </el-collapse-item>
+                <el-collapse-item title="打卡时间不对，差了整整几小时" name="12">
+                  <p>打卡时刻按<b>服务器时钟</b>记录。先看「考勤管理」页右上角的<b>服务器时间</b>是否正确：</p>
+                  <ul>
+                    <li>时间本身就错了 → 服务器（或 NAS）系统时间没同步，开 NTP 对时；</li>
+                    <li>时间对、但记下来的时刻差 8 小时 → 容器时区是 UTC 而员工看的是北京时间。
+                      服务端已用显式时区（默认 <code class="mono">Asia/Shanghai</code>）换算，与容器 <code class="mono">TZ</code> 无关；
+                      若在别的时区部署，设环境变量 <code class="mono">ATT_TIMEZONE</code>（如 <code class="mono">Asia/Urumqi</code>）后重启服务。</li>
+                  </ul>
+                </el-collapse-item>
+                <el-collapse-item title="厂里是两班倒 / 周六也上班，怎么配" name="13">
+                  <p>①「考勤管理 → 考勤设置 → 工作日」把<b>周六</b>也勾上（不勾的星期不计应出勤）；
+                    ②「班次与考勤组 → 新增班次」建白班与夜班（夜班下班时间填 <code class="mono">06:00</code>，系统自动识别为跨天）；
+                    ③「考勤组」按<b>部门</b>把生产部纳进夜班 —— 之后新员工入职会自动进组，不用每次手工加人。</p>
                 </el-collapse-item>
               </el-collapse>
             </section>
@@ -1074,6 +1157,42 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         <div v-else-if="tab === 'modules'">
           <el-alert type="success" :closable="false" style="margin-bottom:14px"
             title="在这里拼页面 → 保存 → 客户端下拉刷新即可看到入口，无需重装 App。组件只允许 8 种，颜色只允许语义名（自动适配深色主题）。" />
+
+          <!-- 应用中心总览：客户端「工作台」= 内置应用 + 这里的自定义应用。
+               放在这一页是因为管理员来这儿就是为了给客户端长功能，得先知道已经有什么。 -->
+          <el-card style="margin-bottom:16px">
+            <template #header>
+              <div class="card-hdr">
+                <span>客户端工作台里的应用（内置 {{ (appCatalog.builtin || []).length }} 个 + 自定义 {{ (appCatalog.dynamic || []).length }} 个）</span>
+                <el-button size="small" @click="loadAppCatalog">刷新</el-button>
+              </div>
+            </template>
+            <el-table :data="appCatalog.builtin || []" border size="small">
+              <el-table-column prop="title" label="内置应用" width="130" />
+              <el-table-column prop="desc" label="说明" min-width="240" />
+              <el-table-column label="对员工是否可见" width="150">
+                <template #default="{ row }">
+                  <el-tag v-if="!appWhy[row.id]" size="small" effect="plain">—</el-tag>
+                  <el-tag v-else :type="appWhy[row.id].visible ? 'success' : 'warning'" size="small" effect="plain">
+                    {{ appWhy[row.id].visible ? '可见' : '当前不可见' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="原因 / 说明" min-width="320">
+                <template #default="{ row }">
+                  <span v-if="appWhy[row.id] && appWhy[row.id].reasons.length" class="hint">
+                    {{ appWhy[row.id].reasons.join('；') }}
+                  </span>
+                  <span v-else class="hint">正常可见</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="hint" style="margin-top:8px">
+              内置应用随客户端安装包发布（考勤打卡、我的申请、组织通讯录）；它们的入口可见性由<b>业务状态</b>决定
+              （是否工作模式 / 是否建了组织 / 考勤是否启用），不是开关 —— 所以不会出现"入口在、点进去报错"。
+              下面拼出来的自定义模块和它们并列出现在同一个工作台里。
+            </div>
+          </el-card>
 
           <el-row :gutter="16">
             <el-col :span="8">
@@ -1681,6 +1800,505 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           </el-dialog>
         </div>
 
+        <!-- 考勤管理（工作模式下随工作模式一起启用） -->
+        <div v-else-if="tab === 'attendance'">
+          <el-alert v-if="compSetting.mode !== 'work'" type="warning" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              当前是普通好友模式，考勤未启用。考勤随<b>工作模式</b>一起启用：请到「系统设置」把好友模式切换为工作模式。
+            </template>
+          </el-alert>
+          <el-alert v-else-if="!orgData.org" type="warning" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              还没有组织机构：考勤的对象是组织员工。请先到「组织机构」创建组织并录入员工。
+            </template>
+          </el-alert>
+
+          <el-card>
+            <template #header>
+              <div class="card-hdr">
+                <span>考勤管理{{ orgData.org ? ' · ' + orgData.org.name : '' }}</span>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <el-tag :type="attConfig.enabled ? 'success' : 'info'" size="small" effect="plain">
+                    {{ attConfig.enabled ? '考勤已启用' : '考勤已停用' }}
+                  </el-tag>
+                  <el-tooltip content="打卡时间一律以服务器时钟为准。若员工打的卡时间不对，先核对这里" placement="bottom">
+                    <el-tag size="small" effect="plain" type="warning">
+                      服务器时间 {{ attFmtTs(attConfig.serverTime) }}
+                    </el-tag>
+                  </el-tooltip>
+                  <el-button size="small" @click="loadAttendance">刷新</el-button>
+                </div>
+              </div>
+            </template>
+
+            <el-tabs v-model="attTab" @tab-change="loadAttTab">
+              <!-- ======== 打卡看板 ======== -->
+              <el-tab-pane label="打卡看板" name="today">
+                <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <el-date-picker v-model="attDay" type="date" value-format="YYYY-MM-DD" :clearable="false"
+                                  style="width:150px" @change="loadAttOverview" />
+                  <el-tag v-if="attOverview.isWorkday === false" type="info" size="small" effect="plain">所选日期是休息日</el-tag>
+                  <span class="hint">没打卡的人也在表里 —— 管理者真正要看的恰恰是"谁没来"。</span>
+                </div>
+                <el-row :gutter="10" style="margin-bottom:14px">
+                  <el-col :span="3" v-for="c in attOvCards" :key="c.k">
+                    <el-card shadow="never" class="stat">
+                      <div class="stat-num">{{ attOverview.stats ? (attOverview.stats[c.k] ?? 0) : '—' }}</div>
+                      <div class="stat-label">{{ c.label }}</div>
+                    </el-card>
+                  </el-col>
+                </el-row>
+                <el-table :data="attOverview.items || []" border stripe size="small" max-height="560">
+                  <el-table-column label="工号" width="95">
+                    <template #default="{ row }">{{ row.employeeNo || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column prop="nickname" label="姓名" min-width="95" />
+                  <el-table-column label="部门" min-width="105">
+                    <template #default="{ row }">{{ row.deptName || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="班次" min-width="165">
+                    <template #default="{ row }">
+                      {{ row.shiftName || '默认班次' }}
+                      <span v-if="row.shift" class="hint">（{{ row.shift.workStart }}-{{ row.shift.workEnd }}）</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="上班" width="72">
+                    <template #default="{ row }"><span :class="{ 'att-bad': row.lateMinutes > 0 }">{{ row.firstInTime || '—' }}</span></template>
+                  </el-table-column>
+                  <el-table-column label="下班" width="72">
+                    <template #default="{ row }"><span :class="{ 'att-bad': row.earlyMinutes > 0 }">{{ row.lastOutTime || '—' }}</span></template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="92">
+                    <template #default="{ row }">
+                      <el-tag size="small" :type="attStatusType(row.status)" effect="plain">{{ row.statusLabel }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="note" label="说明" min-width="130" />
+                  <el-table-column label="打卡地点" min-width="140">
+                    <template #default="{ row }">{{ row.address || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="132" fixed="right">
+                    <template #default="{ row }">
+                      <el-button size="small" @click="openAttRecordDlg(row)">补卡</el-button>
+                      <el-button size="small" @click="openAttDetail(row)">明细</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+
+              <!-- ======== 统计报表 ======== -->
+              <el-tab-pane label="统计报表" name="report">
+                <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                  <el-date-picker v-model="attRange" type="daterange" value-format="YYYY-MM-DD" :clearable="false"
+                                  start-placeholder="开始日期" end-placeholder="结束日期"
+                                  style="width:250px" @change="loadAttReport" />
+                  <el-select v-model="attDeptId" placeholder="全部部门" clearable style="width:170px" @change="loadAttReport">
+                    <el-option v-for="d in orgData.depts || []" :key="d.id" :label="d.name" :value="d.id" />
+                  </el-select>
+                  <el-button size="small" @click="loadAttReport">查询</el-button>
+                  <span class="hint">选部门会连子部门一起算；点行首箭头展开可看每天明细。</span>
+                </div>
+                <el-row :gutter="10" style="margin-bottom:14px">
+                  <el-col :span="3" v-for="c in attRepCards" :key="c.k">
+                    <el-card shadow="never" class="stat">
+                      <div class="stat-num">{{ attReport.totals ? (attReport.totals[c.k] ?? 0) : '—' }}</div>
+                      <div class="stat-label">{{ c.label }}</div>
+                    </el-card>
+                  </el-col>
+                </el-row>
+                <el-table :data="attReport.users || []" border stripe size="small" row-key="userId">
+                  <el-table-column type="expand">
+                    <template #default="{ row }">
+                      <div style="padding:8px 14px 14px">
+                        <div class="hint" style="margin-bottom:6px">
+                          班次：{{ row.shiftName }}（{{ row.shift.workStart }}-{{ row.shift.workEnd }}）·
+                          来源：{{ row.shiftSource === 'group' ? '考勤组点名' : (row.shiftSource === 'dept' ? '考勤组（部门）' : '组织默认班次') }}
+                          {{ row.groupName ? '· 考勤组「' + row.groupName + '」' : '' }}
+                        </div>
+                        <el-table :data="row.days" border size="small" max-height="320">
+                          <el-table-column prop="day" label="日期" width="110" />
+                          <el-table-column label="星期" width="70">
+                            <template #default="{ row: d }">{{ attWeekName(d.weekday) }}</template>
+                          </el-table-column>
+                          <el-table-column label="上班" width="72">
+                            <template #default="{ row: d }">{{ d.firstInTime || '—' }}</template>
+                          </el-table-column>
+                          <el-table-column label="下班" width="72">
+                            <template #default="{ row: d }">{{ d.lastOutTime || '—' }}</template>
+                          </el-table-column>
+                          <el-table-column label="状态" width="95">
+                            <template #default="{ row: d }">
+                              <el-tag size="small" :type="attStatusType(d.status)" effect="plain">{{ d.statusLabel }}</el-tag>
+                            </template>
+                          </el-table-column>
+                          <el-table-column prop="note" label="说明" min-width="200" />
+                        </el-table>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="nickname" label="姓名" min-width="95" />
+                  <el-table-column label="工号" width="88">
+                    <template #default="{ row }">{{ row.employeeNo || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="部门" min-width="100">
+                    <template #default="{ row }">{{ row.deptName || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="应出勤" width="78" align="center">
+                    <template #default="{ row }">{{ row.summary.workdays }}</template>
+                  </el-table-column>
+                  <el-table-column label="出勤天" width="78" align="center">
+                    <template #default="{ row }">{{ row.summary.present }}</template>
+                  </el-table-column>
+                  <el-table-column label="迟到" width="70" align="center">
+                    <template #default="{ row }">
+                      <span :class="{ 'att-bad': row.summary.late > 0 }">{{ row.summary.late }}</span>
+                      <span v-if="row.summary.lateMinutes" class="hint">/{{ row.summary.lateMinutes }}分</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="早退" width="70" align="center">
+                    <template #default="{ row }">
+                      <span :class="{ 'att-bad': row.summary.early > 0 }">{{ row.summary.early }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="缺卡" width="66" align="center">
+                    <template #default="{ row }"><span :class="{ 'att-bad': row.summary.missing > 0 }">{{ row.summary.missing }}</span></template>
+                  </el-table-column>
+                  <el-table-column label="缺勤" width="66" align="center">
+                    <template #default="{ row }"><span :class="{ 'att-bad': row.summary.absent > 0 }">{{ row.summary.absent }}</span></template>
+                  </el-table-column>
+                  <el-table-column label="请假" width="66" align="center">
+                    <template #default="{ row }">{{ row.summary.leave }}</template>
+                  </el-table-column>
+                  <el-table-column label="加班" width="76" align="center">
+                    <template #default="{ row }">
+                      {{ Math.round(row.summary.overtimeMinutes / 6) / 10 }}h
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+
+              <!-- ======== 班次与考勤组 ======== -->
+              <el-tab-pane label="班次与考勤组" name="shift">
+                <div class="card-hdr" style="margin-bottom:8px">
+                  <span><b>班次</b> —— 几点上下班、弹性与宽限</span>
+                  <el-button size="small" type="primary" @click="openShiftDlg()">新增班次</el-button>
+                </div>
+                <div class="hint" style="margin-bottom:10px">
+                  不建班次也能用：没被任何考勤组纳入的员工按「组织默认班次」
+                  （{{ attConfig.defaultShift ? attConfig.defaultShift.workStart + '-' + attConfig.defaultShift.workEnd : '09:00-18:00' }}）打卡。
+                  班次是精细化，不是使用前提。
+                </div>
+                <el-table :data="attShifts" border stripe size="small" style="margin-bottom:22px">
+                  <el-table-column prop="name" label="班次名称" min-width="120" />
+                  <el-table-column label="上下班" width="130">
+                    <template #default="{ row }">{{ row.workStart }} - {{ row.workEnd }}</template>
+                  </el-table-column>
+                  <el-table-column label="跨天" width="70">
+                    <template #default="{ row }">
+                      <el-tag v-if="row.crossDay" size="small" type="warning" effect="plain">夜班</el-tag>
+                      <span v-else>—</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="休息" width="76">
+                    <template #default="{ row }">{{ row.restMinutes }} 分</template>
+                  </el-table-column>
+                  <el-table-column label="弹性打卡" width="88">
+                    <template #default="{ row }">{{ row.flexMinutes }} 分</template>
+                  </el-table-column>
+                  <el-table-column label="迟到宽限" width="88">
+                    <template #default="{ row }">{{ row.lateGrace }} 分</template>
+                  </el-table-column>
+                  <el-table-column label="可提前打卡" width="98">
+                    <template #default="{ row }">{{ row.earlyGrace }} 分</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="140">
+                    <template #default="{ row }">
+                      <el-button size="small" @click="openShiftDlg(row)">编辑</el-button>
+                      <el-button size="small" type="danger" @click="removeShift(row)">删除</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+
+                <div class="card-hdr" style="margin-bottom:8px">
+                  <span><b>考勤组</b> —— 不同人群用不同班次</span>
+                  <el-button size="small" type="primary" @click="openGroupDlg()">新增考勤组</el-button>
+                </div>
+                <div class="hint" style="margin-bottom:10px">
+                  成员可以按<b>部门</b>纳入（含子部门，新员工自动进组，人事少做一件事），也可以<b>点名到人</b>；同一人同时命中多个组时，点名优先，其次按创建顺序取第一个。
+                </div>
+                <el-table :data="attGroups" border stripe size="small">
+                  <el-table-column prop="name" label="考勤组" min-width="130" />
+                  <el-table-column label="班次" width="130">
+                    <template #default="{ row }">
+                      {{ row.shiftName }}
+                      <span v-if="row.shift" class="hint">（{{ row.shift.workStart }}-{{ row.shift.workEnd }}）</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="定位要求" width="110">
+                    <template #default="{ row }">{{ attLocLabel(row.locationMode) }}</template>
+                  </el-table-column>
+                  <el-table-column label="纳入部门" min-width="150">
+                    <template #default="{ row }">
+                      <template v-if="row.deptIds && row.deptIds.length">
+                        <el-tag v-for="d in row.deptIds" :key="d" size="small" effect="plain" style="margin-right:4px">
+                          {{ deptName(d) }}
+                        </el-tag>
+                      </template>
+                      <span v-else class="hint">—</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="人数" width="76" align="center">
+                    <template #default="{ row }">{{ row.memberCount }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="140">
+                    <template #default="{ row }">
+                      <el-button size="small" @click="openGroupDlg(row)">编辑</el-button>
+                      <el-button size="small" type="danger" @click="removeGroup(row)">删除</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+
+              <!-- ======== 申请审批 ======== -->
+              <el-tab-pane :label="`申请审批（${attReqCounts.pending || 0}）`" name="review">
+                <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                  <el-radio-group v-model="attReqStatus" size="small" @change="loadAttRequests">
+                    <el-radio-button label="pending">待审批</el-radio-button>
+                    <el-radio-button label="approved">已通过</el-radio-button>
+                    <el-radio-button label="rejected">已驳回</el-radio-button>
+                    <el-radio-button label="all">全部</el-radio-button>
+                  </el-radio-group>
+                  <el-select v-model="attReqKind" clearable placeholder="全部类型" size="small"
+                             style="width:130px" @change="loadAttRequests">
+                    <el-option label="请假" value="leave" />
+                    <el-option label="补卡" value="makeup" />
+                    <el-option label="外出" value="outing" />
+                    <el-option label="加班" value="overtime" />
+                  </el-select>
+                  <span class="hint">补卡通过后立即写入考勤记录；请假/外出通过后当天不再判缺勤。</span>
+                </div>
+                <el-table :data="attRequests" border stripe size="small">
+                  <el-table-column prop="nickname" label="申请人" min-width="95" />
+                  <el-table-column label="工号" width="90">
+                    <template #default="{ row }">{{ row.employeeNo || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="类型" width="76">
+                    <template #default="{ row }">
+                      <el-tag size="small" effect="plain">{{ row.kindLabel }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="desc" label="内容" min-width="200" />
+                  <el-table-column prop="reason" label="事由" min-width="140" />
+                  <el-table-column label="提交时间" width="150">
+                    <template #default="{ row }">{{ attFmtTs(row.createdAt) }}</template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="86">
+                    <template #default="{ row }">
+                      <el-tag size="small" :type="row.status === 'approved' ? 'success' : (row.status === 'rejected' ? 'danger' : (row.status === 'pending' ? 'warning' : 'info'))" effect="plain">
+                        {{ row.statusLabel }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="审批意见" min-width="120">
+                    <template #default="{ row }">{{ row.reviewNote || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="140" fixed="right">
+                    <template #default="{ row }">
+                      <template v-if="row.status === 'pending'">
+                        <el-button size="small" type="success" @click="reviewAtt(row, true)">通过</el-button>
+                        <el-button size="small" type="danger" @click="reviewAtt(row, false)">驳回</el-button>
+                      </template>
+                      <span v-else class="hint">已处理</span>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+
+              <!-- ======== 考勤设置 ======== -->
+              <el-tab-pane label="考勤设置" name="config">
+                <el-form label-width="150px" style="max-width:700px">
+                  <el-form-item label="启用考勤">
+                    <el-switch v-model="attConfig.enabled" />
+                    <el-tag size="small" :type="attConfig.enabled ? 'success' : 'info'" effect="plain" style="margin-left:10px">
+                      {{ attConfig.enabled ? '员工端可见「考勤打卡」' : '员工端入口整体消失' }}
+                    </el-tag>
+                    <div class="hint">工作模式下默认开启。停用只是隐藏入口，历史打卡与申请记录都保留。</div>
+                  </el-form-item>
+                  <el-form-item label="默认班次 上班 / 下班">
+                    <el-input v-model="attConfig.defaultShift.workStart" style="width:100px" placeholder="09:00" />
+                    <span style="margin:0 8px">—</span>
+                    <el-input v-model="attConfig.defaultShift.workEnd" style="width:100px" placeholder="18:00" />
+                    <div class="hint">下班时间<b>早于或等于</b>上班时间即视为跨天夜班（如 22:00 - 06:00），下班卡会算到次日凌晨。</div>
+                  </el-form-item>
+                  <el-form-item label="弹性打卡 / 迟到宽限">
+                    <el-input-number v-model="attConfig.defaultShift.flexMinutes" :min="0" :max="240" :step="5" />
+                    <el-input-number v-model="attConfig.defaultShift.lateGrace" :min="0" :max="120" :step="5" style="margin-left:10px" />
+                    <span class="hint" style="margin-left:8px">分钟。弹性 = 允许晚到多久仍不算缺勤；宽限 = 迟到判定的缓冲（前者影响"该不该来"，后者只影响"算不算迟到"）</span>
+                  </el-form-item>
+                  <el-form-item label="可提前打卡">
+                    <el-input-number v-model="attConfig.defaultShift.earlyGrace" :min="0" :max="240" :step="5" />
+                    <span class="hint" style="margin-left:8px">分钟：下班前这么多分钟内打卡不算早退（设 10 就是 17:50 打下班卡也正常）</span>
+                  </el-form-item>
+                  <el-form-item label="休息时长">
+                    <el-input-number v-model="attConfig.defaultShift.restMinutes" :min="0" :max="480" :step="15" />
+                    <span class="hint" style="margin-left:8px">分钟，仅作展示，不参与迟到早退判定</span>
+                  </el-form-item>
+                  <el-form-item label="工作日">
+                    <el-checkbox-group v-model="attConfig.workdays">
+                      <el-checkbox v-for="d in attWeekLabels" :key="d.v" :label="d.v">{{ d.t }}</el-checkbox>
+                    </el-checkbox-group>
+                    <div class="hint">只有勾选的星期计「应出勤」；未勾选的日期不判缺勤（休息日来上班，让员工提交加班申请即可）。</div>
+                  </el-form-item>
+                  <el-form-item label="服务器时间 / 时区">
+                    <el-tag size="small" effect="plain" type="warning">{{ attFmtTs(attConfig.serverTime) }}</el-tag>
+                    <el-tag size="small" effect="plain" style="margin-left:8px">{{ attConfig.timezone }}</el-tag>
+                    <div class="hint">打卡时刻一律按服务器时钟记录，客户端改本地时间无效。</div>
+                  </el-form-item>
+                  <el-form-item>
+                    <el-button type="primary" :loading="attBusy" @click="saveAttConfig">保存设置</el-button>
+                  </el-form-item>
+                </el-form>
+              </el-tab-pane>
+            </el-tabs>
+          </el-card>
+
+          <!-- 班次编辑 -->
+          <el-dialog v-model="attShiftDlg" :title="attShiftForm.id ? '编辑班次' : '新增班次'" width="520px">
+            <el-form label-width="120px">
+              <el-form-item label="班次名称">
+                <el-input v-model="attShiftForm.name" maxlength="20" placeholder="如：白班 / 夜班 / 早班" />
+              </el-form-item>
+              <el-form-item label="上班 / 下班">
+                <el-input v-model="attShiftForm.workStart" style="width:100px" placeholder="09:00" />
+                <span style="margin:0 8px">—</span>
+                <el-input v-model="attShiftForm.workEnd" style="width:100px" placeholder="18:00" />
+              </el-form-item>
+              <el-form-item label="休息时长">
+                <el-input-number v-model="attShiftForm.restMinutes" :min="0" :max="480" :step="15" />
+                <span class="hint" style="margin-left:8px">分钟</span>
+              </el-form-item>
+              <el-form-item label="弹性打卡">
+                <el-input-number v-model="attShiftForm.flexMinutes" :min="0" :max="240" :step="5" />
+                <span class="hint" style="margin-left:8px">分钟</span>
+              </el-form-item>
+              <el-form-item label="迟到宽限">
+                <el-input-number v-model="attShiftForm.lateGrace" :min="0" :max="120" :step="5" />
+                <span class="hint" style="margin-left:8px">分钟</span>
+              </el-form-item>
+              <el-form-item label="可提前打卡">
+                <el-input-number v-model="attShiftForm.earlyGrace" :min="0" :max="240" :step="5" />
+                <span class="hint" style="margin-left:8px">分钟</span>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="attShiftDlg = false">取消</el-button>
+              <el-button type="primary" :loading="attBusy" @click="saveShift">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 考勤组编辑 -->
+          <el-dialog v-model="attGroupDlg" :title="attGroupForm.id ? '编辑考勤组' : '新增考勤组'" width="620px">
+            <el-form label-width="110px">
+              <el-form-item label="考勤组名称">
+                <el-input v-model="attGroupForm.name" maxlength="20" placeholder="如：生产部白班" />
+              </el-form-item>
+              <el-form-item label="使用班次">
+                <el-select v-model="attGroupForm.shiftId" clearable placeholder="不选 = 组织默认班次" style="width:100%">
+                  <el-option v-for="s in attShifts" :key="s.id" :label="`${s.name}（${s.workStart}-${s.workEnd}）`" :value="s.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="定位要求">
+                <el-radio-group v-model="attGroupForm.locationMode">
+                  <el-radio label="off">不校验</el-radio>
+                  <el-radio label="optional">有就记录</el-radio>
+                  <el-radio label="required">必须提供</el-radio>
+                </el-radio-group>
+                <div class="hint">桌面端拿不到定位，除非确有必要（外勤岗）否则保持"不校验"。</div>
+              </el-form-item>
+              <el-form-item label="纳入部门">
+                <el-select v-model="attGroupForm.deptIds" multiple clearable placeholder="选部门（含其子部门）"
+                           style="width:100%">
+                  <el-option v-for="d in orgData.depts || []" :key="d.id" :label="d.name" :value="d.id" />
+                </el-select>
+                <div class="hint">新员工入职即自动进组 —— 这是比"逐个点名"更省事的方式。</div>
+              </el-form-item>
+              <el-form-item label="点名成员">
+                <el-select v-model="attGroupForm.memberIds" multiple clearable filterable placeholder="额外指定到人（优先级最高）"
+                           style="width:100%">
+                  <el-option v-for="m in orgData.members || []" :key="m.id" :value="m.id"
+                             :label="`${m.nickname || m.username}${m.employee_no ? '（' + m.employee_no + '）' : ''}`" />
+                </el-select>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="attGroupDlg = false">取消</el-button>
+              <el-button type="primary" :loading="attBusy" @click="saveAttGroup">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 管理员补卡 / 修正 -->
+          <el-dialog v-model="attRecDlg" title="补卡 / 修正打卡" width="480px">
+            <el-alert type="info" :closable="false" style="margin-bottom:12px">
+              <template #title>
+                以管理员身份直接写入打卡记录（来源标记为 admin，可追溯）。同一天同一类型已有记录时会被覆盖。
+              </template>
+            </el-alert>
+            <el-form label-width="90px">
+              <el-form-item label="员工">
+                <span>{{ attRecForm.nickname }}（{{ attRecForm.employeeNo || attRecForm.userId }}）</span>
+              </el-form-item>
+              <el-form-item label="日期">
+                <el-date-picker v-model="attRecForm.day" type="date" value-format="YYYY-MM-DD" :clearable="false" style="width:160px" />
+              </el-form-item>
+              <el-form-item label="类型">
+                <el-radio-group v-model="attRecForm.type">
+                  <el-radio label="in">上班卡</el-radio>
+                  <el-radio label="out">下班卡</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label="时间">
+                <el-input v-model="attRecForm.time" style="width:110px" placeholder="HH:MM" />
+                <span class="hint" style="margin-left:8px">如 08:55</span>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="attRecDlg = false">取消</el-button>
+              <el-button type="primary" :loading="attBusy" @click="saveAttRecord">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 打卡明细 -->
+          <el-dialog v-model="attDetailDlg" :title="`打卡明细 · ${attDetail.nickname || ''} · ${attDetail.day}`" width="620px">
+            <el-table :data="attDetail.items" border size="small">
+              <el-table-column label="类型" width="90">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.type === 'in' ? 'success' : 'info'" effect="plain">
+                    {{ row.type === 'in' ? '上班卡' : '下班卡' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="time" label="时刻" width="90" />
+              <el-table-column label="来源" width="110">
+                <template #default="{ row }">{{ attSourceLabel(row.source) }}</template>
+              </el-table-column>
+              <el-table-column prop="address" label="地点" min-width="140">
+                <template #default="{ row }">{{ row.address || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="device" label="设备" min-width="120">
+                <template #default="{ row }">{{ row.device || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="80">
+                <template #default="{ row }">
+                  <el-button size="small" type="danger" @click="deleteAttRecord(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="hint" style="margin-top:8px">
+              同一天同一类型可以有多条流水（员工"更新打卡"会保留历史），统计只取上班最早、下班最晚。
+            </div>
+          </el-dialog>
+        </div>
+
         <div v-else-if="tab === 'settings'">
           <el-card style="margin-bottom:16px">
             <template #header>公司与好友模式（对全服务器生效，客户端登录页/扫描结果即时可见）</template>
@@ -2245,7 +2863,7 @@ const baseCards = [
 ];
 // 组织人数只在工作模式下有意义，普通模式下显示 0 反而让人以为坏了
 const cards = computed(() => compSetting.value.mode === 'work'
-  ? [...baseCards, { key: 'orgMembers', label: '组织人数' }]
+  ? [...baseCards, { key: 'orgMembers', label: '组织人数' }, { key: 'attPending', label: '待审批申请' }]
   : baseCards);
 
 /* ====== 上手向导 ======
@@ -2296,6 +2914,21 @@ const setupSteps = computed(() => {
       actionText: '去录入',
       tab: 'orgs',
       primary: orgMembers === 0,
+    });
+    // 考勤随工作模式自动启用（默认 09:00-18:00 / 周一至周五），所以这一步"默认就是完成的"。
+    // 放进向导的目的不是催办，而是让管理员**知道有这个功能**、知道去哪儿按自己厂里的
+    // 作息去调 —— 否则很容易出现"系统有考勤，但所有人都在按 9 点标准被算迟到"。
+    steps.push({
+      key: 'attendance',
+      done: orgMembers > 0 && stats.value.attendanceEnabled !== false,
+      title: '考勤打卡（已随工作模式启用）',
+      desc: stats.value.attendanceEnabled === false
+        ? '考勤当前被停用，员工端看不到打卡入口'
+        : '员工端已有「考勤打卡」：默认 09:00-18:00、周一至周五。'
+          + '厂里作息不同（夜班、两班倒、周六上班）就去配班次与考勤组；不配也能用',
+      actionText: '去查看',
+      tab: 'attendance',
+      primary: false,
     });
   } else {
     steps.push({
@@ -2421,11 +3054,12 @@ async function loadTab() {
   else if (tab.value === 'groups') await loadGroups();
   else if (tab.value === 'friends') await loadFriends();
   else if (tab.value === 'orgs') await loadOrgs();
+  else if (tab.value === 'attendance') await loadAttendance();
   else if (tab.value === 'files') await loadFiles();
   else if (tab.value === 'messages') await loadMessages();
   else if (tab.value === 'integrations') await loadIntegrations();
   else if (tab.value === 'clientconfig') { await loadCc(); await loadCcApplied(); }
-  else if (tab.value === 'modules') { await loadMm(); if (!users.value.length) await loadUsers(); }
+  else if (tab.value === 'modules') { await loadMm(); await loadAppCatalog(); if (!users.value.length) await loadUsers(); }
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
 }
 async function loadUsers() { users.value = (await api.get('/admin/users')).data; }
@@ -3648,6 +4282,335 @@ function bindUnauthorized() {
   });
 }
 
+// ====== 应用中心总览（内置应用 + 自定义模块） ======
+// 内置应用（考勤/申请/通讯录）随客户端发布，管理员只能"看"、不能改 ——
+// 能改的只有它们依赖的业务状态。所以这里展示的是"现在为什么可见/不可见"，
+// 而不是一堆开关（开关只会配出"入口在、点进去报错"的状态）。
+const appCatalog = ref({ builtin: [], dynamic: [], context: {} });
+const appWhy = ref({});
+async function loadAppCatalog() {
+  try {
+    const { data } = await api.get('/admin/apps');
+    appCatalog.value = data;
+    const whys = await Promise.all((data.builtin || []).map((a) =>
+      api.get('/admin/apps/why?id=' + a.id).then((r) => r.data).catch(() => null)));
+    const map = {};
+    for (const w of whys) if (w) map[w.id] = w;
+    appWhy.value = map;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载应用清单失败');
+  }
+}
+
+// ====== 考勤管理（工作模式下随工作模式一起启用） ======
+//
+// 服务端把口径全部算好（谁迟到、迟到几分钟、那天算不算请假），管理台只负责展示与
+// 配置。所以这里没有任何"前端算考勤"的逻辑 —— 一旦前端算，管理台和客户端就会
+// 各算一套，两边数字对不上时没人说得清哪个对。
+const attTab = ref('today');
+const attBusy = ref(false);
+const attDay = ref('');
+const attRange = ref([]);
+const attDeptId = ref(null);
+const attWeekLabels = [
+  { v: 1, t: '周一' }, { v: 2, t: '周二' }, { v: 3, t: '周三' }, { v: 4, t: '周四' },
+  { v: 5, t: '周五' }, { v: 6, t: '周六' }, { v: 0, t: '周日' },
+];
+const attConfig = ref({
+  enabled: true,
+  defaultShift: { workStart: '09:00', workEnd: '18:00', restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 },
+  workdays: [1, 2, 3, 4, 5],
+  serverTime: 0,
+  timezone: '',
+});
+const attOverview = ref({ stats: {}, items: [] });
+const attReport = ref({ users: [], totals: {} });
+const attShifts = ref([]);
+const attGroups = ref([]);
+const attRequests = ref([]);
+const attReqCounts = ref({});
+const attReqStatus = ref('pending');
+const attReqKind = ref('');
+const attShiftDlg = ref(false);
+const attShiftForm = ref({});
+const attGroupDlg = ref(false);
+const attGroupForm = ref({});
+const attRecDlg = ref(false);
+const attRecForm = ref({});
+const attDetailDlg = ref(false);
+const attDetail = ref({ day: '', nickname: '', items: [] });
+
+// 看板卡片：口径与服务端判定一致（迟到含"迟到+早退"，早退同理）
+const attOvCards = computed(() => [
+  { k: 'total', label: '应打卡' }, { k: 'present', label: '已打卡' },
+  { k: 'normal', label: '正常' }, { k: 'late', label: '迟到' },
+  { k: 'early', label: '早退' }, { k: 'missing', label: '缺卡' },
+  { k: 'absent', label: '缺勤' }, { k: 'leave', label: '请假' },
+]);
+const attRepCards = computed(() => [
+  { k: 'people', label: '人数' }, { k: 'workdays', label: '应出勤(人日)' },
+  { k: 'present', label: '出勤(人日)' }, { k: 'late', label: '迟到(次)' },
+  { k: 'early', label: '早退(次)' }, { k: 'missing', label: '缺卡(次)' },
+  { k: 'absent', label: '缺勤(天)' }, { k: 'leave', label: '请假(天)' },
+]);
+
+function attDayStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function attToday() { return attDayStr(new Date()); }
+function attFmtTs(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return `${attDayStr(d)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+function attWeekName(w) {
+  return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][w] || '';
+}
+function attStatusType(s) {
+  return {
+    normal: 'success', pending: 'primary', late: 'warning', early: 'warning',
+    late_early: 'warning', missing: 'danger', absent: 'danger', leave: 'info',
+    outing: 'info', rest: 'info', future: 'info',
+  }[s] || 'info';
+}
+function attLocLabel(m) {
+  return { off: '不校验', optional: '有就记录', required: '必须提供' }[m] || '不校验';
+}
+function attSourceLabel(s) {
+  return { app: '客户端打卡', admin: '管理员补录', makeup: '补卡审批' }[s] || s;
+}
+
+async function loadAttConfig() {
+  try {
+    const { data } = await api.get('/admin/attendance/config');
+    attConfig.value = {
+      enabled: data.enabled !== false,
+      defaultShift: data.defaultShift || attConfig.value.defaultShift,
+      workdays: Array.isArray(data.workdays) ? data.workdays : [1, 2, 3, 4, 5],
+      serverTime: data.serverTime,
+      timezone: data.timezone,
+    };
+    return true;
+  } catch (e) {
+    // 没建组织时后端返回 404 —— 这是"还没到能配考勤的阶段"，不是错误
+    if (e.response?.status === 404) return false;
+    ElMessage.error(e.response?.data?.error || '加载考勤设置失败');
+    return false;
+  }
+}
+
+async function loadAttOverview() {
+  try {
+    attOverview.value = (await api.get('/admin/attendance/overview?day=' + attDay.value)).data;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载打卡看板失败');
+  }
+}
+async function loadAttReport() {
+  if (!attRange.value || attRange.value.length !== 2) return;
+  try {
+    const p = new URLSearchParams({ from: attRange.value[0], to: attRange.value[1] });
+    if (attDeptId.value) p.set('deptId', attDeptId.value);
+    attReport.value = (await api.get('/admin/attendance/report?' + p.toString())).data;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载统计报表失败');
+  }
+}
+async function loadAttShifts() {
+  attShifts.value = (await api.get('/admin/attendance/shifts')).data.items || [];
+}
+async function loadAttGroups() {
+  attGroups.value = (await api.get('/admin/attendance/groups')).data.items || [];
+}
+async function loadAttRequests() {
+  try {
+    const p = new URLSearchParams();
+    if (attReqStatus.value) p.set('status', attReqStatus.value);
+    if (attReqKind.value) p.set('kind', attReqKind.value);
+    const { data } = await api.get('/admin/attendance/requests?' + p.toString());
+    attRequests.value = data.items || [];
+    attReqCounts.value = data.counts || {};
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载申请列表失败');
+  }
+}
+async function loadAttTab() {
+  if (attTab.value === 'today') await loadAttOverview();
+  else if (attTab.value === 'report') await loadAttReport();
+  else if (attTab.value === 'shift') { await loadAttShifts(); await loadAttGroups(); }
+  else if (attTab.value === 'review') await loadAttRequests();
+  else if (attTab.value === 'config') await loadAttConfig();
+}
+async function loadAttendance() {
+  if (!attDay.value) attDay.value = attToday();
+  if (!attRange.value || attRange.value.length !== 2) {
+    const d = new Date();
+    d.setDate(d.getDate() - 29);
+    attRange.value = [attDayStr(d), attToday()];
+  }
+  await loadOrgs();          // 部门/员工列表（报表筛选、考勤组选人要用）
+  await loadAttConfig();     // 服务器时间、开关、默认班次
+  await loadAttTab();
+}
+async function saveAttConfig() {
+  attBusy.value = true;
+  try {
+    const { data } = await api.put('/admin/attendance/config', {
+      enabled: attConfig.value.enabled,
+      defaultShift: attConfig.value.defaultShift,
+      workdays: attConfig.value.workdays,
+    });
+    ElMessage.success('考勤设置已保存');
+    attConfig.value = { ...attConfig.value, enabled: data.enabled, defaultShift: data.defaultShift, workdays: data.workdays };
+    await loadAttOverview();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    attBusy.value = false;
+  }
+}
+
+// ---- 班次 ----
+function openShiftDlg(row) {
+  attShiftForm.value = row
+    ? { ...row }
+    : { id: null, name: '', workStart: '09:00', workEnd: '18:00', restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 };
+  attShiftDlg.value = true;
+}
+async function saveShift() {
+  attBusy.value = true;
+  try {
+    const b = attShiftForm.value;
+    if (b.id) await api.put(`/admin/attendance/shifts/${b.id}`, b);
+    else await api.post('/admin/attendance/shifts', b);
+    ElMessage.success('班次已保存');
+    attShiftDlg.value = false;
+    await loadAttShifts();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    attBusy.value = false;
+  }
+}
+async function removeShift(row) {
+  try {
+    await ElMessageBox.confirm(`确认删除班次「${row.name}」？`, '删除确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/admin/attendance/shifts/${row.id}`);
+    ElMessage.success('已删除');
+    await loadAttShifts();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
+// ---- 考勤组 ----
+function openGroupDlg(row) {
+  attGroupForm.value = row
+    ? { id: row.id, name: row.name, shiftId: row.shiftId || null, locationMode: row.locationMode || 'off',
+        deptIds: [...(row.deptIds || [])], memberIds: [...(row.memberIds || [])] }
+    : { id: null, name: '', shiftId: null, locationMode: 'off', deptIds: [], memberIds: [] };
+  attGroupDlg.value = true;
+}
+async function saveAttGroup() {
+  attBusy.value = true;
+  try {
+    const b = attGroupForm.value;
+    if (b.id) await api.put(`/admin/attendance/groups/${b.id}`, b);
+    else await api.post('/admin/attendance/groups', b);
+    ElMessage.success('考勤组已保存');
+    attGroupDlg.value = false;
+    await loadAttGroups();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    attBusy.value = false;
+  }
+}
+async function removeGroup(row) {
+  try {
+    await ElMessageBox.confirm(`确认删除考勤组「${row.name}」？组内人员将回到组织默认班次。`, '删除确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/admin/attendance/groups/${row.id}`);
+    ElMessage.success('已删除');
+    await loadAttGroups();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
+// ---- 审批 ----
+async function reviewAtt(row, approve) {
+  let note = '';
+  if (approve) {
+    try {
+      await ElMessageBox.confirm(`通过「${row.nickname}」的${row.kindLabel}申请（${row.desc}）？`, '审批确认', { type: 'info' });
+    } catch { return; }
+  } else {
+    try {
+      const r = await ElMessageBox.prompt('请填写驳回原因（会展示给申请人）', '驳回申请', {
+        inputPlaceholder: '如：与排班冲突 / 请补充说明',
+        inputValidator: (v) => (v && v.trim() ? true : '驳回需要填写原因'),
+      });
+      note = r.value;
+    } catch { return; }
+  }
+  try {
+    await api.post(`/admin/attendance/requests/${row.id}/review`, { approve, note });
+    ElMessage.success(approve ? '已通过' : '已驳回');
+    await loadAttRequests();
+    if (attTab.value === 'review') { /* 留在本页 */ }
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '审批失败');
+  }
+}
+
+// ---- 补卡 / 明细 ----
+function openAttRecordDlg(row) {
+  attRecForm.value = {
+    userId: row.userId, nickname: row.nickname, employeeNo: row.employeeNo,
+    day: attDay.value, type: row.firstInTime ? 'out' : 'in', time: '',
+  };
+  attRecDlg.value = true;
+}
+async function saveAttRecord() {
+  attBusy.value = true;
+  try {
+    await api.post('/admin/attendance/records', attRecForm.value);
+    ElMessage.success('打卡记录已写入');
+    attRecDlg.value = false;
+    await loadAttOverview();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '写入失败');
+  } finally {
+    attBusy.value = false;
+  }
+}
+async function openAttDetail(row) {
+  try {
+    const { data } = await api.get(`/admin/attendance/records?day=${attDay.value}&userId=${row.userId}`);
+    attDetail.value = { day: attDay.value, nickname: row.nickname, items: data.items || [] };
+    attDetailDlg.value = true;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载明细失败');
+  }
+}
+async function deleteAttRecord(row) {
+  try {
+    await ElMessageBox.confirm(`删除这条${row.type === 'in' ? '上班' : '下班'}卡（${row.time}）？删除后当天的判定会跟着变。`, '删除确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/admin/attendance/records/${row.id}`);
+    ElMessage.success('已删除');
+    attDetail.value.items = attDetail.value.items.filter((x) => x.id !== row.id);
+    await loadAttOverview();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
 onMounted(async () => {
   bindUnauthorized();
   // 登录前也要能显示「××小智」：bootstrap 免鉴权，只取公开字段
@@ -3671,6 +4634,8 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .stat-label { color: #909399; margin-top: 6px; }
 .page-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .hint { color: #909399; font-size: 12px; }
+/* 考勤：迟到/早退/缺卡的数字用红字标出来，一眼能扫到异常 */
+.att-bad { color: #f56c6c; font-weight: 600; }
 
 /* ====== 动态模块编辑器（v0.9.0 第二期） ====== */
 .mm-item { padding: 9px 10px; border: 1px solid var(--el-border-color); border-radius: 6px; margin-bottom: 8px; cursor: pointer; }

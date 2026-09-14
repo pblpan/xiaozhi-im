@@ -14,11 +14,29 @@ const db = require('./db');
 const KEYS = Object.freeze({
   companyName: { key: 'company_name', def: '' },
   friendMode: { key: 'friend_mode', def: 'normal' },
+  // 考勤：工作模式下默认开箱可用（"开启工作模式后同时启用"）。
+  // 关掉它 = 全组织停用打卡，客户端考勤入口消失但历史记录保留。
+  attendanceEnabled: { key: 'attendance_enabled', def: true },
+  // 组织默认班次。没建任何考勤组时全员按它打卡 —— 这样"开了工作模式就能用"，
+  // 而不是"必须先配班次再用"（配班次是精细化，不该是使用前提）。
+  attDefaultShift: {
+    key: 'att_default_shift',
+    def: {
+      workStart: '09:00', workEnd: '18:00', restMinutes: 60,
+      flexMinutes: 0, lateGrace: 0, earlyGrace: 0,
+    },
+  },
+  // 应出勤的星期（0=周日 … 6=周六）。默认周一至周五。
+  // 工厂/门店周末也上班，所以做成可配；节假日不做统一表（各厂不同），
+  // 需要放假的日期用「请假/调休」或管理台手工修正处理。
+  attWorkdays: { key: 'att_workdays', def: [1, 2, 3, 4, 5] },
 });
 
 const COMPANY_MAX = 20;
 const COMPANY_MIN = 2;
 const FRIEND_MODES = ['normal', 'work'];
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const MINUTE_MAX = { restMinutes: 480, flexMinutes: 240, lateGrace: 120, earlyGrace: 240 };
 
 function rawGet(key) {
   const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key);
@@ -64,7 +82,56 @@ function all() {
   return {
     companyName: get('companyName'),
     friendMode: get('friendMode'),
+    attendanceEnabled: get('attendanceEnabled'),
+    attDefaultShift: get('attDefaultShift'),
+    attWorkdays: get('attWorkdays'),
   };
+}
+
+/** 校验时间 'HH:MM' */
+function cleanTime(input, label) {
+  const s = String(input ?? '').trim();
+  if (!TIME_RE.test(s)) return { error: `${label} 需为 HH:MM 格式（如 09:00）` };
+  return { value: s };
+}
+
+/**
+ * 校验默认班次。返回清洗后的值或 { error }。
+ * 跨天班（下班 <= 上班）在这里是**合法**的：夜班 22:00-06:00 很常见，
+ * 不能因为"下班比上班早"就判为输入错误 —— 那会把工厂夜班挡在门外。
+ */
+function cleanShift(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { error: '班次必须是一个对象' };
+  }
+  const out = { ...KEYS.attDefaultShift.def };
+  const s = cleanTime(input.workStart, '上班时间');
+  if (s.error) return s;
+  out.workStart = s.value;
+  const e = cleanTime(input.workEnd, '下班时间');
+  if (e.error) return e;
+  out.workEnd = e.value;
+  for (const k of Object.keys(MINUTE_MAX)) {
+    if (input[k] === undefined) continue;
+    const n = Number(input[k]);
+    if (!Number.isFinite(n) || n < 0 || n > MINUTE_MAX[k]) {
+      return { error: `${k} 需在 0~${MINUTE_MAX[k]} 之间` };
+    }
+    out[k] = Math.trunc(n);
+  }
+  return { value: out };
+}
+
+/** 校验应出勤星期数组：去重、升序、0~6 */
+function cleanWorkdays(input) {
+  if (!Array.isArray(input)) return { error: 'attWorkdays 必须是数组，如 [1,2,3,4,5]' };
+  const set = new Set();
+  for (const x of input) {
+    const n = Number(x);
+    if (!Number.isInteger(n) || n < 0 || n > 6) return { error: '星期取值需为 0~6（0=周日）' };
+    set.add(n);
+  }
+  return { value: [...set].sort((a, b) => a - b) };
 }
 
 /** 管理台整体更新入口：只处理认识的键，返回 { ok, settings } 或 { error } */
@@ -91,7 +158,29 @@ function update(input, by) {
     if (r.error) return r;
   }
 
+  if (input.attendanceEnabled !== undefined) {
+    if (typeof input.attendanceEnabled !== 'boolean') {
+      return { error: 'attendanceEnabled 必须是 true/false' };
+    }
+    const r = setRaw('attendanceEnabled', input.attendanceEnabled, by);
+    if (r.error) return r;
+  }
+
+  if (input.attDefaultShift !== undefined) {
+    const c = cleanShift(input.attDefaultShift);
+    if (c.error) return { error: c.error };
+    const r = setRaw('attDefaultShift', c.value, by);
+    if (r.error) return r;
+  }
+
+  if (input.attWorkdays !== undefined) {
+    const c = cleanWorkdays(input.attWorkdays);
+    if (c.error) return { error: c.error };
+    const r = setRaw('attWorkdays', c.value, by);
+    if (r.error) return r;
+  }
+
   return { ok: true, settings: all() };
 }
 
-module.exports = { all, update, cleanCompany, get, KEYS };
+module.exports = { all, update, cleanCompany, cleanShift, cleanWorkdays, cleanTime, get, KEYS };

@@ -38,7 +38,11 @@ app.use('/api/remote', require('./routes/remote'));
 app.use('/api/client', require('./routes/client'));
 // 集成管理必须挂在 /api/admin 之前，否则会被管理路由先接管
 app.use('/api/admin/integrations', require('./routes/integrations'));
+// 考勤管理端同理：路径前缀更长，必须排在 /api/admin 前面
+app.use('/api/admin/attendance', require('./routes/attendance').admin);
 app.use('/api/admin', require('./routes/admin'));
+// 考勤（工作模式下随工作模式启用）：员工端打卡/我的考勤/申请
+app.use('/api/attendance', require('./routes/attendance'));
 // 对外开放：程序用令牌调用的运行时接口 + 免登录入站 Webhook
 app.use('/api/open', require('./routes/open'));
 app.use('/api/hooks', require('./routes/hooks'));

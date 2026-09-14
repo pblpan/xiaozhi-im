@@ -95,7 +95,6 @@ WIN_MARKS = [
     'submitModule',             # 动态表单提交（api.dart 方法名）
     'module_schema.dart',       # 客户端侧的**二次**校验（不信任服务端）
     'module_renderer.dart',     # 渲染器实现
-    'module_hub.dart',          # 模块列表入口页
     'module_page.dart',         # 单个模块页面
     # ⚠️ 下面这些**实测搜不到，禁止当判据**（2026-09-13 探测确认）：
     #   '/api/client/modules'、'kVersionForGate'、'fetchModules'、'listVisible'
@@ -124,6 +123,26 @@ WIN_MARKS = [
     'showFromTray',             # 来电时把窗口从托盘拉回来（不拉 = 漏接）
     'actionLabel',              # 菜单「点×时：缩到托盘」的当前值展示
     'xz_close_action',          # 记住的选择存在这个 key 里（能改回去，不做绑架）
+    # ---- v0.12.0 工作台 + 考勤打卡 ----
+    # 工作台把「内置应用（考勤/申请/组织）」与「自建应用（动态模块）」合成
+    # 一个入口 —— 取代了原来的 module_hub.dart（已进 GONE_MARKS，别再加回来）。
+    'workbench.dart',           # 工作台页（取代 module_hub.dart）
+    'WorkbenchPage',            # 工作台页类名
+    'apps.dart',                # 内置应用注册表（id → 页面构造器）
+    'builtinAppPage',           # 上面的核心函数：id 不认识就返回 null，不崩
+    'clientSatisfiesVersion',   # 客户端侧版本闸门（工作台列表也要卡一次）
+    'attendance.dart',          # 考勤打卡页
+    'AttendancePage',           # 考勤打卡页类名
+    'attendance_records.dart',  # 我的考勤记录（按天 + 当日流水）
+    'AttendanceRecordsPage',
+    'attendance_request.dart',  # 我的申请（请假/补卡/外出/加班）
+    'AttendanceRequestPage',
+    'attendanceToday',          # api.dart：今日考勤
+    'attendanceClock',          # api.dart：打卡（**不传时间**，时刻由服务端定）
+    'clientApps',               # api.dart：工作台应用列表
+    # ⚠️ 下面这些**实测搜不到，禁止当判据**（2026-09-14 在 Windows app.so 上探测确认）：
+    #   '/api/client/apps' → 由 Config.baseUrl 拼接，完整串不存在（同 v0.8.0/v0.9.0 那批）
+    #   资源路径 'assets/...' 类判据见 SOUND_ASSETS —— 那是单独校验的，别混进来。
 ]
 
 # 只有 Windows 产物才有的记号。**绝不许混进 APK_MARKS**。
@@ -143,6 +162,8 @@ WIN_ONLY_MARKS = [
 # 只在"确定它不该在产物里"时才加进来 —— 误报会让人白跑一轮构建。
 GONE_MARKS = [
     'stun.qq.com',              # v0.6.1：黑龙江电信实测被 RST，已从内置列表剔除
+    'module_hub.dart',          # v0.12.0：原「应用」页被「工作台」取代，源码已删；
+                                #   还在产物里 = 打的是旧代码（构建缓存没清干净）
 ]
 
 # 音频资源条目（必须真的打进包里，否则运行时静默无声）
@@ -393,8 +414,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.11.0', 'v0.11.0'],
-        'src/package.json': ['"version": "0.11.0"'],
+        'manifest': ['version', '0.12.0', 'v0.12.0'],
+        'src/package.json': ['"version": "0.12.0"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
@@ -418,7 +439,11 @@ def check_fpk(path):
                           "case 'remote:offer'", "case 'remote:ice'",
                           'remote.request', 'remote.relay', 'remote.handleOffline'],
         # v0.10.0：远程协助的 REST 路由必须真的挂上去（没挂 = 客户端 404）
-        'src/src/index.js': ["'/api/remote'", "require('./routes/remote')"],
+        # v0.12.0：考勤的两个前缀同理 —— 管理端那条**必须排在 /api/admin 前面**，
+        #   否则会被管理路由先接管、考勤的 admin 接口全部 404（挂载顺序踩过坑）。
+        'src/src/index.js': ["'/api/remote'", "require('./routes/remote')",
+                             "require('./routes/attendance')",
+                             "'/api/attendance'", "'/api/admin/attendance'"],
         # v0.6.3：Cloudflare 托管中继（免端口映射）—— 现场签凭据 + 缓存
         # v0.6.5：新增热加载与凭据探测（管理台向导用）
         'src/src/config.js': ['TURN_URLS', 'iceServers', 'CF_TURN_KEY_ID',
@@ -426,13 +451,21 @@ def check_fpk(path):
                               'probeTurnCredentials', 'applyTurnCredentials',
                               'cfEnabled'],
         # v0.6.3：好友备注（落在我这一侧，对方看不到）
+        # v0.12.0：考勤的 6 张表也在这里（班次/考勤组/组成员/组部门/打卡记录/申请）。
+        #   ⚠️ 这些串要并进本条目，**不能单开一条 'src/src/db.js'** ——
+        #   同一 dict 字面量里同名键后者覆盖前者，单开会把好友备注与远程协助的
+        #   判据悄悄吃掉（下面 app_modules 那条注释里记过同样的坑）。
         'src/src/db.js': ["ensureColumn('friendships', 'remark'",
                           # v0.9.0：动态模块的两张表（定义 + 提交记录）
                           'app_modules', 'module_submissions',
                           # v0.10.0：远程协助的会话审计 + 访问码（只存慢哈希）
                           #   remote_code_attempts 是限流表 —— 没有它就是无限次撞 9 位访问码
                           'remote_sessions', 'remote_access_codes',
-                          'remote_code_attempts', 'code_hash', 'idx_remote_codes_user'],
+                          'remote_code_attempts', 'code_hash', 'idx_remote_codes_user',
+                          # v0.12.0：考勤
+                          'att_shifts', 'att_groups', 'att_group_members',
+                          'att_group_depts', 'att_records', 'att_requests',
+                          "ensureColumn('att_shifts', 'early_grace'"],
         # v0.10.0：远程协助信令本体（SPEC-远程协助.md）
         #   判据挑的是**安全边界的存在证据**，不是业务流程函数名：
         #     ABORT_WINDOW_MS  → 无人值守"有码也不是立刻能控"，还有 10 秒反悔
@@ -472,7 +505,38 @@ def check_fpk(path):
                                     # v0.9.0：动态模块的 CRUD + 提交记录（第二期）
                                     "'/modules'", "'/modules/:id'",
                                     "'/modules/:id/submissions'", 'appmodules',
-                                    'capability', 'templates'],
+                                    'capability', 'templates',
+                                    # v0.12.0：应用中心总览 + 「为什么看不到」诊断，
+                                    # 以及仪表盘/向导要用的考勤计数
+                                    "'/apps'", "'/apps/why'", 'appregistry',
+                                    'attendanceEnabled', 'attPending',
+                                    'attShifts', 'attGroups'],
+        # v0.12.0：考勤引擎 —— 判据挑的是**口径安全**的证据，不是业务流程函数名。
+        #   这一期最难发现的坑是时区：容器 TZ 常是 UTC，用本地时间算打卡
+        #   会让所有人的打卡时刻整体偏 8 小时（而且"看起来"是正常的）。
+        #   所以第一条判据是 TZ 常量与 Intl.DateTimeFormat —— 有了它才谈得上口径正确。
+        #   isValidDay 是另一个真实坑：Date.UTC(2026,12,45) 会**静默归一化**成
+        #   2027-02-14，非法日期能写进库，必须真实回验年月日。
+        'src/src/attendance.js': ['TZ', 'Intl.DateTimeFormat', 'ATT_TIMEZONE',
+                                  'dayOf', 'minutesOfDay', 'tsOfDay', 'weekdayOf',
+                                  'defaultShift', 'shiftFor', 'listShifts',
+                                  'deptChain', 'deptWithDescendants', 'groupMemberIds',
+                                  'clock', 'recordsOn', 'recordsRange',
+                                  'judgeDay', 'judgeRange', 'summarize', 'myRange',
+                                  'isValidDay', 'createRequest', 'listRequests',
+                                  'reviewRequest', 'overview'],
+        # 应用中心注册表：内置应用清单 + 按业务状态过滤可见性
+        'src/src/apps.js': ['BUILTIN_APPS', 'listFor', 'catalog', 'GROUPS',
+                            "'attendance'", "'my_requests'", "'work_org'"],
+        # 考勤 REST（用户端 + 管理端两个 Router）
+        'src/src/routes/attendance.js': ["'/today'", "'/clock'", "'/my'",
+                                         "'/records'", "'/requests'",
+                                         "'/requests/:id/cancel'",
+                                         "'/requests/:id/review'",
+                                         "'/shifts'", "'/shifts/:id'",
+                                         "'/groups'", "'/groups/:id'",
+                                         'admin.get', 'admin.put', 'admin.post',
+                                         'admin.delete', 'express.Router()'],
         # v0.8.0：客户端配置下发（SPEC-动态配置与模块.md 第一期）
         #   clientconfig.js 是配置中心本体：白名单校验 / 只增不改的版本快照 /
         #   回滚=用旧内容发新版。routes/client.js 是下发出去的口子：
@@ -485,7 +549,9 @@ def check_fpk(path):
                                      'clientconfig',
                                      # v0.9.0：动态模块访问与提交（第二期）
                                      "'/modules/:id'", "'/modules/:id/submit'",
-                                     'appmodules', 'listVisible'],
+                                     'appmodules', 'listVisible',
+                                     # v0.12.0：工作台把内置应用与自建应用合并下发
+                                     'appregistry', 'req.query.clientVersion'],
         # v0.9.0：动态模块中心（SPEC-动态配置与模块.md 第二期）
         #   这一期的全部风险都在"服务端下发的 schema 会不会把客户端搞崩 / 变成 SSRF 跳板"，
         #   所以判据挑的是**三道闸门**的存在证据，而不是 CRUD 函数名：
@@ -627,6 +693,20 @@ def check_fpk(path):
                         '命中 ✓' if mm_hit else '缺失 ✗'))
     all_ok = all_ok and bool(mm_hit)
 
+    # v0.12.0：管理台「考勤管理」页必须真打进静态产物。
+    # 判据挑**只出现在页面标记里**的串（帮助文档里没有），否则"帮助写到了但页面没打进去"
+    # 也会假通过：『所选日期是休息日』只在打卡看板的标记里，『班次名称』只在班次表里。
+    # 再配三个标签页名。改文案就要同步改这里，反过来也提醒"页面还在"。
+    att_hit = [n for n in admin_js
+               if '所选日期是休息日'.encode('utf-8') in blob[n]
+               and '班次名称'.encode('utf-8') in blob[n]
+               and '统计报表'.encode('utf-8') in blob[n]
+               and '班次与考勤组'.encode('utf-8') in blob[n]
+               and '申请审批'.encode('utf-8') in blob[n]]
+    print('%-30s %s' % ('src/public/assets(考勤管理页)',
+                        '命中 ✓' if att_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(att_hit)
+
     # v0.8.0：bootstrap 免鉴权是硬要求，但绝不能因此把用户定向内容漏出去。
     # 判据：bootstrap 分支里不得出现 verifyToken（只有 /config 与上报才鉴权）。
     #   注意别用"文件里出现 verifyToken"来判 —— uidOf() 定义在文件上方，
@@ -649,6 +729,19 @@ def check_fpk(path):
     print('%-30s %s' % ('routes/client.js(bootstrap 过滤定向模块)',
                         '正确 ✓' if boot_filter_ok else '异常 ✗'))
     all_ok = all_ok and boot_filter_ok
+
+    # v0.12.0：/apps 必须把客户端的 ?clientVersion= 交给 listVisible 做过滤。
+    #   漏传的后果**不是报错**，而是"凡设了「最低客户端版本」的自建应用整个消失"
+    #   （cv 为空串 → versionGte 一律 false），现象是"管理台明明发布了、
+    #   客户端工作台里就是没有"，很难查 —— 曾经真实发生过一轮。
+    #   这里按**形态**判：/apps 处理函数体里必须同时出现 clientVersion 与 listVisible。
+    apps_seg = b''
+    if b"'/apps'" in cjs:
+        apps_seg = cjs.split(b"'/apps'", 1)[1].split(b'router.', 1)[0]
+    apps_cv_ok = b'clientVersion' in apps_seg and b'listVisible' in apps_seg
+    print('%-30s %s' % ('routes/client.js(/apps 传 clientVersion)',
+                        '正确 ✓' if apps_cv_ok else '异常 ✗ 漏传会让自建应用整个消失'))
+    all_ok = all_ok and apps_cv_ok
 
     hits = []
     for name, data in blob.items():
