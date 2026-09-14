@@ -1,7 +1,8 @@
 <template>
   <div class="login-wrap" v-if="!token">
     <el-card class="login-card">
-      <h2 style="text-align:center;margin-bottom:18px">小智 IM 管理后台</h2>
+      <h2 style="text-align:center;margin-bottom:6px">{{ brand }}</h2>
+      <p style="text-align:center;color:#909399;font-size:12.5px;margin:0 0 16px">服务端可视化管理后台</p>
       <el-alert v-if="err" :title="err" type="error" show-icon :closable="false" style="margin-bottom:12px" />
       <el-input v-model="form.username" placeholder="管理员账号" @keyup.enter="login" />
       <el-input v-model="form.password" type="password" placeholder="密码" style="margin-top:12px" @keyup.enter="login" />
@@ -12,7 +13,7 @@
 
   <el-container v-else style="height:100vh">
     <el-aside width="200px" class="aside">
-      <div class="logo">小智 IM</div>
+      <div class="logo">{{ brand }}</div>
       <el-menu :default-active="tab" @select="tab = $event" background-color="#0F2620" text-color="#c0c4cc" active-text-color="#10B981">
         <el-menu-item index="dashboard">仪表盘</el-menu-item>
         <el-menu-item index="users">用户管理</el-menu-item>
@@ -35,12 +36,49 @@
 
     <el-container>
       <el-header class="hdr">
-        <span>小智 IM · 服务端可视化管理</span>
+        <span>{{ brand }} · 服务端可视化管理</span>
         <el-tag v-if="info.version" type="success" effect="plain" size="small">v{{ info.version }}</el-tag>
       </el-header>
       <el-main>
         <!-- 仪表盘 -->
         <div v-if="tab === 'dashboard'">
+          <!-- 上手向导：按服务器真实状态动态打勾。新手进来先看这块，
+               不用读文档也知道下一步该做什么、点哪儿。 -->
+          <el-card class="setup" shadow="never">
+            <template #header>
+              <div class="card-hdr">
+                <span>
+                  上手向导
+                  <span class="hint" style="margin-left:8px">照着做，几分钟把这套系统跑起来</span>
+                </span>
+                <div>
+                  <el-tag :type="setupDone ? 'success' : 'primary'" effect="plain" size="small">
+                    {{ setupDoneCount }} / {{ setupSteps.length }} 已完成
+                  </el-tag>
+                  <el-button v-if="setupDone" type="primary" link @click="setupOpen = !setupOpen">
+                    {{ setupOpen ? '收起' : '展开' }}
+                  </el-button>
+                  <el-button type="primary" link @click="tab = 'help'">完整帮助 →</el-button>
+                </div>
+              </div>
+            </template>
+            <div v-show="!setupDone || setupOpen">
+              <el-progress :percentage="setupPercent" :stroke-width="8" :show-text="false" class="setup-bar" />
+              <div v-for="(s, i) in setupSteps" :key="s.key" class="setup-item" :class="{ done: s.done }">
+                <span class="setup-mark">{{ s.done ? '✓' : i + 1 }}</span>
+                <div class="setup-body">
+                  <div class="setup-title">{{ s.title }}</div>
+                  <div class="setup-desc">{{ s.desc }}</div>
+                </div>
+                <el-button size="small" :type="!s.done && s.primary ? 'primary' : 'default'"
+                           @click="tab = s.tab">{{ s.actionText }}</el-button>
+              </div>
+              <div v-if="setupDone" class="setup-allgood">
+                全部就绪 —— 剩下的就是把客户端发给同事用起来。
+              </div>
+            </div>
+          </el-card>
+
           <el-row :gutter="16">
             <el-col :span="6" v-for="c in cards" :key="c.label">
               <el-card shadow="hover" class="stat">
@@ -59,7 +97,7 @@
             <p>· <b>小智 IM</b> 是私有化部署的即时通讯服务，数据 100% 存储于本机（飞牛 / 群晖 / 绿联 / 麒麟等私有服务器），不经任何第三方云。</p>
             <p>· <b>客户端</b>支持 Windows / Android（宽屏双栏 / 窄屏跳转自适应布局），后续扩展 Mac / iOS；支持文字、图片、文件、语音、表情、卡片消息，以及单聊 / 群聊、已读回执、撤回、收藏、转发、全局搜索、好友备注与音视频通话。</p>
             <p>· <b>本管理台</b>用于管用户、群组、好友关系、文件、消息，以及对接外部系统的入站推送与事件订阅。</p>
-            <p>· <b>上手步骤</b>：装客户端 → 自动探测服务器地址并登录 → 搜索账号加好友 → 开聊。批量开户在「用户管理 → 新建用户」。</p>
+            <p>· <b>上手步骤</b>：见上方<b>上手向导</b>（按服务器当前状态自动判断还差哪几步，一键跳到对应页面）。开户方式取决于模式：普通模式在「用户管理 → 新建用户」、或让同事自己在客户端注册；<b>工作模式</b>在「组织机构 → 员工管理」按工号录入（工号 = 登录账号、初始密码 = 工号），人多就用 Excel 批量导入。</p>
             <p>· <b>两个高频注意点</b>：改管理员密码在「系统设置」（无需重启）；外网通话要通，必须先配好音视频中继（见「系统帮助 → 音视频通话与网络穿透」）。</p>
           </el-card>
         </div>
@@ -91,16 +129,34 @@
 
             <section class="help-sec">
               <h3>二、五分钟上手</h3>
+              <el-alert type="success" :closable="false" style="margin-bottom:14px">
+                <template #title>
+                  <b>不想读文档？</b>回「仪表盘」，顶上有一份<b>上手向导</b>：它会按服务器当前状态列出还没做的事，
+                  每一条都能一键跳到对应页面，跟着做完系统就能用了。
+                </template>
+              </el-alert>
+
+              <p><b>管理员这边（服务端）</b></p>
               <el-steps :active="4" align-center style="margin:6px 0 14px">
-                <el-step title="装客户端" description="Android 装 APK / Windows 解压运行" />
-                <el-step title="登录" description="自动探测地址，或手动填" />
-                <el-step title="加好友" description="搜索账号或昵称发申请" />
-                <el-step title="开聊" description="对方通过后出现在会话列表" />
+                <el-step title="设公司名" description="客户端显示「××小智」" />
+                <el-step title="开户" description="普通模式建用户 / 工作模式录员工" />
+                <el-step title="配中继" description="手机在外也能通话" />
+                <el-step title="发客户端" description="装 exe / APK 给同事" />
               </el-steps>
+
+              <p><b>同事这边（客户端）</b></p>
+              <el-steps :active="3" align-center style="margin:6px 0 14px">
+                <el-step title="装客户端" description="Windows 装 exe / 安卓装 APK" />
+                <el-step title="连服务器" description="自动扫描局域网，或手填内网地址" />
+                <el-step title="开聊" description="搜索同事发消息（工作模式下同事已互为好友）" />
+              </el-steps>
+
               <ul>
                 <li>Windows 端解压后双击 <code class="mono">xiaozhi_im_client.exe</code>；<b>dll 与 data/ 目录必须一起保留</b>，不能只拷 exe。</li>
                 <li>手机装 APK 时，若提示已存在旧版，请确认新包的文件名版本号比旧的高 —— <b>版本号不涨，安卓会静默跳过覆盖安装</b>。</li>
-                <li>要给同事批量开户：本页「用户管理 → 新建用户」，不必让对方自己注册。</li>
+                <li><b>普通模式</b>：给同事开户用「用户管理 → 新建用户」，也可以让同事自己在客户端注册。</li>
+                <li><b>工作模式</b>：登记用「组织机构 → 员工管理」（工号 = 登录账号、初始密码 = 工号），
+                  人多就用<b>批量导入</b>把 Excel 名单粘进去；关掉自助注册后，别人也注册不了。</li>
               </ul>
             </section>
 
@@ -115,9 +171,11 @@
                   <tr><td>消息操作</td><td>撤回（限时窗口内）、转发、收藏、复制、置顶</td></tr>
                   <tr><td>已读回执</td><td>单聊显示对方读到哪；群聊显示「所有人都读到」的水位</td></tr>
                   <tr><td>全局搜索</td><td>跨会话搜文字与卡片内容（图片/文件/语音不参与，因为内容不是可读文本）</td></tr>
-                  <tr><td>好友</td><td>认证附言（附言模板最多 10 条）、<b>好友备注</b>（只自己可见，不改变对方昵称）</td></tr>
-                  <tr><td>个人资料</td><td>头像、昵称、个性签名、性别、地区、生日</td></tr>
-                  <tr><td>音视频通话</td><td>1 对 1 语音 / 视频通话，含来电界面、重连恢复</td></tr>
+                  <tr><td>好友</td><td>认证附言（附言模板最多 10 条）、<b>好友备注</b>（只自己可见，不改变对方昵称）；对方不在线时发出的申请，他下次上线会收到提醒</td></tr>
+                  <tr><td>个人资料</td><td>头像、昵称、个性签名、性别、地区、生日；<b>修改密码</b>在「个人信息 → 账号」</td></tr>
+                  <tr><td>音视频通话</td><td>单聊语音 / 视频通话（群内最多 6 人同时通话），含来电界面与断线重连</td></tr>
+                  <tr><td>首次连接</td><td>装好后首次启动会<b>自动扫描局域网找服务器</b>；扫不到可在「服务器设置」手填内网地址，如 <code class="mono">http://192.168.31.44:3602</code></td></tr>
+                  <tr><td>远程协助</td><td>无人值守被控（Windows 端），需要远程看对方屏幕时用</td></tr>
                 </tbody>
               </table>
             </section>
@@ -127,16 +185,92 @@
               <table class="help-table">
                 <thead><tr><th style="width:130px">页面</th><th>说明</th></tr></thead>
                 <tbody>
-                  <tr><td>仪表盘</td><td>各类计数总览（用户、群组、消息、文件、好友关系、机器人、入站推送、事件订阅、公钥接入）</td></tr>
-                  <tr><td>用户管理</td><td>新建 / 编辑 / 删除用户，改角色、重置密码</td></tr>
+                  <tr><td>仪表盘</td><td><b>上手向导</b> + 各类计数总览（用户、群组、消息、文件、好友关系、机器人、入站推送、事件订阅、公钥接入；工作模式下多一张「组织人数」）</td></tr>
+                  <tr><td>用户管理</td><td>新建 / 编辑 / 删除用户，改角色、重置密码。<b>工作模式下</b>新建普通用户会自动作为员工加入组织</td></tr>
                   <tr><td>群组管理</td><td>查看群与成员，必要时解散</td></tr>
                   <tr><td>好友关系</td><td>查看好友关系与备注，可解除关系</td></tr>
+                  <tr><td>组织机构</td><td>工作模式专用：部门管理（支持父子层级）/ 岗位管理 / 员工管理（含 Excel 粘贴批量导入）。用法见「四之二」</td></tr>
                   <tr><td>文件管理</td><td>查看磁盘占用与上传的文件，可删除</td></tr>
                   <tr><td>消息管理</td><td>按类型 / 关键词检索消息，用于排查与审计</td></tr>
                   <tr><td>集成对接</td><td>入站推送地址、事件订阅、公钥接入（详见第六节）</td></tr>
-                  <tr><td>系统设置</td><td>改管理员密码（无需重启）、查看服务器信息</td></tr>
+                  <tr><td>客户端配置</td><td>下发给客户端的配置：服务器地址、功能开关、公告、强制升级；带版本快照与按范围下发</td></tr>
+                  <tr><td>动态模块</td><td>客户端首页的功能模块，可开关并指定下发给哪些人</td></tr>
+                  <tr><td>系统设置</td><td>公司名称、好友模式（普通 / 工作，见「四之二」）、音视频中继配置、改管理员密码 —— 改完即生效，不用重启</td></tr>
+                  <tr><td>系统帮助</td><td>就是本页</td></tr>
                 </tbody>
               </table>
+            </section>
+
+            <section class="help-sec">
+              <h3>四之二、工作模式与组织机构（公司统一开户用这个）</h3>
+              <p>两种好友模式，二选一，在「系统设置」里切换：</p>
+              <table class="help-table">
+                <thead><tr><th style="width:150px">模式</th><th>适合谁 / 行为差异</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><b>普通好友模式</b><br /><el-tag size="small">默认</el-tag></td>
+                    <td>家人、朋友、小团队。谁都能自助注册；互相搜账号发申请加好友；搜索能看到服务器上的所有人。</td>
+                  </tr>
+                  <tr>
+                    <td><b>工作模式</b></td>
+                    <td>
+                      公司 / 工厂。关闭自助注册（注册会提示联系管理员）、不再随意加好友（同事关系由组织决定），
+                      搜索只能搜到<b>同组织</b>的同事，避免把全员通讯录暴露给每个账号。<br />
+                      人员由管理员在「组织机构」统一录入：<b>工号就是登录账号，初始密码 = 工号</b>，录入后自动与同事互为好友。
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <p><b>开启工作模式后的三步</b></p>
+              <el-steps :active="3" align-center style="margin:6px 0 14px">
+                <el-step title="系统设置" description="切到工作模式" />
+                <el-step title="组织机构" description="创建组织" />
+                <el-step title="员工管理" description="录入 / 批量导入" />
+              </el-steps>
+
+              <p><b>批量导入员工（几百人的厂用这个，别一个个加）</b></p>
+              <ol>
+                <li>在 Excel 里排成四列：<code class="mono">工号 | 姓名 | 部门 | 岗位</code>（只有工号必填，其余可留空）。</li>
+                <li>选中这些单元格 → <b>Ctrl + C</b> → 打开「组织机构 → 员工管理 → 批量导入」→ 直接 <b>Ctrl + V</b> 粘进输入框（也支持选 CSV 文件）。</li>
+                <li>看一眼解析预览没问题，点「导入」。<b>部门 / 岗位不存在会自动创建</b>，同一批里同名的只建一次。</li>
+                <li>结果弹窗会写清：新建多少人、自动建了哪些部门岗位、哪些行被跳过及原因（工号格式错 / 已在组织中）。<b>坏行不影响其它行</b>。</li>
+              </ol>
+
+              <el-alert type="warning" :closable="false" style="margin:10px 0">
+                <template #title>
+                  员工登录后，请提醒他到「个人信息 → 账号 → 修改密码」把初始密码改掉 —— 工号当密码只是方便第一次登录。
+                  <b>忘记密码由管理员在「用户管理」里重置</b>，员工自己改不了别人的。
+                </template>
+              </el-alert>
+
+              <p><b>从普通模式切到工作模式，已有的账号怎么办？</b></p>
+              <ul>
+                <li>已建立的好友关系<b>不受影响</b>，照常聊天。</li>
+                <li>但这些账号如果没进组织，在工作模式下<b>搜不到任何人</b>（搜索被限定为同组织）。</li>
+                <li>把它们<b>收编进组织</b>就行：在「员工管理」把账号本身当工号录入，系统识别出这是已有账号，
+                  <b>只并入组织、不改密码</b>，随即与同事互为好友。批量导入同样支持（结果里显示「老账号归队 N 人」）。</li>
+              </ul>
+              <p class="help-tip">
+                「移除员工」是离职语义：<b>账号保留</b>，仅退出组织、清掉部门岗位、解除与同事的好友关系。
+                想让他回来，重新录入同一个工号即可，原密码依然有效。
+              </p>
+            </section>
+
+            <section class="help-sec">
+              <h3>四之三、客户端首次安装：怎么找到服务器</h3>
+              <p>服务器地址只需配一次，三种方式任选：</p>
+              <ol>
+                <li><b>自动扫描（推荐）</b>：首次启动，或在「服务器设置」里点<b>「扫描内网服务器」</b>。
+                  客户端向局域网广播探测，服务器应答后把结果列出来（带公司名，一眼认出自家），点一下即填入。</li>
+                <li><b>手动填写</b>：在「服务器设置 → 内网地址」填 <code class="mono">http://服务器IP:3602</code>，
+                  例如 <code class="mono">http://192.168.31.44:3602</code>。</li>
+                <li><b>服务端下发</b>：连上服务器后客户端会自动拉取服务端配置（公司名、功能开关、公告、升级地址），不需要手工配。</li>
+              </ol>
+              <p class="help-tip">
+                扫描依赖服务端 UDP <code class="mono">3616</code> 端口可达：Docker 部署时端口映射要有
+                <code class="mono">3616:3616/udp</code>。<b>扫不到也不影响使用</b>，手填地址一样能连上。
+              </p>
             </section>
 
             <section class="help-sec">
@@ -322,6 +456,31 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <p>先在 App 内「服务器设置」确认地址正确（内网一般是 <code class="mono">http://192.168.31.44:3602</code>）。
                     若人在外面，需要走外网访问通道；服务端本身只监听 3602 一个端口。</p>
                 </el-collapse-item>
+                <el-collapse-item title="员工登录后搜不到同事，也加不了好友" name="7">
+                  <p>先确认当前是不是<b>工作模式</b>。工作模式下：搜索只返回<b>同组织</b>成员，且不允许主动加好友
+                    （同事关系由组织决定，不靠申请/同意）。</p>
+                  <p>如果这个账号还<b>不属于任何组织</b>（普通模式时期自己注册的老账号，或直接在「用户管理」里建的），
+                    他就会一个人都搜不到，看着像系统坏了。处理办法：</p>
+                  <ol>
+                    <li>打开「组织机构 → 员工管理」；</li>
+                    <li>把他的<b>账号本身当作工号</b>录入（可顺手指定部门和岗位）；</li>
+                    <li>系统会识别出这是已有账号 → <b>收编进组织、不改密码</b>，并立刻与同事互为好友。</li>
+                  </ol>
+                  <p>要一次处理一批人，用「员工管理 → 批量导入」把账号列粘进去即可。</p>
+                </el-collapse-item>
+                <el-collapse-item title="部门删不掉，提示「该部门下有 N 名员工」，但列表里看不到人" name="8">
+                  <p>这是老版本的残留数据：早期「移除员工」只清掉了组织归属，没清部门 / 岗位，
+                    人被移走了却仍占着部门名额。当前版本已修复（移除时会一并清空）。</p>
+                  <p>若已有这种残留：把那个人<b>重新录入一次再移除</b>，即可清干净；或者给他重新指定一个部门再撤回。</p>
+                </el-collapse-item>
+                <el-collapse-item title="员工忘记登录密码了" name="9">
+                  <p>管理员在「用户管理」里找到该账号 → 编辑 → <b>重置密码</b>（不需要旧密码）。
+                    员工也可以在客户端「个人信息 → 账号 → 修改密码」自己改，但只能改自己的。</p>
+                </el-collapse-item>
+                <el-collapse-item title="普通模式切成工作模式，原来的人还能用吗" name="10">
+                  <p>能登录，和已有好友也能照常聊天（好友关系保留）。但<b>没进组织的人搜不到新同事</b>，
+                    因为工作模式下搜索被限定为同组织。把他们收编进组织即可，见「四之二」。</p>
+                </el-collapse-item>
               </el-collapse>
             </section>
 
@@ -331,6 +490,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <thead><tr><th style="width:200px">项目</th><th>值</th></tr></thead>
                 <tbody>
                   <tr><td>服务端端口</td><td><code class="mono">3602</code>（管理台在 <code class="mono">/admin/</code>）</td></tr>
+                  <tr><td>局域网发现</td><td><code class="mono">3616/udp</code> —— 客户端「扫描内网服务器」靠它自动找服务器；Docker 端口映射需含 <code class="mono">3616:3616/udp</code></td></tr>
                   <tr><td>自建中继端口</td><td><code class="mono">3478/udp</code>、<code class="mono">3478/tcp</code>、<code class="mono">49160-49200/udp</code>（仅自建 coturn 方案需要放通）</td></tr>
                   <tr><td>应用目录</td><td><code class="mono">/vol1/@appcenter/xiaozhi-im</code></td></tr>
                   <tr><td>配置与数据</td><td><code class="mono">docker/.env</code>（配置）、<code class="mono">data/</code>（数据库与文件）</td></tr>
@@ -343,6 +503,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
 
         <!-- 用户管理 -->
         <div v-else-if="tab === 'users'">
+          <el-alert v-if="compSetting.mode === 'work'" type="info" :closable="false" style="margin-bottom:12px">
+            <template #title>
+              当前是<b>工作模式</b>：这里新建普通用户会<b>自动作为员工加入组织</b>（账号即工号、自动与同事互为好友）。
+              要按部门 / 岗位批量录人，用「组织机构」的批量导入更快。
+            </template>
+          </el-alert>
           <div class="page-bar">
             <el-input v-model="userSearch" placeholder="搜索账号/昵称" clearable style="width:240px" />
             <el-button type="primary" @click="openUserDialog()">新建用户</el-button>
@@ -1489,10 +1655,15 @@ docker compose up -d --force-recreate xiaozhi-im</div>
 
           <!-- 导入结果 -->
           <el-dialog v-model="importResultDlg" title="导入结果" width="560px">
-            <el-result v-if="importResult" :icon="importResult.created ? 'success' : 'warning'"
+            <el-result v-if="importResult"
+              :icon="(importResult.created || importResult.adopted?.length) ? 'success' : 'warning'"
               :title="importResult.message">
               <template #sub-title>
                 <div style="text-align:left;font-size:13px">
+                  <div v-if="importResult.adopted?.length">
+                    老账号归队 {{ importResult.adopted.length }} 人（沿用原密码）：
+                    {{ importResult.adopted.slice(0, 10).join('、') }}{{ importResult.adopted.length > 10 ? ' 等' : '' }}
+                  </div>
                   <div v-if="importResult.newDepts?.length">自动创建部门：{{ importResult.newDepts.join('、') }}</div>
                   <div v-if="importResult.newPositions?.length">自动创建岗位：{{ importResult.newPositions.join('、') }}</div>
                   <div v-if="importResult.skipped?.length" style="margin-top:8px">
@@ -1691,6 +1862,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </el-radio-group>
           </el-form-item>
         </el-form>
+        <el-alert v-if="compSetting.mode === 'work' && !userForm.id" type="info" :closable="false">
+          <template #title>
+            工作模式：保存后该账号会<b>自动加入组织</b>（工号 = 账号、自动互为好友）。
+            需要指定部门 / 岗位，请到「组织机构」录入或批量导入。
+          </template>
+        </el-alert>
       </div>
       <div v-show="userStep === 1">
         <el-form :model="userForm" label-width="80px">
@@ -2032,6 +2209,11 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import api from './api';
 
 const token = ref(localStorage.getItem('xz_token') || '');
+// 品牌名：只依赖 pub（bootstrap 的公开字段，登录前就能拿到）。
+// ⚠️ 这里不能引用 compSetting —— 它在文件后面才声明，而下面的 watch 是 immediate，
+// setup 阶段就会求值，会踩 TDZ 直接白屏。登录成功后由 loadAll 把公司名回写进 pub。
+const pub = ref({});
+const brand = computed(() => (pub.value.companyName ? pub.value.companyName + '小智' : '小智 IM'));
 const form = ref({ username: '', password: '' });
 const loading = ref(false);
 const err = ref('');
@@ -2046,7 +2228,7 @@ const msgKind = ref('');
 const msgQ = ref('');
 const info = ref({});
 
-const cards = [
+const baseCards = [
   { key: 'users', label: '用户数' },
   { key: 'groups', label: '群组数' },
   { key: 'messages', label: '消息总数' },
@@ -2061,6 +2243,116 @@ const cards = [
   { key: 'hooks_out', label: '事件订阅' },
   { key: 'pubkeys', label: '公钥接入' },
 ];
+// 组织人数只在工作模式下有意义，普通模式下显示 0 反而让人以为坏了
+const cards = computed(() => compSetting.value.mode === 'work'
+  ? [...baseCards, { key: 'orgMembers', label: '组织人数' }]
+  : baseCards);
+
+/* ====== 上手向导 ======
+   每一步都用服务器真实状态判断，纯前端计算、不新增接口。
+   依据：settings（公司名/好友模式）+ stats（用户数/组织数/组织人数/消息数）+ info（TURN）。 */
+const setupOpen = ref(true);
+const setupSteps = computed(() => {
+  const work = compSetting.value.mode === 'work';
+  const hasOrg = (stats.value.orgs || 0) > 0;
+  const orgMembers = stats.value.orgMembers || 0;
+  const hasOtherUser = (stats.value.users || 0) > 1; // 除 admin 外还有人
+  const msgs = stats.value.messages || 0;
+  // 中继是否可用看 /admin/turn 的 ready（= 至少配了一种中继来源）。
+  // 注意别用 /admin/info（没有这个字段），也别用客户端 ICE 接口的 turnConfigured —— 两个接口字段不同名
+  const turnReady = !!turn.value?.ready;
+
+  const steps = [{
+    key: 'company',
+    done: !!compSetting.value.name,
+    title: '给服务器起个名字（公司名）',
+    desc: compSetting.value.name
+      ? `客户端登录页与局域网扫描结果都会显示「${compSetting.value.name}小智」`
+      : '填上公司简称（如「盛京」），客户端登录页就显示「盛京小智」—— 员工装完 App 一眼知道连的是自家服务器',
+    actionText: '去设置',
+    tab: 'settings',
+    primary: true,
+  }];
+
+  if (work) {
+    steps.push({
+      key: 'org',
+      done: hasOrg,
+      title: '创建组织机构',
+      desc: hasOrg
+        ? '组织已建好，随时可以录员工'
+        : '工作模式下人员由组织统一管理：先建一个组织（一个服务器一个组织）',
+      actionText: hasOrg ? '去看看' : '去创建',
+      tab: 'orgs',
+      primary: !hasOrg,
+    });
+    steps.push({
+      key: 'members',
+      done: orgMembers > 0,
+      title: '把员工录进来',
+      desc: orgMembers > 0
+        ? `组织里已有 ${orgMembers} 名员工（工号即登录账号，初始密码 = 工号）`
+        : '一个个加，或按「工号 姓名 部门 岗位」四列从 Excel 复制过来批量导入；录入后同事自动互为好友',
+      actionText: '去录入',
+      tab: 'orgs',
+      primary: orgMembers === 0,
+    });
+  } else {
+    steps.push({
+      key: 'users',
+      done: hasOtherUser,
+      title: '添加用户',
+      desc: hasOtherUser
+        ? '除管理员外已经有其他人的账号了'
+        : '给同事开户，也可以让同事在客户端自己注册。人多、要按部门统一管，就到「系统设置」切工作模式',
+      actionText: hasOtherUser ? '去管理' : '去添加',
+      tab: 'users',
+      primary: !hasOtherUser,
+    });
+  }
+
+  // 已经建过组织、但当前是普通模式：最容易被卡住的一种状态 ——
+  // 组织明明在页面上，录员工却被服务端 400 拒掉。与其让人自己琢磨，
+  // 不如向导直接把话说明白。
+  if (!work && hasOrg) {
+    steps.push({
+      key: 'mode-back',
+      done: false,
+      title: '组织已存在，但当前是普通模式',
+      desc: '服务器上已经建过组织机构。要用它按工号录员工，请到「系统设置」把好友模式切回工作模式',
+      actionText: '去切换',
+      tab: 'settings',
+      primary: true,
+    });
+  }
+
+  steps.push({
+    key: 'turn',
+    done: turnReady,
+    title: '配置音视频中继（外网通话用）',
+    desc: turnReady
+      ? '已配置：手机 4G/5G 与内网之间也能通话'
+      : '不配的话只有同一个 Wi-Fi 内能通，手机流量呼入连不上。推荐 Cloudflare TURN：免费、不需要端口映射，填两个值即可',
+    actionText: turnReady ? '查看' : '去配置',
+    tab: 'settings',
+  });
+
+  steps.push({
+    key: 'client',
+    done: msgs > 0,
+    title: '装客户端，发通第一条消息',
+    desc: msgs > 0
+      ? '客户端已经用起来了'
+      : 'Windows 装 exe、安卓装 APK。首次启动会自动扫描局域网找服务器，也可以在「服务器设置」里手填内网地址',
+    actionText: '看安装说明',
+    tab: 'help',
+  });
+
+  return steps;
+});
+const setupDoneCount = computed(() => setupSteps.value.filter((s) => s.done).length);
+const setupDone = computed(() => setupDoneCount.value === setupSteps.value.length);
+const setupPercent = computed(() => Math.round((setupDoneCount.value / setupSteps.value.length) * 100));
 
 async function login() {
   err.value = '';
@@ -2088,7 +2380,7 @@ function logout() {
 
 async function loadAll() {
   try {
-    const [s, u, g, fs, fr, ms, inf] = await Promise.all([
+    const [s, u, g, fs, fr, ms, inf, st] = await Promise.all([
       api.get('/admin/stats'),
       api.get('/admin/users'),
       api.get('/admin/groups'),
@@ -2096,6 +2388,7 @@ async function loadAll() {
       api.get('/admin/friendships'),
       api.get('/admin/messages?limit=300'),
       api.get('/admin/info'),
+      api.get('/admin/settings'),
     ]);
     stats.value = s.data;
     users.value = u.data;
@@ -2104,6 +2397,11 @@ async function loadAll() {
     friendships.value = fr.data;
     messages.value = ms.data;
     info.value = inf.data;
+    // 公司名与好友模式：上手向导、仪表盘卡片、侧栏都要用，登录后就取好，
+    // 不要等切到「系统设置」页才加载（否则向导第一步永远是未完成）
+    compSetting.value = { name: st.data.companyName || '', mode: st.data.friendMode || 'normal' };
+    // 品牌名单一数据源在 pub，登录后把最新公司名回写过去
+    pub.value = { ...pub.value, companyName: st.data.companyName || '' };
     loadTurn();
   } catch (e) {
     ElMessage.error('加载失败：' + (e.response?.data?.error || e.message));
@@ -2113,8 +2411,12 @@ async function loadAll() {
 // 切换 tab 时按需加载
 async function loadTab() {
   if (tab.value === 'dashboard') {
-    const { data } = await api.get('/admin/stats');
-    stats.value = data;
+    // 向导的三个判断依据（统计 / 公司名与模式 / 中继状态）都要重新拉：
+    // 否则刚在系统设置里配好中继、切回仪表盘，向导还显示"未完成"
+    const [st, sc] = await Promise.all([api.get('/admin/stats'), api.get('/admin/settings')]);
+    stats.value = st.data;
+    compSetting.value = { name: sc.data.companyName || '', mode: sc.data.friendMode || 'normal' };
+    await loadTurn();
   } else if (tab.value === 'users') await loadUsers();
   else if (tab.value === 'groups') await loadGroups();
   else if (tab.value === 'friends') await loadFriends();
@@ -2451,6 +2753,8 @@ function applyTemplate(t) {
 
 // 监听 tab 切换
 watch(tab, loadTab);
+// 浏览器标签页标题也跟着公司名走，多开几个后台时不容易认错
+watch(brand, (v) => { document.title = v + ' 管理后台'; }, { immediate: true });
 
 /* ====== Users ====== */
 const userSearch = ref('');
@@ -3075,7 +3379,14 @@ async function addMember() {
       deptId: orgEmp.value.deptId || null,
       positionId: orgEmp.value.positionId || null,
     });
-    ElMessage.success(`已录入 ${data.user.username}，初始密码 = 工号，请通知员工登录后修改`);
+    // 撞上「老账号」（普通模式时期自己注册、还没进组织）时会走收编：
+    // 只改归属、不动密码，提示必须跟新建账号区分开，否则管理员会以为
+    // 员工密码被重置成工号了
+    if (data.adopted) {
+      ElMessage.success(`账号 ${data.user.username} 已纳入组织（沿用原密码，未清零），并已和同事互为好友`);
+    } else {
+      ElMessage.success(`已录入 ${data.user.username}，初始密码 = 工号，请通知员工登录后修改`);
+    }
     orgEmp.value = { no: '', name: '', deptId: null, positionId: null };
     orgDlg.value = false;
     await loadOrgs();
@@ -3237,6 +3548,7 @@ async function saveCompSetting() {
   compBusy.value = true;
   try {
     await api.put('/admin/settings', { companyName: name, friendMode: compSetting.value.mode });
+    pub.value = { ...pub.value, companyName: name }; // 侧栏/标签页品牌即时更新
     ElMessage.success('设置已保存，客户端下次拉取即生效');
     await loadCompSetting();
   } catch (e) {
@@ -3336,8 +3648,12 @@ function bindUnauthorized() {
   });
 }
 
-onMounted(() => {
+onMounted(async () => {
   bindUnauthorized();
+  // 登录前也要能显示「××小智」：bootstrap 免鉴权，只取公开字段
+  try {
+    pub.value = (await api.get('/client/bootstrap')).data || {};
+  } catch { /* 服务器没连上就算了，退回默认名 */ }
   if (token.value) loadAll();
 });
 </script>
@@ -3369,6 +3685,49 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 /* 向导里的命令块：整块可选中复制，长命令自动换行不撑破卡片 */
 .cmd-box { display: block; padding: 10px 12px; margin: 8px 0; border-radius: 6px; background: #f5f7fa; border: 1px solid #e4e7ed; white-space: pre-wrap; word-break: break-all; line-height: 1.7; user-select: all; }
 .el-menu { border-right: none !important; }
+
+/* ====== 上手向导 ====== */
+.setup { margin-bottom: 16px; }
+.setup-bar { margin-bottom: 14px; }
+.setup-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  margin-bottom: 8px;
+}
+.setup-item.done {
+  background: var(--el-color-success-light-9);
+  border-color: var(--el-color-success-light-5);
+}
+.setup-mark {
+  flex: 0 0 24px;
+  height: 24px;
+  line-height: 24px;
+  text-align: center;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--el-fill-color);
+  color: var(--el-text-color-secondary);
+}
+.setup-item.done .setup-mark { background: var(--el-color-success); color: #fff; }
+.setup-body { flex: 1; min-width: 0; }
+.setup-title { font-size: 14px; font-weight: 600; }
+.setup-item.done .setup-title { color: var(--el-color-success-dark-2); }
+.setup-desc {
+  font-size: 12.5px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+  margin-top: 2px;
+}
+.setup-allgood {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--el-color-success-dark-2);
+}
 
 /* ---- 仪表盘「系统说明」卡头（标题 + 右侧入口按钮）---- */
 .card-hdr { display: flex; align-items: center; justify-content: space-between; }

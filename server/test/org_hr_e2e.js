@@ -219,6 +219,80 @@ function stopServer() {
   r = await api('POST', '/api/orgs/depts', { token: emp10, body: { name: '私自建部' } });
   ok('普通员工建部门 → 403', r.status === 403, JSON.stringify(r.body));
 
+  // ============================================================
+  // 【八】逻辑修正验证（2026-09-14）
+  //   这几条都是"看起来能用、实际会把人堵死"的问题，属于回归重点
+  // ============================================================
+  console.log('\n【八】逻辑修正');
+
+  // 1) 移除员工必须连同部门/岗位一起清空。
+  //    只清 org_id 的话，部门删除护栏（按 dept_id 统计人数）会把已移除的人
+  //    继续算作占用者 —— 界面上看不到这个人，部门却永远删不掉。
+  let rr = await api('POST', '/api/orgs/depts', { token: admin, body: { name: '临时车间' } });
+  const tmpDept = rr.body?.id;
+  rr = await api('POST', '/api/orgs/positions', { token: admin, body: { name: '临时岗', deptId: tmpDept } });
+  const tmpPos = rr.body?.id;
+  rr = await api('POST', `/api/orgs/${orgId}/members`,
+    { token: admin, body: { employeeNo: 'tmp001', deptId: tmpDept, positionId: tmpPos } });
+  const tmpUid = rr.body?.user?.id;
+  ok('建临时员工（带部门岗位）', !!tmpUid, JSON.stringify(rr.body));
+
+  rr = await api('DELETE', `/api/orgs/${orgId}/members/${tmpUid}`, { token: admin });
+  ok('移除临时员工 → 200', rr.status === 200, JSON.stringify(rr.body));
+  rr = await api('DELETE', `/api/orgs/depts/${tmpDept}`, { token: admin });
+  ok('移除后部门可删（不再被"看不见的人"占住）', rr.status === 200, JSON.stringify(rr.body));
+  rr = await api('DELETE', `/api/orgs/positions/${tmpPos}`, { token: admin });
+  ok('移除后岗位可删', rr.status === 200, JSON.stringify(rr.body));
+
+  // 2) 老账号归队：普通模式下自己注册的账号，切到工作模式后能被录入进组织。
+  //    以前一律 409「工号已被占用」→ 老用户搜不到同事、加不了好友、又无法被录入，
+  //    在系统里等于被堵死，只能换号重来。现在收编进组织且不改密码。
+  await api('PUT', '/api/admin/settings', { token: admin, body: { friendMode: 'normal' } });
+  rr = await api('POST', '/api/auth/register',
+    { body: { username: 'olduser', password: 'oldpass123', nickname: '老用户' } });
+  ok('普通模式下注册老账号', rr.status === 200, JSON.stringify(rr.body));
+  await api('PUT', '/api/admin/settings', { token: admin, body: { friendMode: 'work' } });
+
+  rr = await api('POST', `/api/orgs/${orgId}/members`, { token: admin, body: { employeeNo: 'olduser', nickname: '老用户' } });
+  ok('录入已有账号 → 收编而非 409', rr.status === 200 && rr.body?.adopted === true, JSON.stringify(rr.body));
+  rr = await api('POST', '/api/auth/login', { body: { username: 'olduser', password: 'oldpass123' } });
+  ok('收编后原密码仍可登录（不清零密码）', !!rr.body?.token, JSON.stringify(rr.body));
+  const oldTok = rr.body?.token;
+  rr = await api('GET', '/api/friends', { token: oldTok });
+  ok('收编后自动与同事互为好友', (rr.body?.friends || []).length > 0,
+    JSON.stringify(rr.body?.friends?.length));
+  rr = await api('GET', '/api/users/search?q=emp01', { token: oldTok });
+  ok('收编后能搜到同组织同事', Array.isArray(rr.body) && rr.body.length > 0, JSON.stringify(rr.body));
+  rr = await api('POST', `/api/orgs/${orgId}/members`, { token: admin, body: { employeeNo: 'olduser' } });
+  ok('组织内成员重复录入 → 409', rr.status === 409, JSON.stringify(rr.body));
+
+  // 3) 普通模式下组织写操作口径一致（录入/编辑/移除都要拦）
+  await api('PUT', '/api/admin/settings', { token: admin, body: { friendMode: 'normal' } });
+  const anyMember = (await api('GET', '/api/orgs/my', { token: admin })).body?.members?.[0];
+  rr = await api('POST', `/api/orgs/${orgId}/members`, { token: admin, body: { employeeNo: 'zzz001' } });
+  ok('普通模式录入员工 → 400', rr.status === 400, JSON.stringify(rr.body));
+  rr = await api('PUT', `/api/orgs/${orgId}/members/${anyMember.id}`, { token: admin, body: { nickname: '改名' } });
+  ok('普通模式编辑员工 → 400（与录入同口径）', rr.status === 400, JSON.stringify(rr.body));
+  rr = await api('DELETE', `/api/orgs/${orgId}/members/${anyMember.id}`, { token: admin });
+  ok('普通模式移除员工 → 400', rr.status === 400, JSON.stringify(rr.body));
+
+  // 4) 工作模式下后台「新建用户」不再制造游离账号（自动入职 + 互为好友）
+  await api('PUT', '/api/admin/settings', { token: admin, body: { friendMode: 'work' } });
+  rr = await api('POST', '/api/admin/users',
+    { token: admin, body: { username: 'desk001', password: 'desk001pw', nickname: '前台' } });
+  ok('工作模式后台建普通用户 → 自动入组织', rr.status === 200 && rr.body?.joinedOrg === true, JSON.stringify(rr.body));
+  const deskTok = (await api('POST', '/api/auth/login',
+    { body: { username: 'desk001', password: 'desk001pw' } })).body?.token;
+  rr = await api('GET', '/api/users/search?q=emp01', { token: deskTok });
+  ok('后台新建的人能搜到同事（不是游离号）', Array.isArray(rr.body) && rr.body.length > 0, JSON.stringify(rr.body));
+  rr = await api('GET', '/api/orgs/my', { token: admin });
+  const desk = (rr.body?.members || []).find((m) => m.username === 'desk001');
+  ok('后台新建的人带工号出现在组织成员里', desk?.employee_no === 'desk001', JSON.stringify(desk));
+
+  // 5) 管理员账号不会被当成员工收编
+  rr = await api('POST', `/api/orgs/${orgId}/members`, { token: admin, body: { employeeNo: 'admin' } });
+  ok('把管理员账号当工号录入 → 409', rr.status === 409, JSON.stringify(rr.body));
+
   // ---------------- 汇总 ----------------
   console.log('\n' + '='.repeat(52));
   console.log(`通过 ${passed} / ${passed + failed}`);

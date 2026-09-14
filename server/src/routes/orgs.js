@@ -143,24 +143,48 @@ router.post('/:id/members', (req, res) => {
   const count = db.prepare('SELECT COUNT(*) AS c FROM users WHERE org_id=?').get(orgId).c;
   if (count >= MAX_MEMBERS) return res.status(400).json({ error: `组织成员已达上限（${MAX_MEMBERS} 人）` });
 
-  // 工号=账号：撞 users.username 的 UNIQUE 约束 = 工号已被占用
+  // 工号 = 账号。撞号时分两种情况，必须分开处理：
+  //   a) 号没被占用 → 新建账号，初始密码 = 工号
+  //   b) 号被一个「游离账号」占着（普通模式时期自己注册、还没进任何组织）
+  //      → 收编进组织，密码保持不变
+  // (b) 是普通模式转工作模式后，老账号唯一的归队路径。以前这种情况一律 409，
+  // 等于把老用户堵死：他在工作模式下搜不到同事、加不了好友，想被录入又提示
+  // "工号已被占用"，最后只能换个号重来 —— 数据和人全断。
+  const exist = db.prepare('SELECT id, role, org_id FROM users WHERE username=?').get(employeeNo);
   let newUid;
-  try {
-    const info = db.prepare(`INSERT INTO users (username, password_hash, nickname, role, org_id, employee_no, dept_id, position_id, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`)
-      .run(employeeNo, hashPassword(employeeNo), nickname || employeeNo, 'user', orgId, employeeNo, deptId, positionId, Date.now());
-    newUid = info.lastInsertRowid;
-  } catch (e) {
-    if (/UNIQUE/i.test(e.message)) {
-      return res.status(409).json({ error: `工号 ${employeeNo} 已被占用（可能是重名账号或已录入）` });
+  let adopted = false;
+  if (exist) {
+    if (exist.role === 'admin') {
+      return res.status(409).json({ error: `账号 ${employeeNo} 是管理员，不能作为员工录入` });
     }
-    throw e;
+    if (exist.org_id) {
+      return res.status(409).json({ error: `账号 ${employeeNo} 已在组织中，无需重复录入` });
+    }
+    // 只改归属，不动 password_hash —— 人还是那个人，密码照旧
+    db.prepare('UPDATE users SET org_id=?, employee_no=?, dept_id=?, position_id=? WHERE id=?')
+      .run(orgId, employeeNo, deptId, positionId, exist.id);
+    if (nickname) db.prepare('UPDATE users SET nickname=? WHERE id=?').run(nickname, exist.id);
+    newUid = exist.id;
+    adopted = true;
+  } else {
+    try {
+      const info = db.prepare(`INSERT INTO users (username, password_hash, nickname, role, org_id, employee_no, dept_id, position_id, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`)
+        .run(employeeNo, hashPassword(employeeNo), nickname || employeeNo, 'user', orgId, employeeNo, deptId, positionId, Date.now());
+      newUid = info.lastInsertRowid;
+    } catch (e) {
+      if (/UNIQUE/i.test(e.message)) {
+        return res.status(409).json({ error: `工号 ${employeeNo} 已被占用（可能是重名账号或已录入）` });
+      }
+      throw e;
+    }
   }
 
+  // 收编的账号也要补同事好友关系（autoFriend 用 INSERT OR IGNORE，重复无害）
   autoFriend(newUid, orgId, uid);
 
   const user = db.prepare(`SELECT ${ORG_COLS} ${MEMBER_JOIN} WHERE u.id=?`).get(newUid);
-  res.json({ user });
+  res.json({ user, adopted });
 });
 
 // ============================================================
@@ -168,6 +192,9 @@ router.post('/:id/members', (req, res) => {
 // ============================================================
 router.put('/:id/members/:uid', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
+  // 与「录入员工」保持同一道门：普通模式下组织相关写操作一律停下，
+  // 否则会出现"能改不能加"这种自相矛盾的状态
+  if (!requireWorkMode(req, res)) return;
   const orgId = Number(req.params.id);
   const target = Number(req.params.uid);
   const org = db.prepare('SELECT id, created_by FROM orgs WHERE id=?').get(orgId);
@@ -206,6 +233,7 @@ router.put('/:id/members/:uid', (req, res) => {
 // ============================================================
 router.delete('/:id/members/:uid', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
+  if (!requireWorkMode(req, res)) return;
   const orgId = Number(req.params.id);
   const target = Number(req.params.uid);
   const org = db.prepare('SELECT id, created_by FROM orgs WHERE id=?').get(orgId);
@@ -214,7 +242,10 @@ router.delete('/:id/members/:uid', (req, res) => {
   const u = db.prepare('SELECT id, org_id, role FROM users WHERE id=?').get(target);
   if (!u || u.org_id !== orgId) return res.status(404).json({ error: '该用户不是本组织成员' });
 
-  db.prepare('UPDATE users SET org_id=NULL, employee_no=NULL WHERE id=?').run(target);
+  // dept_id/position_id 必须一起清：只清 org_id 的话，部门删除护栏
+  // （按 dept_id 统计人数）会把这名已移除的员工继续算作占用者 ——
+  // 界面上看不到人，却永远提示"该部门下有 N 名员工"，部门删不掉。
+  db.prepare('UPDATE users SET org_id=NULL, employee_no=NULL, dept_id=NULL, position_id=NULL WHERE id=?').run(target);
   db.prepare('DELETE FROM friendships WHERE (user_id=? AND friend_id IN (SELECT id FROM users WHERE org_id=? OR id=?)) OR (friend_id=? AND user_id IN (SELECT id FROM users WHERE org_id=? OR id=?))')
     .run(target, orgId, org.created_by, target, orgId, org.created_by);
   res.json({ ok: true });
@@ -420,6 +451,7 @@ router.post('/:id/members/import', (req, res) => {
   }
 
   const created = [];
+  const adopted = [];
   const skipped = [];
   for (const row of rows) {
     const employeeNo = String(row?.employeeNo || '').trim();
@@ -430,18 +462,33 @@ router.post('/:id/members/import', (req, res) => {
       skipped.push({ employeeNo, reason: '工号格式错（3-20 位字母/数字/下划线）' });
       continue;
     }
-    if (db.prepare('SELECT id FROM users WHERE username=?').get(employeeNo)) {
-      skipped.push({ employeeNo, reason: '工号已被占用（已有账号或已录入）' });
+    // 撞号分两类：管理员/已在组织 → 跳过；游离老账号 → 收编（同「录入员工」语义）
+    const exist = db.prepare('SELECT id, role, org_id FROM users WHERE username=?').get(employeeNo);
+    if (exist && exist.role === 'admin') {
+      skipped.push({ employeeNo, reason: '该账号是管理员，不能作为员工导入' });
+      continue;
+    }
+    if (exist && exist.org_id) {
+      skipped.push({ employeeNo, reason: '已在组织中（无需重复导入）' });
       continue;
     }
     try {
       const dId = deptIdOf(dept);
       const pId = posIdOf(position, dId);
-      const info = db.prepare(`INSERT INTO users (username, password_hash, nickname, role, org_id, employee_no, dept_id, position_id, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?)`)
-        .run(employeeNo, hashPassword(employeeNo), nickname || employeeNo, 'user', orgId, employeeNo, dId, pId, Date.now());
-      autoFriend(info.lastInsertRowid, orgId, uid);
-      created.push(employeeNo);
+      if (exist) {
+        // 老账号归队：只改归属与部门岗位，密码保持原样
+        db.prepare('UPDATE users SET org_id=?, employee_no=?, dept_id=?, position_id=? WHERE id=?')
+          .run(orgId, employeeNo, dId, pId, exist.id);
+        if (nickname) db.prepare('UPDATE users SET nickname=? WHERE id=?').run(nickname, exist.id);
+        autoFriend(exist.id, orgId, uid);
+        adopted.push(employeeNo);
+      } else {
+        const info = db.prepare(`INSERT INTO users (username, password_hash, nickname, role, org_id, employee_no, dept_id, position_id, created_at)
+          VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(employeeNo, hashPassword(employeeNo), nickname || employeeNo, 'user', orgId, employeeNo, dId, pId, Date.now());
+        autoFriend(info.lastInsertRowid, orgId, uid);
+        created.push(employeeNo);
+      }
     } catch (e) {
       skipped.push({ employeeNo, reason: '写入失败：' + e.message });
     }
@@ -449,11 +496,16 @@ router.post('/:id/members/import', (req, res) => {
 
   res.json({
     created: created.length,
+    adopted,
     skipped,
     newDepts,
     newPositions,
-    message: `导入完成：成功 ${created.length} 人${skipped.length ? `，跳过 ${skipped.length} 行` : ''}`,
+    message: `导入完成：新建 ${created.length} 人`
+      + (adopted.length ? `，老账号归队 ${adopted.length} 人（密码不变）` : '')
+      + (skipped.length ? `，跳过 ${skipped.length} 行` : ''),
   });
 });
 
 module.exports = router;
+// 供 admin.js 复用：工作模式下后台新建普通用户 = 员工入职，要补同事好友关系
+module.exports.autoFriend = autoFriend;

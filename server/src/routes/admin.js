@@ -7,6 +7,7 @@ const { verifyToken, hashPassword, verifyPassword } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
 const settings = require('../settings');
+const orgs = require('./orgs');
 const pkg = require('../../package.json');
 
 function adminOf(req, res) {
@@ -40,6 +41,11 @@ router.get('/stats', (req, res) => {
     hooks_out: c('SELECT COUNT(*) c FROM outgoing_hooks WHERE active=1'),
     deliveries_failed: c('SELECT COUNT(*) c FROM webhook_deliveries WHERE ok=0'),
     pubkeys: c('SELECT COUNT(*) c FROM public_keys WHERE revoked=0'),
+    // 组织机构：工作模式下管理员最关心「组织建了没、里面有多少人」，
+    // 这两个数同时被仪表盘的上手向导用来判断某一步做完没有
+    orgs: c('SELECT COUNT(*) c FROM orgs'),
+    orgMembers: c('SELECT COUNT(*) c FROM users WHERE org_id IS NOT NULL'),
+    depts: c('SELECT COUNT(*) c FROM org_depts'),
   });
 });
 
@@ -96,9 +102,29 @@ router.post('/users', (req, res) => {
   if (String(password).length < 6) return res.status(400).json({ error: '密码至少 6 位' });
   const exists = db.prepare('SELECT id FROM users WHERE username=?').get(username);
   if (exists) return res.status(409).json({ error: '账号已存在' });
-  const r = db.prepare('INSERT INTO users (username,password_hash,nickname,role,created_at) VALUES (?,?,?,?,?)')
-    .run(username, hashPassword(password), nickname || username, role === 'admin' ? 'admin' : 'user', Date.now());
-  res.json({ id: r.lastInsertRowid });
+
+  // 工作模式下不制造「游离账号」：没进组织的人搜不到同事、加不了好友（work 模式
+  // 下好友申请被拒），管理员却以为人建好了 —— 这里直接按员工入职处理，
+  // 账号即工号、自动入组织、自动与同事互为好友，行为与「组织机构 → 录入员工」一致。
+  let orgId = null;
+  let employeeNo = null;
+  if (settings.get('friendMode') === 'work' && role !== 'admin') {
+    const org = db.prepare('SELECT id FROM orgs LIMIT 1').get();
+    if (!org) {
+      return res.status(400).json({
+        error: '当前是工作模式但还没有组织：请先到「组织机构」创建组织，再录入员工',
+      });
+    }
+    orgId = org.id;
+    employeeNo = username;
+  }
+
+  const r = db.prepare(`INSERT INTO users (username,password_hash,nickname,role,org_id,employee_no,created_at)
+    VALUES (?,?,?,?,?,?,?)`)
+    .run(username, hashPassword(password), nickname || username,
+      role === 'admin' ? 'admin' : 'user', orgId, employeeNo, Date.now());
+  if (orgId) orgs.autoFriend(r.lastInsertRowid, orgId, uid);
+  res.json({ id: r.lastInsertRowid, joinedOrg: !!orgId });
 });
 
 router.patch('/users/:id', (req, res) => {
