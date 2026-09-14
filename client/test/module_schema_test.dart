@@ -5,6 +5,7 @@
 //   ① 任何畸形输入都不抛异常（抛了就是白屏）
 //   ② 危险动作在客户端这一层就被拦住（纵深防御）
 import 'package:flutter_test/flutter_test.dart';
+import 'package:xiaozhi_im_client/core/apps.dart';
 import 'package:xiaozhi_im_client/core/module_schema.dart';
 
 void main() {
@@ -115,6 +116,64 @@ void main() {
       expect(m('v1').supports('0.9.0'), isFalse);
       expect(m('1.0.0').supports(''), isFalse);
       expect(m('1.0.0').supports('最新版'), isFalse);
+    });
+  });
+
+  // 工作台（应用列表）里只有 minVersion 字符串、没有完整 ModuleDef，
+  // 所以它调的是抽出来的独立函数。**参数顺序是 (minVersion, clientVersion)**，
+  // 反过来写不会报错、只会静默判反 —— 这条组就是拿来看住顺序的。
+  group('clientSatisfiesVersion（工作台用的独立版本闸门）', () {
+    test('没有最低版本要求 → 一律通过', () {
+      expect(clientSatisfiesVersion(null, '0.11.0'), isTrue);
+      expect(clientSatisfiesVersion('', '0.11.0'), isTrue);
+    });
+
+    test('参数顺序：第一个是最低要求，第二个才是本机版本', () {
+      // 最低要 9.9.9、本机 0.11.0 → 不满足
+      expect(clientSatisfiesVersion('9.9.9', '0.11.0'), isFalse);
+      // 最低要 0.1.0、本机 0.11.0 → 满足
+      // （若把两个参数写反，上面两条的结果正好会对调，所以这两条必须成对断言）
+      expect(clientSatisfiesVersion('0.1.0', '0.11.0'), isTrue);
+    });
+
+    test('相等 / 更高都通过，低一个补丁号也拦住', () {
+      expect(clientSatisfiesVersion('0.11.0', '0.11.0'), isTrue);
+      expect(clientSatisfiesVersion('0.11.0', '0.12.0'), isTrue);
+      expect(clientSatisfiesVersion('0.11.1', '0.11.0'), isFalse);
+      expect(clientSatisfiesVersion('0.11.0', '0.10.9'), isFalse);
+      expect(clientSatisfiesVersion('1.0.0', '0.99.99'), isFalse);
+    });
+
+    test('本机版本非法 = 不满足（不能因为读不到版本就把所有东西都放行）', () {
+      expect(clientSatisfiesVersion('1.0.0', ''), isFalse);
+      expect(clientSatisfiesVersion('1.0.0', 'dev'), isFalse);
+      expect(clientSatisfiesVersion('1.0.0', '0.11'), isFalse);
+    });
+
+    test('最低版本写成非法值时也拦（服务端校验过，客户端不假设它一定对）', () {
+      expect(clientSatisfiesVersion('v1', '0.11.0'), isFalse);
+      expect(clientSatisfiesVersion('最新版', '0.11.0'), isFalse);
+    });
+  });
+
+  group('内置应用注册表（core/apps.dart）', () {
+    test('三个内置 id 都认识，且能取到页面构造器', () {
+      for (final id in kBuiltinAppIds) {
+        expect(isKnownBuiltinApp(id), isTrue, reason: id);
+        expect(builtinAppPage(id), isNotNull, reason: id);
+      }
+    });
+
+    test('id 与服务端 apps.js 对齐（改名 = 老客户端丢入口，发布后不可改）', () {
+      expect(kBuiltinAppIds, {'attendance', 'my_requests', 'work_org'});
+    });
+
+    test('不认识的 id 返回 null，让调用方跳过而不是崩', () {
+      // 服务端先上线一个新应用、客户端还是旧版本时的必经路径
+      expect(isKnownBuiltinApp('some_future_app'), isFalse);
+      expect(builtinAppPage('some_future_app'), isNull);
+      expect(isKnownBuiltinApp(''), isFalse);
+      expect(builtinAppPage(''), isNull);
     });
   });
 
