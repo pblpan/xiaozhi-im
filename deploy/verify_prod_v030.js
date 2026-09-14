@@ -263,17 +263,19 @@ async function api(base, p, { method = 'GET', token, body } = {}) {
     ok('外网会话列表 has_mention=true', (wanConv || []).find((c) => c.id === gcid)?.has_mention === true);
 
     // ---------- 10. admin 后台新字段 ----------
+    // ⚠️ v0.14.0 起管理端列表接口统一分页，响应为 {items,total,page,pageSize}。
+    // 消息类列表还要显式 allTime=1 —— 不传就是「最近 30 天」，历史数据会被时间窗挡掉。
     console.log('\n=== 10. 管理后台新字段 ===');
-    const admGroups = (await api(BASE_LAN, '/admin/groups', { token: adminTok })).body;
-    const myGroup = (admGroups || []).find((x) => x.id === gid);
+    const admGroups = ((await api(BASE_LAN, '/admin/groups?pageSize=200', { token: adminTok })).body.items) || [];
+    const myGroup = admGroups.find((x) => x.id === gid);
     ok('admin 群组列表带公告', !!myGroup?.announcement, JSON.stringify(myGroup)?.slice(0, 140));
 
-    const admMsgs = (await api(BASE_LAN, '/admin/messages?mentioned=1&limit=50', { token: adminTok })).body;
+    const admMsgs = ((await api(BASE_LAN, '/admin/messages?mentioned=1&pageSize=50&allTime=1', { token: adminTok })).body.items) || [];
     ok('admin 消息支持「仅看@提及」筛选', Array.isArray(admMsgs) && admMsgs.length > 0, `n=${admMsgs?.length}`);
-    ok('admin 消息带 mentions 字段', admMsgs?.some((m) => m.mentions));
+    ok('admin 消息带 mentions 字段', admMsgs.some((m) => m.mentions));
 
-    const admAdmin = await api(BASE_LAN, `/admin/messages?q=${encodeURIComponent(STAMP)}&limit=5`, { token: adminTok });
-    ok('admin 关键词筛选正常', admAdmin.status === 200 && Array.isArray(admAdmin.body));
+    const admAdmin = await api(BASE_LAN, `/admin/messages?q=${encodeURIComponent(STAMP)}&pageSize=5&allTime=1`, { token: adminTok });
+    ok('admin 关键词筛选正常', admAdmin.status === 200 && Array.isArray(admAdmin.body?.items));
 
     // ---------- 11. 清理 ----------
     console.log('\n=== 11. 清理测试数据 ===');

@@ -627,11 +627,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </template>
           </el-alert>
           <div class="page-bar">
-            <el-input v-model="userSearch" placeholder="搜索账号/昵称" clearable style="width:240px" />
+            <el-input v-model="userSearch" placeholder="搜索账号/昵称（服务端搜索全部用户）" clearable style="width:300px" />
             <el-button type="primary" @click="openUserDialog()">新建用户</el-button>
             <el-button @click="loadUsers">刷新</el-button>
+            <span class="hint">共 {{ userPager.p.total }} 个用户</span>
           </div>
-          <el-table :data="filteredUsers" border stripe>
+          <el-table :data="userPager.p.items" border stripe v-loading="userPager.p.loading">
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="username" label="账号" />
             <el-table-column prop="nickname" label="昵称" />
@@ -650,7 +651,14 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-button size="small" type="danger" @click="delUser(row)">删除</el-button>
               </template>
             </el-table-column>
+            <template #empty>
+              <div class="empty-tip">
+                <span v-if="userSearch.trim()">没有匹配「{{ userSearch.trim() }}」的用户</span>
+                <span v-else>还没有用户</span>
+              </div>
+            </template>
           </el-table>
+          <PagerBar :pager="userPager" />
         </div>
 
         <!-- 群组管理 -->
@@ -658,8 +666,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <div class="page-bar">
             <el-button type="primary" @click="openGroupDialog()">新建群组</el-button>
             <el-button @click="loadGroups">刷新</el-button>
+            <span class="hint">共 {{ groupPager.p.total }} 个群（原来这个列表没有上限，群多了会把响应撑大）</span>
           </div>
-          <el-table :data="groups" border stripe>
+          <el-table :data="groupPager.p.items" border stripe v-loading="groupPager.p.loading">
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="name" label="群名" />
             <el-table-column prop="owner_name" label="群主" />
@@ -680,11 +689,16 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               </template>
             </el-table-column>
           </el-table>
+          <PagerBar :pager="groupPager" />
         </div>
 
         <!-- 好友关系 -->
         <div v-else-if="tab === 'friends'">
-          <el-table :data="friendships" border stripe>
+          <div class="page-bar">
+            <el-button @click="loadFriends">刷新</el-button>
+            <span class="hint">共 {{ friendPager.p.total }} 条好友关系</span>
+          </div>
+          <el-table :data="friendPager.p.items" border stripe v-loading="friendPager.p.loading">
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="user_name" label="用户" />
             <el-table-column prop="friend_name" label="好友" />
@@ -702,58 +716,226 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               </template>
             </el-table-column>
           </el-table>
+          <PagerBar :pager="friendPager" />
         </div>
 
         <!-- 文件管理 -->
         <div v-else-if="tab === 'files'">
-          <div class="page-bar">
-            <span>磁盘占用：<b>{{ fmtBytes(info.files_disk_bytes) }}</b></span>
+          <div class="stat-row">
+            <div class="stat-box">
+              <div class="stat-k">库内总占用</div>
+              <div class="stat-v">{{ fmtBytes(fileStorage?.totalBytes) }}</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-k">文件数</div>
+              <div class="stat-v">{{ fileStorage?.totalCount ?? 0 }}</div>
+            </div>
+            <div class="stat-box" :class="{ 'stat-warn': (fileOrphans.counts?.dbOnly || 0) + (fileOrphans.counts?.diskOnly || 0) > 0 }">
+              <div class="stat-k">库盘不一致</div>
+              <div class="stat-v">{{ (fileOrphans.counts?.dbOnly || 0) + (fileOrphans.counts?.diskOnly || 0) }}</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-k">磁盘实际占用</div>
+              <div class="stat-v">{{ fmtBytes(fileStorage?.diskBytes) }}</div>
+            </div>
           </div>
-          <el-table :data="files" border stripe>
-            <el-table-column prop="id" label="ID" width="70" />
-            <el-table-column label="预览" width="80">
-              <template #default="{ row }">
-                <el-image v-if="isImage(row.mime)" :src="`/files/${row.path}`" style="width:48px;height:48px;object-fit:cover" fit="cover" :preview-src-list="[`/files/${row.path}`]" hide-on-click-modal />
-                <span v-else style="color:#909399">—</span>
+
+          <el-collapse class="file-analysis">
+            <el-collapse-item name="storage">
+              <template #title>
+                <b>存储占用分析</b>
+                <span class="hint" style="margin-left:10px">谁把磁盘吃满了 —— 按类型分布 / 按上传者 TOP 10</span>
               </template>
-            </el-table-column>
-            <el-table-column prop="name" label="原始文件名" />
-            <el-table-column prop="owner" label="上传者" width="120" />
-            <el-table-column prop="mime" label="类型" width="160" />
-            <el-table-column prop="size" label="大小" width="100">
-              <template #default="{ row }">{{ fmtBytes(row.size) }}</template>
-            </el-table-column>
-            <el-table-column prop="created_at" label="上传时间" width="180">
-              <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="200">
-              <template #default="{ row }">
-                <el-button size="small" @click="downloadFile(row)">下载</el-button>
-                <el-button size="small" type="danger" @click="delFile(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
+              <div class="analysis-grid">
+                <div>
+                  <div class="analysis-h">按类型</div>
+                  <el-table :data="fileStorage?.byType || []" size="small" border>
+                    <el-table-column prop="mime" label="类型" show-overflow-tooltip />
+                    <el-table-column prop="count" label="个数" width="80" />
+                    <el-table-column label="占用" width="100">
+                      <template #default="{ row }">{{ fmtBytes(row.bytes) }}</template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+                <div>
+                  <div class="analysis-h">按上传者（TOP 10）</div>
+                  <el-table :data="fileStorage?.byOwner || []" size="small" border>
+                    <el-table-column label="上传者" show-overflow-tooltip>
+                      <template #default="{ row }">{{ row.username || ('#' + row.owner_id) }}</template>
+                    </el-table-column>
+                    <el-table-column prop="count" label="个数" width="80" />
+                    <el-table-column label="占用" width="100">
+                      <template #default="{ row }">{{ fmtBytes(row.bytes) }}</template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+
+          <el-tabs v-model="fileTab">
+            <el-tab-pane label="全部文件" name="all">
+              <div class="page-bar wrap">
+                <el-radio-group v-model="fileRange" size="small" @change="filePager.reset()">
+                  <el-radio-button value="today">今天</el-radio-button>
+                  <el-radio-button value="7d">7 天</el-radio-button>
+                  <el-radio-button value="30d">30 天</el-radio-button>
+                  <el-radio-button value="90d">90 天</el-radio-button>
+                  <el-radio-button value="all">全部</el-radio-button>
+                  <el-radio-button value="custom">自定义</el-radio-button>
+                </el-radio-group>
+                <el-date-picker v-if="fileRange === 'custom'" v-model="fileCustom" type="datetimerange"
+                  range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" size="small"
+                  style="width:340px" @change="filePager.reset()" />
+                <el-select v-model="fileOwnerId" placeholder="全部上传者" clearable filterable style="width:170px" @change="filePager.reset()">
+                  <el-option v-for="u in userOptions" :key="u.id" :label="u.nickname || u.username" :value="u.id" />
+                </el-select>
+                <el-select v-model="fileMime" placeholder="全部类型" clearable style="width:130px" @change="filePager.reset()">
+                  <el-option label="图片" value="image" />
+                  <el-option label="视频" value="video" />
+                  <el-option label="音频" value="audio" />
+                  <el-option label="压缩包" value="zip" />
+                  <el-option label="文档" value="text" />
+                </el-select>
+                <el-input v-model="fileQ" placeholder="原始文件名" clearable style="width:180px" @keyup.enter="filePager.reset()" />
+                <el-button type="primary" @click="filePager.reset()">搜索</el-button>
+                <el-button @click="resetFileFilter">重置</el-button>
+                <el-button type="danger" plain @click="openPurge('files')">批量清理</el-button>
+              </div>
+              <el-table :data="filePager.p.items" border stripe v-loading="filePager.p.loading">
+                <el-table-column prop="id" label="ID" width="70" />
+                <el-table-column label="预览" width="80">
+                  <template #default="{ row }">
+                    <el-image v-if="isImage(row.mime)" :src="`/files/${row.path}`" style="width:48px;height:48px;object-fit:cover" fit="cover" :preview-src-list="[`/files/${row.path}`]" hide-on-click-modal />
+                    <span v-else style="color:#909399">—</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="name" label="原始文件名" show-overflow-tooltip />
+                <el-table-column prop="owner" label="上传者" width="110" />
+                <el-table-column prop="mime" label="类型" width="150" show-overflow-tooltip />
+                <el-table-column prop="size" label="大小" width="100">
+                  <template #default="{ row }">{{ fmtBytes(row.size) }}</template>
+                </el-table-column>
+                <el-table-column label="引用" width="90">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.refCount > 0" size="small" type="warning">{{ row.refCount }} 条消息</el-tag>
+                    <span v-else style="color:#909399">未引用</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="created_at" label="上传时间" width="170">
+                  <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="150">
+                  <template #default="{ row }">
+                    <el-button size="small" @click="downloadFile(row)">下载</el-button>
+                    <el-button size="small" type="danger" @click="delFile(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+                <template #empty>
+                  <div class="empty-tip">
+                    <span>当前筛选条件下没有文件</span>
+                    <el-button v-if="fileRange !== 'all'" link type="primary" @click="fileRange = 'all'; filePager.reset()">改为「全部时间」再试</el-button>
+                  </div>
+                </template>
+              </el-table>
+              <PagerBar :pager="filePager" />
+            </el-tab-pane>
+
+            <el-tab-pane label="孤儿巡检" name="orphans">
+              <el-alert type="info" :closable="false" style="margin-bottom:12px">
+                <template #title>
+                  <b>断链</b>（库里有记录、磁盘文件不见了）通常是手动删了文件 / 挂载变了 / 迁移丢文件；
+                  <b>残留</b>（磁盘有文件、库里没记录）通常是删库残留或上传中途失败。
+                  <span v-if="fileOrphans.truncated">⚠️ 结果已截断（扫描上限 {{ fileOrphans.scanLimit }}），可能还有更多。</span>
+                </template>
+              </el-alert>
+              <div class="page-bar">
+                <el-button @click="loadOrphans">重新巡检</el-button>
+                <el-button type="danger" plain :disabled="!fileOrphans.counts?.diskOnly" @click="openPurge('orphan')">
+                  清理残留文件（{{ fileOrphans.counts?.diskOnly || 0 }} 个，{{ fmtBytes(fileOrphans.counts?.diskOnlyBytes) }}）
+                </el-button>
+                <span class="hint">残留文件库里本来就没记录，清理风险最低，不涉及任何消息。</span>
+              </div>
+
+              <div class="analysis-h">断链：库里有记录，磁盘文件不存在（{{ fileOrphans.counts?.dbOnly || 0 }}）</div>
+              <el-table :data="fileOrphans.dbOnly" border stripe size="small" style="margin-bottom:16px">
+                <el-table-column prop="id" label="ID" width="70" />
+                <el-table-column prop="name" label="文件名" show-overflow-tooltip />
+                <el-table-column prop="path" label="磁盘路径" show-overflow-tooltip />
+                <el-table-column label="大小" width="100">
+                  <template #default="{ row }">{{ fmtBytes(row.size) }}</template>
+                </el-table-column>
+                <el-table-column label="上传时间" width="170">
+                  <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+                </el-table-column>
+                <template #empty><div class="empty-tip">没有断链文件</div></template>
+              </el-table>
+
+              <div class="analysis-h">残留：磁盘有文件，库里无记录（{{ fileOrphans.counts?.diskOnly || 0 }}）</div>
+              <el-table :data="fileOrphans.diskOnly" border stripe size="small">
+                <el-table-column prop="path" label="磁盘文件名" show-overflow-tooltip />
+                <el-table-column label="大小" width="110">
+                  <template #default="{ row }">{{ fmtBytes(row.size) }}</template>
+                </el-table-column>
+                <el-table-column label="修改时间" width="180">
+                  <template #default="{ row }">{{ fmtTime(row.mtime) }}</template>
+                </el-table-column>
+                <template #empty><div class="empty-tip">没有残留文件</div></template>
+              </el-table>
+            </el-tab-pane>
+          </el-tabs>
         </div>
 
         <!-- 消息管理 -->
         <div v-else-if="tab === 'messages'">
-          <div class="page-bar">
-            <el-select v-model="msgKind" placeholder="全部类型" clearable style="width:130px" @change="loadMessages">
-              <el-option label="全部类型" value="" />
+          <el-alert v-if="!msgNoTimeLimit" type="info" :closable="false" style="margin-bottom:12px">
+            <template #title>
+              默认只查<b>最近 30 天</b>（数据不炸的第一道防线）。找更早的消息，把时间范围改成「全部」或自定义。
+            </template>
+          </el-alert>
+          <div class="page-bar wrap">
+            <el-radio-group v-model="msgRange" size="small" @change="msgPager.reset()">
+              <el-radio-button value="today">今天</el-radio-button>
+              <el-radio-button value="7d">7 天</el-radio-button>
+              <el-radio-button value="30d">30 天</el-radio-button>
+              <el-radio-button value="90d">90 天</el-radio-button>
+              <el-radio-button value="all">全部时间</el-radio-button>
+              <el-radio-button value="custom">自定义</el-radio-button>
+            </el-radio-group>
+            <el-date-picker v-if="msgRange === 'custom'" v-model="msgCustom" type="datetimerange"
+              range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" size="small"
+              style="width:340px" @change="msgPager.reset()" />
+          </div>
+          <div class="page-bar wrap">
+            <el-select v-model="msgSenderId" placeholder="全部发送者" clearable filterable style="width:170px" @change="msgPager.reset()">
+              <el-option v-for="u in userOptions" :key="u.id" :label="u.nickname || u.username" :value="u.id" />
+            </el-select>
+            <el-select v-model="msgConvId" placeholder="全部会话" clearable filterable style="width:190px" @change="msgPager.reset()">
+              <el-option v-for="c in msgConvs" :key="c.id" :label="c.name" :value="c.id" />
+            </el-select>
+            <el-select v-model="msgKind" placeholder="全部类型" clearable style="width:120px" @change="msgPager.reset()">
               <el-option label="文字" value="text" />
               <el-option label="图片" value="image" />
               <el-option label="文件" value="file" />
               <el-option label="语音" value="audio" />
+              <el-option label="卡片" value="card" />
             </el-select>
-            <el-input v-model="msgQ" placeholder="搜索消息内容" clearable style="width:220px" @keyup.enter="loadMessages" />
-            <el-button type="primary" @click="loadMessages">搜索</el-button>
+            <el-input v-model="msgQ" placeholder="搜索消息内容" clearable style="width:190px" @keyup.enter="msgPager.reset()" />
+            <el-checkbox v-model="msgMentioned" @change="msgPager.reset()">仅 @提及</el-checkbox>
+            <el-button type="primary" @click="msgPager.reset()">搜索</el-button>
             <el-button @click="resetMsgFilter">重置</el-button>
-            <el-button @click="loadMessages">刷新</el-button>
+            <el-button type="danger" plain @click="openPurge('messages')">批量清理</el-button>
           </div>
-          <el-table :data="messages" border stripe>
+          <el-table :data="msgPager.p.items" border stripe v-loading="msgPager.p.loading">
             <el-table-column prop="id" label="ID" width="70" />
-            <el-table-column prop="sender_name" label="发送者" width="120" />
-            <el-table-column prop="conversation_id" label="会话" width="80" />
+            <el-table-column prop="sender_name" label="发送者" width="110" />
+            <el-table-column label="会话" width="150" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="row.conversation_name">{{ row.conversation_name }}</span>
+                <span v-else style="color:#c0c4cc">#{{ row.conversation_id }}</span>
+                <el-tag v-if="row.conversation_type === 'group'" size="small" type="info" style="margin-left:4px">群</el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="kind" label="类型" width="80">
               <template #default="{ row }">
                 <el-tag size="small" :type="kindTag(row.kind)">{{ kindLabel(row.kind) }}</el-tag>
@@ -781,7 +963,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <span v-else style="color:#909399">文件 · {{ row.content || '—' }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="created_at" label="发送时间" width="180">
+            <el-table-column prop="created_at" label="发送时间" width="170">
               <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
             </el-table-column>
             <el-table-column label="操作" width="100">
@@ -789,7 +971,17 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-button size="small" type="danger" @click="delMessage(row)">删除</el-button>
               </template>
             </el-table-column>
+            <template #empty>
+              <div class="empty-tip">
+                <span>当前筛选条件下没有数据</span>
+                <el-button v-if="!msgNoTimeLimit" link type="primary" @click="msgRange = 'all'; msgPager.reset()">改为「全部时间」再试</el-button>
+              </div>
+            </template>
           </el-table>
+          <PagerBar :pager="msgPager" />
+          <div class="hint" style="margin-top:10px">
+            提示：筛选条件就是「批量清理」的作用范围 —— 不用勾选，按条件执行，服务端会重算条数并要求二次确认。
+          </div>
         </div>
 
         <!-- 集成对接 -->
@@ -1331,7 +1523,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                         <el-option label="普通用户 user" value="user" />
                       </el-select>
                       <el-select v-model="mmForm.userIds" multiple filterable placeholder="按用户（留空 = 不限）" style="width:100%">
-                        <el-option v-for="u in users" :key="u.id"
+                        <el-option v-for="u in userOptions" :key="u.id"
                           :label="(u.nickname || u.username) + ' #' + u.id" :value="u.id" />
                       </el-select>
                       <div class="hint">
@@ -2596,6 +2788,57 @@ docker compose up -d --force-recreate xiaozhi-im</div>
       </el-main>
     </el-container>
 
+        <!-- 批量清理确认（消息 / 文件 / 磁盘残留 共用；三步安全模型的第 2 步） -->
+        <el-dialog v-model="purgeDlg" width="640px" :title="purgeKind === 'messages' ? '批量清理消息' : (purgeKind === 'orphan' ? '清理磁盘残留文件' : '批量清理文件')">
+          <div v-if="!purgePreview" style="padding:24px;text-align:center;color:#909399">统计中…</div>
+          <div v-else>
+            <el-alert type="warning" :closable="false" style="margin-bottom:14px">
+              <template #title>
+                <b>此操作不可恢复。</b>
+                <span v-if="purgeKind === 'messages'">删除消息记录；其中不再被任何消息引用的文件会连磁盘文件一并删除。</span>
+                <span v-else-if="purgeKind === 'orphan'">只删除磁盘上、数据库里没有记录的文件，不涉及任何消息。</span>
+                <span v-else>文件会被删除，引用它的消息内容替换成「[文件已被管理员删除]」（与单条删除保持一致）。</span>
+              </template>
+            </el-alert>
+
+            <div class="purge-box">
+              <div class="purge-row"><span>命中条数</span><b class="purge-num">{{ purgePreview.count }}</b></div>
+              <div v-if="purgePreview.bytes !== undefined" class="purge-row"><span>占用空间</span><b>{{ fmtBytes(purgePreview.bytes) }}</b></div>
+              <div v-if="purgePreview.oldest" class="purge-row">
+                <span>时间跨度</span><b>{{ fmtTime(purgePreview.oldest) }} ~ {{ fmtTime(purgePreview.newest) }}</b>
+              </div>
+              <div v-for="(s, i) in purgeScopeLines" :key="i" class="purge-row">
+                <span>清理条件</span><b>{{ s }}</b>
+              </div>
+            </div>
+
+            <el-alert v-if="purgePreview.tooMany" type="error" :closable="false" style="margin:12px 0">
+              <template #title>
+                超过单次上限 {{ purgePreview.limit }} 条，请收窄条件（比如缩短时间范围）后分批清理 —— 这是防止一条写宽的条件把整个库删掉。
+              </template>
+            </el-alert>
+            <el-alert v-else-if="purgePreview.count === 0" type="info" :closable="false" style="margin:12px 0">
+              <template #title>当前条件下没有数据，无需清理。</template>
+            </el-alert>
+            <div v-else style="margin:12px 0">
+              <div style="margin-bottom:6px">
+                为避免误删，请手工输入要清理的条数 <code class="mono">{{ purgePreview.count }}</code>：
+              </div>
+              <el-input v-model="purgeInput" placeholder="输入上面的数字" style="width:220px" />
+              <div class="hint" style="margin-top:8px">
+                服务端会重新统计一遍：若期间条数有变化（有人正在发消息）会拒绝执行并让你重新确认，而不是多删。
+                执行前会自动导出一份 JSON 备份到服务器的 <code class="mono">purge-backup/</code>。
+              </div>
+            </div>
+          </div>
+          <template #footer>
+            <el-button @click="purgeDlg = false">取消</el-button>
+            <el-button type="danger" :loading="purgeBusy"
+              :disabled="!purgePreview || purgePreview.count === 0 || purgePreview.tooMany"
+              @click="doPurge">确认清理</el-button>
+          </template>
+        </el-dialog>
+
     <!-- 用户编辑向导：2 步（基本信息 / 密码） -->
     <el-dialog v-model="userDlg" :title="userForm.id ? '编辑用户' : '新建用户'" width="480px" @close="userStep=0">
       <el-steps :active="userStep" finish-status="success" simple style="margin-bottom:18px">
@@ -2654,7 +2897,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           </el-form-item>
           <el-form-item label="群主">
             <el-select v-model="groupForm.owner_id" filterable placeholder="选择群主" style="width:100%">
-              <el-option v-for="u in users" :key="u.id" :label="`${u.username} (${u.nickname || ''})`" :value="u.id" />
+              <el-option v-for="u in userOptions" :key="u.id" :label="`${u.username} (${u.nickname || ''})`" :value="u.id" />
             </el-select>
           </el-form-item>
         </el-form>
@@ -2664,7 +2907,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <el-form-item label="成员">
             <el-select v-model="groupForm.member_ids" multiple filterable collapse-tags collapse-tags-tooltip
                        placeholder="选择成员（可多选）" style="width:100%">
-              <el-option v-for="u in users" :key="u.id" :label="`${u.username} (${u.nickname || ''})`" :value="u.id" />
+              <el-option v-for="u in userOptions" :key="u.id" :label="`${u.username} (${u.nickname || ''})`" :value="u.id" />
             </el-select>
             <div class="hint" style="margin-top:6px">
               * 创建时群主自动加入成员列表；编辑时改动成员会同步会话成员。
@@ -2959,8 +3202,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ref, reactive, computed, onMounted, watch, h } from 'vue';
+import { ElMessage, ElMessageBox, ElPagination } from 'element-plus';
 import api from './api';
 
 const token = ref(localStorage.getItem('xz_token') || '');
@@ -2974,13 +3217,6 @@ const loading = ref(false);
 const err = ref('');
 const tab = ref('dashboard');
 const stats = ref({});
-const users = ref([]);
-const groups = ref([]);
-const friendships = ref([]);
-const files = ref([]);
-const messages = ref([]);
-const msgKind = ref('');
-const msgQ = ref('');
 const info = ref({});
 
 const baseCards = [
@@ -3148,30 +3384,110 @@ function logout() {
   localStorage.removeItem('xz_token');
 }
 
+/**
+ * 通用列表分页器（全站统一约定，见 SPEC-消息与文件管理.md §6.1）。
+ *
+ * 服务端列表接口统一返回 `{items,total,page,pageSize}`。抽成一个可复用件，
+ * 避免每个页面各写一套 —— 之前每个接口各写死一个 LIMIT，数据一多就静默截断。
+ *
+ * ⚠️ 筛选条件变化时**必须回到第 1 页**：不回到第 1 页的话，用户在第 5 页改条件
+ * 会查到空结果，然后以为"没数据"。
+ */
+function usePager(loader, opts = {}) {
+  const p = reactive({
+    items: [], total: 0, page: 1, pageSize: opts.pageSize || 50, loading: false,
+  });
+  let seq = 0;
+  async function load() {
+    const my = ++seq;              // 防竞态：连续改条件时只认最后一次的结果
+    p.loading = true;
+    try {
+      const r = await loader({ page: p.page, pageSize: p.pageSize });
+      if (my !== seq) return;
+      p.items = r.items || [];
+      p.total = r.total || 0;
+      // 删到当前页空了自动回退到最后一页：否则用户对着空表以为数据没了
+      const lastPage = Math.max(1, Math.ceil(p.total / p.pageSize));
+      if (!p.items.length && p.total > 0 && p.page > lastPage) {
+        p.page = lastPage;         // watch(page) 会重新拉
+        return;
+      }
+    } catch (e) {
+      if (my === seq) ElMessage.error('加载失败：' + (e.response?.data?.error || e.message));
+    } finally {
+      if (my === seq) p.loading = false;
+    }
+  }
+  watch(() => p.page, load);
+  watch(() => p.pageSize, () => { if (p.page !== 1) p.page = 1; else load(); });
+  return {
+    p,
+    load,
+    /** 回到第 1 页并刷新（筛选条件变化后调它） */
+    reset() { if (p.page !== 1) { p.page = 1; } else { load(); } },
+  };
+}
+
+/**
+ * 通用分页条。所有列表页共用一套交互，避免每页各写一遍。
+ * ⚠️ 不监听 @current-change 手动 reload —— 直接把 current-page 绑到 pager.p.page，
+ * usePager 内部 watch(page) 会触发加载，避免"改页码"和"手动请求"两条路径打架。
+ */
+const PagerBar = {
+  name: 'PagerBar',
+  props: { pager: { type: Object, required: true } },
+  setup(props) {
+    return () => h('div', { class: 'pager-bar' }, [
+      h(ElPagination, {
+        currentPage: props.pager.p.page,
+        pageSize: props.pager.p.pageSize,
+        total: props.pager.p.total,
+        pageSizes: [20, 50, 100, 200],
+        layout: 'total, sizes, prev, pager, next, jumper',
+        background: true,
+        'onUpdate:currentPage': (v) => { props.pager.p.page = v; },
+        'onUpdate:pageSize': (v) => { props.pager.p.pageSize = v; },
+      }),
+    ]);
+  },
+};
+
+/** 时间范围快捷选项 → 查询参数。`all` 用显式 allTime 表达，不靠"不传"（不传=最近 30 天） */
+function rangeToQuery(range, custom) {
+  if (range === 'all') return { allTime: '1' };
+  if (range === 'custom') {
+    const [a, b] = custom || [];
+    if (!a || !b) return {};
+    return { from: String(new Date(a).getTime()), to: String(new Date(b).getTime()) };
+  }
+  if (range === 'today') {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    return { from: String(d.getTime()) };
+  }
+  const days = Number(String(range).replace('d', '')) || 30;
+  return { from: String(Date.now() - days * 86400000) };
+}
+function rangeLabel(range) {
+  return { today: '今天', '7d': '最近 7 天', '30d': '最近 30 天', '90d': '最近 90 天', all: '全部时间', custom: '自定义' }[range] || range;
+}
+
 async function loadAll() {
   try {
-    const [s, u, g, fs, fr, ms, inf, st] = await Promise.all([
+    // 列表数据不再在登录时一次性全量拉（分页后没必要），切到对应页签再按需加载。
+    // 但选择器要用的「全部用户」必须早点拿到，否则建群/考勤组会少人。
+    const [s, inf, st] = await Promise.all([
       api.get('/admin/stats'),
-      api.get('/admin/users'),
-      api.get('/admin/groups'),
-      api.get('/admin/files'),
-      api.get('/admin/friendships'),
-      api.get('/admin/messages?limit=300'),
       api.get('/admin/info'),
       api.get('/admin/settings'),
     ]);
     stats.value = s.data;
-    users.value = u.data;
-    groups.value = g.data;
-    files.value = fs.data;
-    friendships.value = fr.data;
-    messages.value = ms.data;
     info.value = inf.data;
     // 公司名与好友模式：上手向导、仪表盘卡片、侧栏都要用，登录后就取好，
     // 不要等切到「系统设置」页才加载（否则向导第一步永远是未完成）
     compSetting.value = { name: st.data.companyName || '', mode: st.data.friendMode || 'normal' };
     // 品牌名单一数据源在 pub，登录后把最新公司名回写过去
     pub.value = { ...pub.value, companyName: st.data.companyName || '' };
+    await loadUserOptions();
     loadTurn();
   } catch (e) {
     ElMessage.error('加载失败：' + (e.response?.data?.error || e.message));
@@ -3187,34 +3503,251 @@ async function loadTab() {
     stats.value = st.data;
     compSetting.value = { name: sc.data.companyName || '', mode: sc.data.friendMode || 'normal' };
     await loadTurn();
-  } else if (tab.value === 'users') await loadUsers();
-  else if (tab.value === 'groups') await loadGroups();
-  else if (tab.value === 'friends') await loadFriends();
+  } else if (tab.value === 'users') await userPager.reset();
+  else if (tab.value === 'groups') await groupPager.reset();
+  else if (tab.value === 'friends') await friendPager.reset();
   else if (tab.value === 'orgs') await loadOrgs();
   else if (tab.value === 'attendance') await loadAttendance();
   else if (tab.value === 'files') await loadFiles();
   else if (tab.value === 'messages') await loadMessages();
   else if (tab.value === 'integrations') await loadIntegrations();
   else if (tab.value === 'clientconfig') { await loadCc(); await loadCcApplied(); }
-  else if (tab.value === 'modules') { await loadMm(); await loadAppCatalog(); if (!users.value.length) await loadUsers(); }
+  else if (tab.value === 'modules') { await loadMm(); await loadAppCatalog(); await loadUserOptions(); }
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
 }
-async function loadUsers() { users.value = (await api.get('/admin/users')).data; }
-async function loadGroups() { groups.value = (await api.get('/admin/groups')).data; }
-async function loadFriends() { friendships.value = (await api.get('/admin/friendships')).data; }
-async function loadFiles() { files.value = (await api.get('/admin/files')).data; }
-async function loadMessages() {
-  const p = new URLSearchParams({ limit: '300' });
+
+/* ====== 用户管理：服务端分页 + 服务端搜索 ====== */
+
+// 搜索必须放服务端：分页和前端过滤天然矛盾 —— 前端只拿到当页 50 条，
+// 在当页里 filter 搜不到第 51 个人，而且不报错（属最难查的一类问题）。
+const userSearch = ref('');
+const userPager = usePager(async ({ page, pageSize }) => {
+  const p = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  if (userSearch.value.trim()) p.set('q', userSearch.value.trim());
+  return (await api.get('/admin/users?' + p.toString())).data;
+});
+let userSearchTimer = null;
+watch(userSearch, () => {
+  clearTimeout(userSearchTimer);
+  userSearchTimer = setTimeout(() => userPager.reset(), 300);
+});
+
+/**
+ * 全部用户的轻量列表（**不分页**）。
+ *
+ * 管理台有 4 处选择器要"全部用户"：身份下拉、建群选成员、考勤组指定到人、
+ * 模块表单的人员字段。用户列表一分页，这几处会**集体静默少人** ——
+ * 所以它们必须走这个独立接口，不能复用用户页的分页数据。
+ */
+const userOptions = ref([]);
+async function loadUserOptions() { userOptions.value = (await api.get('/admin/users/options')).data; }
+
+/* ====== 群组 / 好友 ====== */
+const groupPager = usePager(async ({ page, pageSize }) =>
+  (await api.get(`/admin/groups?page=${page}&pageSize=${pageSize}`)).data);
+const friendPager = usePager(async ({ page, pageSize }) =>
+  (await api.get(`/admin/friendships?page=${page}&pageSize=${pageSize}`)).data);
+
+async function loadGroups() { return groupPager.reset(); }
+async function loadFriends() { return friendPager.reset(); }
+
+/* ====== 文件管理 ====== */
+
+const fileTab = ref('all');
+const fileRange = ref('30d');
+const fileCustom = ref(null);
+const fileOwnerId = ref(null);
+const fileMime = ref('');
+const fileQ = ref('');
+const fileStorage = ref(null);
+const fileOrphans = ref({ dbOnly: [], diskOnly: [], counts: {}, truncated: false });
+
+const filePager = usePager(async ({ page, pageSize }) => {
+  const p = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  for (const [k, v] of Object.entries(rangeToQuery(fileRange.value, fileCustom.value))) p.set(k, v);
+  if (fileOwnerId.value) p.set('ownerId', String(fileOwnerId.value));
+  if (fileMime.value) p.set('mime', fileMime.value);
+  if (fileQ.value.trim()) p.set('q', fileQ.value.trim());
+  return (await api.get('/admin/files?' + p.toString())).data;
+});
+
+async function loadFiles() {
+  await Promise.all([
+    filePager.reset(),
+    api.get('/admin/files/storage').then((r) => { fileStorage.value = r.data; }).catch(() => {}),
+    loadOrphans(),
+  ]);
+}
+
+async function loadOrphans() {
+  try { fileOrphans.value = (await api.get('/admin/files/orphans')).data; }
+  catch (e) { ElMessage.error('孤儿巡检失败：' + (e.response?.data?.error || e.message)); }
+}
+
+function resetFileFilter() {
+  fileRange.value = '30d';
+  fileCustom.value = null;
+  fileOwnerId.value = null;
+  fileMime.value = '';
+  fileQ.value = '';
+  filePager.reset();
+}
+
+/* ====== 消息管理 ====== */
+
+const msgRange = ref('30d');
+const msgCustom = ref(null);
+const msgSenderId = ref(null);
+const msgConvId = ref(null);
+const msgKind = ref('');
+const msgQ = ref('');
+const msgMentioned = ref(false);
+const msgConvs = ref([]);
+// 用于「空状态」判断：不限时间还查不到，说明真的没有数据
+const msgNoTimeLimit = computed(() => msgRange.value === 'all');
+
+function msgQueryParams(page, pageSize) {
+  const p = new URLSearchParams();
+  if (page) p.set('page', String(page));
+  if (pageSize) p.set('pageSize', String(pageSize));
+  for (const [k, v] of Object.entries(rangeToQuery(msgRange.value, msgCustom.value))) p.set(k, v);
+  if (msgSenderId.value) p.set('senderId', String(msgSenderId.value));
+  if (msgConvId.value) p.set('conversationId', String(msgConvId.value));
   if (msgKind.value) p.set('kind', msgKind.value);
   if (msgQ.value.trim()) p.set('q', msgQ.value.trim());
-  messages.value = (await api.get('/admin/messages?' + p.toString())).data;
+  if (msgMentioned.value) p.set('mentioned', '1');
+  return p;
+}
+
+const msgPager = usePager(async ({ page, pageSize }) =>
+  (await api.get('/admin/messages?' + msgQueryParams(page, pageSize).toString())).data);
+
+async function loadMessages() {
+  if (!msgConvs.value.length) {
+    // 会话下拉需要「全部会话」（原来那个列表群/单聊各 LIMIT 100，第 101 个群选不到）
+    try { msgConvs.value = (await api.get('/admin/conversations/options')).data; } catch { /* 下拉拿不到不阻断列表 */ }
+  }
+  await msgPager.reset();
 }
 
 function resetMsgFilter() {
+  msgRange.value = '30d';
+  msgCustom.value = null;
+  msgSenderId.value = null;
+  msgConvId.value = null;
   msgKind.value = '';
   msgQ.value = '';
-  loadMessages();
+  msgMentioned.value = false;
+  msgPager.reset();
 }
+
+/** 把当前筛选条件整理成给用户看的摘要（批量清理弹窗必须列清楚删的是什么） */
+const msgFilterSummary = computed(() => {
+  const out = [`时间：${rangeLabel(msgRange.value)}`];
+  if (msgSenderId.value) {
+    const u = userOptions.value.find((x) => x.id === msgSenderId.value);
+    out.push(`发送者：${u ? (u.nickname || u.username) : '#' + msgSenderId.value}`);
+  }
+  if (msgConvId.value) {
+    const c = msgConvs.value.find((x) => x.id === msgConvId.value);
+    out.push(`会话：${c ? c.name : '#' + msgConvId.value}`);
+  }
+  if (msgKind.value) out.push(`类型：${kindLabel(msgKind.value)}`);
+  if (msgMentioned.value) out.push('仅 @提及');
+  if (msgQ.value.trim()) out.push(`关键词：${msgQ.value.trim()}`);
+  return out;
+});
+const fileFilterSummary = computed(() => {
+  const out = [`时间：${rangeLabel(fileRange.value)}`];
+  if (fileOwnerId.value) {
+    const u = userOptions.value.find((x) => x.id === fileOwnerId.value);
+    out.push(`上传者：${u ? (u.nickname || u.username) : '#' + fileOwnerId.value}`);
+  }
+  if (fileMime.value) out.push(`类型：${fileMime.value}`);
+  if (fileQ.value.trim()) out.push(`文件名：${fileQ.value.trim()}`);
+  return out;
+});
+
+/* ====== 批量清理（三步安全模型：算条数 → 手输确认 → 服务端重算比对） ====== */
+
+const purgeDlg = ref(false);
+const purgeKind = ref('messages');           // messages | files | orphan
+const purgePreview = ref(null);
+const purgeInput = ref('');
+const purgeBusy = ref(false);
+const purgeBackup = ref('');
+const purgeBackupErr = ref('');
+
+async function openPurge(kind) {
+  purgeKind.value = kind;
+  purgePreview.value = null;
+  purgeInput.value = '';
+  purgeBackup.value = '';
+  purgeBackupErr.value = '';
+  purgeDlg.value = true;
+  try {
+    if (kind === 'messages') {
+      purgePreview.value = (await api.get('/admin/messages/purge-preview?' + msgQueryParams().toString())).data;
+    } else if (kind === 'files') {
+      purgePreview.value = (await api.get('/admin/files/purge-preview?' + filePurgeParams().toString())).data;
+    } else {
+      purgePreview.value = (await api.get('/admin/files/purge-preview?orphanOnly=1')).data;
+    }
+  } catch (e) {
+    ElMessage.error('统计失败：' + (e.response?.data?.error || e.message));
+    purgeDlg.value = false;
+  }
+}
+
+function filePurgeParams() {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(rangeToQuery(fileRange.value, fileCustom.value))) p.set(k, v);
+  if (fileOwnerId.value) p.set('ownerId', String(fileOwnerId.value));
+  if (fileMime.value) p.set('mime', fileMime.value);
+  if (fileQ.value.trim()) p.set('q', fileQ.value.trim());
+  return p;
+}
+
+async function doPurge() {
+  const pv = purgePreview.value;
+  if (!pv) return;
+  if (Number(purgeInput.value) !== pv.count) {
+    ElMessage.error(`请输入与统计一致的条数：${pv.count}`);
+    return;
+  }
+  purgeBusy.value = true;
+  try {
+    let r;
+    if (purgeKind.value === 'messages') {
+      const q = msgQueryParams();
+      q.set('confirm', String(pv.count));
+      r = await api.post('/admin/messages/purge', Object.fromEntries(q));
+    } else if (purgeKind.value === 'files') {
+      const q = filePurgeParams();
+      q.set('confirm', String(pv.count));
+      r = await api.post('/admin/files/purge', Object.fromEntries(q));
+    } else {
+      r = await api.post('/admin/files/purge', { orphanOnly: '1', confirm: String(pv.count) });
+    }
+    purgeBackup.value = r.data.backup || '';
+    purgeBackupErr.value = r.data.backupError || '';
+    ElMessage.success(`已清理 ${r.data.deleted} 条`);
+    purgeDlg.value = false;
+    if (purgeKind.value === 'files' || purgeKind.value === 'orphan') { await loadFiles(); }
+    else await msgPager.load();
+  } catch (e) {
+    const st = e.response?.status;
+    ElMessage.error(st === 409 ? (e.response.data?.error || '数量已变化，请重新确认') : ('清理失败：' + (e.response?.data?.error || e.message)));
+    // 409 说明数据变了，刷新统计让用户看到新的条数再决定
+    if (st === 409) openPurge(purgeKind.value);
+  } finally { purgeBusy.value = false; }
+}
+
+/** 清理弹窗里列出"到底删的是什么条件"，一个都不能少 —— 用户据此判断有没有点错 */
+const purgeScopeLines = computed(() => {
+  if (purgeKind.value === 'orphan') return ['磁盘上未被数据库记录的残留文件'];
+  return purgeKind.value === 'messages' ? msgFilterSummary.value : fileFilterSummary.value;
+});
 
 function kindLabel(k) {
   return { text: '文字', image: '图片', file: '文件', audio: '语音', emoji: '表情', card: '卡片' }[k] || k;
@@ -3528,12 +4061,8 @@ watch(tab, loadTab);
 watch(brand, (v) => { document.title = v + ' 管理后台'; }, { immediate: true });
 
 /* ====== Users ====== */
-const userSearch = ref('');
-const filteredUsers = computed(() => {
-  const k = userSearch.value.trim().toLowerCase();
-  if (!k) return users.value;
-  return users.value.filter((u) => (u.username + (u.nickname || '')).toLowerCase().includes(k));
-});
+// 用户页的搜索与分页已上移到「用户管理」区块（服务端搜索 + 服务端分页）。
+// 原来这里是前端过滤 filteredUsers，分页后只会在当页 50 条里搜 —— 必须去掉。
 const userDlg = ref(false);
 const userDlgBusy = ref(false);
 const userForm = ref({ id: null, username: '', nickname: '', role: 'user', password: '' });
@@ -3599,7 +4128,7 @@ const groupDlgBusy = ref(false);
 const groupForm = ref({ id: null, name: '', owner_id: null, member_ids: [] });
 const groupStep = ref(0);
 async function openGroupDialog(row) {
-  if (!users.value.length) await loadUsers();
+  await loadUserOptions();   // 选择器要「全部用户」：分页接口只回一页，会静默少人
   if (row) {
     // 编辑时：留空成员选择 = 不动成员；用户主动勾选 = 全量替换（增/删都会自动跳过群主）
     groupForm.value = { id: row.id, name: row.name, owner_id: row.owner_id, member_ids: [] };
@@ -3739,7 +4268,7 @@ const outgoingStep = ref(0);
 /** 身份下拉：机器人排前面（对接一般以机器人身份发言），再接真人用户 */
 const identityOptions = computed(() => [
   ...bots.value.map((b) => ({ id: b.id, username: b.username, nickname: b.nickname, is_bot: true })),
-  ...users.value.filter((u) => !u.is_bot).map((u) => ({ ...u, is_bot: false })),
+  ...userOptions.value.filter((u) => !u.is_bot).map((u) => ({ ...u, is_bot: false })),
 ]);
 
 // 集成页内的子标签切换（放在 intTab 定义之后，避免 const 暂时性死区）
@@ -4845,6 +5374,36 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .stat-label { color: #909399; margin-top: 6px; }
 .page-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .hint { color: #909399; font-size: 12px; }
+
+/* ====== 列表分页 / 筛选（v0.14.0 全站统一） ====== */
+.page-bar.wrap { flex-wrap: wrap; row-gap: 10px; }
+.pager-bar { display: flex; justify-content: flex-end; margin-top: 12px; }
+/* 空状态：筛选后没数据时给一条"怎么放宽条件"的出路，避免用户以为数据丢了 */
+.empty-tip { padding: 18px; color: var(--el-text-color-secondary); }
+.empty-tip .el-button { margin-left: 6px; }
+
+/* 文件页顶部统计卡 */
+.stat-row { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.stat-box {
+  flex: 1 1 150px; padding: 12px 14px; border: 1px solid var(--el-border-color);
+  border-radius: 8px; background: var(--el-fill-color-blank);
+}
+.stat-k { font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 6px; }
+.stat-v { font-size: 20px; font-weight: 600; }
+.stat-warn { border-color: var(--el-color-warning); }
+.stat-warn .stat-v { color: var(--el-color-warning); }
+
+/* 存储占用分析 */
+.file-analysis { margin-bottom: 8px; }
+.analysis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.analysis-h { font-size: 13px; font-weight: 600; margin: 6px 0 8px; color: var(--el-text-color-regular); }
+@media (max-width: 900px) { .analysis-grid { grid-template-columns: 1fr; } }
+
+/* 批量清理确认弹窗 */
+.purge-box { border: 1px solid var(--el-border-color); border-radius: 8px; padding: 10px 14px; }
+.purge-row { display: flex; gap: 12px; padding: 4px 0; font-size: 13px; align-items: baseline; }
+.purge-row > span { color: var(--el-text-color-secondary); width: 76px; flex: none; }
+.purge-num { color: var(--el-color-danger); font-size: 16px; }
 /* 考勤：迟到/早退/缺卡的数字用红字标出来，一眼能扫到异常 */
 .att-bad { color: #f56c6c; font-weight: 600; }
 

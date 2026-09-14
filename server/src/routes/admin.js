@@ -9,7 +9,14 @@ const appmodules = require('../appmodules');
 const appregistry = require('../apps');
 const settings = require('../settings');
 const orgs = require('./orgs');
+const paging = require('../paging');
 const pkg = require('../../package.json');
+
+// 单次批量清理的条数上限：防止一条条件写宽了把整个库删掉。
+// 配合"算法条数 → 手输条数确认 → 服务端重算比对"的三步模型使用。
+const MAX_PURGE = 20000;
+// 孤儿巡检的扫描上限：避免超大目录把接口拖死；超限时响应里标 truncated
+const MAX_ORPHAN_SCAN = 5000;
 
 function adminOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -18,6 +25,84 @@ function adminOf(req, res) {
   if (!u || u.role !== 'admin') { res.status(403).json({ error: 'forbidden' }); return null; }
   return c.uid;
 }
+
+/** 备份文件名用的时间戳（本地时区可读，不含冒号以免文件名非法） */
+function stampName(d = new Date()) {
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+/**
+ * 把待删记录导出成 JSON 落到 `<DATA_DIR>/purge-backup/`。
+ *
+ * 成本极低，但把"不可恢复"变成"能捞回来" —— 审计留痕的标准做法。
+ * 导出失败**不阻断删除**（磁盘满等情况下，删除是用户的明确意图），
+ * 但要把错误带回响应里让管理员知道没留下备份。
+ */
+function writePurgeBackup(kind, rows, meta) {
+  const dir = path.join(config.DATA_DIR, 'purge-backup');
+  const name = `${kind}-${stampName()}.json`;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, name),
+      JSON.stringify({ kind, at: Date.now(), ...meta, count: rows.length, rows }, null, 2),
+      'utf8',
+    );
+    return { name, error: null };
+  } catch (e) {
+    return { name: null, error: e.message };
+  }
+}
+
+/**
+ * 消息列表的筛选条件构建（列表、preview、purge 三处共用一套，避免口径分家）。
+ * 返回 `{ error }` 时路由回 400。
+ */
+function messageFilter(query, timeField = 'm.created_at') {
+  const list = paging.parseList(query);
+  if (list.error) return { error: list.error };
+
+  const params = [];
+  const where = [];
+  where.push(...paging.timeWhere(list, params, timeField));
+
+  const kind = String(query.kind || '').trim();
+  if (kind) { where.push('m.kind = ?'); params.push(kind); }
+  const senderId = Number(query.senderId);
+  if (Number.isFinite(senderId) && senderId > 0) { where.push('m.sender_id = ?'); params.push(senderId); }
+  const conversationId = Number(query.conversationId);
+  if (Number.isFinite(conversationId) && conversationId > 0) { where.push('m.conversation_id = ?'); params.push(conversationId); }
+  if (String(query.mentioned || '') === '1') where.push('m.mentions IS NOT NULL');
+  const q = String(query.q || '').trim();
+  if (q) { where.push("m.content LIKE ? ESCAPE '\\'"); params.push(paging.likeParam(q)); }
+
+  return { list, where, params, sql: where.length ? 'WHERE ' + where.join(' AND ') : '' };
+}
+
+/** 文件列表的筛选条件构建（列表 / preview / purge 共用） */
+function fileFilter(query) {
+  const list = paging.parseList(query);
+  if (list.error) return { error: list.error };
+
+  const where = [];
+  const params = [];
+  where.push(...paging.timeWhere(list, params, 'f.created_at'));
+
+  const ownerId = Number(query.ownerId);
+  if (Number.isFinite(ownerId) && ownerId > 0) { where.push('f.owner_id = ?'); params.push(ownerId); }
+  const mime = String(query.mime || '').trim();
+  if (mime) { where.push("f.mime LIKE ? ESCAPE '\\'"); params.push(paging.escapeLike(mime) + '%'); }
+  const minSize = Number(query.minSize);
+  if (Number.isFinite(minSize) && minSize > 0) { where.push('f.size >= ?'); params.push(minSize); }
+  const maxSize = Number(query.maxSize);
+  if (Number.isFinite(maxSize) && maxSize > 0) { where.push('f.size <= ?'); params.push(maxSize); }
+  const q = String(query.q || '').trim();
+  if (q) { where.push("f.name LIKE ? ESCAPE '\\'"); params.push(paging.likeParam(q)); }
+
+  return { list, where, params, sql: where.length ? 'WHERE ' + where.join(' AND ') : '' };
+}
+
 
 router.get('/stats', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
@@ -97,9 +182,74 @@ router.put('/settings', (req, res) => {
 
 /* ==================== Users ==================== */
 
+/**
+ * 用户列表（服务端分页 + 服务端搜索）。
+ *
+ * 搜索为什么必须放服务端：分页和前端过滤天然矛盾 —— 前端只拿到当页 50 条，
+ * `filteredUsers` 只能在这 50 条里搜，第 51 个人**搜不到且不报错**。
+ */
 router.get('/users', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
-  res.json(db.prepare('SELECT id,username,nickname,avatar,role,created_at FROM users ORDER BY id DESC LIMIT 500').all());
+  const list = paging.parseList(req.query);
+  if (list.error) return res.status(400).json({ error: list.error });
+
+  const where = [];
+  const params = [];
+  const q = String(req.query.q || '').trim();
+  if (q) {
+    where.push("(u.username LIKE ? ESCAPE '\\' OR u.nickname LIKE ? ESCAPE '\\')");
+    params.push(paging.likeParam(q), paging.likeParam(q));
+  }
+  const role = String(req.query.role || '').trim();
+  if (role === 'admin' || role === 'user') { where.push('u.role = ?'); params.push(role); }
+  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+  const total = db.prepare(`SELECT COUNT(*) n FROM users u ${w}`).get(...params).n;
+  const items = db.prepare(`SELECT u.id,u.username,u.nickname,u.avatar,u.role,u.created_at
+    FROM users u ${w} ORDER BY u.id ${list.sortDir} LIMIT ? OFFSET ?`)
+    .all(...params, list.pageSize, list.offset);
+  res.json(paging.envelope(list, items, total));
+});
+
+/**
+ * 用户轻量选项（**不分页**）。
+ *
+ * 管理台有 4 处选择器共用一份全局 users：用户页搜索、身份下拉、建群选成员、
+ * 考勤组指定到人。用户列表一分页，这 4 处就**集体静默少人**（人变少了但不报错，
+ * 属最难查的一类问题）。所以给它们一个专门的轻量接口，只回必要字段。
+ *
+ * 用户上千时这个接口本身会变大（4 字段 × 1000 人 ≈ 40KB）。第一版接受；
+ * 真到上万再做「服务端搜索式下拉」，现在不做属 YAGNI。
+ */
+router.get('/users/options', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json(db.prepare('SELECT id,username,nickname,is_bot,role FROM users ORDER BY id').all());
+});
+
+/**
+ * 会话轻量选项（**不分页**）。
+ *
+ * 消息页/文件页的会话下拉需要**全部会话**：原来会话列表来自 integrations.js
+ * 的 conversationOptions()，群和单聊各自 `LIMIT 100` —— 第 101 个群选不到。
+ * 这里不限量，并把 name 一次算好（群名 / 单聊参与者拼接）。
+ */
+router.get('/conversations/options', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const rows = db.prepare(`SELECT c.id, c.type,
+      COALESCE(g.name, dm.name) AS name
+    FROM conversations c
+    LEFT JOIN groups g ON g.conversation_id = c.id
+    LEFT JOIN (
+      SELECT cm.conversation_id, GROUP_CONCAT(COALESCE(u.nickname,u.username), ' / ') AS name
+      FROM conversation_members cm JOIN users u ON u.id = cm.user_id
+      GROUP BY cm.conversation_id
+    ) dm ON dm.conversation_id = c.id
+    ORDER BY c.id DESC`).all();
+  res.json(rows.map((r) => ({
+    id: r.id,
+    type: r.type,
+    name: r.name || `会话 #${r.id}`,
+  })));
 });
 
 router.post('/users', (req, res) => {
@@ -183,9 +333,24 @@ router.delete('/users/:id', (req, res) => {
 
 router.get('/groups', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
-  res.json(db.prepare(`SELECT g.id,g.name,g.owner_id,u.nickname owner_name,g.created_at,g.announcement,
+  const list = paging.parseList(req.query);
+  if (list.error) return res.status(400).json({ error: list.error });
+
+  const where = [];
+  const params = [];
+  const q = String(req.query.q || '').trim();
+  if (q) { where.push("g.name LIKE ? ESCAPE '\\'"); params.push(paging.likeParam(q)); }
+  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+  const total = db.prepare(`SELECT COUNT(*) n FROM groups g ${w}`).get(...params).n;
+  // 原来这个接口完全没有 LIMIT，群多了会把响应直接撑大，现在统一进分页
+  // （顺带带上 conversation_id：群与会话不是同一个 id，排查问题时要来回对）
+  const items = db.prepare(`SELECT g.id,g.name,g.owner_id,g.conversation_id,u.nickname owner_name,g.created_at,g.announcement,
     (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id=g.id) members
-    FROM groups g JOIN users u ON u.id=g.owner_id ORDER BY g.id DESC`).all());
+    FROM groups g JOIN users u ON u.id=g.owner_id
+    ${w} ORDER BY g.id ${list.sortDir} LIMIT ? OFFSET ?`)
+    .all(...params, list.pageSize, list.offset);
+  res.json(paging.envelope(list, items, total));
 });
 
 router.post('/groups', (req, res) => {
@@ -299,10 +464,219 @@ router.delete('/conversations/:id', (req, res) => {
 
 /* ==================== Files ==================== */
 
+/**
+ * 文件列表（服务端分页 + 多维筛选 + 引用计数）。
+ *
+ * `refCount` = 该文件被多少条消息引用。删除前用它告知影响面，
+ * 避免"文件删了，还有人翻旧消息点不开"。
+ */
 router.get('/files', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
-  res.json(db.prepare(`SELECT f.id,f.name,f.mime,f.size,f.path,f.created_at,u.username owner,f.owner_id
-    FROM files f LEFT JOIN users u ON u.id=f.owner_id ORDER BY f.id DESC LIMIT 500`).all());
+  const f = fileFilter(req.query);
+  if (f.error) return res.status(400).json({ error: f.error });
+
+  const total = db.prepare(`SELECT COUNT(*) n FROM files f ${f.sql}`).get(...f.params).n;
+  const items = db.prepare(`SELECT f.id,f.name,f.mime,f.size,f.path,f.created_at,f.owner_id,
+      COALESCE(u.nickname,u.username) owner,
+      (SELECT COUNT(*) FROM messages m WHERE m.file_id=f.id) refCount
+    FROM files f LEFT JOIN users u ON u.id=f.owner_id
+    ${f.sql} ORDER BY f.id ${f.list.sortDir} LIMIT ? OFFSET ?`)
+    .all(...f.params, f.list.pageSize, f.list.offset);
+  res.json(paging.envelope(f.list, items, total));
+});
+
+/**
+ * 存储占用分析 —— 直接回答"谁把磁盘吃满了"。
+ * byType 按字节降序；byOwner 取 TOP 10。
+ */
+router.get('/files/storage', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+
+  const total = db.prepare('SELECT COUNT(*) count, COALESCE(SUM(size),0) bytes FROM files').get();
+  const byType = db.prepare(`SELECT COALESCE(NULLIF(mime,''),'未知') mime, COUNT(*) count, SUM(size) bytes
+    FROM files GROUP BY COALESCE(NULLIF(mime,''),'未知') ORDER BY bytes DESC`).all();
+  const byOwner = db.prepare(`SELECT f.owner_id, COALESCE(u.nickname,u.username) username,
+      COUNT(*) count, SUM(f.size) bytes
+    FROM files f LEFT JOIN users u ON u.id=f.owner_id
+    GROUP BY f.owner_id ORDER BY bytes DESC LIMIT 10`).all();
+
+  // 磁盘实际占用与库里统计对不上时，管理员在这里第一时间看到
+  let diskBytes = 0;
+  let diskCount = 0;
+  try {
+    for (const e of fs.readdirSync(config.FILES_DIR, { withFileTypes: true })) {
+      if (!e.isFile()) continue;
+      diskCount++;
+      try { diskBytes += fs.statSync(path.join(config.FILES_DIR, e.name)).size; } catch {}
+    }
+  } catch {}
+
+  res.json({
+    totalBytes: total.bytes,
+    totalCount: total.count,
+    diskBytes,
+    diskCount,
+    byType,
+    byOwner,
+  });
+});
+
+/**
+ * 孤儿文件巡检：库里和磁盘对不上的两类都要能查出来。
+ *   dbOnly   files 表有记录、磁盘文件不存在（断链：手动删了文件 / 挂载变更 / 迁移丢文件）
+ *   diskOnly 磁盘有文件、files 表无记录（残留：删库残留 / 上传中途失败）
+ *
+ * 扫描设上限（超出标 truncated），避免超大目录把接口拖死。
+ */
+function scanOrphans() {
+  const known = new Set(db.prepare('SELECT path FROM files').all().map((r) => r.path));
+  const dbRows = db.prepare('SELECT id,name,mime,size,path,owner_id,created_at FROM files ORDER BY id DESC LIMIT ?')
+    .all(MAX_ORPHAN_SCAN);
+
+  const dbOnly = [];
+  for (const r of dbRows) {
+    if (!fs.existsSync(path.join(config.FILES_DIR, r.path))) dbOnly.push(r);
+  }
+  let truncated = dbRows.length >= MAX_ORPHAN_SCAN;
+
+  const diskOnly = [];
+  let diskTotal = 0;
+  try {
+    for (const e of fs.readdirSync(config.FILES_DIR, { withFileTypes: true })) {
+      if (!e.isFile() || e.name.startsWith('.')) continue;
+      diskTotal++;
+      if (known.has(e.name)) continue;
+      if (diskOnly.length >= MAX_ORPHAN_SCAN) { truncated = true; continue; }
+      let size = 0;
+      let mtime = 0;
+      try {
+        const st = fs.statSync(path.join(config.FILES_DIR, e.name));
+        size = st.size;
+        mtime = Math.floor(st.mtimeMs);
+      } catch {}
+      diskOnly.push({ path: e.name, size, mtime });
+    }
+  } catch {}
+
+  return { dbOnly, diskOnly, diskTotal, truncated };
+}
+
+router.get('/files/orphans', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const r = scanOrphans();
+  const diskOnlyBytes = r.diskOnly.reduce((s, x) => s + (x.size || 0), 0);
+  res.json({
+    dbOnly: r.dbOnly,
+    diskOnly: r.diskOnly,
+    counts: {
+      dbOnly: r.dbOnly.length,
+      diskOnly: r.diskOnly.length,
+      diskTotal: r.diskTotal,
+      diskOnlyBytes,
+    },
+    truncated: r.truncated,
+    scanLimit: MAX_ORPHAN_SCAN,
+  });
+});
+
+/** 文件批量清理：只算不删（第三步 purge 会重新算一遍并比对） */
+router.get('/files/purge-preview', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+
+  if (String(req.query.orphanOnly || '') === '1') {
+    const r = scanOrphans();
+    const bytes = r.diskOnly.reduce((s, x) => s + (x.size || 0), 0);
+    return res.json({
+      orphanOnly: true, count: r.diskOnly.length, bytes,
+      oldest: null, newest: null,
+      tooMany: r.diskOnly.length > MAX_PURGE, limit: MAX_PURGE, truncated: r.truncated,
+    });
+  }
+
+  const f = fileFilter(req.query);
+  if (f.error) return res.status(400).json({ error: f.error });
+  const row = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(f.size),0) bytes,
+      MIN(f.created_at) oldest, MAX(f.created_at) newest FROM files f ${f.sql}`).get(...f.params);
+  res.json({
+    orphanOnly: false, count: row.n, bytes: row.bytes,
+    oldest: row.oldest, newest: row.newest,
+    tooMany: row.n > MAX_PURGE, limit: MAX_PURGE,
+  });
+});
+
+/**
+ * 文件批量清理。
+ *
+ * 沿用单条删除的语义（§4.5）：文件删除后**消息保留、内容替换成占位文案** ——
+ * 用户翻到旧消息至少知道发生过什么。批量和单条必须一致，否则同一个动作
+ * 在两条路径上表现不同，是审计最讨厌的。
+ *
+ * `orphanOnly=1` 只清 diskOnly 残留（库里本来就没记录），风险最低，不涉及消息。
+ */
+router.post('/files/purge', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const body = req.body || {};
+  const confirm = Number(body.confirm);
+  if (!Number.isFinite(confirm)) return res.status(400).json({ error: '缺少 confirm（要删除的条数）' });
+
+  // ---- 分支一：只清磁盘残留，不碰数据库记录 ----
+  if (String(body.orphanOnly || '') === '1') {
+    const r = scanOrphans();
+    const list = r.diskOnly;
+    if (list.length !== confirm) {
+      return res.status(409).json({
+        error: `数量已变化：当前命中 ${list.length} 个，你确认的是 ${confirm} 个，请重新确认`,
+        count: list.length,
+      });
+    }
+    if (list.length === 0) return res.json({ ok: true, deleted: 0, orphanOnly: true });
+    if (list.length > MAX_PURGE) {
+      return res.status(400).json({ error: `一次最多清理 ${MAX_PURGE} 个（当前 ${list.length} 个），请分批处理` });
+    }
+    const backup = writePurgeBackup('files-orphan', list, { operator: uid, orphanOnly: true });
+    let deleted = 0;
+    for (const x of list) {
+      try { fs.unlinkSync(path.join(config.FILES_DIR, x.path)); deleted++; } catch {}
+    }
+    return res.json({ ok: true, deleted, orphanOnly: true, backup: backup.name, backupError: backup.error });
+  }
+
+  // ---- 分支二：按筛选条件删文件（含引用它的消息改占位文案） ----
+  const f = fileFilter(body);
+  if (f.error) return res.status(400).json({ error: f.error });
+  const row = db.prepare(`SELECT COUNT(*) n FROM files f ${f.sql}`).get(...f.params);
+  if (row.n !== confirm) {
+    return res.status(409).json({
+      error: `数量已变化：当前命中 ${row.n} 条，你确认的是 ${confirm} 条，请重新确认`,
+      count: row.n,
+    });
+  }
+  if (row.n === 0) return res.json({ ok: true, deleted: 0 });
+
+  const rows = db.prepare(`SELECT f.* FROM files f ${f.sql} ORDER BY f.id`).all(...f.params);
+  const backup = writePurgeBackup('files', rows, { operator: uid, filter: body, limit: MAX_PURGE });
+
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      // 与单条删除完全一致的语义：解引用 + 换占位文案（消息保留）
+      db.prepare('UPDATE messages SET file_id=NULL,kind=?,content=? WHERE file_id=?')
+        .run('text', '[文件已被管理员删除]', r.id);
+      db.prepare('DELETE FROM files WHERE id=?').run(r.id);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: '批量删除失败，已回滚：' + e.message });
+  }
+
+  // 磁盘删除放在事务提交之后：库先一致，磁盘删失败最多留个孤儿（孤儿巡检能发现），
+  // 不会出现"文件没了但库还引用着"这种更糟的状态
+  let filesDeleted = 0;
+  for (const r of rows) {
+    try { fs.unlinkSync(path.join(config.FILES_DIR, r.path)); filesDeleted++; } catch {}
+  }
+  res.json({ ok: true, deleted: rows.length, filesDeleted, backup: backup.name, backupError: backup.error });
 });
 
 router.delete('/files/:id', (req, res) => {
@@ -319,29 +693,152 @@ router.delete('/files/:id', (req, res) => {
 
 /* ==================== Messages ==================== */
 
+/**
+ * 消息列表（服务端分页 + 多维筛选）。
+ *
+ * 新增 `conversation_name`：以前只显示会话 ID，对人毫无意义。
+ * 群会话取群名，单聊取参与者拼接（管理员视角没有"对方"这个概念，
+ * 所以不能像客户端那样按"除我之外的人"取名）。
+ */
 router.get('/messages', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
-  const limit = Math.min(Number(req.query.limit) || 200, 1000);
-  const kind = String(req.query.kind || '').trim();
-  const q = String(req.query.q || '').trim();
-  const mentioned = String(req.query.mentioned || '').trim();
+  const f = messageFilter(req.query);
+  if (f.error) return res.status(400).json({ error: f.error });
 
-  const where = [];
-  const params = [];
-  if (kind) { where.push('m.kind = ?'); params.push(kind); }
-  if (mentioned === '1') where.push('m.mentions IS NOT NULL');
-  if (q) {
-    // 转义 LIKE 通配符，避免管理员输入 % 变全表扫描
-    where.push("m.content LIKE ? ESCAPE '\\'");
-    params.push('%' + q.replace(/[\\%_]/g, (ch) => '\\' + ch) + '%');
+  const total = db.prepare(`SELECT COUNT(*) n FROM messages m ${f.sql}`).get(...f.params).n;
+  // 用 id 排序而不是 created_at：id 单调递增且是主键，created_at 可能因并发写入
+  // 出现相同值，翻页时会错乱（同一条重复出现或漏掉）
+  const items = db.prepare(`SELECT m.id,m.conversation_id,m.sender_id,m.kind,m.content,
+      m.file_id,m.created_at,m.deleted,m.edited,m.mentions,
+      COALESCE(u.nickname,u.username) sender_name,
+      COALESCE(g.name, dm.name) conversation_name,
+      c.type conversation_type
+    FROM messages m
+    LEFT JOIN users u ON u.id = m.sender_id
+    LEFT JOIN conversations c ON c.id = m.conversation_id
+    LEFT JOIN groups g ON g.conversation_id = m.conversation_id
+    LEFT JOIN (
+      SELECT cm.conversation_id, GROUP_CONCAT(COALESCE(u2.nickname,u2.username), ' / ') AS name
+      FROM conversation_members cm JOIN users u2 ON u2.id = cm.user_id
+      GROUP BY cm.conversation_id
+    ) dm ON dm.conversation_id = m.conversation_id
+    ${f.sql} ORDER BY m.id ${f.list.sortDir} LIMIT ? OFFSET ?`)
+    .all(...f.params, f.list.pageSize, f.list.offset);
+  res.json(paging.envelope(f.list, items, total));
+});
+
+/** 消息批量清理：只算不删 */
+router.get('/messages/purge-preview', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const f = messageFilter(req.query);
+  if (f.error) return res.status(400).json({ error: f.error });
+  const row = db.prepare(`SELECT COUNT(*) n, MIN(m.created_at) oldest, MAX(m.created_at) newest
+    FROM messages m ${f.sql}`).get(...f.params);
+  res.json({
+    count: row.n,
+    oldest: row.oldest,
+    newest: row.newest,
+    tooMany: row.n > MAX_PURGE,
+    limit: MAX_PURGE,
+  });
+});
+
+/**
+ * 消息批量清理（三步安全模型的第 3 步）。
+ *
+ * 不是"勾选一堆 ID"而是**把筛选条件直接交给服务端执行**：用户的诉求是
+ * "按条件定位"而非人工挑几千条；按条件删顺带解决翻页丢勾选、前端要塞几千个 ID、
+ * 以及"点了删除才发现删多了"三个坑。
+ *
+ * `confirm` 是核心护栏：从"算条数"到"真删"之间数据可能变了（有人正在发消息），
+ * 服务端重算后不一致就 **409 拒绝**，让用户重新确认，而不是多删。
+ */
+router.post('/messages/purge', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const body = req.body || {};
+  const f = messageFilter(body);
+  if (f.error) return res.status(400).json({ error: f.error });
+
+  const confirm = Number(body.confirm);
+  if (!Number.isFinite(confirm)) return res.status(400).json({ error: '缺少 confirm（要删除的条数）' });
+
+  const count = db.prepare(`SELECT COUNT(*) n FROM messages m ${f.sql}`).get(...f.params).n;
+  if (count !== confirm) {
+    return res.status(409).json({
+      error: `数量已变化：当前命中 ${count} 条，你确认的是 ${confirm} 条，请重新确认`,
+      count,
+    });
   }
-  params.push(limit);
+  if (count === 0) return res.json({ ok: true, deleted: 0 });
+  if (count > MAX_PURGE) {
+    return res.status(400).json({ error: `一次最多删除 ${MAX_PURGE} 条（当前 ${count} 条），请收窄条件后再试` });
+  }
 
-  const rows = db.prepare(`SELECT m.id,m.conversation_id,m.sender_id,u.username sender_name,m.kind,m.content,m.file_id,m.created_at,m.deleted,m.edited,m.mentions
-    FROM messages m LEFT JOIN users u ON u.id=m.sender_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY m.id DESC LIMIT ?`).all(...params);
-  res.json(rows);
+  // 导出备份要在删除之前完成
+  const rows = db.prepare(`SELECT m.* FROM messages m ${f.sql} ORDER BY m.id`).all(...f.params);
+  const backup = writePurgeBackup('messages', rows, { operator: uid, filter: body, limit: MAX_PURGE });
+  const fileIds = [...new Set(rows.map((r) => r.file_id).filter((v) => v != null))];
+
+  // 三句都用同一套筛选条件（子查询），避免把上万个 id 塞进 SQL 参数
+  db.exec('BEGIN');
+  try {
+    // 收藏必须先清：chat.js 的收藏**列表**做了 JOIN messages、**计数**没做
+    // （:533 vs :535），消息删了收藏行还在的话，用户会看到"收藏 20 条"
+    // 但列表只有 15 条，且没有任何报错。
+    db.prepare(`DELETE FROM favorites WHERE message_id IN (SELECT m.id FROM messages m ${f.sql})`).run(...f.params);
+    // 置顶消息悬空：消息没了字段还指着不存在的 id，群公告/置顶位会失效
+    db.prepare(`UPDATE conversations SET pinned_message_id=NULL
+      WHERE pinned_message_id IN (SELECT m.id FROM messages m ${f.sql})`).run(...f.params);
+    db.prepare(`DELETE FROM messages WHERE id IN (SELECT m.id FROM messages m ${f.sql})`).run(...f.params);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: '批量删除失败，已回滚：' + e.message });
+  }
+
+  // 级联删文件：只删"删完后已无任何消息引用"的
+  let filesDeleted = 0;
+  for (const fid of fileIds) {
+    const still = db.prepare('SELECT COUNT(*) c FROM messages WHERE file_id=?').get(fid).c;
+    if (still !== 0) continue;
+    const fr = db.prepare('SELECT path FROM files WHERE id=?').get(fid);
+    db.prepare('DELETE FROM files WHERE id=?').run(fid);
+    if (fr) {
+      try { fs.unlinkSync(path.join(config.FILES_DIR, fr.path)); filesDeleted++; } catch {}
+    }
+  }
+
+  res.json({ ok: true, deleted: count, filesDeleted, backup: backup.name, backupError: backup.error });
+});
+
+/** 下载批量清理时自动留下的备份（把"不可恢复"变成"能捞回来"） */
+router.get('/purge-backups', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const dir = path.join(config.DATA_DIR, 'purge-backup');
+  let items = [];
+  try {
+    items = fs.readdirSync(dir)
+      .filter((n) => n.endsWith('.json'))
+      .map((n) => {
+        let size = 0;
+        try { size = fs.statSync(path.join(dir, n)).size; } catch {}
+        return { name: n, size };
+      })
+      .sort((a, b) => (a.name < b.name ? 1 : -1));
+  } catch {}
+  res.json({ items, dir });
+});
+
+router.get('/purge-backups/:name', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const name = String(req.params.name || '');
+  // 防路径穿越：只允许固定前缀 + 安全字符
+  if (!/^(messages|files|files-orphan)-[0-9-]+\.json$/.test(name)) {
+    return res.status(400).json({ error: '非法的备份文件名' });
+  }
+  const p = path.join(config.DATA_DIR, 'purge-backup', name);
+  if (!fs.existsSync(p)) return res.status(404).json({ error: 'not found' });
+  res.download(p, name);
 });
 
 router.delete('/messages/:id', (req, res) => {
@@ -349,7 +846,9 @@ router.delete('/messages/:id', (req, res) => {
   const mid = Number(req.params.id);
   const m = db.prepare('SELECT file_id FROM messages WHERE id=?').get(mid);
   if (!m) return res.status(404).json({ error: 'message not found' });
-  // 物理删除消息；如果是文件消息，且是该文件唯一引用，一并删磁盘
+  // 物理删除消息；同时清掉指向它的收藏与置顶（见 SPEC §3.3.1，否则会留下悬空引用）
+  db.prepare('DELETE FROM favorites WHERE message_id=?').run(mid);
+  db.prepare('UPDATE conversations SET pinned_message_id=NULL WHERE pinned_message_id=?').run(mid);
   db.prepare('DELETE FROM messages WHERE id=?').run(mid);
   if (m.file_id) {
     const still = db.prepare('SELECT COUNT(*) c FROM messages WHERE file_id=?').get(m.file_id).c;
@@ -368,12 +867,30 @@ router.delete('/messages/:id', (req, res) => {
 
 router.get('/friendships', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
-  res.json(db.prepare(`SELECT fs.id,fs.user_id,fs.friend_id,fs.status,fs.created_at,
+  const list = paging.parseList(req.query);
+  if (list.error) return res.status(400).json({ error: list.error });
+
+  const where = [];
+  const params = [];
+  const status = String(req.query.status || '').trim();
+  if (status) { where.push('fs.status = ?'); params.push(status); }
+  const q = String(req.query.q || '').trim();
+  if (q) {
+    where.push("(ua.username LIKE ? ESCAPE '\\' OR ub.username LIKE ? ESCAPE '\\')");
+    params.push(paging.likeParam(q), paging.likeParam(q));
+  }
+  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+  const total = db.prepare(`SELECT COUNT(*) n FROM friendships fs
+    LEFT JOIN users ua ON ua.id=fs.user_id LEFT JOIN users ub ON ub.id=fs.friend_id ${w}`).get(...params).n;
+  const items = db.prepare(`SELECT fs.id,fs.user_id,fs.friend_id,fs.status,fs.created_at,
     ua.username user_name, ub.username friend_name
     FROM friendships fs
     LEFT JOIN users ua ON ua.id=fs.user_id
     LEFT JOIN users ub ON ub.id=fs.friend_id
-    ORDER BY fs.id DESC LIMIT 500`).all());
+    ${w} ORDER BY fs.id ${list.sortDir} LIMIT ? OFFSET ?`)
+    .all(...params, list.pageSize, list.offset);
+  res.json(paging.envelope(list, items, total));
 });
 
 router.delete('/friendships/:id', (req, res) => {
@@ -603,9 +1120,15 @@ router.delete('/modules/:id', (req, res) => {
 /** 某模块的提交记录（第二期验收要看"表单真的收到数据了"） */
 router.get('/modules/:id/submissions', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
+  const list = paging.parseList(req.query, { defaultPageSize: 100, defaultWindowDays: 0 });
+  if (list.error) return res.status(400).json({ error: list.error });
+  // 提交记录按 id 分页，不吃默认时间窗（否则老提交会"消失"）
+  list.from = null;
+  list.to = null;
   res.json({
     moduleId: req.params.id,
-    items: appmodules.listSubmissions(req.params.id, Number(req.query.limit) || 100),
+    ...paging.envelope(list, appmodules.listSubmissions(req.params.id, list.pageSize, list.offset),
+      appmodules.countSubmissions(req.params.id)),
   });
 });
 

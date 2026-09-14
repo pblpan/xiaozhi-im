@@ -42,18 +42,30 @@ async function api(p, opts = {}) {
   const t = login.token;
   console.log('✓ 管理员登录:', login.user.username);
 
-  // 定位「工厂管理」群
-  const groups = await api('/api/admin/groups', { token: t });
-  const list = Array.isArray(groups) ? groups : (groups.groups || []);
+  // 定位「工厂管理」群（v0.14.0 起 /api/admin/groups 分页，响应 {items,total}）
+  const groupsBody = await api(`/api/admin/groups?q=${encodeURIComponent('工厂管理')}&pageSize=200`, { token: t });
+  const list = groupsBody.items || (Array.isArray(groupsBody) ? groupsBody : []);
   const g = list.find((x) => (x.name || x.nickname) === '工厂管理');
   if (!g) { console.log('✗ 未找到「工厂管理」群，现有群:', list.map((x) => x.name || x.nickname)); return; }
   const detail = await api(`/api/groups/${g.id}`, { token: t });
   const cid = (detail.group || detail).conversation_id;
   console.log(`✓ 找到群「工厂管理」 id=${g.id} conversation_id=${cid}\n`);
 
-  // 拉该群最近消息
-  const qs = ALL ? '?limit=1000' : `?limit=1000&q=${encodeURIComponent(Q)}`;
-  const msgs = await api(`/api/admin/messages${qs}`, { token: t });
+  // 拉该群消息
+  // ⚠️ v0.14.0 起 /api/admin/messages 分页（响应 {items,total}，单页上限 200），
+  // 且不传时间范围时默认只查最近 30 天 —— 所以这里显式 allTime=1 并逐页取全，
+  // 否则"清测试消息"会漏掉 30 天前的那批，而脚本看起来一切正常。
+  const msgs = await (async () => {
+    const out = [];
+    const baseQs = ALL ? 'allTime=1' : `allTime=1&q=${encodeURIComponent(Q)}`;
+    for (let page = 1; ; page++) {
+      const body = await api(`/api/admin/messages?${baseQs}&page=${page}&pageSize=200`, { token: t });
+      const items = body.items || [];
+      out.push(...items);
+      if (items.length < 200 || out.length >= 20000) break;
+    }
+    return out;
+  })();
   const hit = msgs
     .filter((m) => Number(m.conversation_id) === Number(cid))
     .sort((a, b) => a.id - b.id);

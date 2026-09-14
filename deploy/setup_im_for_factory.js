@@ -30,8 +30,9 @@ async function api(path, opts = {}) {
   console.log('✓ 登录成功:', login.user.username);
 
   // ---------- 1. 群 ----------
-  // 注意：/api/admin/groups 不返回 conversation_id，必须从 /api/groups/:id 的 group 字段取
-  let groups = await api('/api/admin/groups', { token: t });
+  // v0.14.0 起 /admin/groups 分页（响应 {items,total}）并带上了 conversation_id
+  const groupsBody = await api(`/api/admin/groups?q=${encodeURIComponent(GROUP_NAME)}&pageSize=200`, { token: t });
+  const groups = groupsBody.items || (Array.isArray(groupsBody) ? groupsBody : []);
   let g = groups.find((x) => x.name === GROUP_NAME);
   if (!g) {
     const r = await api('/api/groups', { method: 'POST', token: t, body: { name: GROUP_NAME } });
@@ -45,7 +46,9 @@ async function api(path, opts = {}) {
   console.log(`  群会话 conversation_id=${cid}`);
 
   // ---------- 2. 拉人入群 ----------
-  const users = await api('/api/admin/users', { token: t });
+  // 用不分页的 options 接口：v0.14.0 起 /admin/users 分页（单页上限 200），
+  // 拿它做「拉全部人进群」会漏掉第 200 个之后的人，且不会报错。
+  const users = await api('/api/admin/users/options', { token: t });
   const inGroup = new Set((detail.members || []).map((m) => m.id));
   for (const u of users) {
     if (u.is_bot || inGroup.has(u.id)) continue;

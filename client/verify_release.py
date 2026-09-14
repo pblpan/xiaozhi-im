@@ -426,8 +426,8 @@ def check_fpk(path):
 
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.13.0', 'v0.13.0'],
-        'src/package.json': ['"version": "0.13.0"'],
+        'manifest': ['version', '0.14.0', 'v0.14.0'],
+        'src/package.json': ['"version": "0.14.0"'],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
@@ -483,7 +483,15 @@ def check_fpk(path):
                           "ensureColumn('att_shifts', 'rest_start'",
                           "ensureColumn('att_shifts', 'rest_end'",
                           "ensureColumn('att_records', 'slot'",
-                          "ensureColumn('att_requests', 'slot'"],
+                          "ensureColumn('att_requests', 'slot'",
+                          # v0.14.0：消息/文件表的查询索引（此前一张都没有）。
+                          #   LIKE '%x%' 前导通配符用不上任何索引，所以策略是
+                          #   先靠时间/发送者/会话/类型把行数砍下来再做 LIKE ——
+                          #   没有这些索引，默认 30 天窗也救不了全表扫描。
+                          'idx_messages_created', 'idx_messages_sender',
+                          'idx_messages_conv', 'idx_messages_kind',
+                          'idx_files_created', 'idx_files_owner', 'idx_files_size',
+                          'idx_favorites_message'],
         # v0.10.0：远程协助信令本体（SPEC-远程协助.md）
         #   判据挑的是**安全边界的存在证据**，不是业务流程函数名：
         #     ABORT_WINDOW_MS  → 无人值守"有码也不是立刻能控"，还有 10 秒反悔
@@ -528,7 +536,30 @@ def check_fpk(path):
                                     # 以及仪表盘/向导要用的考勤计数
                                     "'/apps'", "'/apps/why'", 'appregistry',
                                     'attendanceEnabled', 'attPending',
-                                    'attShifts', 'attGroups'],
+                                    'attShifts', 'attGroups',
+                                    # v0.14.0：列表分页 + 按条件批量清理 + 文件巡检。
+                                    #   判据挑的是**护栏的存在证据**，不是功能名：
+                                    #     purge-preview/purge 成对 → 三步安全模型的第 1、3 步都在
+                                    #     MAX_PURGE              → 单次上限（没有它一条宽条件能删空整库）
+                                    #     writePurgeBackup       → 删前自动留档（把"不可恢复"变成"能捞回来"）
+                                    #     DELETE FROM favorites  → 删消息时清收藏悬空引用
+                                    #     pinned_message_id=NULL → 清置顶悬空引用
+                                    #     scanOrphans/dbOnly/diskOnly → 库盘不一致的两类都要能查出来
+                                    "'/messages/purge-preview'", "'/messages/purge'",
+                                    "'/files/purge-preview'", "'/files/purge'",
+                                    "'/files/storage'", "'/files/orphans'",
+                                    "'/users/options'", "'/conversations/options'",
+                                    "'/purge-backups'", 'writePurgeBackup', 'MAX_PURGE',
+                                    'scanOrphans', 'dbOnly', 'diskOnly', 'refCount',
+                                    'DELETE FROM favorites WHERE message_id',
+                                    'pinned_message_id=NULL', 'paging.parseList'],
+        # v0.14.0：全站统一分页约定。这个新文件是"消灭静默截断"的本体 ——
+        #   判据要盖住四件事：参数护栏（pageSize 截断 + from>to 报错）、
+        #   默认时间窗（不传时间就是最近 30 天）、统一响应形状、LIKE 转义。
+        #   少了默认时间窗，关键词搜索会退化成全表扫描；少了转义，输入 % 就匹配全部。
+        'src/src/paging.js': ['MAX_PAGE_SIZE', 'DEFAULT_PAGE_SIZE', 'DEFAULT_WINDOW_DAYS',
+                              'parseList', 'timeWhere', 'envelope',
+                              'escapeLike', 'likeParam', 'allTime', 'sortDir'],
         # v0.12.0：考勤引擎 —— 判据挑的是**口径安全**的证据，不是业务流程函数名。
         #   这一期最难发现的坑是时区：容器 TZ 常是 UTC，用本地时间算打卡
         #   会让所有人的打卡时刻整体偏 8 小时（而且"看起来"是正常的）。
@@ -764,6 +795,22 @@ def check_fpk(path):
     print('%-30s %s' % ('src/public/assets(一天4次卡 UI)',
                         '命中 ✓' if rest_hit else '缺失 ✗'))
     all_ok = all_ok and bool(rest_hit)
+
+    # v0.14.0：管理台必须真把"分页 + 筛选 + 批量清理 + 文件巡检"的界面打进去。
+    #   判据全部挑**只出现在新页面代码里**的串（内置帮助文档里一个都没有，
+    #   已逐个核对过）—— 否则"帮助写了但页面没打进去"也会假通过。
+    #   库盘不一致 / 存储占用分析 = 文件页统计与分析区块
+    #   孤儿巡检                   = 文件页第二个标签页
+    #   手工输入 / 清理条件        = 批量清理确认弹窗（三步安全模型的第 2 步）
+    list_hit = [n for n in admin_js
+                if '库盘不一致'.encode('utf-8') in blob[n]
+                and '存储占用分析'.encode('utf-8') in blob[n]
+                and '孤儿巡检'.encode('utf-8') in blob[n]
+                and '手工输入'.encode('utf-8') in blob[n]
+                and '清理条件'.encode('utf-8') in blob[n]]
+    print('%-30s %s' % ('src/public/assets(分页/批量清理 UI)',
+                        '命中 ✓' if list_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(list_hit)
 
     # v0.8.0：bootstrap 免鉴权是硬要求，但绝不能因此把用户定向内容漏出去。
     # 判据：bootstrap 分支里不得出现 verifyToken（只有 /config 与上报才鉴权）。

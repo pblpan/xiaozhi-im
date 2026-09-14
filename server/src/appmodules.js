@@ -479,12 +479,13 @@ function collectFormFields(body, depth = 0) {
   return out;
 }
 
-function listSubmissions(moduleId, limit = 100) {
+function listSubmissions(moduleId, limit = 100, offset = 0) {
   const lim = Math.min(Number(limit) || 100, 500);
+  const off = Math.max(Number(offset) || 0, 0);
   const rows = db.prepare(`SELECT s.id, s.module_id, s.user_id, s.payload, s.created_at,
       u.nickname, u.username
     FROM module_submissions s LEFT JOIN users u ON u.id=s.user_id
-    WHERE s.module_id=? ORDER BY s.created_at DESC LIMIT ?`).all(String(moduleId), lim);
+    WHERE s.module_id=? ORDER BY s.created_at DESC LIMIT ? OFFSET ?`).all(String(moduleId), lim, off);
   return rows.map((r) => {
     let data = {};
     try { data = JSON.parse(r.payload || '{}'); } catch { data = {}; }
@@ -497,6 +498,11 @@ function listSubmissions(moduleId, limit = 100) {
       createdAt: r.created_at,
     };
   });
+}
+
+/** 某模块的提交总数（配合 listSubmissions 做分页；原来固定 LIMIT 100 静默截断） */
+function countSubmissions(moduleId) {
+  return db.prepare('SELECT COUNT(*) n FROM module_submissions WHERE module_id=?').get(String(moduleId)).n;
 }
 
 /* ---------------- 模板库（第二期管理台用） ----------------
@@ -617,5 +623,5 @@ module.exports = {
   versionGte,
   validate, validateComponent, validateAction, sanitizeSubmission, collectFormFields,
   list, get, listVisible, upsert, remove,
-  recordSubmission, listSubmissions,
+  recordSubmission, listSubmissions, countSubmissions,
 };

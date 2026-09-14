@@ -268,12 +268,18 @@ const U2 = `v4b${SUF}`;
     for (const id of created.users) {
       await api(LAN, `/admin/users/${id}`, { method: 'DELETE', token: admin });
     }
-    const leftovers = (await api(LAN, '/admin/users', { token: admin })).body
-      .filter((u) => u.username.startsWith('v4a') || u.username.startsWith('v4b'));
+    // ⚠️ v0.14.0 起列表接口统一分页，响应是 {items,total} 而不是裸数组。
+    // 这里改用**服务端搜索**（而不是拉一页在前端 filter）：分页后只拉一页会漏掉
+    // 第 200 个之后的残留账号，断言反而"看起来通过"。
+    const leftoverA = (await api(LAN, '/admin/users?q=v4a', { token: admin })).body.items || [];
+    const leftoverB = (await api(LAN, '/admin/users?q=v4b', { token: admin })).body.items || [];
+    const leftovers = [...leftoverA, ...leftoverB];
     ok('临时账号已清除', leftovers.length === 0, `残留 ${leftovers.length}`);
-    ok('测试群已清除', !(await api(LAN, '/admin/groups', { token: admin })).body
-      .some((x) => String(x.name).includes(SUF)));
-    ok('测试消息已清除', (await api(LAN, '/admin/messages?q=' + encodeURIComponent(SUF), { token: admin })).body.length === 0);
+    ok('测试群已清除', ((await api(LAN, `/admin/groups?q=${encodeURIComponent(SUF)}`, { token: admin }))
+      .body.items || []).length === 0);
+    // allTime=1：不显式指定就是「最近 30 天」，老测试消息会被时间窗挡住而误判为已清除
+    ok('测试消息已清除', ((await api(LAN, `/admin/messages?q=${encodeURIComponent(SUF)}&allTime=1`, { token: admin }))
+      .body.items || []).length === 0);
     ok('测试机器人已清除', !(await api(LAN, '/admin/integrations/bots', { token: admin })).body
       .some((b) => String(b.nickname).includes(SUF)));
 

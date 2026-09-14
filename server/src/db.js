@@ -492,6 +492,23 @@ ensureColumn('att_shifts', 'rest_end', 'rest_end TEXT');
 ensureColumn('att_records', 'slot', 'slot INTEGER NOT NULL DEFAULT 1');
 ensureColumn('att_requests', 'slot', 'slot INTEGER NOT NULL DEFAULT 1');
 
+// ---- 管理台列表页的查询索引（v0.14.0 新增）----
+// messages / files 原先**一个索引都没有**（生产库实测 indexes 为空）。
+// LIKE '%x%' 前导通配符任何索引都用不上，所以策略是：先靠时间/发送者/会话/类型
+// 把行数砍下来，再对剩下的少量行做 LIKE —— 配合列表默认 30 天窗才成立。
+// CREATE INDEX IF NOT EXISTS 幂等，不需要迁移标记。
+// 不写 DESC：SQLite 可反向扫描索引，单列索引上 DESC 与 ASC 完全等价（写了只是噪音）。
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_messages_created ON messages (created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_sender  ON messages (sender_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_conv    ON messages (conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_kind    ON messages (kind, created_at);
+CREATE INDEX IF NOT EXISTS idx_files_created    ON files (created_at);
+CREATE INDEX IF NOT EXISTS idx_files_owner      ON files (owner_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_files_size       ON files (size);
+CREATE INDEX IF NOT EXISTS idx_favorites_message ON favorites (message_id);
+`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {
