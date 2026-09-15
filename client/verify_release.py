@@ -423,6 +423,25 @@ def check_apk(zf, marks):
     return 0 if all_ok else 1
 
 
+def _expected_server_version():
+    """版本号从 server/package.json 现读 —— 别再在脚本里写死。
+
+    踩过：v0.15.1 涨版本后这里仍写着 '0.15.0'，打包完全正常却被判"有问题 ✗"。
+    写死的版本断言是**必然会过期**的断言，过期后只有两种结局：要么误报卡住交付，
+    要么（更糟）被人顺手注释掉，连带把整段校验一起废掉。
+    所以版本一律从源头取；取不到就明确报出来，不退回旧字面量。
+    """
+    import json
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     '..', 'server', 'package.json')
+    try:
+        with open(p, 'r', encoding='utf-8') as fh:
+            return json.load(fh)['version']
+    except Exception as e:  # 源树不在（比如只拿了 fpk 过来）就该说清楚
+        print('  ⚠️ 读不到 server/package.json 的版本号（%s），跳过版本断言' % e)
+        return None
+
+
 def check_fpk(path):
     """校验服务端 fpk：版本号 + v0.6.1~v0.7.0 关键修复点是否都打进去了。
 
@@ -430,10 +449,13 @@ def check_fpk(path):
     """
     import tarfile
 
+    sv = _expected_server_version()
+    ver_marks = ['version', sv, 'v' + sv] if sv else ['version']
+
     # 文件名 -> 必须出现的特征串
     want = {
-        'manifest': ['version', '0.15.0', 'v0.15.0'],
-        'src/package.json': ['"version": "0.15.0"'],
+        'manifest': ver_marks,
+        'src/package.json': ['"version": "%s"' % sv] if sv else [],
         'src/src/routes/call.js': ['iceServers', 'turnConfigured', 'turnSources'],
         # v0.7.0：通话从双人模型改为参与者列表（群通话基础）
         #   participants / activeMembers / join / MAX_PARTICIPANTS 是多方模型的骨架；
