@@ -615,11 +615,50 @@ function stopServer() {
   ok('  含组织通讯录', ids.includes('work_org'), JSON.stringify(ids));
   const attApp = r.body.apps.find((x) => x.id === 'attendance');
   ok('  考勤 kind=builtin 且分组 work', attApp?.kind === 'builtin' && attApp?.group === 'work', JSON.stringify(attApp));
+  // 员工不该看到管理员的看板入口：入口可见性与接口权限必须是同一套判据，
+  // 否则员工点进去只会拿到 403（"点了才知道"是最差的交互）。
+  ok('  不含管理员的「考勤记录」', !ids.includes('att_admin'), JSON.stringify(ids));
 
   r = await api('GET', '/api/client/apps', { token: admin });
   const aids = (r.body.apps || []).map((x) => x.id);
   ok('管理员视角：不含考勤打卡（管理员不参与考勤）', !aids.includes('attendance'), JSON.stringify(aids));
+  ok('  也不含我的申请（他不打卡也就没有申请）', !aids.includes('my_requests'), JSON.stringify(aids));
+  ok('  含「考勤记录」（主管看板 + 代补卡）', aids.includes('att_admin'), JSON.stringify(aids));
   ok('  但含组织通讯录', aids.includes('work_org'), JSON.stringify(aids));
+  const admApp = r.body.apps.find((x) => x.id === 'att_admin');
+  ok('  考勤记录 kind=builtin 且分组 work', admApp?.kind === 'builtin' && admApp?.group === 'work', JSON.stringify(admApp));
+
+  // 角标＝待审批条数（管理员的待办）。这里临时造一条再撤掉，用完复原，
+  // 免得给后面的用例留下"多出来一条待审批"的暗坑。
+  r = await api('POST', '/api/attendance/requests', {
+    token: e1.token,
+    body: { kind: 'makeup', day: Y2, clockType: 'in', at: tsAt(Y2, '09:00'), reason: '角标用例' },
+  });
+  const badgeReqId = r.body?.id;
+  ok('员工提交补卡申请（为角标造数据）', r.status === 200 && !!badgeReqId, JSON.stringify(r.body));
+  r = await api('GET', '/api/client/apps', { token: admin });
+  const badgeOf = (b) => Number((b.body.apps || []).find((x) => x.id === 'att_admin')?.badge || 0);
+  const badgeBefore = badgeOf(r);
+  ok('  管理员「考勤记录」带待审批角标', badgeBefore >= 1, 'badge=' + badgeBefore);
+  await api('POST', `/api/attendance/requests/${badgeReqId}/cancel`, { token: e1.token });
+  r = await api('GET', '/api/client/apps', { token: admin });
+  ok('  撤销后角标跟着减一（角标是真查出来的，不是摆设）',
+      badgeOf(r) === badgeBefore - 1, `before=${badgeBefore} after=${badgeOf(r)}`);
+
+  // 管理员看板的数据源：管理端 overview 此前只有管理台在用，客户端要复用同一份口径
+  r = await api('GET', `/api/admin/attendance/overview?day=${TODAY}`, { token: admin });
+  ok('管理员可拉今日看板 overview', r.status === 200 && !!r.body.stats && Array.isArray(r.body.items),
+      JSON.stringify(r.body).slice(0, 120));
+  r = await api('GET', `/api/admin/attendance/overview?day=${TODAY}`, { token: e1.token });
+  ok('  员工拉管理员看板 → 403（入口与权限同源）', r.status === 403, JSON.stringify(r.body));
+
+  // 考勤停用后管理员的看板入口也要消失（不能留一个点进去空的入口）
+  await api('PUT', '/api/admin/attendance/config', { token: admin, body: { enabled: false } });
+  r = await api('GET', '/api/client/apps', { token: admin });
+  ok('考勤停用：管理员也不下发「考勤记录」',
+      !(r.body.apps || []).some((x) => x.id === 'att_admin'),
+      JSON.stringify((r.body.apps || []).map((x) => x.id)));
+  await api('PUT', '/api/admin/attendance/config', { token: admin, body: { enabled: true } });
 
   // 动态模块并入同一列表
   r = await api('POST', '/api/admin/modules', {

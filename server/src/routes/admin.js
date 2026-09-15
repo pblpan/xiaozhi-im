@@ -1097,7 +1097,8 @@ router.get('/apps/why', (req, res) => {
   if (n.workMode && settings.get('friendMode') !== 'work') reasons.push('当前是普通好友模式（需在「系统设置」切换为工作模式）');
   if (n.attendance && settings.get('attendanceEnabled') === false) reasons.push('考勤已被停用（可在「考勤管理 → 考勤设置」开启）');
   if (n.orgMember && !org) reasons.push('尚未创建组织（需在「组织机构」创建）');
-  if (n.role === 'employee') reasons.push('管理员账号本身不参与考勤，属正常');
+  if (n.role === 'employee') reasons.push('管理员账号本身不参与考勤，属正常（管理员看的是「考勤记录」）');
+  if (n.adminOnly) reasons.push('这是管理员专属入口（主管看板的入口，员工看不到是正常的）');
   res.json({ id, title: app.title, visible: reasons.length === 0, reasons });
 });
 

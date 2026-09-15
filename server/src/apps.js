@@ -66,6 +66,25 @@ const BUILTIN_APPS = [
     // 管理员也能看（他要看全员），所以不限定 role
     need: { workMode: true, orgMember: true },
   },
+  {
+    id: 'att_admin',
+    title: '考勤记录',
+    icon: 'assessment',
+    group: 'work',
+    desc: '查看今日出勤与缺卡，可代为补卡',
+    // 管理员的考勤入口 —— **不是"我自己打卡"，而是"看别人打了没"**。
+    //
+    // 为什么和 attendance 分成两个应用而不是同一个页面两种形态：
+    //   员工要的是"我这四张卡打了没"，管理员要的是"今天谁没打、我给他补上"。
+    //   两者数据源不同（一个是自己的判定，一个是全员看板）、操作也不同
+    //   （一个是打卡，一个是改别人的记录）。塞进一个 id 就必须在客户端按
+    //   角色分叉渲染，而"我到底是不是管理员"客户端本来就不该自己判 ——
+    //   可见性一律由服务端算（本文件开头的设计约束 1）。
+    //
+    // 同样不设开关，只认业务状态：没开工作模式 / 考勤被停用 / 还没建组织，
+    // 这个入口就跟着消失，不会出现"点进去报错"的状态。
+    need: { workMode: true, attendance: true, orgMember: true, adminOnly: true },
+  },
 ];
 
 /**
@@ -80,8 +99,13 @@ function listFor({ friendMode, attendanceEnabled, hasOrg, role } = {}) {
     if (n.workMode && friendMode !== 'work') return false;
     if (n.attendance && attendanceEnabled === false) return false;
     if (n.orgMember && !hasOrg) return false;
-    // role: 'employee' 表示"只有员工可见（管理员不可见）"
+    // role: 'employee' = **员工专属**。管理员管的是"别人打了没"，
+    // 让他也进"我的打卡"只会污染统计口径，所以这两项对他隐藏
+    // （他要看的是 att_admin）。
     if (n.role === 'employee' && isAdmin) return false;
+    // adminOnly = **管理员专属**（主管的看板与代补卡）。员工看到它没有意义，
+    // 而且他点开也是 403 —— 入口和权限必须是同一套判据，不能靠"点了才知道"。
+    if (n.adminOnly && !isAdmin) return false;
     return true;
   }).map((a) => ({
     id: a.id,

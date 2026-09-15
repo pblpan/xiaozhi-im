@@ -116,6 +116,13 @@ router.get('/apps', (req, res) => {
       const c = db.prepare("SELECT COUNT(*) AS c FROM att_requests WHERE user_id=? AND status='pending'").get(uid).c;
       if (c > 0) a.badge = String(c);
     }
+    // 管理员的角标是**待审批条数**（他的待办），不是"谁缺卡"——
+    // 缺卡数要跑一遍全员判定（judgeRange），冷启动时为一张卡片付这个代价不值；
+    // 待审批一条 COUNT 就够，而且那才是需要他动手的事。
+    if (a.id === 'att_admin' && org) {
+      const c = db.prepare("SELECT COUNT(*) AS c FROM att_requests WHERE org_id=? AND status='pending'").get(org.id).c;
+      if (c > 0) a.badge = String(c);
+    }
   }
 
   const cv = String(req.query.clientVersion || '');

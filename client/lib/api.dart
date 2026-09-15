@@ -375,6 +375,54 @@ class ImApi {
   Future<void> cancelAttendanceRequest(int id) async =>
       await _post('/attendance/requests/$id/cancel', const {});
 
+  // ---- 管理端考勤（仅管理员；工作台「考勤记录」页用）----
+  //
+  // 与管理台 Web 用的是**同一批接口、同一份口径**：手机上看板和管理台上看板
+  // 必须是同一个数字，否则"手机上显示正常、管理台显示缺卡"没人说得清。
+  // 服务端 adminGuard 会校验 role=admin，非管理员调用拿 403 —— 客户端不自行判断
+  // 自己是不是管理员（可见性一律由服务端算，见 core/apps.dart 的说明）。
+
+  /// 今日（或指定日）打卡看板：stats 汇总 + items 逐人逐卡实况。
+  /// 未打卡的人也在 items 里（这正是主管要看的），不会因为"没数据"而消失。
+  Future<Map<String, dynamic>> adminAttOverview({String? day}) async =>
+      await _get('/admin/attendance/overview${day != null ? '?day=$day' : ''}');
+
+  /// 代员工补卡：直接写一条打卡记录（服务端标记来源为管理员）。
+  /// [time] 为 'HH:MM'，[slot] 是第几段卡（2 次卡只有 1，4 次卡还有 2）——
+  /// 只给 type 不给 slot，卡会补到错误的段上：看着补了、报表上那天依旧缺卡。
+  Future<Map<String, dynamic>> adminAttAddRecord({
+    required int userId,
+    required String day,
+    required String type,
+    required int slot,
+    required String time,
+    String? note,
+  }) async =>
+      await _post('/admin/attendance/records', {
+        'userId': userId,
+        'day': day,
+        'type': type,
+        'slot': slot,
+        'time': time,
+        if (note != null && note.isNotEmpty) 'note': note,
+      });
+
+  /// 管理端申请列表（默认待审批）+ 各状态计数
+  Future<Map<String, dynamic>> adminAttRequests({String status = 'pending'}) async =>
+      await _get('/admin/attendance/requests?status=$status');
+
+  /// 审批申请（approve=false 即驳回）。补卡通过后服务端会**自动补写打卡记录**。
+  Future<Map<String, dynamic>> adminAttReview(int id,
+          {bool approve = true, String? note}) async =>
+      await _post('/admin/attendance/requests/$id/review', {
+        'approve': approve,
+        if (note != null && note.isNotEmpty) 'note': note,
+      });
+
+  /// 删除某条打卡流水（补错了要能撤）
+  Future<void> adminAttDeleteRecord(int id) async =>
+      await _delete('/admin/attendance/records/$id');
+
   // ---- 群组 ----
   Future<Map<String, dynamic>> createGroup(String name) async =>
       await _post('/groups', {'name': name});

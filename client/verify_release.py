@@ -133,6 +133,12 @@ WIN_MARKS = [
     'clientSatisfiesVersion',   # 客户端侧版本闸门（工作台列表也要卡一次）
     'attendance.dart',          # 考勤打卡页
     'AttendancePage',           # 考勤打卡页类名
+    # ---- v0.15.1 考勤记录（管理员专属：今日看板 + 代补卡）----
+    # 与 attendance.dart / AttendancePage / attendanceToday 同一类判据（文件名 / 类名 /
+    # api 方法名），在同批产物上验证过这类记号能扛住 AOT；新增这三条同样要两端实测。
+    'attendance_admin.dart',    # 管理员的考勤记录页
+    'AttendanceAdminPage',      # 上面那个页面类名
+    'adminAttOverview',         # api.dart：管理端今日看板（与报表同一份判定口径）
     'attendance_records.dart',  # 我的考勤记录（按天 + 当日流水）
     'AttendanceRecordsPage',
     'attendance_request.dart',  # 我的申请（请假/补卡/外出/加班）
@@ -537,6 +543,9 @@ def check_fpk(path):
                                     "'/apps'", "'/apps/why'", 'appregistry',
                                     'attendanceEnabled', 'attPending',
                                     'attShifts', 'attGroups',
+                                    # v0.15.1：诊断要能解释"管理员看不到考勤打卡"，
+                                    # 否则管理员只会看到"客户端里没有考勤"然后来问是不是坏了
+                                    '管理员专属入口',
                                     # v0.14.0：列表分页 + 按条件批量清理 + 文件巡检。
                                     #   判据挑的是**护栏的存在证据**，不是功能名：
                                     #     purge-preview/purge 成对 → 三步安全模型的第 1、3 步都在
@@ -602,7 +611,10 @@ def check_fpk(path):
                                 '跨天班（夜班）不支持午休窗口'],
         # 应用中心注册表：内置应用清单 + 按业务状态过滤可见性
         'src/src/apps.js': ['BUILTIN_APPS', 'listFor', 'catalog', 'GROUPS',
-                            "'attendance'", "'my_requests'", "'work_org'"],
+                            "'attendance'", "'my_requests'", "'work_org'",
+                            # v0.15.1：管理员的考勤入口（看板 + 代补卡）与它的判据。
+                            # 只认业务状态不认开关，所以 adminOnly 必须真在过滤逻辑里。
+                            "'att_admin'", 'adminOnly'],
         # 考勤 REST（用户端 + 管理端两个 Router）
         'src/src/routes/attendance.js': ["'/today'", "'/clock'", "'/my'",
                                          "'/records'", "'/requests'",
@@ -633,7 +645,11 @@ def check_fpk(path):
                                      "'/modules/:id'", "'/modules/:id/submit'",
                                      'appmodules', 'listVisible',
                                      # v0.12.0：工作台把内置应用与自建应用合并下发
-                                     'appregistry', 'req.query.clientVersion'],
+                                     'appregistry', 'req.query.clientVersion',
+                                     # v0.15.1：管理员的「考勤记录」带待审批角标
+                                     #   （角标只查 COUNT，不跑全员判定 —— 冷启动别为
+                                     #    一张卡片付 judgeRange 的代价）
+                                     "'att_admin'"],
         # v0.9.0：动态模块中心（SPEC-动态配置与模块.md 第二期）
         #   这一期的全部风险都在"服务端下发的 schema 会不会把客户端搞崩 / 变成 SSRF 跳板"，
         #   所以判据挑的是**三道闸门**的存在证据，而不是 CRUD 函数名：
@@ -721,6 +737,18 @@ def check_fpk(path):
     print('%-30s %s' % ('src/public/assets(中继向导)',
                         '命中 ✓' if wizard_hit else '缺失 ✗'))
     all_ok = all_ok and bool(wizard_hit)
+
+    # v0.15.1：帮助与「应用中心」说明必须讲清**两类人看到的工作台不一样**。
+    # 这一条是有来历的：曾出现"管理员在手机上只看到组织通讯录、以为打卡功能坏了"
+    # 的反馈 —— 真实原因是他账号是管理员（不参与考勤）、他看到的是「考勤记录」。
+    # 所以说明里必须同时出现"管理员专属"与"代员工补卡"，否则下次同样要重新解释一遍。
+    role_hit = [n for n in admin_js
+                if '管理员专属'.encode('utf-8') in blob[n]
+                and '代员工补卡'.encode('utf-8') in blob[n]
+                and '考勤记录'.encode('utf-8') in blob[n]]
+    print('%-30s %s' % ('src/public/assets(两个角色说明)',
+                        '命中 ✓' if role_hit else '缺失 ✗'))
+    all_ok = all_ok and bool(role_hit)
 
     # 向导绝不能把明文密钥渲染进静态产物。
     # ⚠️ 这里**绝对不要**写真实凭据去做比对 —— 本仓库是公开的，
