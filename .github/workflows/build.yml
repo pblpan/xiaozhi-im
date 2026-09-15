@@ -39,9 +39,51 @@ jobs:
         working-directory: ${{ env.CLIENT_DIR }}
         run: flutter pub get
 
+      # ⚠️ 固定签名密钥（2026-09-15 修）
+      # 原先 release 走 signingConfigs.debug，debug keystore 是每台构建机现场随机生成的，
+      # 导致每版 CI 出的 APK 签名都不同 → 覆盖安装报 -7。这里从 secrets 还原固定 keystore。
+      - name: Decode release keystore (fixed signing key)
+        working-directory: ${{ env.CLIENT_DIR }}/android
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_STORE_PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_KEY_PW: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KS_B64:-}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 未配置 —— 拒绝产出签名不固定的安装包"
+            exit 1
+          fi
+          echo "$KS_B64" | base64 -d > app/xiaozhi-release.keystore
+          if [ ! -s app/xiaozhi-release.keystore ]; then
+            echo "::error::keystore 解码结果为空"
+            exit 1
+          fi
+          cat > key.properties <<EOF
+          storeFile=$(pwd)/app/xiaozhi-release.keystore
+          storePassword=$KS_STORE_PW
+          keyPassword=$KS_KEY_PW
+          keyAlias=$KS_ALIAS
+          storeType=PKCS12
+          EOF
+          echo "keystore 就绪: $(stat -c%s app/xiaozhi-release.keystore) bytes"
+
       - name: Build APK (release)
         working-directory: ${{ env.CLIENT_DIR }}
         run: flutter build apk --release --dart-define=BASE_URL=${{ env.BASE_URL }}
+
+      - name: Verify APK signing cert (断言签名证书)
+        working-directory: ${{ env.CLIENT_DIR }}
+        run: |
+          APK=$(ls build/app/outputs/flutter-apk/*.apk | head -1)
+          echo "APK: $APK"
+          APKSIGNER=$(ls "${ANDROID_SDK_ROOT:-$ANDROID_HOME}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs "$APK"
+          else
+            echo "apksigner 未找到，跳过指纹打印"
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
