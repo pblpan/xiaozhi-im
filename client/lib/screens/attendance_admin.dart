@@ -22,14 +22,15 @@ import 'attendance.dart' show statusColor;
 /// ─────────────────────────────────────────────────────────────
 /// 两条纪律（与员工端打卡页一致）
 /// ─────────────────────────────────────────────────────────────
-/// 1. **判定一律来自服务端**。谁该打几张卡、缺的是"午休下班"还是"下班"、
+/// 1. **判定一律来自服务端**。谁该打几张卡、缺的是第 1 段的卡还是第 2 段的卡、
 ///    迟到几分钟，都由 /api/admin/attendance/overview 用与报表同一个判定引擎
 ///    算好下发。客户端只负责摆出来 —— 这里若自己算一次，手机上看板和管理台
 ///    报表就会给出两个答案，对不上时无从查起。
-/// 2. **补卡必须指明"第几次卡"**（slot）。4 次卡的班次里 out1 是"午休下班"、
-///    out2 才是"下班"，只给 in/out 会把卡补到错误的段上 —— 看着补了、
-///    报表上那天依旧缺卡。所以补卡选项直接**照服务端下发的 punchPlan 渲染**，
-///    主管点的是"午休上班"这张卡，而不是自己拼 type+slot。
+/// 2. **补卡必须指明"第几次卡"**（slot）。4 次卡的班次里每张卡都叫"上班/下班"，
+///    但第 1 段的 out 和收工的 out 是两张不同的卡，只给 in/out 会把卡补到
+///    错误的段上 —— 看着补了、报表上那天依旧缺卡。所以补卡选项直接
+///    **照服务端下发的 punchPlan 渲染**（卡名 + 应打时刻一起显示，
+///    否则四个选项同名分不清），主管点的是"第几张"而不是自己拼 type+slot。
 class AttendanceAdminPage extends StatefulWidget {
   const AttendanceAdminPage({super.key});
 
@@ -278,12 +279,12 @@ class _AttendanceAdminPageState extends State<AttendanceAdminPage> {
             '${missPunch > 0 ? '，还缺 $missPunch 张' : '，今日无缺卡'}',
             style: TextStyle(fontSize: 11.5, color: sem.muted),
           ),
-          // 4 次卡下"人数"已经不够说明问题：全组都在岗、但一半人没打午休卡，
+          // 4 次卡下"人数"已经不够说明问题：全组都在岗、但一半人没打第 1 段的卡，
           // 出勤率看着 100%，实际报表上全是缺卡。所以张数必须单独给一行。
           if (expect > done)
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text('（4 次卡的班次一天要打 4 张，只看人数会把漏打午休卡的人算成"正常"）',
+              child: Text('（4 次卡的班次一天要打 4 张，只看人数会把漏打第 1 段卡的人算成"正常"）',
                   style: TextStyle(fontSize: 11, height: 1.5, color: sem.muted)),
             ),
         ],
@@ -471,7 +472,8 @@ class _AttendanceAdminPageState extends State<AttendanceAdminPage> {
   }
 
   /// 一张卡一个标签：「应打 12:00」+「已打 12:01」/「缺卡」/「免打卡」。
-  /// 4 次卡的班次靠它把"缺的是午休下班还是下午上班"说清楚。
+  /// 4 次卡的班次靠它把"缺的是哪一段的卡"说清楚 —— 卡名都叫上班/下班，
+  /// 所以每一张都必须把应打/已打时刻摆出来，否则分不清是哪一段。
   Widget _punchChip(Map<String, dynamic> p) {
     final done = p['done'] == true;
     final exempt = p['exempt'] == true;

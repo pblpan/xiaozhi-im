@@ -85,7 +85,7 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> {
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 6),
                 Text('同一天同一张卡可以有多条（更新打卡会保留历史），统计只取到点的那一次。'
-                    '一天 4 次卡的班次：上班 / 午休下班 / 午休上班 / 下班。',
+                    '一天 4 次卡的班次：上班 → 下班 → 上班 → 下班，靠打卡时刻区分是哪一段。',
                     style: TextStyle(fontSize: 11.5, height: 1.5, color: sem.muted)),
                 const SizedBox(height: 12),
                 if (items.isEmpty)
@@ -107,9 +107,10 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> {
                                     .withValues(alpha: 0.16),
                                 borderRadius: BorderRadius.circular(AppRadii.pill),
                               ),
-                              // 标签一律用服务端下发的 punchLabel：同一个 type=out，
-                              // 4 次卡里可能是"午休下班"也可能是"下班"，客户端按 type
-                              // 猜只会猜错（中午那张被显示成下班，员工以为已经下班了）
+                              // 标签一律用服务端下发的 punchLabel（客户端不按 type 猜），
+                              // 并且**这一行必须把时刻也显示出来**：4 次卡的班次里
+                              // 卡名统一是"上班/下班"，光看名字分不出是哪一段
+                              // （第 1 段的 out 和收工都叫"下班"）。
                               child: Text(
                                   (it['punchLabel'] ?? (it['type'] == 'in' ? '上班' : '下班')).toString(),
                                   style: TextStyle(

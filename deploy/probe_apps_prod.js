@@ -98,13 +98,22 @@ const ok = (name, cond, extra) => {
       const missKeys = NEED.filter((k) => punches.some((p) => !(k in p)));
       const badDone = punches.filter((p) => p.done !== (p.time != null));
       const doneCnt = punches.filter((p) => p.done === true).length;
+      // v0.15.2 卡名口径：不许再出现"午休"这类时段词（那套叫法只对早班成立），
+      // 并且同一人一天里每张卡的「卡名+应打时刻」必须互不相同 ——
+      // 名字统一成"上班/下班"之后，不给时刻就分不清补的是哪一张。
+      const badLabel = punches.filter((p) => /午休|晚餐|中休|中午/.test(p.label || ''));
+      const dupCard = items.filter((i) => {
+        const u = (i.punches || []).map((p) => `${p.label}@${p.expectTime}`);
+        return new Set(u).size !== u.length;
+      });
       console.log(`   卡片 ${punches.length} 张（已打 ${doneCnt} 张）  缺字段: ` +
         (missKeys.length ? missKeys.join(',') : '无') +
-        `  done/time 不一致: ${badDone.length}`);
+        `  done/time 不一致: ${badDone.length}` +
+        `  带时段词的卡名: ${badLabel.length}  有同名同刻的卡: ${dupCard.length} 人`);
       ovSeen[uid] = {
         status: r2.status, total: stats.total, items: items.length,
         punches: punches.length, doneCnt, missKeys: missKeys.length,
-        badDone: badDone.length,
+        badDone: badDone.length, badLabel: badLabel.length, dupCard: dupCard.length,
       };
     }
   }
@@ -126,6 +135,10 @@ const ok = (name, cond, extra) => {
       `卡片 ${r.punches} 张，缺 ${r.missKeys} 种字段`);
     ok(`uid=${uid} done 与 time 一致（打过的卡不会显示成"缺"）`,
       r.badDone === 0, `${r.badDone} 张不一致`);
+    ok(`uid=${uid} 卡名不含时段词（早班晚班都能用）`,
+      r.badLabel === 0, `${r.badLabel} 张还带着"午休/晚餐"这类词`);
+    ok(`uid=${uid} 每张卡的「卡名+应打时刻」互不相同（补卡按钮分得清）`,
+      r.dupCard === 0, `${r.dupCard} 人有同名同刻的卡`);
   }
   for (const [k, ids] of users) {
     ok(`${k} 看不到 att_admin（员工专属不该有）`, !ids.includes('att_admin'), ids.join(','));

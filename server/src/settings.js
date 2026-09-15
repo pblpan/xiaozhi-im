@@ -20,7 +20,7 @@ const KEYS = Object.freeze({
   // 组织默认班次。没建任何考勤组时全员按它打卡 —— 这样"开了工作模式就能用"，
   // 而不是"必须先配班次再用"（配班次是精细化，不该是使用前提）。
   //
-  // 填了午休开始/结束 = 一天打 **4 次**卡（上班、午休下班、午休上班、下班），
+  // 填了休息开始/结束 = 一天打 **4 次**卡（上班、下班、上班、下班，靠 slot 分段），
   // 两个在岗段各 4 小时、合计 8 小时；不填就是传统的上班/下班 2 次卡。
   // 默认给 08:00-12:00 / 13:00-17:00 —— 常见的"上午一段下午一段"作息，
   // 不合胃口的在管理台「考勤设置」里改两个时间就行。
@@ -106,11 +106,13 @@ function cleanTime(input, label) {
  * 跨天班（下班 <= 上班）在这里是**合法**的：夜班 22:00-06:00 很常见，
  * 不能因为"下班比上班早"就判为输入错误 —— 那会把工厂夜班挡在门外。
  *
- * 午休窗口（restStart/restEnd）：
+ * 休息时段（restStart/restEnd）：
  *   · 两个都填 = 一天 4 次卡；两个都空 = 一天 2 次卡；只填一个 = 非法
  *     （只填一个的话没法判断该打几次，静默忽略等于"我配了但它没生效"）
+ *   · 名字用"休息"而不是"午休"：这段休息可能是午休、晚饭或交接班，
+ *     4 次卡的班次也未必是早班（晚班填 17:30-18:30 吃晚饭同样是 4 次卡）
  *   · 必须严格落在上班与下班之间且先后有序，否则判定时会算出负数的在岗时长
- *   · 跨天班（夜班）不支持 —— 凌晨那顿"午休"跨了日期，语义上不成立，
+ *   · 跨天班（夜班）不支持 —— 凌晨那顿休息跨了日期，语义上不成立，
  *     与其把它算错，不如明确拒绝
  */
 function cleanShift(input) {
@@ -128,16 +130,16 @@ function cleanShift(input) {
   const rs = String(input.restStart ?? '').trim();
   const re = String(input.restEnd ?? '').trim();
   if (rs || re) {
-    if (!rs || !re) return { error: '午休开始与午休结束需要同时填写（同时清空即恢复一天 2 次卡）' };
-    const a = cleanTime(rs, '午休开始');
+    if (!rs || !re) return { error: '休息开始与休息结束需要同时填写（同时清空即恢复一天 2 次卡）' };
+    const a = cleanTime(rs, '休息开始');
     if (a.error) return a;
-    const b = cleanTime(re, '午休结束');
+    const b = cleanTime(re, '休息结束');
     if (b.error) return b;
     const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
     const [sm, am, bm, em] = [toMin(out.workStart), toMin(a.value), toMin(b.value), toMin(out.workEnd)];
-    if (em <= sm) return { error: '跨天班（夜班）不支持午休窗口，请清空午休时间' };
+    if (em <= sm) return { error: '跨天班（夜班）不支持休息时段，请清空休息时间' };
     if (!(sm < am && am < bm && bm < em)) {
-      return { error: '午休时间需满足：上班 < 午休开始 < 午休结束 < 下班' };
+      return { error: '休息时间需满足：上班 < 休息开始 < 休息结束 < 下班' };
     }
     out.restStart = a.value;
     out.restEnd = b.value;

@@ -159,12 +159,12 @@ function defaultShift() {
  * 班次归一化。
  *
  * `segments` 是这个模块的核心开关：
- *   2 = 填了午休窗口 → 一天 4 次卡（上班 / 午休下班 / 午休上班 / 下班）
+ *   2 = 填了休息时段 → 一天 4 次卡（上班 / 下班 / 上班 / 下班，靠 slot 区分是哪一段）
  *   1 = 没填        → 一天 2 次卡（上班 / 下班）
  * 其它所有逻辑（判定、补卡、报表、客户端按钮）都只读这一处结论，
  * 不各自再判一遍"到底几次卡"—— 那种写法改一处漏一处，迟早对不上。
  *
- * 午休窗口要"严格落在班次内 + 非跨天"才算成立。不成立时**静默降级为 2 次卡**：
+ * 休息时段要"严格落在班次内 + 非跨天"才算成立。不成立时**静默降级为 2 次卡**：
  * 与其拿一个矛盾的班次去算在岗时长（会得出负数），不如退回老行为。
  * 写入侧的校验在 settings.cleanShift / 班次接口里做，那里才该报错给用户看。
  */
@@ -207,7 +207,7 @@ function normalizeShift(r) {
   };
   // 附上一个班次应出勤多少分钟：管理台班次表、客户端"应出勤 8 小时"都要用。
   // 放在这里算，是为了让它跟着 segments 一起出来 —— 让各处自己拿
-  // 上班/下班/午休再减一遍，就是给"两处口径不一致"留后门。
+  // 上班/下班/休息再减一遍，就是给"两处口径不一致"留后门。
   out.expectedWorkMinutes = expectedMinutes(out);
   return out;
 }
@@ -355,7 +355,7 @@ function groupMemberIds(groupRow, orgId) {
  * 但**保留**最近 24 小时内的旧流水（管理台能看到"8:31 打过又 9:02 补打"），
  * 所以这里的"覆盖"是 UPDATE，不是"删掉旧的"。
  *
- * ⚠️ 一天 4 次卡时,"午休下班(out,1)" 和 "下班(out,2)" 是两张**不同的卡**：
+ * ⚠️ 一天 4 次卡时，第 1 段结束的 out(out,1) 和收工的 out(out,2) 是两张**不同的卡**：
  * 只看 type 不看 slot 的话，中午打的那次会把下班卡覆盖掉 —— 员工下午明明打了卡，
  * 报表上却是缺卡。所以下面的去重口径必须带上 slot。
  */
@@ -403,7 +403,7 @@ function decorateRecord(r) {
     type: r.type,
     slot,
     // punchKey 是这张卡的身份（前端按钮、补卡单、测试断言都用它）。
-    // 不给显示名：out1 在 2 次卡里是"下班"、在 4 次卡里是"午休下班"，
+    // 不给显示名：out1 在 2 次卡里是收工、在 4 次卡里只是第 1 段结束，
     // 只有拿到班次才说得准 —— 谁需要名字谁用 punchLabelOf(shift, key) 取。
     punchKey: r.type + slot,
     at: r.at,
@@ -443,16 +443,31 @@ const LEAVE_TYPES = ['personal', 'sick', 'annual', 'comp'];
 const REQUEST_KINDS = ['leave', 'makeup', 'outing', 'overtime'];
 
 /**
- * 打卡卡片的显示名。同一个 key 在不同班次下含义不同：
- *   · 4 次卡：out1 是"午休下班"（上午那段结束），out2 才是"下班"
- *   · 2 次卡：out1 就是"下班"
+ * 打卡卡片的显示名 —— **全模块唯一来源**（punchLabelOf 与 punchPlan 都走这里）。
+ *
+ * 同一个 key 在不同班次下含义不同：
+ *   · 4 次卡：out1 是第 1 段在岗的结束，out2 才是收工
+ *   · 2 次卡：out1 就是收工
  * 所以必须连着班次一起问，不能写死一张表 —— 写死必然在另一种班次下显示错。
+ *
+ * ⚠️ 名字里**不许再带时段词**（"午休下班"这种已废）：
+ *   那一段休息可能是午休、晚饭，也可能是交接班；4 次卡的班次未必是早班，
+ *   叫"午休下班"在晚班就是错的（龙哥现场提的）。
+ *   代价：同一天会出现两个"上班"、两个"下班"。所以——
+ *   **凡是只列卡名、不带时刻的地方（补卡选卡按钮），必须把应打时刻一起显示**，
+ *   否则四个选项长得一模一样，人根本分不清补的是哪一张。
+ *   现在带时刻的地方：员工端「补哪张卡」、管理端「补哪张卡」、看板逐张卡；
+ *   只列名字的地方：打卡明细（旁边就是时刻列，够用）。
  */
-function punchLabelOf(shift, key) {
+function punchLabels(shift) {
   if (shift && shift.segments === 2) {
-    return { in1: '上班', out1: '午休下班', in2: '午休上班', out2: '下班' }[key] || key;
+    return { in1: '上班', out1: '下班', in2: '上班', out2: '下班' };
   }
-  return { in1: '上班', out1: '下班' }[key] || key;
+  return { in1: '上班', out1: '下班' };
+}
+
+function punchLabelOf(shift, key) {
+  return punchLabels(shift)[key] || key;
 }
 
 /** 一天的请假覆盖。half 仅对单日请假生效（多日请假一定是整天） */
@@ -538,7 +553,9 @@ function overtimeMinutesOn(reqs, day) {
  * 一天里该打哪几次卡 —— 全模块唯一的"打卡计划"来源。
  *
  * 2 次卡：in1 上班、out1 下班
- * 4 次卡：in1 上班、out1 午休下班、in2 午休上班、out2 下班
+ * 4 次卡：in1 上班、out1 下班（第 1 段结束）、in2 上班（第 2 段开始）、out2 下班
+ *         名字走 punchLabels()，别在这里再写一遍字面量 —— 两处各写一份，
+ *         改名时漏一处就会出现"看板叫 A、补卡按钮叫 B"。
  *
  * key 的命名刻意保持 `in1/out1/in2/out2`：它同时是前端的按钮身份、
  * 补卡单里的"补哪一张"、以及测试里的断言名。改名 = 老客户端点错按钮。
@@ -547,16 +564,17 @@ function punchPlan(shift, day) {
   const mk = (key, type, slot, hhmm, label) => ({
     key, type, slot, hhmm, label, at: tsOfDay(day, hhmm),
   });
+  const L = punchLabels(shift);
   const plan = shift.segments === 2
     ? [
-      mk('in1', 'in', 1, shift.workStart, '上班'),
-      mk('out1', 'out', 1, shift.restStart, '午休下班'),
-      mk('in2', 'in', 2, shift.restEnd, '午休上班'),
-      mk('out2', 'out', 2, shift.workEnd, '下班'),
+      mk('in1', 'in', 1, shift.workStart, L.in1),
+      mk('out1', 'out', 1, shift.restStart, L.out1),
+      mk('in2', 'in', 2, shift.restEnd, L.in2),
+      mk('out2', 'out', 2, shift.workEnd, L.out2),
     ]
     : [
-      mk('in1', 'in', 1, shift.workStart, '上班'),
-      mk('out1', 'out', 1, shift.workEnd, '下班'),
+      mk('in1', 'in', 1, shift.workStart, L.in1),
+      mk('out1', 'out', 1, shift.workEnd, L.out1),
     ];
   // 跨天班：下班（以及 4 次卡里任何早于上班的时刻）落在**次日**。
   // 这里统一把"比第一张卡还早"的时刻 +24h 拉直，下游就只需前后比大小。
@@ -581,7 +599,7 @@ function windowOf(shift, day) {
   };
 }
 
-/** 午休窗口的绝对时刻（只有 4 次卡才有），没有则 null */
+/** 休息时段的绝对时刻（只有 4 次卡才有），没有则 null */
 function restWindowOf(shift, day) {
   if (shift.segments !== 2) return null;
   return { startAt: tsOfDay(day, shift.restStart), endAt: tsOfDay(day, shift.restEnd) };
@@ -636,7 +654,7 @@ function punchNote(prefix, minutes, items) {
  * 也能被测试直接喂各种边界（迟到一分钟、跨天班、半天假、四段卡）。
  *
  * 【判定粒度是"每一张卡"，不是"一天"】
- * 4 次卡的班次里，上午迟到和下午迟到是两件事，中午忘了打午休下班也是缺卡。
+ * 4 次卡的班次里，第 1 段迟到和第 2 段迟到是两件事，忘打第 1 段的卡也是缺卡。
  * 所以先逐张卡算出 { 应打时刻、实打时刻、状态、迟到/早退分钟 }，再由这些卡片
  * 汇总出整天状态。好处是"缺的到底是哪一张"永远说得清楚，报表也能给出"3/4"。
  *
@@ -754,7 +772,7 @@ function judgeDay({ day, now, shift, recs, reqs, workdays }) {
   if (isToday && pendingItems.length > 0) {
     if (now < win.startAt) return { ...base, status: 'pending', note: '未到上班时间' };
     if (missingItems.length > 0) {
-      // 中间那几张已经到点却没打 —— 这是真的缺卡（比如中午忘了打午休下班），
+      // 中间那几张已经到点却没打 —— 这是真的缺卡（比如休息前忘了打卡），
       // 不能因为"后面还有卡没到点"就整天空着不报
       return {
         ...base, status: 'missing',
@@ -943,7 +961,7 @@ function createRequest({ orgId, userId, kind, reason, startDay, endDay, half, le
     const { shift } = shiftFor(userId, orgId);
     if (sl > shift.segments) {
       return {
-        error: `当前班次（${shift.workStart}-${shift.workEnd}${shift.restStart ? ` / 午休 ${shift.restStart}-${shift.restEnd}` : ''}）`
+        error: `当前班次（${shift.workStart}-${shift.workEnd}${shift.restStart ? ` / 休息 ${shift.restStart}-${shift.restEnd}` : ''}）`
           + `一天打 ${shift.punchesPerDay} 次卡，没有第 ${sl} 次卡可补`,
       };
     }
@@ -985,8 +1003,8 @@ function shiftForCached(userId, orgId, cache) {
 
 /**
  * 申请单的展示形态。
- * `shift` 可选：给了才能把"补卡"写成"补午休下班卡"这种人话
- * （同一张 out/1，2 次卡里叫"下班卡"、4 次卡里叫"午休下班卡"，只有班次说得准）。
+ * `shift` 可选：给了才说得清补的是哪一张卡 —— 4 次卡里"第 1 段结束"和"收工"
+ * 都是 out，光看类型会把卡补到错误的段上，只有班次说得准。
  */
 function decorateRequest(r, shift = null) {
   const km = { leave: '请假', makeup: '补卡', outing: '外出', overtime: '加班' };
@@ -1053,7 +1071,7 @@ function reviewRequest({ orgId, id, approve, reviewerId, note = null }) {
   if (approve && r.kind === 'makeup') {
     const user = db.prepare('SELECT org_id FROM users WHERE id=?').get(r.user_id);
     if (!user || !user.org_id) return { error: '该员工已离职或不在组织中，无法补卡' };
-    // 补的是哪一张卡必须带上 slot：4 次卡里"午休下班(out,1)"和"下班(out,2)"
+    // 补的是哪一张卡必须带上 slot：4 次卡里第 1 段结束(out,1)和收工(out,2)
     // 是两张卡，只按 type 删旧记录、只按 type 写入，会把下班卡覆盖成中午那次。
     const slot = Number(r.slot) === 2 ? 2 : 1;
     db.prepare('DELETE FROM att_records WHERE user_id=? AND day=? AND type=? AND slot=? AND source=?')
@@ -1095,7 +1113,7 @@ function overview({ orgId, day, now = Date.now() }) {
       employeeNo: u.employeeNo, deptName: u.deptName,
       shiftName: u.shiftName, shift: d.shift, groupName: u.groupName,
       firstInTime: d.firstInTime, lastOutTime: d.lastOutTime,
-      // 逐张卡的实况：4 次卡的看板必须能一眼看出"缺的是午休下班还是下午上班"，
+      // 逐张卡的实况：4 次卡的看板必须能一眼看出"缺的是第 1 段的下班卡还是第 2 段的上班卡"，
       // 只给最早的上班和最晚的下班是看不出来的
       //
       // ⚠️ 字段集必须和 routes/attendance.js 的 punchView() **逐字对齐**（含 done /

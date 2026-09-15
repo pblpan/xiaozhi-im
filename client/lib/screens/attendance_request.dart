@@ -32,8 +32,8 @@ class _AttendanceRequestPageState extends State<AttendanceRequestPage> {
   // 补卡
   DateTime _makeupDay = DateTime.now();
   String _clockType = 'in';
-  /// 补第几次卡。一天 4 次卡的班次里，"午休下班(out,1)"和"下班(out,2)"是两张不同的卡，
-  /// 只发 type 会把卡补到错误的段上（员工以为补好了，报表上那天依旧缺卡）。
+  /// 补第几次卡。一天 4 次卡的班次里，第 1 段的 out(out,1) 和收工的 out(out,2)
+  /// 是两张不同的卡，只发 type 会把卡补到错误的段上（员工以为补好了，报表上那天依旧缺卡）。
   int _slot = 1;
   TimeOfDay _makeupTime = const TimeOfDay(hour: 8, minute: 50);
   /// 服务端下发的一日打卡计划（[{key,type,slot,label,expectTime}, ...]）。
@@ -76,13 +76,25 @@ class _AttendanceRequestPageState extends State<AttendanceRequestPage> {
     }
   }
 
-  /// 补卡可选项。有 punchPlan 就照它来（含"午休下班"这类标签和应打时刻）。
+  /// 补卡可选项。有 punchPlan 就照它来（含服务端下发的卡名与应打时刻）。
   List<Map<String, dynamic>> get _makeupOptions {
     if (_plan.isNotEmpty) return _plan;
     return const [
       {'key': 'in1', 'type': 'in', 'slot': 1, 'label': '上班卡', 'expectTime': ''},
       {'key': 'out1', 'type': 'out', 'slot': 1, 'label': '下班卡', 'expectTime': ''},
     ];
+  }
+
+  /// 选卡按钮上的字：**卡名 + 应打时刻**，例如「上班 08:00」。
+  ///
+  /// 卡名本身不带时段词（服务端统一叫"上班/下班"，因为那段休息可能是午休、
+  /// 晚饭或交接班）。代价是 4 次卡的班次里会出现两个"上班"、两个"下班" ——
+  /// 不把应打时刻摆出来，四个按钮长得一模一样，员工只能靠猜，
+  /// 而猜错就是**把卡补到第 1 段还是第 2 段**这种看不出来的错。
+  static String _punchOptionText(Map<String, dynamic> p) {
+    final label = (p['label'] ?? '打卡').toString();
+    final expect = (p['expectTime'] ?? '').toString();
+    return expect.length == 5 ? '$label $expect' : label;
   }
 
   @override
@@ -403,16 +415,18 @@ class _AttendanceRequestPageState extends State<AttendanceRequestPage> {
   List<Widget> _makeupFields() => [
         _row('补卡日期', _dateBtn(_makeupDay, (d) => _makeupDay = d)),
         const SizedBox(height: 10),
-        // 选项照服务端的打卡计划来：2 次卡 2 项、4 次卡 4 项，标签也用服务端的
-        // （"午休下班"这种叫法客户端编不出来）。点哪一项就把时间默认成它的应打时刻，
-        // 省得员工自己回忆中午几点下的班。
+        // 选项照服务端的打卡计划来：2 次卡 2 项、4 次卡 4 项。
+        // 卡名和应打时刻都取自服务端（客户端编不出"这一张是第几段"），
+        // 并且**必须把应打时刻显示出来**：卡名统一成"上班/下班"后，
+        // 4 次卡会出现两个"上班"两个"下班"，只显示名字就分不清哪张是哪张。
+        // 点哪一项就把时间默认成它的应打时刻，省得员工自己回忆几点下的班。
         _row('补哪张卡', Wrap(
           spacing: 8,
           runSpacing: 8,
           children: [
             for (final p in _makeupOptions)
               ChoiceChip(
-                label: Text((p['label'] ?? '打卡').toString()),
+                label: Text(_punchOptionText(p)),
                 selected: _clockType == p['type'] && _slot == ((p['slot'] as num?)?.toInt() ?? 1),
                 onSelected: (_) => setState(() {
                   _clockType = (p['type'] ?? 'in').toString();

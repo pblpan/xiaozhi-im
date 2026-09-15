@@ -154,10 +154,10 @@ WIN_MARKS = [
     # 判据挑的是"客户端真的在按服务端下发的计划渲染"的证据：客户端自己判
     # "今天几次卡"是这一期最容易出的错（与报表口径分家），所以这层要卡住。
     'punchPlan',                # attendance.dart / attendance_request.dart：一日打卡计划
-    'expectTime',               # 每张卡的应打时刻（按钮上直接写"应打 12:00"）
-    'punchLabel',               # "午休下班"这类叫法由服务端下发，客户端不按 type 猜
+    'expectTime',               # 每张卡的应打时刻（按钮上直接写"上班 13:00"）
+    'punchLabel',               # 卡名由服务端下发，客户端不按 type 猜
     'minutesAsHours',           # TimeFmt：在岗时长（480 分钟 → "8 小时"）
-    'restStart',                # 午休窗口（有它才谈得上 4 次卡）
+    'restStart',                # 休息时段（有它才谈得上 4 次卡）
     # ⚠️ 下面这些**实测搜不到，禁止当判据**（2026-09-14 在 Windows app.so 上探测确认）：
     #   '/api/client/apps' → 由 Config.baseUrl 拼接，完整串不存在（同 v0.8.0/v0.9.0 那批）
     #   资源路径 'assets/...' 类判据见 SOUND_ASSETS —— 那是单独校验的，别混进来。
@@ -182,6 +182,11 @@ GONE_MARKS = [
     'stun.qq.com',              # v0.6.1：黑龙江电信实测被 RST，已从内置列表剔除
     'module_hub.dart',          # v0.12.0：原「应用」页被「工作台」取代，源码已删；
                                 #   还在产物里 = 打的是旧代码（构建缓存没清干净）
+    # v0.13.4：卡名里的时段词已废（"午休下班/午休上班"）。
+    #   那段时间叫"午休"只对早班成立，晚班的那顿是晚饭 —— 名字必须对任何班次都成立。
+    #   留在产物里要么是打了旧代码、要么是有人在客户端又硬编码了一份卡名。
+    '午休下班',
+    '午休上班',
 ]
 
 # 音频资源条目（必须真的打进包里，否则运行时静默无声）
@@ -614,7 +619,7 @@ def check_fpk(path):
                                   'judgeDay', 'judgeRange', 'summarize', 'myRange',
                                   'isValidDay', 'createRequest', 'listRequests',
                                   'reviewRequest', 'overview',
-                                  # v0.13.0：一天 4 次卡（含午休窗口）
+                                  # v0.13.0：一天 4 次卡（含休息时段）
                                   #   punchPlan/windowOf 是唯一口径源：客户端按钮、补卡、判定、
                                   #   报表全部读它，任何一处自己再判"今天几次卡"都会对不上。
                                   #   restWindowOf/workedMinutes/expectedMinutes 是工时口径；
@@ -624,18 +629,25 @@ def check_fpk(path):
                                   'workedMinutes', 'expectedMinutes',
                                   'punchesPerDay', 'segments', 'restStart', 'restEnd',
                                   "'in2'", "'out2'",
+                                  # v0.13.4：卡名去掉时段词（"午休下班"只对早班成立），
+                                  #   并且**两处下发卡名的地方合并成唯一来源** punchLabels ——
+                                  #   原先 punchLabelOf 与 punchPlan 各写一份字面量，
+                                  #   改名时漏一处就会"看板叫 A、补卡按钮叫 B"。
+                                  #   判据是那张表本身，不是"有没有 label 字段"。
+                                  'punchLabels',
+                                  "{ in1: '上班', out1: '下班', in2: '上班', out2: '下班' }",
                                   # v0.15.1：overview 的卡必须和 punchView() 同字段集。
                                   #   踩过：这里少发 done → 管理员看板上**已经打过的卡
                                   #   显示成"缺"**，而员工打卡页正常，两边对不上。
                                   #   判据就是那行 `done: p.done` 本身（不是"有 punches 就算过"）。
                                   'done: p.done'],
-        # v0.13.0：默认班次的午休窗口校验。
+        # v0.13.0：班次里休息时段（restStart/restEnd）的校验。
         #   判据挑的是**校验证据**而不是字段名：两个都填/两个都空/只填一个的
-        #   三分支必须都在，且错误文案真的提到了"午休"—— 只判 restStart 存在的话，
+        #   三分支必须都在，且错误文案真的提到了"休息"—— 只判 restStart 存在的话，
         #   把校验删掉照样通过，而"只填一个"会静默算错在岗时长。
         'src/src/settings.js': ['attDefaultShift', 'cleanShift',
-                                'restStart', 'restEnd', '午休开始', '午休结束',
-                                '跨天班（夜班）不支持午休窗口'],
+                                'restStart', 'restEnd', '休息开始', '休息结束',
+                                '跨天班（夜班）不支持休息时段'],
         # 应用中心注册表：内置应用清单 + 按业务状态过滤可见性
         'src/src/apps.js': ['BUILTIN_APPS', 'listFor', 'catalog', 'GROUPS',
                             "'attendance'", "'my_requests'", "'work_org'",
@@ -944,6 +956,55 @@ def check_fpk(path):
     return 0 if all_ok else 1
 
 
+# ---- v0.13.4：客户端源码级口径（二进制里查不出来，但正是这一轮的核心）----
+#
+# 为什么查源码而不是查产物：
+#   · 中文串未必进 AOT 包、私有函数会被内联（见上面 WIN_MARKS 的实测记录），
+#     所以"选卡按钮有没有带时刻"在二进制里没法可靠判定；
+#   · 而这两条纪律恰恰是这一轮的命门，不能只靠肉眼看代码。
+# 跑校验时仓库就在手边（脚本本来就要在 client/ 下执行），顺手查了。
+#
+# 纪律 1：补卡选卡按钮必须是「卡名 + 应打时刻」。
+#   卡名统一成"上班/下班"后，4 次卡会出现两个"上班"、两个"下班"；
+#   不给时刻就是四个长得一模一样的选项，员工只能靠猜 ——
+#   猜错 = 把卡补到错误的段上，看着补了、报表上那天依旧缺卡。
+# 纪律 2：源码里不许再出现带时段词的卡名（午休下班/午休上班）。
+#   那段休息可能是午休、晚饭或交接班，名字必须对早班晚班都成立。
+CLIENT_SRC_MUST = [
+    ('lib/screens/attendance_request.dart',
+     ['_punchOptionText', 'Text(_punchOptionText(p))', "p['expectTime']"]),
+    ('lib/screens/attendance_records.dart', ["it['punchLabel']", "it['time']"]),
+]
+CLIENT_SRC_GONE = ['午休下班', '午休上班']
+
+
+def check_client_source():
+    """直接查客户端源码（不看产物）。返回 True/False。"""
+    print('\n-- 客户端源码口径（选卡按钮带时刻 / 卡名不带时段词）--')
+    ok_all = True
+    for rel, marks in CLIENT_SRC_MUST:
+        if not os.path.isfile(rel):
+            print('  %-40s 找不到源码 ✗（请在 client/ 目录下跑本脚本）' % rel)
+            ok_all = False
+            continue
+        with open(rel, encoding='utf-8', errors='replace') as f:
+            txt = f.read()
+        miss = [m for m in marks if m not in txt]
+        if miss:
+            print('  %-40s 缺记号 %s ✗' % (rel, miss))
+            ok_all = False
+            continue
+        bad = [b for b in CLIENT_SRC_GONE if b in txt]
+        if bad:
+            print('  %-40s 仍写死旧卡名 %s ✗' % (rel, bad))
+            ok_all = False
+            continue
+        print('  %-40s ✓' % rel)
+    if ok_all:
+        print('  源码口径 ✓')
+    return ok_all
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -962,6 +1023,7 @@ def main():
         return check_fpk(path)
 
     marks = sys.argv[2:] or (APK_MARKS if path.lower().endswith('.apk') else WIN_MARKS)
+    src_ok = check_client_source()
     if path.lower().endswith('.exe'):
         # NSIS 安装程序：内容压缩在里面，先解出来再按同一套判据校验。
         # 7z 的项名不带盘符，Windows 这边源码结构和以前 zip 版一致，可直接复用。
@@ -972,7 +1034,7 @@ def main():
         finally:
             sz.close()
         print('=' * 56)
-        return rc or (0 if meta_ok else 1)
+        return rc or (0 if (meta_ok and src_ok) else 1)
 
     with zipfile.ZipFile(path) as zf:
         if path.lower().endswith('.apk'):
@@ -980,7 +1042,7 @@ def main():
         else:
             rc = check_win(zf, marks)
     print('=' * 56)
-    return rc
+    return rc or (0 if src_ok else 1)
 
 
 if __name__ == '__main__':

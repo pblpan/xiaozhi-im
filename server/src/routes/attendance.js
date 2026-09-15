@@ -78,7 +78,7 @@ function needClockToday(day = att.today()) {
  * 员工端
  * ============================================================ */
 
-/** 班次对客户端的展示形态（含"一天几次卡"与午休窗口） */
+/** 班次对客户端的展示形态（含"一天几次卡"与休息时段） */
 function shiftView(s) {
   return {
     name: s.name, workStart: s.workStart, workEnd: s.workEnd,
@@ -87,7 +87,7 @@ function shiftView(s) {
     crossDay: s.crossDay, restMinutes: s.restMinutes,
     flexMinutes: s.flexMinutes, lateGrace: s.lateGrace, earlyGrace: s.earlyGrace,
     // 一个班次应出勤多少分钟（两个在岗段之和）。客户端拿它显示"应出勤 8 小时"，
-    // 不用自己拿 下班-上班-午休 再算一遍 —— 少一处能算错的地方
+    // 不用自己拿 下班-上班-休息 再算一遍 —— 少一处能算错的地方
     expectedWorkMinutes: s.expectedWorkMinutes,
   };
 }
@@ -149,7 +149,7 @@ router.get('/today', (req, res) => {
     shiftSource: source,
     /**
      * 兼容字段：最早上班卡 / 最晚下班卡。
-     * 老客户端还在读它，别删 —— 但新客户端请用 punchPlan，那张表才认得"午休下班"。
+     * 老客户端还在读它，别删 —— 但新客户端请用 punchPlan —— 那张表才知道该打几张、哪一张属于哪一段。
      */
     cards: {
       in: today.firstIn == null ? null : { at: today.firstIn, time: today.firstInTime, count: recs.filter((r) => r.type === 'in' && r.day === day).length },
@@ -261,7 +261,7 @@ router.get('/my', (req, res) => {
       firstInTime: d.firstInTime, lastOutTime: d.lastOutTime,
       lateMinutes: d.lateMinutes, earlyMinutes: d.earlyMinutes, leave: d.leave, outing: d.outing,
       overtimeMinutes: d.overtimeMinutes,
-      // 4 次卡：明细页要能一条条列出"上午上班 / 午休下班 / 午休上班 / 下班"
+      // 4 次卡：明细页要能一条条列出"上班 / 下班 / 上班 / 下班"（每条自带应打时刻）
       punches: punchView(d),
       donePunches: d.donePunches, expectedPunches: d.expectedPunches,
       missingLabels: d.missingLabels,
@@ -277,7 +277,7 @@ router.get('/records', (req, res) => {
   const st = state();
   if (!st.org || !u.org_id) return res.json({ available: false, items: [] });
   const day = att.isValidDay(req.query.day) ? String(req.query.day) : att.today();
-  // 带上班次：同一张 out/1 在 2 次卡里叫"下班"、在 4 次卡里叫"午休下班"，
+  // 带上班次：同一张 out/1 在 2 次卡里就是收工、在 4 次卡里只是第 1 段结束，
   // 不把班次一起给出来，客户端就只能显示一个含糊的"下班卡"。
   const shift = att.shiftFor(u.id, st.org.id).shift;
   const items = att.recordsOn(u.id, day)
@@ -348,8 +348,8 @@ admin.get('/config', (req, res) => {
     enabled: settings.get('attendanceEnabled') !== false,
     // 默认班次：**可编辑的存储值 + 归一化后的派生值合并成一个对象**。
     //   只给存储值的话，管理台就不知道"这个班次一天打几次卡、应出勤多少小时"，
-    //   只能自己拿 上班/下班/午休 再减一遍 —— 那正是口径分家的起点。
-    //   归一化值覆盖同名键（restStart 等在午休窗口不成立时会是 null），
+    //   只能自己拿 上班/下班/休息 再减一遍 —— 那正是口径分家的起点。
+    //   归一化值覆盖同名键（restStart 等在休息时段不成立时会是 null），
     //   所以界面看到的永远是**真正生效**的形状。
     //   写回时 cleanShift 只认它自己那几个键，多出来的派生字段会被忽略，往返安全。
     defaultShift: { ...(settings.get('attDefaultShift') || {}), ...shiftView(eff) },
@@ -432,7 +432,7 @@ admin.get('/records', (req, res) => {
   const rows = db.prepare(`SELECT r.*, u.username, u.nickname, u.employee_no
     FROM att_records r LEFT JOIN users u ON u.id=r.user_id
     WHERE ${where.join(' AND ')} ORDER BY r.at DESC LIMIT 1000`).all(...args);
-  // 带上"这是哪一张卡"：光看 in/out 分不清"午休下班"和"下班"，
+  // 带上"这是哪一张卡"：光看 in/out 分不清"第 1 段结束"和"收工"，
   // 管理员修正时点错一张，员工当天就多一条错记录
   const shiftCache = new Map();
   const items = rows.map((r) => {
@@ -493,9 +493,9 @@ admin.get('/shifts', (req, res) => {
 function shiftPayload(b) {
   const name = String(b.name || '').trim();
   if (!name || [...name].length > 20) return { error: '班次名称必填，最多 20 个字' };
-  // 时间与午休窗口的校验**复用** settings.cleanShift：
+  // 时间与休息时段的校验**复用** settings.cleanShift：
   // 默认班次和命名班次必须是同一套规则，否则迟早出现
-  // "默认班次能存午休 12:00、命名班次却报错"这种自相矛盾的行为。
+  // "默认班次能存休息 12:00、命名班次却报错"这种自相矛盾的行为。
   const c = settings.cleanShift({
     workStart: b.workStart, workEnd: b.workEnd,
     restStart: b.restStart, restEnd: b.restEnd,
@@ -573,7 +573,7 @@ function groupDetail(row) {
   return {
     id: row.id, name: row.name, shiftId: row.shift_id,
     shiftName: shift ? shift.name : '默认班次',
-    // 给完整的班次形态（含午休窗口与"一天几次卡"），管理台才显示得清
+    // 给完整的班次形态（含休息时段与"一天几次卡"），管理台才显示得清
     // "这个组是一天 4 次卡还是一天 2 次卡"
     shift: shiftViewObj ? {
       name: shiftViewObj.name, workStart: shiftViewObj.workStart, workEnd: shiftViewObj.workEnd,

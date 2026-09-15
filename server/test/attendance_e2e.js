@@ -134,7 +134,7 @@ function stopServer() {
   const e2 = await addEmp('emp02', '李四', prodDept);
   ok('录员工 emp01/emp02 并能登录', !!e1.id && !!e1.token && !!e2.id, JSON.stringify([e1.id, e2.id]));
 
-  // 默认班次带午休窗口（08:00-12:00 / 13:00-17:00）＝ 一天 4 次卡，
+  // 默认班次带休息时段（08:00-12:00 / 13:00-17:00）＝ 一天 4 次卡，
   // 工作日设成全周（判定用例需要"昨天一定是工作日"）
   await api('PUT', '/api/admin/attendance/config', {
     token: admin, body: { workdays: [0, 1, 2, 3, 4, 5, 6], enabled: true },
@@ -145,16 +145,26 @@ function stopServer() {
   r = await api('GET', '/api/attendance/today', { token: e1.token });
   ok('员工 today → available:true', r.status === 200 && r.body.available === true, JSON.stringify(r.body).slice(0, 200));
   ok('  班次来源 = default', r.body.shiftSource === 'default', r.body.shiftSource);
-  ok('  默认班次 08:00-17:00 含午休 12:00-13:00',
+  ok('  默认班次 08:00-17:00 含休息 12:00-13:00',
     r.body.shift?.workStart === '08:00' && r.body.shift?.workEnd === '17:00'
     && r.body.shift?.restStart === '12:00' && r.body.shift?.restEnd === '13:00',
     JSON.stringify(r.body.shift));
   ok('  默认一天 4 次卡（segments=2 / punchesPerDay=4）',
     r.body.shift?.segments === 2 && r.body.shift?.punchesPerDay === 4, JSON.stringify(r.body.shift));
-  ok('  打卡计划 4 张卡且顺序为 上班/午休下班/午休上班/下班',
+  ok('  打卡计划 4 张卡且顺序为 上班/下班/上班/下班（key 仍是 in1/out1/in2/out2）',
     JSON.stringify((r.body.punchPlan || []).map((p) => [p.key, p.label]))
-      === JSON.stringify([['in1', '上班'], ['out1', '午休下班'], ['in2', '午休上班'], ['out2', '下班']]),
+      === JSON.stringify([['in1', '上班'], ['out1', '下班'], ['in2', '上班'], ['out2', '下班']]),
     JSON.stringify((r.body.punchPlan || []).map((p) => [p.key, p.label])));
+  // 卡名去掉时段词之后，必须**仍然分得清是哪一张**：四张卡的「卡名+应打时刻」互不相同。
+  // 这是补卡按钮能用的前提 —— 名字一样了还不给时刻，就是四个一模一样的选项，
+  // 员工只能靠猜，猜错就是把卡补到错误的段上（报表上那天依旧缺卡）。
+  ok('  四张卡的「卡名+应打时刻」互不相同（补卡按钮才分得清）',
+    new Set((r.body.punchPlan || []).map((p) => `${p.label}@${p.expectTime}`)).size === 4,
+    JSON.stringify((r.body.punchPlan || []).map((p) => `${p.label}@${p.expectTime}`)));
+  // 卡名不许带时段词：晚班那顿休息不是午休，名字得对任何班次都成立
+  ok('  卡名不含时段词（早班晚班都能用）',
+    (r.body.punchPlan || []).every((p) => !/午休|晚餐|中休/.test(p.label || '')),
+    JSON.stringify((r.body.punchPlan || []).map((p) => p.label)));
   ok('  今日应打 4 次', r.body.today?.expectedPunches === 4, JSON.stringify(r.body.today));
   ok('  无考勤组', r.body.group === null, JSON.stringify(r.body.group));
 
@@ -177,22 +187,22 @@ function stopServer() {
   ok('  员工看到新上班时间 08:30', r.body.shift?.workStart === '08:30', JSON.stringify(r.body.shift));
   r = await api('PUT', '/api/admin/attendance/config',
     { token: admin, body: { defaultShift: { workStart: '09:00', workEnd: '18:00', restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 } } });
-  ok('清空午休窗口 → 降级为一天 2 次卡', r.status === 200);
+  ok('清空休息时段 → 降级为一天 2 次卡', r.status === 200);
   r = await api('GET', '/api/attendance/today', { token: e1.token });
-  ok('  午休为空时 shift.restStart=null 且 punchesPerDay=2',
+  ok('  休息时段为空时 shift.restStart=null 且 punchesPerDay=2',
     r.body.shift?.restStart === null && r.body.shift?.segments === 1 && r.body.shift?.punchesPerDay === 2,
     JSON.stringify(r.body.shift));
   ok('  打卡计划退化为 上班/下班 两张',
     JSON.stringify((r.body.punchPlan || []).map((p) => p.key)) === JSON.stringify(['in1', 'out1']),
     JSON.stringify((r.body.punchPlan || []).map((p) => p.key)));
-  // 只填一半的午休窗口是非法配置：判定时算不出该打几次卡，必须明确报错
+  // 只填一半的休息时段是非法配置：判定时算不出该打几次卡，必须明确报错
   r = await api('PUT', '/api/admin/attendance/config', { token: admin, body: { defaultShift: { workStart: '09:00', workEnd: '18:00', restStart: '12:00' } } });
-  ok('只填午休开始 → 400', r.status === 400, JSON.stringify(r.body));
+  ok('只填休息开始 → 400', r.status === 400, JSON.stringify(r.body));
   r = await api('PUT', '/api/admin/attendance/config', { token: admin, body: { defaultShift: { workStart: '09:00', workEnd: '18:00', restStart: '12:00', restEnd: '13:00' } } });
-  ok('午休落在班次内 → 200', r.status === 200, JSON.stringify(r.body));
+  ok('休息时段落在班次内 → 200', r.status === 200, JSON.stringify(r.body));
   r = await api('PUT', '/api/admin/attendance/config', { token: admin, body: { defaultShift: { workStart: '09:00', workEnd: '18:00', restStart: '08:00', restEnd: '13:00' } } });
-  ok('午休早于上班 → 400', r.status === 400, JSON.stringify(r.body));
-  // ★ 复位成"09:00-18:00 无午休"的 2 次卡 —— 下面所有判定用例都建立在这个班次上，
+  ok('休息早于上班 → 400', r.status === 400, JSON.stringify(r.body));
+  // ★ 复位成"09:00-18:00 无休息时段"的 2 次卡 —— 下面所有判定用例都建立在这个班次上，
   //   留成 4 次卡会把它们全部带偏（缺卡、迟到分钟数、在岗时长都不是原来的数）
   r = await api('PUT', '/api/admin/attendance/config',
     { token: admin, body: { defaultShift: { workStart: '09:00', workEnd: '18:00', restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 } } });
@@ -743,8 +753,8 @@ function stopServer() {
   r = await api('GET', `/api/admin/attendance/report?from=${from}&to=${to}`, { token: admin });
   ok('停用/重启后历史考勤数据仍在', r.body.users?.length === 3, JSON.stringify(r.body.users?.length));
 
-  // ---------------- 十三：一天 4 次卡（午休窗口） ----------------
-  console.log('\n【十三】一天 4 次卡（上班 / 午休下班 / 午休上班 / 下班）');
+  // ---------------- 十三：一天 4 次卡（休息时段） ----------------
+  console.log('\n【十三】一天 4 次卡（上班 / 下班 / 上班 / 下班，靠应打时刻区分）');
   // 这一节拿**默认班次**当载体：临时改成 08:00-12:00 / 13:00-17:00，验完复位。
   // e1（张三）走的正是默认班次，不必新建考勤组。
   //
@@ -765,16 +775,18 @@ function stopServer() {
   };
 
   r = await api('PUT', '/api/admin/attendance/config', { token: admin, body: { defaultShift: REST_SHIFT } });
-  ok('配 08:00-12:00 / 13:00-17:00 含午休的班次 → 200', r.status === 200, JSON.stringify(r.body));
+  ok('配 08:00-12:00 / 13:00-17:00 含休息时段的班次 → 200', r.status === 200, JSON.stringify(r.body));
   r = await api('GET', '/api/attendance/today', { token: e1.token });
   ok('  识别为 2 段 → 一天 4 次卡',
     r.body.shift?.segments === 2 && r.body.shift?.punchesPerDay === 4, JSON.stringify(r.body.shift));
   ok('  应出勤 8 小时 = 480 分钟', r.body.shift?.expectedWorkMinutes === 480,
     String(r.body.shift?.expectedWorkMinutes));
-  ok('  四张卡依次是 上班/午休下班/午休上班/下班',
+  ok('  四张卡依次是 上班/下班/上班/下班',
     JSON.stringify((r.body.punchPlan || []).map((p) => p.label))
-      === JSON.stringify(['上班', '午休下班', '午休上班', '下班']),
+      === JSON.stringify(['上班', '下班', '上班', '下班']),
     JSON.stringify((r.body.punchPlan || []).map((p) => p.label)));
+  // 记下这一套卡名，下面用来对"同一张卡经另一条路口径"（报表 punches 走 punchLabelOf）
+  const planLabels4 = (r.body.punchPlan || []).map((p) => p.label);
 
   // (0) 工作台角标的口径：不能是"有没有上班卡"。
   //     老写法是 `type='in'` 存在就消角标 —— 4 次卡下员工打完 08:00 的上班卡，
@@ -840,7 +852,7 @@ function stopServer() {
   await fixSlot(e1.id, D3, 'in', 2, '13:40');
   await fixSlot(e1.id, D3, 'out', 2, '17:00');
   d = await dayRec(e1.id, D3);
-  ok('午休后 13:40 上班 → in2 迟到 40 分钟',
+  ok('休息后 13:40 上班 → in2 迟到 40 分钟',
     (d?.punches || []).find((x) => x.key === 'in2')?.lateMinutes === 40,
     JSON.stringify((d?.punches || []).find((x) => x.key === 'in2')));
 
@@ -849,11 +861,18 @@ function stopServer() {
   await fixSlot(e1.id, D4, 'in', 1, '08:00');
   await fixSlot(e1.id, D4, 'out', 1, '12:00');
   d = await dayRec(e1.id, D4);
-  ok('只打上午两张 → 缺午休上班、下班两张卡',
+  ok('只打上午两张 → 缺 in2/out2 两张卡',
     d?.status === 'missing'
     && JSON.stringify(d?.missingPunches) === JSON.stringify(['in2', 'out2'])
-    && JSON.stringify(d?.missingLabels) === JSON.stringify(['午休上班', '下班']),
+    && JSON.stringify(d?.missingLabels) === JSON.stringify(['上班', '下班']),
     JSON.stringify({ s: d?.status, keys: d?.missingPunches, labels: d?.missingLabels }));
+  // 同一张卡经**两条路**下发：员工端/管理端拿的是 punchPlan（punchPlan() 生成），
+  // 报表与看板拿的是 punches（punchLabelOf() 生成）。这两处以前各写一份卡名字面量，
+  // 改名时漏一处就会出现"看板叫 A、补卡按钮叫 B"—— 各自看都对，最难查。
+  // 所以这里逐字比对：同一张卡，两条路的名字必须一模一样。
+  ok('  同一张卡在 punchPlan 与报表里名字逐字一致',
+    JSON.stringify((d?.punches || []).map((x) => x.label)) === JSON.stringify(planLabels4),
+    JSON.stringify({ plan: planLabels4, report: (d?.punches || []).map((x) => x.label) }));
   ok('  在岗时长只算打完的那段 = 240 分钟', d?.workedMinutes === 240, String(d?.workedMinutes));
 
   // (5) 一张没打 → 缺勤
@@ -868,13 +887,13 @@ function stopServer() {
   await fixSlot(e1.id, D6, 'in', 2, '13:00');
   await fixSlot(e1.id, D6, 'out', 2, '17:00');
   d = await dayRec(e1.id, D6);
-  ok('午休 11:20 下班 → out1 早退 40 分钟',
+  ok('第 1 段 11:20 下班 → out1 早退 40 分钟',
     (d?.punches || []).find((x) => x.key === 'out1')?.earlyMinutes === 40,
     JSON.stringify((d?.punches || []).find((x) => x.key === 'out1')));
   ok('  在岗时长 440 分钟（3h20m + 4h）', d?.workedMinutes === 440, String(d?.workedMinutes));
 
   // (7) 补卡必须带 slot：补第 2 段的上班卡，审批后要落到 in2 上
-  //     若只补 type=in 不带 slot，卡会挂到第 1 段 —— 那天依旧"缺午休上班卡"
+  //     若只补 type=in 不带 slot，卡会挂到第 1 段 —— 那天依旧"缺第 2 段的上班卡"
   const D7 = dayStr(-107);
   await fixSlot(e1.id, D7, 'in', 1, '08:00');
   await fixSlot(e1.id, D7, 'out', 1, '12:00');
@@ -891,8 +910,9 @@ function stopServer() {
   ok('提交补卡（第 2 段上班卡）→ 200', r.status === 200 && !!mk2Id, JSON.stringify(r.body));
   r = await api('GET', '/api/admin/attendance/requests', { token: admin });
   const mkRow = (r.body.items || []).find((x) => x.id === mk2Id);
-  ok('  补卡申请显示为「午休上班卡」',
-    mkRow?.punchLabel === '午休上班', JSON.stringify({ label: mkRow?.punchLabel, slot: mkRow?.slot }));
+  ok('  补卡申请显示为「上班卡」且指明是第 2 段',
+    mkRow?.punchLabel === '上班' && mkRow?.clockSlot === 2,
+    JSON.stringify({ label: mkRow?.punchLabel, slot: mkRow?.slot, clockSlot: mkRow?.clockSlot }));
   r = await api('POST', `/api/admin/attendance/requests/${mk2Id}/review`, { token: admin, body: { approve: true } });
   ok('审批通过补卡 → 200', r.status === 200, JSON.stringify(r.body));
   d = await dayRec(e1.id, D7);
@@ -923,7 +943,7 @@ function stopServer() {
     JSON.stringify({ in1: hp.in1?.status, out1: hp.out1?.status, in2: hp.in2?.status, out2: hp.out2?.status }));
   ok('  当天请假标记为 am', d?.leave === 'am', String(d?.leave));
 
-  // (10) 未填午休的班次不该被 4 次卡逻辑污染（回归：2 次卡仍然只有 2 张卡）
+  // (10) 未填休息时段的班次不该被 4 次卡逻辑污染（回归：2 次卡仍然只有 2 张卡）
   r = await api('PUT', '/api/admin/attendance/config',
     { token: admin, body: { defaultShift: { workStart: '09:00', workEnd: '18:00', restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 } } });
   r = await api('GET', '/api/attendance/today', { token: e1.token });

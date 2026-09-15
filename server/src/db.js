@@ -387,16 +387,16 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_attempts_user ON remote_code_atte
 /* ==================== 考勤（工作模式的标配能力，对标钉钉考勤）====================
  *
  * 六张表，职责互不重叠：
- *   att_shifts        班次：几点上下班、午休窗口、弹性与宽限（一个组织可有多套）
+ *   att_shifts        班次：几点上下班、休息时段、弹性与宽限（一个组织可有多套）
  *   att_groups        考勤组：一批人用哪套班次、要不要定位、允不允许外勤
  *   att_group_members 考勤组的「点名」成员
  *   att_group_depts   考勤组按部门纳入（部门内所有人自动算成员，新员工自动进组）
  *   att_records       打卡流水
  *   att_requests      请假/补卡/外出/加班申请单
  *
- * 【一天打几次卡，由班次有没有午休窗口决定】
- *   填了午休开始/结束（如 12:00 / 13:00）→ 一天 4 次：
- *       上班(in,1) 午休下班(out,1) 午休上班(in,2) 下班(out,2)
+ * 【一天打几次卡，由班次有没有休息时段决定】
+ *   填了休息开始/结束（如 12:00 / 13:00）→ 一天 4 次：
+ *       上班(in,1) 下班(out,1) 上班(in,2) 下班(out,2)   ← 卡名一样，靠 slot 区分
  *       在岗时长 = (12:00-08:00) + (17:00-13:00) = 8 小时
  *   没填 → 一天 2 次（上班/下班），老行为不变。
  *   两种模式共用同一套判定代码，只差"期望打卡计划"这张表（见 attendance.js
@@ -418,9 +418,9 @@ CREATE TABLE IF NOT EXISTS att_shifts (
   name TEXT NOT NULL,
   work_start TEXT NOT NULL,              -- 'HH:MM'
   work_end TEXT NOT NULL,                -- 'HH:MM'；work_end<=work_start 表示跨天班（cross_day=1）
-  rest_start TEXT,                       -- 'HH:MM' 午休开始(上午下班)。与 rest_end 同时有值 = 一天 4 次卡
-  rest_end TEXT,                         -- 'HH:MM' 午休结束(下午上班)
-  rest_minutes INTEGER NOT NULL DEFAULT 0,   -- 不填午休窗口时的休息时长（仅展示/扣工时）
+  rest_start TEXT,                       -- 'HH:MM' 休息开始(第 1 段结束)。与 rest_end 同时有值 = 一天 4 次卡
+  rest_end TEXT,                         -- 'HH:MM' 休息结束(第 2 段开始)
+  rest_minutes INTEGER NOT NULL DEFAULT 0,   -- 不填休息时段时的休息时长（仅展示/扣工时）
   flex_minutes INTEGER NOT NULL DEFAULT 0,   -- 弹性上班分钟数：0=不弹性（只作用于当天第一次上班）
   late_grace INTEGER NOT NULL DEFAULT 0,     -- 迟到宽限（分钟）：宽限内不算迟到
   early_grace INTEGER NOT NULL DEFAULT 0,    -- 可提前打卡分钟数：下班前 N 分钟打不算早退

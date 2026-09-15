@@ -65,8 +65,8 @@ class _AttendancePageState extends State<AttendancePage> {
     return 'unknown';
   }
 
-  /// 打卡。slot = 第几段（1 = 上班/午休下班，2 = 午休上班/下班）。
-  /// 一天 4 次卡的班次里，"午休下班"和"下班"都是 type=out，靠 slot 区分。
+  /// 打卡。slot = 第几段（1 = 第 1 段的上班/下班，2 = 第 2 段的上班/下班）。
+  /// 一天 4 次卡的班次里，第 1 段的 out 和收工的 out 都是 type=out，靠 slot 区分。
   Future<void> _clock(String type, int slot) async {
     setState(() => _busy = true);
     try {
@@ -203,7 +203,9 @@ class _AttendancePageState extends State<AttendancePage> {
           const SizedBox(height: 10),
           Text(
             '班次 ${shift['name'] ?? '默认班次'} · ${shift['workStart'] ?? ''} - ${shift['workEnd'] ?? ''}'
-            '${shift['restStart'] != null ? '（午休 ${shift['restStart']}-${shift['restEnd']}）' : ''}'
+            // 名字用"休息"而不是"午休"：4 次卡的班次未必是早班，
+            // 那段休息也可能是晚饭或交接班（服务端的字段口径同样是中性的）
+            '${shift['restStart'] != null ? '（休息 ${shift['restStart']}-${shift['restEnd']}）' : ''}'
             '${shift['crossDay'] == true ? '（跨天）' : ''}',
             style: const TextStyle(fontSize: 13, color: Colors.white70),
           ),
@@ -258,7 +260,7 @@ class _AttendancePageState extends State<AttendancePage> {
   ///
   /// 客户端不判断"今天该打几次卡"—— 2 次卡给两张按钮、4 次卡给四张，
   /// 全由 punchPlan 决定。客户端自己再算一遍"是不是 4 次卡"，迟早会和报表口径打起来
-  /// （班次带不带午休窗口、有没有跨天降级，只有服务端说得准）。
+  /// （班次带不带休息时段、有没有跨天降级，只有服务端说得准）。
   ///
   /// 老服务端不返回 punchPlan 时退回 cards.in / cards.out 两张按钮 —— 向前兼容，
   /// 免得客户端先发了、服务端还没热更，打卡页直接空白。
