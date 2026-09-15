@@ -40,13 +40,25 @@ class Workspace {
   }
 
   /// 拉一次 bootstrap 的公开字段并落盘。任何失败静默（保持现状）。
+  ///
+  /// **失败重试**：冷启动时这一发请求若因地址还没解析好 / 网络抖动失败，
+  /// 静默错过会让客户端卡在旧模式 —— 导航不切工作模式，工作台 / 组织通讯录
+  /// 这两个一级入口就永远出不来（已入编员工也点不进去）。所以这里最多重试 2 次，
+  /// 退避 2s，给地址探测 / 网络恢复留出时间。
   static Future<void> refresh() async {
-    final b = await RemoteConfig.fetchPublic();
-    if (b.isEmpty) return;
-    await apply(
-      mode: (b['friendMode'] ?? '').toString(),
-      companyName: (b['companyName'] ?? '').toString(),
-    );
+    for (var attempt = 0; attempt < 3; attempt++) {
+      final b = await RemoteConfig.fetchPublic();
+      if (b.isNotEmpty) {
+        await apply(
+          mode: (b['friendMode'] ?? '').toString(),
+          companyName: (b['companyName'] ?? '').toString(),
+        );
+        return;
+      }
+      if (attempt < 2) {
+        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
+      }
+    }
   }
 
   /// 应用一份身份信息。空值/非法值**跳过该项**，不覆盖已有状态。

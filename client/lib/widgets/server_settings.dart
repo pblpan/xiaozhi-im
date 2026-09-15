@@ -4,6 +4,7 @@ import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/discover.dart';
 import 'package:xiaozhi_im_client/core/settings.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
+import 'package:xiaozhi_im_client/core/workspace.dart';
 
 /// 服务器设置弹窗（双地址 + 网络模式 + 自动探测）。
 ///
@@ -126,6 +127,8 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
     await Settings.setServers(lan: lan, wan: wan, mode: _mode);
     // 保存后强制重探一次，让右上角当前地址立刻生效
     await Config.resolveNow();
+    // 地址变了：重新拉服务器模式（工作/普通），导航形态可能要跟着变
+    Workspace.refresh();
     if (mounted) Navigator.pop(context, true);
   }
 

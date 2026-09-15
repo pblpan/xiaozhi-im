@@ -30,8 +30,8 @@ class _OrgScreenState extends State<OrgScreen> {
   List<User> _members = [];
   // uid → 部门/岗位名（服务端 my 接口附带；空 = 未分配）
   Map<int, Map<String, String>> _extras = const {};
-  // 部门展示顺序（服务端按 sort 排好）
-  List<String> _deptOrder = const [];
+  // uid → 部门 id（建树用；服务端 my 接口已附带 dept_id，但 User 模型不含，单独留一份）
+  Map<int, int?> _deptIds = const {};
   bool _isAdmin = false;
   int _myId = 0;
   bool _loading = true;
@@ -89,18 +89,19 @@ class _OrgScreenState extends State<OrgScreen> {
             'position': (m['position_name'] ?? '').toString(),
           },
       };
-      // 服务端 depts 全集（含没人部门），按 sort 排好 → 分组顺序以它为准
-      final deptOrder = (org['depts'] as List? ?? const [])
-          .whereType<Map>()
-          .map((d) => (d['name'] ?? '').toString())
-          .toList();
+      // 每个成员的部门 id（建树：成员挂到对应部门节点下）
+      final deptIds = <int, int?>{};
+      for (final m in rawMembers) {
+        final id = (m['id'] ?? 0) as int;
+        deptIds[id] = (m['dept_id'] is int) ? m['dept_id'] as int? : null;
+      }
       if (!mounted) return;
       setState(() {
         _isAdmin = role == 'admin';
         _org = o is Map ? Map<String, dynamic>.from(o) : null;
         _members = list;
         _extras = extras;
-        _deptOrder = deptOrder;
+        _deptIds = deptIds;
         _loading = false;
       });
     } catch (e) {
@@ -316,59 +317,151 @@ class _OrgScreenState extends State<OrgScreen> {
               ? const Center(
                   child: Text('还没有成员，点右上角添加',
                       style: TextStyle(color: AppColors.textWeak)))
-              : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                  itemCount: _flatRows.length,
-                  itemBuilder: (c, i) {
-                    final row = _flatRows[i];
-                    return row.header != null
-                        ? _deptHeader(row.header!)
-                        : _memberRow(row.user!);
-                  },
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 24),
+                  children: _tree(),
                 ),
         ),
       ],
     );
   }
 
-  // 分组行：header 非 null = 部门小标题，否则是成员
-  // （按服务端 depts 的 sort 顺序分组；未分配部门排最后）
-  List<({String? header, User? user})> get _flatRows {
-    final byDept = <String, List<User>>{};
+  /// 把「部门（parent_id 层级）+ 成员」渲染成可展开 / 收起的树。
+  ///
+  /// 以前是"部门小标题 + 成员"的平铺列表；组织稍大就一长条、找不到人。
+  /// 现在部门是可折叠节点，点开才展开子部门与成员；多级部门能嵌套。
+  /// 没人任何部门的成员收进「未分配部门」叶子节点。
+  List<Widget> _tree() {
+    final depts = (() {
+      final raw = (_org?['depts'] as List? ?? const []).whereType<Map>();
+      final map = <int, Map<String, dynamic>>{};
+      for (final d in raw) {
+        final id = d['id'];
+        if (id is int) map[id] = Map<String, dynamic>.from(d);
+      }
+      return map;
+    })();
+
+    // 成员按 dept_id 分组（null / 不在 depts 里 = 未分配）
+    final byDept = <int?, List<User>>{};
     for (final u in _members) {
-      final dept = _extras[u.id]?['dept'] ?? '';
-      (byDept[dept] ??= []).add(u);
+      final did = _deptIds[u.id];
+      (byDept[deptIdsContains(depts, did) ? did : null] ??= []).add(u);
     }
-    final rows = <({String? header, User? user})>[];
-    for (final d in _deptOrder) {
-      final list = byDept.remove(d);
-      if (list == null) continue; // 没人的部门不占屏
-      rows.add((header: d, user: null));
-      rows.addAll(list.map((u) => (header: null, user: u)));
+    for (final list in byDept.values) {
+      list.sort((a, b) => a.display.compareTo(b.display));
     }
-    // 剩下的 = 未分配（'' 为 key）+ 数据里出现但不在 depts 全集的（防御）
-    for (final e in byDept.entries) {
-      rows.add((header: e.key.isEmpty ? '未分配部门' : e.key, user: null));
-      rows.addAll(e.value.map((u) => (header: null, user: u)));
+
+    bool hasDepts = depts.isNotEmpty;
+    final roots = depts.values
+        .where((d) => (d['parent_id'] is int ? d['parent_id'] as int : 0) == 0)
+        .toList()
+      ..sort(_deptCmp);
+
+    final children = <Widget>[];
+    for (final d in roots) {
+      children.add(_deptNode(d, depts, byDept, 0));
     }
-    return rows;
+    // 没有部门数据：退化为"全部成员"一组
+    if (!hasDepts) {
+      children.add(_leafGroup('成员', byDept[null] ?? _members, 0, keyId: 'all'));
+    } else if ((byDept[null] ?? []).isNotEmpty) {
+      children.add(_leafGroup('未分配部门', byDept[null]!, 0, keyId: 'unassigned'));
+    }
+    return children;
   }
 
-  Widget _deptHeader(String name) => Padding(
-        padding: const EdgeInsets.only(top: 10, bottom: 6),
-        child: Row(
-          children: [
-            const Icon(Icons.folder_outlined,
-                size: 14, color: AppColors.textWeak),
-            const SizedBox(width: 5),
-            Text(name,
-                style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textWeak)),
-          ],
-        ),
-      );
+  /// 该 dept_id 是否在部门表里（防御：数据里出现但表里没有的部门 id）
+  bool deptIdsContains(Map<int, Map<String, dynamic>> depts, int? did) =>
+      did != null && depts.containsKey(did);
+
+  int _deptCmp(Map<String, dynamic> a, Map<String, dynamic> b) {
+    final sa = (a['sort'] is int ? a['sort'] as int : 0);
+    final sb = (b['sort'] is int ? b['sort'] as int : 0);
+    if (sa != sb) return sa.compareTo(sb);
+    return (a['id'] as int).compareTo(b['id'] as int);
+  }
+
+  /// 部门节点（可折叠）：展开后显示子部门 + 本部门成员。
+  Widget _deptNode(Map<String, dynamic> dept,
+      Map<int, Map<String, dynamic>> depts, Map<int?, List<User>> byDept, int depth) {
+    final id = dept['id'] as int;
+    final name = (dept['name'] ?? '').toString();
+    final subDepts = depts.values
+        .where((d) =>
+            (d['parent_id'] is int ? d['parent_id'] as int : 0) == id)
+        .toList()
+      ..sort(_deptCmp);
+    final mems = byDept[id] ?? const <User>[];
+    final kids = <Widget>[];
+    for (final s in subDepts) {
+      kids.add(_deptNode(s, depts, byDept, depth + 1));
+    }
+    // 纯容器部门（只有子部门、没有直接成员）就不挂空的"本部门成员"
+    if (mems.isNotEmpty) {
+      kids.add(_leafGroup('本部门成员', mems, depth + 1, keyId: 'mem_$id'));
+    }
+    return _treeTile(name, mems.length, kids, depth, keyId: id);
+  }
+
+  /// 叶子分组（未分配部门 / 本部门成员）：只列成员，不可再展开子部门。
+  Widget _leafGroup(String title, List<User> mems, int depth, {Object? keyId}) {
+    if (mems.isEmpty) {
+      return _treeTile(title, 0, const [], depth, empty: true, keyId: keyId);
+    }
+    final kids = mems.map(_memberRow).toList();
+    return _treeTile(title, mems.length, kids, depth, keyId: keyId);
+  }
+
+  /// 树的通用节点外观：文件夹图标 + 名称 + 人数，可展开 / 收起。
+  Widget _treeTile(String title, int count, List<Widget> children, int depth,
+      {bool empty = false, Object? keyId}) {
+    final leading = Icon(
+      children.isEmpty ? Icons.folder_open_outlined : Icons.folder_outlined,
+      size: 18,
+      color: empty ? AppColors.textWeak : AppColors.brand,
+    );
+    final tile = ExpansionTile(
+      key: PageStorageKey('org_${keyId ?? title}_$depth'),
+      leading: leading,
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(title,
+                style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
+          ),
+          if (count > 0)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+              decoration: BoxDecoration(
+                color: AppColors.brand.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(AppRadii.pill),
+              ),
+              child: Text('$count',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.brand)),
+            ),
+        ],
+      ),
+      initiallyExpanded: depth == 0,
+      children: empty
+          ? const [
+              Padding(
+                padding: EdgeInsets.only(left: 16, bottom: 8),
+                child: Text('（暂无成员）',
+                    style: TextStyle(fontSize: 12, color: AppColors.textWeak)),
+              )
+            ]
+          : children,
+    );
+    // 按层级缩进，做出"树"的视觉
+    return Padding(
+      padding: EdgeInsets.only(left: depth * 14.0),
+      child: tile,
+    );
+  }
 
   Widget _emptyOrg() => Center(
         child: Column(

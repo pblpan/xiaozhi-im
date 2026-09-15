@@ -48,8 +48,36 @@ void main() async {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+/// 监听 App 生命周期：回到前台时重拉一次服务器模式。
+///
+/// 覆盖一个此前漏掉的时序：管理员在管理台把服务器切成工作模式、用户只是把 App
+/// 切回前台（没杀进程重启），旧逻辑不会重新拉取，导航形态就停在旧模式 —— 工作台 /
+/// 组织通讯录入口出不来。回到前台补一发，配合 Workspace.refresh() 自身的重试，
+/// "服务端改了模式，客户端马上跟上"才稳。
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) Workspace.refresh();
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
