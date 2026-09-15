@@ -1097,10 +1097,17 @@ function overview({ orgId, day, now = Date.now() }) {
       firstInTime: d.firstInTime, lastOutTime: d.lastOutTime,
       // 逐张卡的实况：4 次卡的看板必须能一眼看出"缺的是午休下班还是下午上班"，
       // 只给最早的上班和最晚的下班是看不出来的
+      //
+      // ⚠️ 字段集必须和 routes/attendance.js 的 punchView() **逐字对齐**（含 done /
+      //    expectAt）。踩过：这里少发了 `done`，客户端按 punchPlan 的同一套读法
+      //    渲染，于是管理员看板上**已经打过的卡也显示成"缺"** —— 而员工打卡页
+      //    （走 punchView）显示正常，两边对不上，最容易怀疑到判定引擎上去。
+      //    两个接口下发同一张卡，就不该有两套字段。
       punches: d.punches.map((p) => ({
         key: p.key, type: p.type, slot: p.slot, label: p.label,
-        expectTime: p.expectTime, time: p.at == null ? null : hhmmOf(p.at),
-        at: p.at, status: p.status, due: p.due, exempt: p.exempt,
+        expectTime: p.expectTime, expectAt: p.expectAt,
+        time: p.at == null ? null : hhmmOf(p.at), at: p.at,
+        done: p.done, due: p.due, exempt: p.exempt, status: p.status,
         lateMinutes: p.lateMinutes, earlyMinutes: p.earlyMinutes,
       })),
       expectedPunches: d.expectedPunches,

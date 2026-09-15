@@ -623,7 +623,12 @@ def check_fpk(path):
                                   'punchPlan', 'windowOf', 'restWindowOf', 'slotOf',
                                   'workedMinutes', 'expectedMinutes',
                                   'punchesPerDay', 'segments', 'restStart', 'restEnd',
-                                  "'in2'", "'out2'"],
+                                  "'in2'", "'out2'",
+                                  # v0.15.1：overview 的卡必须和 punchView() 同字段集。
+                                  #   踩过：这里少发 done → 管理员看板上**已经打过的卡
+                                  #   显示成"缺"**，而员工打卡页正常，两边对不上。
+                                  #   判据就是那行 `done: p.done` 本身（不是"有 punches 就算过"）。
+                                  'done: p.done'],
         # v0.13.0：默认班次的午休窗口校验。
         #   判据挑的是**校验证据**而不是字段名：两个都填/两个都空/只填一个的
         #   三分支必须都在，且错误文案真的提到了"午休"—— 只判 restStart 存在的话，

@@ -88,7 +88,24 @@ const ok = (name, cond, extra) => {
       const items = (j2 && j2.items) || [];
       console.log(`   看板接口 HTTP ${r2.status}  stats.total=${stats.total} ` +
         `present=${stats.present} missing=${stats.missing}  员工数=${items.length}`);
-      ovSeen[uid] = { status: r2.status, total: stats.total, items: items.length };
+      // 卡片字段集必须和 punchView() 一致（尤其 done）。踩过：overview 漏发 done，
+      // 于是"已经打过的卡"在管理员看板上显示成"缺" —— 员工页正常、看板不对，
+      // 最容易怀疑到判定引擎上去。线上必须真验一次。
+      const NEED = ['key', 'type', 'slot', 'label', 'expectTime', 'expectAt',
+                    'time', 'at', 'done', 'due', 'exempt', 'status',
+                    'lateMinutes', 'earlyMinutes'];
+      const punches = items.flatMap((i) => i.punches || []);
+      const missKeys = NEED.filter((k) => punches.some((p) => !(k in p)));
+      const badDone = punches.filter((p) => p.done !== (p.time != null));
+      const doneCnt = punches.filter((p) => p.done === true).length;
+      console.log(`   卡片 ${punches.length} 张（已打 ${doneCnt} 张）  缺字段: ` +
+        (missKeys.length ? missKeys.join(',') : '无') +
+        `  done/time 不一致: ${badDone.length}`);
+      ovSeen[uid] = {
+        status: r2.status, total: stats.total, items: items.length,
+        punches: punches.length, doneCnt, missKeys: missKeys.length,
+        badDone: badDone.length,
+      };
     }
   }
 
@@ -104,6 +121,11 @@ const ok = (name, cond, extra) => {
     ok(`uid=${uid} 看板接口可用（HTTP 200 且有 items）`,
       r.status === 200 && r.items > 0,
       `HTTP ${r.status}, items=${r.items}`);
+    ok(`uid=${uid} 看板的卡带齐字段（含 done）`,
+      r.punches > 0 && r.missKeys === 0,
+      `卡片 ${r.punches} 张，缺 ${r.missKeys} 种字段`);
+    ok(`uid=${uid} done 与 time 一致（打过的卡不会显示成"缺"）`,
+      r.badDone === 0, `${r.badDone} 张不一致`);
   }
   for (const [k, ids] of users) {
     ok(`${k} 看不到 att_admin（员工专属不该有）`, !ids.includes('att_admin'), ids.join(','));

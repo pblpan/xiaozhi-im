@@ -649,6 +649,24 @@ function stopServer() {
   r = await api('GET', `/api/admin/attendance/overview?day=${TODAY}`, { token: admin });
   ok('管理员可拉今日看板 overview', r.status === 200 && !!r.body.stats && Array.isArray(r.body.items),
       JSON.stringify(r.body).slice(0, 120));
+
+  // 字段集必须和 punchView()（员工打卡页用的那份）逐字对齐。
+  // 踩过：overview 少发了 done → 客户端照 punchPlan 的读法渲染，
+  // **已经打过的卡在看板上显示成"缺"**，而员工页显示正常，两边对不上。
+  // 所以这里按字段名逐个卡一遍，不是"看起来有数据就算过"。
+  {
+    const NEED = ['key', 'type', 'slot', 'label', 'expectTime', 'expectAt',
+                  'time', 'at', 'done', 'due', 'exempt', 'status',
+                  'lateMinutes', 'earlyMinutes'];
+    const punches = (r.body.items || []).flatMap((i) => i.punches || []);
+    ok('  看板的卡带齐 punchView 的全部字段（含 done）',
+        punches.length > 0 && punches.every((p) => NEED.every((k) => k in p)),
+        '缺少: ' + JSON.stringify(NEED.filter((k) => punches.some((p) => !(k in p)))));
+    // done 必须就是"有没有打卡时刻"，两处口径不能分家
+    ok('  done 与 time 一致（打了才有时刻，有时刻就是打了）',
+        punches.every((p) => p.done === (p.time != null)),
+        JSON.stringify(punches.filter((p) => p.done !== (p.time != null)).slice(0, 3)));
+  }
   r = await api('GET', `/api/admin/attendance/overview?day=${TODAY}`, { token: e1.token });
   ok('  员工拉管理员看板 → 403（入口与权限同源）', r.status === 403, JSON.stringify(r.body));
 
