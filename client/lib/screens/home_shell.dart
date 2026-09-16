@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/badges.dart';
+import '../core/share_intake.dart';
 import '../core/theme.dart';
 import '../core/workspace.dart';
 import '../models.dart';
@@ -8,6 +9,7 @@ import 'conversations.dart';
 import 'friends_new.dart';
 import 'org_screen.dart';
 import 'profile.dart';
+import 'share_target.dart';
 import 'workbench.dart';
 
 /// 首页外壳：把「消息 / 工作台 / 通讯录 / 我」摆到一级导航上。
@@ -154,12 +156,34 @@ class _HomeShellState extends State<HomeShell> {
     // 拿不到就保持上次缓存的值 —— 导航不会因为一次网络失败而乱跳。
     Workspace.refresh();
     Workspace.mode.addListener(_onModeChanged);
+    // 系统分享进来的东西（相册 → 分享 → 小智IM）。
+    // 消费点放在首页而不是 main()：分享完全可能比登录先到 —— 那时还没首页，
+    // 直接弹页面会盖在登录页上；挂在这儿，用户登录进首页后自然被接手。
+    ShareIntake.pending.addListener(_onShare);
+    _onShare(); // 冷启动时分享可能已经躺在 pending 里了
   }
 
   @override
   void dispose() {
     Workspace.mode.removeListener(_onModeChanged);
+    ShareIntake.pending.removeListener(_onShare);
     super.dispose();
+  }
+
+  /// 有分享进来 → 弹出「发送到小智」。
+  void _onShare() {
+    final p = ShareIntake.pending.value;
+    if (p == null || !mounted) return;
+    // 先消费再推页面：顺序反了的话，从这个页面返回时 pending 还在，会再弹一次
+    ShareIntake.consume();
+    // initState 期间还在构建阶段，直接 push 会踩 "setState() during build"，
+    // 等这一帧画完再推
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => ShareTargetScreen(payload: p)),
+      );
+    });
   }
 
   void _onModeChanged() {

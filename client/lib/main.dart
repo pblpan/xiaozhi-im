@@ -6,6 +6,7 @@ import 'core/call_service.dart';
 import 'core/remote_config.dart';
 import 'screens/remote.dart';
 import 'core/settings.dart';
+import 'core/share_intake.dart';
 import 'core/sound_service.dart';
 import 'core/storage.dart';
 import 'core/theme.dart';
@@ -45,6 +46,10 @@ void main() async {
   // 来电要把缩在托盘里的窗口拉回来，所以先把导航 key 交出去。
   TrayService.instance.attachNavigator(appNavigatorKey);
   await TrayService.instance.init();
+  // 系统「分享到小智」的入口（仅 Android）。**故意不 await**：分享进来的图可能几十 MB，
+  // 拷贝耗时，不该卡住启动；拷完会通过 ShareIntake.pending 通知首页去接手。
+  // 桌面端内部直接跳过（Platform.isAndroid 为 false），不会去调不存在的原生通道。
+  ShareIntake.init();
   runApp(const MyApp());
 }
 

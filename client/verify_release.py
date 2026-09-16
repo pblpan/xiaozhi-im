@@ -201,6 +201,15 @@ SOUND_ASSETS = [
 # 原生库是否齐三个架构，由 check_apk 单独按条目名判定。
 APK_MARKS = list(WIN_MARKS)
 
+# v0.13.5：系统「分享到小智」是**只在 Android 存在**的能力，这几个记号不能并进
+# WIN_MARKS —— Windows 包里永远找不到，会让每次校验都假报缺失。
+ANDROID_ONLY_MARKS = [
+    'xiaozhi/share',        # Dart ↔ 原生的通道名（两端逐字一致，写错=分享进来毫无反应）
+    'share_target.dart',    # 「发送到小智」页面
+    'ShareTargetScreen',    # 该页面类名
+]
+APK_MARKS = list(WIN_MARKS) + ANDROID_ONLY_MARKS
+
 # v0.9.2 起 Windows 走 NSIS 安装程序；下面这些也必须老实躺在安装包里，
 # 少一个都起不来（其中托盘图标缺失的表现是：运行时托盘区一片空白）。
 WIN_REQUIRED = [
@@ -275,6 +284,25 @@ class SevenZipDir(object):
         return Info()
 
 
+# 分享接收有一半在**原生侧**：清单里声明"能接收"，Kotlin 里把 content:// 读成文件。
+# 这两处都不在 libapp.so 里 —— 只验 Dart 侧会得出"分享功能完好"的错误结论。
+APK_NATIVE_MUST = {
+    'AndroidManifest.xml': [
+        'android.intent.action.SEND',           # 单个分享（相册发一张图）
+        'android.intent.action.SEND_MULTIPLE',  # 多选分享（一次发三张）
+    ],
+    'classes.dex': [
+        # ⚠️ 判据只能挑"只可能来自本次改动"的记号。踩过：用 onNewIntent 当判据，
+        # 旧包照样命中 4 次 —— 那是 FlutterActivity 自带的方法名，跟分享接收无关，
+        # 这条判据根本拦不住回退。字符串常量才可靠（也不会被混淆掉）。
+        'xiaozhi/share',      # 通道名（与 Dart 侧逐字一致才通）
+        'share_in',           # content:// 的落地目录
+        'getInitialShare',    # 冷启动入口：App 被分享拉起来，Dart 主动来问
+        'onShare',            # 热启动入口：App 已在跑，原生主动推过去
+    ],
+}
+
+
 def scan_bytes(data, marks):
     """返回 {记号: 命中次数}。
 
@@ -289,6 +317,34 @@ def scan_bytes(data, marks):
             n = data.count(m.encode('utf-16-le'))
         out[m] = n
     return out
+
+
+def check_apk_native(zf, names):
+    """校验 APK 的原生侧（二进制清单 + dex）。
+
+    AndroidManifest.xml 进包后是二进制 AXML：字符串以 UTF-16LE 存放，所以按字节
+    找、两种编码都试。dex 数量不定（classes.dex / classes2.dex …），全部拼起来再找。
+    """
+    print('\n-- 系统分享接收（原生侧，libapp.so 之外）--')
+    ok = True
+    axml = [n for n in names if n == 'AndroidManifest.xml']
+    dex = [n for n in names if n.endswith('.dex')]
+    print('  条目: AndroidManifest.xml x%d, dex x%d -> %s'
+          % (len(axml), len(dex), dex))
+    if not axml:
+        print('  没找到 AndroidManifest.xml ✗')
+        return False
+    for entry, marks in APK_NATIVE_MUST.items():
+        pool = zf.read(axml[0]) if entry == 'AndroidManifest.xml' else b''.join(
+            zf.read(d) for d in dex)
+        for m in marks:
+            n = pool.count(m.encode('utf-8')) or pool.count(m.encode('utf-16-le'))
+            if n:
+                print('  %-34s 命中 x%d ✓' % (m, n))
+            else:
+                print('  %-34s 未命中 ✗' % m)
+                ok = False
+    return ok
 
 
 def check_gone(data):
@@ -421,9 +477,10 @@ def check_apk(zf, marks):
         print('  %-28s %s' % (k, '命中 x%d' % v if v else '未命中 ✗'))
     ok_native = len(native) >= 3
     gone_ok = check_gone(data)
+    native_ok = check_apk_native(zf, names)
     snd_ok = check_sounds(zf, names, 'assets/flutter_assets/')
     print('\nWebRTC 原生库三架构: %s' % ('齐全 ✓' if ok_native else '不足 ✗'))
-    all_ok = not bad and ok_native and gone_ok and snd_ok
+    all_ok = not bad and ok_native and gone_ok and native_ok and snd_ok
     print('结论: %s' % ('新代码已编入产物 ✓' if all_ok else '有问题 ✗'))
     return 0 if all_ok else 1
 
@@ -974,13 +1031,26 @@ CLIENT_SRC_MUST = [
     ('lib/screens/attendance_request.dart',
      ['_punchOptionText', 'Text(_punchOptionText(p))', "p['expectTime']"]),
     ('lib/screens/attendance_records.dart', ["it['punchLabel']", "it['time']"]),
+    # v0.13.5：系统「分享到小智」四处缺一不可 ——
+    #   清单不声明 = 分享面板里根本不出现小智（本次问题的根因）
+    #   Kotlin 不收字节流 = 出现了也发不出去（content:// 只有原生读得了）
+    #   Dart 通道/页面 = 收了也没地方去
+    ('android/app/src/main/AndroidManifest.xml',
+     ['android.intent.action.SEND', 'android.intent.action.SEND_MULTIPLE',
+      'android:mimeType="image/*"']),
+    ('android/app/src/main/kotlin/com/example/xiaozhi_im_client/MainActivity.kt',
+     ['onNewIntent', 'getInitialShare', '"xiaozhi/share"', 'contentResolver']),
+    ('lib/core/share_intake.dart',
+     ["'xiaozhi/share'", "'getInitialShare'", "'onShare'"]),
+    ('lib/screens/share_target.dart', ['ShareTargetScreen', 'prepareForUpload']),
+    ('lib/screens/home_shell.dart', ['ShareIntake.pending.addListener']),
 ]
 CLIENT_SRC_GONE = ['午休下班', '午休上班']
 
 
 def check_client_source():
     """直接查客户端源码（不看产物）。返回 True/False。"""
-    print('\n-- 客户端源码口径（选卡按钮带时刻 / 卡名不带时段词）--')
+    print('\n-- 客户端源码口径（卡名与选卡按钮 / 系统分享接收）--')
     ok_all = True
     for rel, marks in CLIENT_SRC_MUST:
         if not os.path.isfile(rel):
