@@ -1,7 +1,7 @@
 name: xiaozhi_im_client
 description: 小智 IM 客户端 (Windows + Android)
 publish_to: 'none'
-version: 0.13.5+37
+version: 0.14.0+38
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -10,6 +10,10 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.0
+  # 包完整性自校验（core/integrity.dart）算 SHA-256 用。
+  # 它本来就是 http 链路里的传递依赖，但**显式声明**：直接 import 的包
+  # 不能靠"别人顺带带进来"，否则哪天上游换实现就会突然编不过。
+  crypto: ^3.0.3
   web_socket_channel: ^3.0.0
   shared_preferences: ^2.2.0
   file_picker: ^12.2.0

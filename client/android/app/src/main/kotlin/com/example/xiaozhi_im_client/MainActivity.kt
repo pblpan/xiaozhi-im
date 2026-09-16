@@ -31,6 +31,17 @@ class MainActivity : FlutterActivity() {
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channel = ch
 
+        // 包完整性自校验：读本 APK 的签名证书指纹，与内置官方指纹比对。
+        // 同步返回 —— 读 PackageManager 是内存操作，不值得为它开线程。
+        // 通道名与 Dart 侧 core/integrity.dart 的 'xiaozhi/guard' 必须逐字一致。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GUARD_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "checkIntegrity" -> result.success(AppIntegrity.check(applicationContext))
+                    else -> result.notImplemented()
+                }
+            }
+
         ch.setMethodCallHandler { call, result ->
             when (call.method) {
                 // 冷启动那一份。拷贝几十 MB 的图会卡住主线程，所以丢后台线程做；
@@ -174,5 +185,8 @@ class MainActivity : FlutterActivity() {
     companion object {
         /// 与 Dart 侧 ShareIntake 的通道名必须逐字一致（写错 = 分享进来毫无反应）
         private const val CHANNEL = "xiaozhi/share"
+
+        /// 与 Dart 侧 core/integrity.dart 的通道名必须逐字一致（写错 = 校验静默失效）
+        private const val GUARD_CHANNEL = "xiaozhi/guard"
     }
 }

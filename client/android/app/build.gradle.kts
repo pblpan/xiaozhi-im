@@ -67,6 +67,23 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+
+            // ---- 客户端加固 A：R8 代码混淆 + 资源压缩（2026-09-16，任务 #127）----
+            // 目的：把反编译出来的东西从"接近源码"变成"读不懂"。
+            // 这不是防破解的银弹（真正的硬判据是 AppIntegrity 的签名校验），
+            // 但能让"顺手改两行去掉校验"这件事的成本高一个量级。
+            //
+            // ⚠️ 出问题时的回退开关：把下面两行改回 false 即可（不用动别处）。
+            //    混淆的问题特征很明确 —— **编译期全绿，跑起来某个功能才崩**，
+            //    所以打开后必须真机过一遍：选文件 / 录音 / 语音 / 音视频通话 / 打开附件。
+            isMinifyEnabled = true
+            // 资源压缩默认 safe 模式（保守：可能被引用的都留），
+            // 比默认更激进会把插件里动态引用的资源删掉。
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

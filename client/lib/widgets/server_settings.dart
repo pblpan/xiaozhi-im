@@ -185,7 +185,8 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                 const SizedBox(height: 18),
                 _AddrField(
                   label: '内网地址',
-                  hint: '192.168.31.44:3602',
+                  // 通用示例，不是任何真实服务器（加固后包里不含生产地址）
+                  hint: '192.168.1.10:3602',
                   ctrl: _lanCtrl,
                   icon: Icons.wifi_rounded,
                   status: _lanStatus,
@@ -193,7 +194,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                 const SizedBox(height: 14),
                 _AddrField(
                   label: '外网地址',
-                  hint: 'https://xxxx.hn.takin.cc',
+                  hint: 'https://your-domain.example.com',
                   ctrl: _wanCtrl,
                   icon: Icons.public_rounded,
                   status: _wanStatus,
@@ -282,7 +283,11 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                   children: [
                     Expanded(
                       child: Text(
-                        '当前使用：${Config.baseUrl}',
+                        // 加固后"没有地址"是合法状态（新装没扫到服务器），
+                        // 直接显示"当前使用："后面一片空白会让人以为界面坏了
+                        Config.baseUrl.isEmpty
+                            ? '未配置服务器（可扫描或手填）'
+                            : '当前使用：${Config.baseUrl}',
                         style: const TextStyle(
                             fontSize: 11.5,
                             color: AppColors.textWeak,
@@ -290,12 +295,21 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    TextButton(
-                      onPressed: () {
-                        _lanCtrl.text = Config.builtInBaseUrl;
-                      },
-                      child: const Text('内网填内置', style: TextStyle(fontSize: 12)),
-                    ),
+                    // 「填内置」只在**定制包**（构建时 --dart-define=BASE_URL 注入过）
+                    // 才有意义；通用包内置值是空的，按钮就是死的 → 换成清空。
+                    if (Config.builtInBaseUrl.isNotEmpty)
+                      TextButton(
+                        onPressed: () {
+                          _lanCtrl.text = Config.builtInBaseUrl;
+                        },
+                        child: const Text('内网填内置',
+                            style: TextStyle(fontSize: 12)),
+                      )
+                    else
+                      TextButton(
+                        onPressed: () => setState(() => _lanCtrl.clear()),
+                        child: const Text('清空', style: TextStyle(fontSize: 12)),
+                      ),
                   ],
                 ),
                 const SizedBox(height: 4),

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api.dart';
 import 'core/call_service.dart';
+import 'core/config.dart';
+import 'core/integrity.dart';
 import 'core/remote_config.dart';
 import 'screens/remote.dart';
 import 'core/settings.dart';
@@ -14,6 +16,7 @@ import 'core/tray_service.dart';
 import 'core/workspace.dart';
 import 'screens/home_shell.dart';
 import 'screens/login.dart';
+import 'screens/setup_server.dart';
 import 'widgets/avatar.dart';
 
 /// 全局导航 key：来电时用户可能在任意页面（甚至聊天页里），
@@ -30,6 +33,11 @@ void main() async {
       systemNavigationBarIconBrightness: Brightness.light,
     ));
   }
+  // 包完整性自校验：被改过/被重签名的安装包，直接不给进入。
+  // ⚠️ 位置讲究：必须在 ensureInitialized() **之后**（MethodChannel 的前置条件，
+  //    跟 ShareIntake 那次一启动就崩是同一个坑），又在任何网络请求之前。
+  await Integrity.check();
+
   await Settings.load(); // 载入用户自定义的服务器地址
   // 好友模式（普通/工作）+ 公司名：主界面靠它决定导航形态（工作模式才有
   // 工作台/组织通讯录的一级入口）。先吃本地缓存保证离线也能定形态，
@@ -94,8 +102,76 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         // 包 login 或 home 都做不到 —— 一旦 push 了新路由就盖不住了。
         builder: (ctx, child) =>
             RemoteAssistWatcher(child: child ?? const SizedBox.shrink()),
-        home: const AuthGate(),
+        // 完整性校验没过就**不进入** App：挡在最外层，连登录页都不给。
+        // 这是唯一一个"不给绕过"的界面 —— 签名对不上意味着这个包不可能是我们出的。
+        home: Integrity.blocked != null
+            ? IntegrityBlockedScreen(reason: Integrity.blocked!)
+            : const AuthGate(),
         debugShowCheckedModeBanner: false,
+      );
+}
+
+/// 被篡改时的阻断页（无跳过入口）。
+class IntegrityBlockedScreen extends StatelessWidget {
+  final String reason;
+  const IntegrityBlockedScreen({super.key, required this.reason});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: AppColors.bg,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.gpp_bad_rounded,
+                      size: 56, color: AppColors.danger),
+                  const SizedBox(height: 18),
+                  Text(
+                    reason,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.text,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    '请从官方安装包重新安装后再使用。\n'
+                    '（出现这个提示说明程序文件被改动过，出于安全考虑已停止运行）',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 13, height: 1.7, color: AppColors.textSub),
+                  ),
+                  if (Integrity.detail != null) ...[
+                    const SizedBox(height: 18),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(AppRadii.sm),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: Text(
+                        Integrity.detail!,
+                        style: const TextStyle(
+                            fontSize: 11,
+                            height: 1.6,
+                            fontFamily: 'monospace',
+                            color: AppColors.textWeak),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
       );
 }
 
@@ -137,6 +213,11 @@ class _AuthGateState extends State<AuthGate> {
           ),
         ),
       );
+    }
+    // 还不知道该连哪台服务器（加固后包里不再内置地址；局域网也没扫到）
+    // → 引导用户去发现/手填，别把他丢在登录页反复看"网络错误"。
+    if (!Config.configured) {
+      return SetupServerScreen(onConfigured: _check);
     }
     return _has! ? const HomeShell() : const LoginScreen();
   }

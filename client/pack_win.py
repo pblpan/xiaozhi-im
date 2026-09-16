@@ -21,6 +21,8 @@ electron-builder 配置里没写 perMachine（默认 false），装出来就是
 NSIS 3.x（V2 用的也是它）：winget install -e --id NSIS.NSIS
 """
 import argparse
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -41,6 +43,50 @@ def read_version():
     if not m:
         raise SystemExit('pubspec.yaml 里读不到 version')
     return m.group(1).split('+')[0]
+
+
+def write_integrity_stamp():
+    """在 Release 目录写 integrity.dat —— 客户端启动时用它核对程序文件没被改过。
+
+    【为什么是这两个文件】
+      小智IM.exe          → 外壳（窗口/插件加载）；被换成别的程序就是最粗暴的替换
+      data/app.so         → **真正的 Dart AOT 代码**都在这里。只校验 exe 是没用的：
+                            改代码的人动的是 app.so，exe 一个字节都不碰。
+
+    【强度要说清楚，别当成 Android 那套】
+      这是**篡改检测（减速带）**，不是密码学保证：清单和程序文件放在一起，
+      有心人把校验点一起改掉就过了。Windows 上没有代码签名证书就不存在
+      等价于 Android「签名指纹」的硬判据。它的价值是拦住"换个 exe、
+      改个 app.so"这类省事的做法，并留下明确痕迹。
+
+    【为什么必须由打包脚本生成】哈希是构建产物的一部分，每次构建都会变；
+    写死在代码里等于每次发版都要手工改两个哈希（必漏）。
+    """
+    targets = ['xiaozhi_im_client.exe', 'data/app.so']
+    files = {}
+    for rel in targets:
+        p = os.path.join(SRC, rel.replace('/', os.sep))
+        if not os.path.isfile(p):
+            raise SystemExit('完整性清单要用的文件不存在：%s\n'
+                             '（先跑 flutter build windows --release）' % p)
+        h = hashlib.sha256()
+        with open(p, 'rb') as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                h.update(chunk)
+        files[rel] = h.hexdigest()
+
+    stamp = {
+        'algo': 'sha256',
+        'build': read_version(),
+        'files': files,
+    }
+    out = os.path.join(SRC, 'integrity.dat')
+    # 换行统一成 \n：客户端只做 jsonDecode，不依赖行尾
+    with open(out, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(stamp, f, ensure_ascii=False, indent=2)
+    for k, v in files.items():
+        print('  完整性清单 %-20s %s' % (k, v[:16] + '…'))
+    return out
 
 
 def find_makensis():
@@ -308,6 +354,11 @@ def main():
     out_path = os.path.join(tmp_root, out_name)
     if os.path.exists(out_path):
         os.remove(out_path)
+
+    # ⚠️ 顺序不能反：NSIS 脚本里是 `File /r __SRC__\*.*` —— 把 Release 目录里
+    #    **当下存在的一切**打进包。必须先把清单写进去，它才会被一起打包。
+    print('生成完整性清单（客户端启动时用它核对程序有没有被改过）…')
+    write_integrity_stamp()
 
     script = build_nsi(version, out_path, os.path.join(tmp_root, 'installer.nsi'),
                        per_user=per_user)

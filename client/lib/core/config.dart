@@ -14,17 +14,30 @@ import 'dart:io';
 class Config {
   // ============================================================
   // 打包内置默认值（--dart-define=BASE_URL=... 可覆盖）
+  //
+  // 🔴 故意留空 —— 这里**不许**再写任何生产地址（2026-09-16 客户端加固）。
+  //    以前写死了内网 IP 和外网零讯域名，三个问题：
+  //      1) 这是通用产品：客户拿去要连的是**他自己的**服务器，
+  //         写死我们的地址 = 装完连不上，还顺手把服务器地址散播出去；
+  //      2) 换个部署（换 IP / 换域名 / 换客户）就得重新出包；
+  //      3) 地址信息随安装包发给所有人，等于把内部网络结构公开。
+  //    三条替代路径（都已在包内）：
+  //      · 首次启动自动做局域网发现（UDP 广播，见 core/discover.dart）
+  //      · 用户在「服务器设置」里手填
+  //      · 管理员在管理台「客户端配置」下发候选地址（core/remote_config.dart）
+  //    确实需要预置地址的定制包，用 --dart-define=BASE_URL=xxx 在构建时注入，
+  //    不要改回这里的字面量。
   // ============================================================
   static const String builtInBaseUrl = String.fromEnvironment(
     'BASE_URL',
-    defaultValue: 'http://192.168.31.44:3602',
+    defaultValue: '',
   );
 
-  /// 内置外网地址（ZeroNews 域名映射）
-  /// --dart-define=WAN_URL=... 可覆盖；新装 App 开箱即用，不必手动配
+  /// 内置外网地址（ZeroNews 域名映射）——同样留空，理由同上
+  /// --dart-define=WAN_URL=... 可覆盖
   static const String builtInWanUrl = String.fromEnvironment(
     'WAN_URL',
-    defaultValue: 'https://1dcf316343d04ecd93dd0330c2d81a0d.hn.takin.cc',
+    defaultValue: '',
   );
 
   // ============================================================
@@ -60,6 +73,10 @@ class Config {
 
   /// 兼容旧接口：返回当前生效地址
   static String get baseUrl => currentUrl;
+
+  /// 是否已经知道该连哪台服务器。
+  /// 为 false 时上层要引导用户去「服务器设置」（新装 + 局域网没扫到 的唯一态）。
+  static bool get configured => currentUrl.isNotEmpty;
 
   /// 兼容旧接口：返回 WS 地址
   static String get wsUrl =>
@@ -118,7 +135,10 @@ class Config {
     final lan = lanUrl.isNotEmpty ? lanUrl : null;
     final wan = wanUrl.isNotEmpty ? wanUrl : null;
     if (lan == null && wan == null) {
-      currentUrl = builtInBaseUrl;
+      // 一个地址都没有（新装且局域网也没扫到）→ 状态就是"未配置"。
+      // ⚠️ 这里**不做任何 fallback**：宁可让上层显示"去设置服务器"，
+      //    也不要悄悄连一个写死的地址（加固前这里会 fallback 到内置生产 IP）。
+      currentUrl = '';
       return currentUrl;
     }
     if (lan != null && wan == null) {

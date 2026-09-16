@@ -165,7 +165,13 @@ void main() {
     });
 
     test('id 与服务端 apps.js 对齐（改名 = 老客户端丢入口，发布后不可改）', () {
-      expect(kBuiltinAppIds, {'attendance', 'my_requests', 'work_org'});
+      // ⚠️ 这份期望值必须与服务端 server/src/apps.js 的 id 集合**逐字一致**。
+      // 2026-09-16 补上 'att_admin'：它是 v0.13.3 加的管理员专属考勤记录应用，
+      // 客户端 apps.dart 当时就跟着加了，但**这里的期望值漏改** —— 于是这条
+      // 判据从 v0.13.3 起一直红着，没人跑 flutter test 就没人发现。
+      // 一个长期红的判据等于没有判据（和"探针全绿其实没验"是同一类病），
+      // 所以这里顺手补绿，并在两端各留一句注释。
+      expect(kBuiltinAppIds, {'attendance', 'my_requests', 'work_org', 'att_admin'});
     });
 
     test('不认识的 id 返回 null，让调用方跳过而不是崩', () {

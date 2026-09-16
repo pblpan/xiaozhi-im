@@ -161,6 +161,18 @@ WIN_MARKS = [
     # ⚠️ 下面这些**实测搜不到，禁止当判据**（2026-09-14 在 Windows app.so 上探测确认）：
     #   '/api/client/apps' → 由 Config.baseUrl 拼接，完整串不存在（同 v0.8.0/v0.9.0 那批）
     #   资源路径 'assets/...' 类判据见 SOUND_ASSETS —— 那是单独校验的，别混进来。
+    # ---- v0.14.0 客户端加固（2026-09-16，任务 #127）----
+    # 「包里不再内置任何服务器地址」带来的两个新状态，都必须有可查的证据：
+    #   ① 首次使用引导页（新装 + 局域网没扫到 → 不能再让用户对着登录页猜）
+    #   ② 完整性校验（被改过的包拒绝启动）
+    # 下面几条是**2026-09-16 在本机真实产物上探过**才写进来的：
+    #   APK：SetupServerScreen/连接你的服务器/未配置服务器/此安装包不是官方版本 → 全部命中
+    #        （中文串在 libapp.so 里是 UTF-16LE，scan_bytes 两种编码都试，没问题）
+    'SetupServerScreen',        # 首次使用引导页类名
+    'setup_server.dart',        # 该页所在文件（AOT 为栈回溯保留文件名）
+    '连接你的服务器',              # 引导页标题
+    '未配置服务器',                # 服务器设置页里的"未配置"状态文案
+    'Integrity',                # core/integrity.dart：完整性校验入口类
 ]
 
 # 只有 Windows 产物才有的记号。**绝不许混进 APK_MARKS**。
@@ -174,6 +186,10 @@ WIN_ONLY_MARKS = [
     'minimizeToTray',           # 「关闭 ≠ 退出」的主体动作
     'tray_manager.dart',        # 托盘能力所在文件
     'window_manager.dart',      # 拦截 WM_CLOSE 用的库
+    # v0.14.0：完整性清单文件名。它由 pack_win.py 在打包时生成到 Release 目录，
+    # **Android 包里永远不会有** —— 放进 WIN_MARKS 会让每次 APK 校验都假报缺失
+    # （本轮实测踩到：本地 APK 校验因此报了一条 ✗）。
+    'integrity.dat',
 ]
 
 # 必须**不再出现**的记号：功能下线 / 资源被替换。
@@ -187,6 +203,12 @@ GONE_MARKS = [
     #   留在产物里要么是打了旧代码、要么是有人在客户端又硬编码了一份卡名。
     '午休下班',
     '午休上班',
+    # v0.14.0 客户端加固：**包里不许再有任何生产服务器地址**。
+    #   这三个串是 2026-09-16 实测确认的：v0.13.5 的包在 libapp.so 里三个全能搜到，
+    #   加固后的新包三个全部搜不到。写死地址 = ①客户拿到连不上（他要连自己那台）
+    #   ②内部网络结构随安装包外流 ③换 IP/换客户就得重新出包。
+    '192.168.31.44',
+    '.hn.takin.cc',
 ]
 
 # 音频资源条目（必须真的打进包里，否则运行时静默无声）
@@ -299,6 +321,15 @@ APK_NATIVE_MUST = {
         'share_in',           # content:// 的落地目录
         'getInitialShare',    # 冷启动入口：App 被分享拉起来，Dart 主动来问
         'onShare',            # 热启动入口：App 已在跑，原生主动推过去
+        # ---- v0.14.0 完整性自校验（2026-09-16，任务 #127）----
+        # 这几条**实测过**：v0.14.0 的本地包全部命中，v0.13.5 旧包全部未命中
+        # （拿真包跑过一遍反向验证，见 build 记录）。
+        'xiaozhi/guard',      # 校验通道名（与 Dart 侧 core/integrity.dart 逐字一致）
+        'checkIntegrity',     # 原生方法名
+        'AppIntegrity',       # 原生类名（proguard 里显式 keep，混淆不掉）
+        # 期望签名指纹。**只能用小写形式**：Kotlin 常量本身就是小写，
+        # 大写形式在 dex 里实测搜不到（别加大写版，会天天假报缺失）。
+        '64d99000e061259a94c2a54cc408487c9461cf678f7f155f488293534e0ed6d5',
     ],
 }
 
@@ -1044,6 +1075,34 @@ CLIENT_SRC_MUST = [
      ["'xiaozhi/share'", "'getInitialShare'", "'onShare'"]),
     ('lib/screens/share_target.dart', ['ShareTargetScreen', 'prepareForUpload']),
     ('lib/screens/home_shell.dart', ['ShareIntake.pending.addListener']),
+    # ---- v0.14.0 客户端加固（2026-09-16，任务 #127）----
+    #
+    # 这三条都是"编译期看不出来、只有用户拿到包才会炸"的那类纪律：
+    #
+    # ① **包里不许有硬编码服务器地址**。config.dart 里那两个 String.fromEnvironment
+    #    的 defaultValue 必须是空串 —— 只要有人为了"自己方便"把地址填回去，
+    #    这个包就变成了"只连得通我们这台服务器"的包（客户拿来直接废）。
+    ('lib/core/config.dart',
+     ["String.fromEnvironment(\n    'BASE_URL',\n    defaultValue: '',",
+      "String.fromEnvironment(\n    'WAN_URL',\n    defaultValue: '',"]),
+    # ② **两个通道名两端必须逐字一致**：写错不报错，只是功能静默失效。
+    #    分享那次已经吃过一遍（Dart 发消息给没人听的通道）；完整性校验同理 ——
+    #    原生收不到调用就永远返回不了"被篡改"，等于这道防线不存在。
+    ('android/app/src/main/kotlin/com/example/xiaozhi_im_client/MainActivity.kt',
+     ['"xiaozhi/guard"', 'checkIntegrity']),
+    ('lib/core/integrity.dart',
+     ["MethodChannel('xiaozhi/guard')", "'checkIntegrity'", 'expected']),
+    # 原生侧必须真的持有期望指纹（唯一来源），且格式是小写十六进制
+    ('android/app/src/main/kotlin/com/example/xiaozhi_im_client/AppIntegrity.kt',
+     ['EXPECTED_CERT_SHA256',
+      '64d99000e061259a94c2a54cc408487c9461cf678f7f155f488293534e0ed6d5',
+      'GET_SIGNING_CERTIFICATES']),
+    # ③ **混淆开关必须真打开**（release）。有人为了排查问题把它关掉之后忘了开回来，
+    #    产物照样能出、上传照样能装 —— 只有反编译的人会发现这包读起来像源码。
+    ('android/app/build.gradle.kts',
+     ['isMinifyEnabled = true', 'isShrinkResources = true', 'proguard-rules.pro']),
+    # ④ Windows 侧的完整性清单要真的由打包脚本生成（否则客户端那个校验永远"跳过"）
+    ('pack_win.py', ['integrity.dat', 'write_integrity_stamp', 'data/app.so']),
 ]
 CLIENT_SRC_GONE = ['午休下班', '午休上班']
 
