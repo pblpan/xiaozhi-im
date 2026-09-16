@@ -227,7 +227,6 @@
               <div class="card-hdr">
                 <span>
                   授权状态
-                  <span class="hint" style="margin-left:8px">买断 / 年费 / 试用，一眼看清还能用多久</span>
                 </span>
                 <el-button size="small" :loading="lic.loading" @click="loadLicense">刷新</el-button>
               </div>
