@@ -4,7 +4,7 @@
  * 用法: node deploy/probe_im.js
  */
 const LAN = process.env.IM_LAN || 'http://192.168.31.44:3602';
-const ADMIN = { username: process.env.IM_USER || 'admin', password: process.env.IM_PASS || 'admin123' };
+const ADMIN = { username: process.env.IM_USER || 'admin', password: process.env.IM_PASS || '' };
 
 async function api(base, path, opts = {}) {
   const res = await fetch(base + path, {

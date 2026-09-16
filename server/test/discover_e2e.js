@@ -55,7 +55,7 @@ async function startServer() {
       ...process.env,
       PORT: String(PORT),
       DATA_DIR,
-      ADMIN_PASSWORD: 'admin123',
+      ADMIN_PASSWORD: 'TestAdmin_123',
       DISCOVER_PORT: String(DISCOVER_PORT),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -106,7 +106,7 @@ function probe(payloadStr, timeout = 1500) {
   console.log('[discover E2E] 服务端已就绪 ' + BASE + '\n');
 
   // 先设一个公司名，验证应答带出来
-  let r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'admin123' } });
+  let r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'TestAdmin_123' } });
   await api('PUT', '/api/admin/settings', { token: r.body?.token, body: { companyName: '盛京', friendMode: 'work' } });
 
   // ---------------- 一：协议纪律 ----------------

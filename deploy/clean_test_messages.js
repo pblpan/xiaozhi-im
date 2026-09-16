@@ -18,7 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const BASE = process.env.IM_BASE || 'http://192.168.31.44:3602';
-const ADMIN = { username: process.env.IM_USER || 'admin', password: process.env.IM_PASS || 'admin123' };
+const ADMIN = { username: process.env.IM_USER || 'admin', password: process.env.IM_PASS || '' };
 const APPLY = process.argv.includes('--apply');
 const ALL = process.argv.includes('--all');
 const qIdx = process.argv.indexOf('--q');

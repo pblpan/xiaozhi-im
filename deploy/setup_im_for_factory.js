@@ -7,7 +7,7 @@
  * 用法: node deploy/setup_im_for_factory.js
  */
 const LAN = process.env.IM_LAN || 'http://192.168.31.44:3602';
-const ADMIN = { username: process.env.IM_USER || 'admin', password: process.env.IM_PASS || 'admin123' };
+const ADMIN = { username: process.env.IM_USER || 'admin', password: process.env.IM_PASS || '' };
 const GROUP_NAME = process.env.GROUP_NAME || '工厂管理';
 const BOT_NAME = process.env.BOT_NAME || '工厂V2助手';
 const HOOK_NAME = process.env.HOOK_NAME || '工厂V2推送';

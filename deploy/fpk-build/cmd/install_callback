@@ -13,7 +13,21 @@ echo ""
 echo "========================================="
 echo "  小智IM 已启动！"
 echo "  管理后台: http://<飞牛IP>:3602/admin"
-echo "  默认账号: admin / admin123"
-echo "  首次登录后请及时修改密码"
+# 初始密码由 xiaozhi_env 随机生成写进 docker/.env，这里就地读出来告诉用户。
+# 从前这里写死 "admin / admin123"，而本仓库有过一段 Public 历史 ——
+# 等于把管理台口令公开发布，实测可从网络直接登录成功。所以不再写死，
+# 但也不能什么都不说：客户装完不知道该用什么密码登录，只会以为系统坏了。
+ENVDIR="${TRIM_APPDEST:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+ADMINPW=""
+if [ -f "$ENVDIR/docker/.env" ]; then
+  ADMINPW=$(grep -E '^ADMIN_PASSWORD=' "$ENVDIR/docker/.env" | tail -1 | cut -d= -f2-)
+fi
+echo "  管理账号: admin"
+if [ -n "$ADMINPW" ]; then
+  echo "  初始密码: $ADMINPW"
+  echo "  （登录后请到「系统设置」修改；密码同时留在服务器 docker/.env 里备查）"
+else
+  echo "  初始密码: 见服务器 docker/.env 中的 ADMIN_PASSWORD"
+fi
 echo "========================================="
 exit 0

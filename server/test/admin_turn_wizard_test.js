@@ -138,7 +138,7 @@ async function main() {
       DB_PATH: path.join(tmpRoot, 'wiz.db'),
       FILES_DIR: path.join(tmpRoot, 'files'),
       ADMIN_USERNAME: 'admin',
-      ADMIN_PASSWORD: 'admin123',
+      ADMIN_PASSWORD: 'TestAdmin_123',
       CF_TURN_API_BASE: `http://127.0.0.1:${cf.port}/v1/turn/keys`,
       ICE_STUN: 'stun:stun.miwifi.com:3478',
       TURN_URLS: '',
@@ -185,7 +185,7 @@ async function main() {
     }
 
     // 登录取 token
-    const login = await j('POST', '/api/auth/login', { username: 'admin', password: 'admin123' });
+    const login = await j('POST', '/api/auth/login', { username: 'admin', password: 'TestAdmin_123' });
     const token = login.data && (login.data.token || login.data.access_token);
     if (!token) {
       console.log('  \x1b[31m✗\x1b[0m 登录失败：' + JSON.stringify(login));

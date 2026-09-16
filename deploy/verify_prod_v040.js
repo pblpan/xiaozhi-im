@@ -14,7 +14,7 @@ const crypto = require('crypto');
 const LAN = (process.argv[2] || 'http://192.168.31.44:3602').replace(/\/$/, '');
 const WAN = (process.argv[3] || 'https://1dcf316343d04ecd93dd0330c2d81a0d.hn.takin.cc').replace(/\/$/, '');
 const ADMIN_USER = 'admin';
-const ADMIN_PASS = 'admin123';
+const ADMIN_PASS = process.env.IM_PASS || '';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {

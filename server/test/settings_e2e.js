@@ -48,7 +48,7 @@ let serverLog = '';
 
 async function startServer() {
   serverProc = spawn(process.execPath, [path.join(SERVER_DIR, 'src', 'index.js')], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR, ADMIN_PASSWORD: 'admin123' },
+    env: { ...process.env, PORT: String(PORT), DATA_DIR, ADMIN_PASSWORD: 'TestAdmin_123' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   serverProc.stdout.on('data', (d) => { serverLog += d.toString(); });
@@ -77,7 +77,7 @@ function stopServer() {
   console.log('[settings E2E] 服务端已就绪 ' + BASE + '\n');
 
   // ---------------- 管理员登录 ----------------
-  let r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'admin123' } });
+  let r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'TestAdmin_123' } });
   const admin = r.body?.token;
   ok('管理员登录', !!admin, JSON.stringify(r.body));
 
@@ -150,7 +150,7 @@ function stopServer() {
   killServer();
   await sleep(300);
   await startServer();
-  r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'admin123' } });
+  r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'TestAdmin_123' } });
   r = await api('GET', '/api/admin/settings', { token: r.body.token });
   ok('重启后设置不丢', r.status === 200 && r.body.companyName === '盛京' && r.body.friendMode === 'normal',
     JSON.stringify(r.body));

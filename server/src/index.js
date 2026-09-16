@@ -6,6 +6,7 @@ const config = require('./config');
 require('./db'); // 确保表结构与种子初始化
 const { init: initWs } = require('./ws');
 const dispatcher = require('./dispatcher');
+const license = require('./license');
 
 const app = express();
 app.use(cors());
@@ -19,6 +20,14 @@ app.use(express.json({
 // 静态资源：管理后台 + 上传文件
 app.use('/admin', express.static(path.join(__dirname, '..', 'public')));
 app.use('/files', express.static(config.FILES_DIR));
+
+// 授权门禁：必须排在所有业务接口之前。
+// 授权不可用时一律 403，只放行登录、看状态、激活、健康检查与客户端冷启动握手
+// （放行名单见 license.js 的 ALLOW）—— 让管理员能进来看见"为什么用不了"。
+app.use('/api', license.gate);
+
+// 授权状态与激活：免鉴权可看状态，激活需管理员
+app.use('/api/license', require('./routes/license'));
 
 // API 路由
 app.use('/api/auth', require('./routes/auth'));
@@ -62,4 +71,6 @@ server.listen(config.PORT, () => {
   console.log(`[小智IM] 管理后台:    http://localhost:${config.PORT}/admin`);
   console.log(`[小智IM] WebSocket:   ws://localhost:${config.PORT}/ws`);
   console.log(`[小智IM] 开放接口:    http://localhost:${config.PORT}/api/open  /api/hooks/incoming/<token>`);
+  // 打印机器码与剩余天数，并起「授权失效即断开在线连接」的巡检
+  license.init();
 });

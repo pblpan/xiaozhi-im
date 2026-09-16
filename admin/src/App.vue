@@ -29,6 +29,7 @@
         <el-menu-item index="clientconfig">客户端配置</el-menu-item>
         <el-menu-item index="modules">动态模块</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
+        <el-menu-item index="license">授权管理</el-menu-item>
         <el-menu-item index="help">系统帮助</el-menu-item>
       </el-menu>
       <div class="aside-foot">
@@ -41,6 +42,9 @@
       <el-header class="hdr">
         <span>{{ brand }} · 服务端可视化管理</span>
         <el-tag v-if="info.version" type="success" effect="plain" size="small">v{{ info.version }}</el-tag>
+        <!-- 授权状态常驻顶栏：到期前几个月就要看得见，不能等人点进授权页才发现 -->
+        <el-tag v-if="licenseState" :type="licTagType" effect="plain" size="small"
+                style="margin-left:6px;cursor:pointer" @click="tab = 'license'">{{ licHeadline }}</el-tag>
       </el-header>
       <el-main>
         <!-- 仪表盘 -->
@@ -206,6 +210,91 @@
         </div>
 
         <!-- 系统帮助 -->
+        <!-- 授权管理 -->
+        <div v-else-if="tab === 'license'">
+          <!-- 不可用时先讲清「为什么业务停了、怎么办」，再给操作入口。
+               管理员登录进来看到的是满屏加载失败时，至少这里能告诉他根因。 -->
+          <el-alert v-if="licenseState && !licenseState.ok" type="error" show-icon :closable="false" class="dash-alert">
+            <template #title>{{ licenseState.message }}</template>
+            <div class="dash-alert-desc">
+              业务接口现在一律返回 403：员工登录不进来、消息发不出去、考勤打不了卡。登录与查看本页不受影响。
+              把下面的机器码发给管理员换取授权码，粘贴到本页下方点「激活」即可立即恢复，<b>不需要重启服务</b>。
+            </div>
+          </el-alert>
+
+          <el-card shadow="never">
+            <template #header>
+              <div class="card-hdr">
+                <span>
+                  授权状态
+                  <span class="hint" style="margin-left:8px">买断 / 年费 / 试用，一眼看清还能用多久</span>
+                </span>
+                <el-button size="small" :loading="lic.loading" @click="loadLicense">刷新</el-button>
+              </div>
+            </template>
+
+            <div v-if="licenseState" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+              <el-tag :type="licTagType" effect="dark" size="large" style="font-size:15px;padding:0 14px;height:34px;line-height:34px">
+                {{ licHeadline }}
+              </el-tag>
+              <div v-if="licenseState.daysLeft !== null && licenseState.daysLeft !== undefined"
+                   style="display:flex;align-items:baseline;gap:6px">
+                <b style="font-size:30px;line-height:1;color:#10B981">{{ licenseState.daysLeft }}</b>
+                <span class="hint">天后到期</span>
+              </div>
+              <div v-else-if="licenseState.perpetual" style="display:flex;align-items:baseline;gap:6px">
+                <b style="font-size:26px;line-height:1;color:#10B981">永久</b>
+                <span class="hint">无需续费</span>
+              </div>
+            </div>
+
+            <el-descriptions v-if="licenseState" :column="2" border style="margin-top:16px">
+              <el-descriptions-item label="授权类型">{{ licModeText }}</el-descriptions-item>
+              <el-descriptions-item label="到期时间">
+                {{ licenseState.expiresAt ? licTime(licenseState.expiresAt) : '永久有效' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="开始使用">{{ licenseState.installedAt ? licTime(licenseState.installedAt) : '-' }}</el-descriptions-item>
+              <el-descriptions-item label="激活时间">{{ licenseState.activatedAt ? licTime(licenseState.activatedAt) : '未激活' }}</el-descriptions-item>
+              <el-descriptions-item label="本机机器码" :span="2">
+                <span style="font-family:ui-monospace,Consolas,monospace;font-size:15px;letter-spacing:1px;font-weight:600">
+                  {{ licenseState.machineCode }}
+                </span>
+                <el-button type="primary" link style="margin-left:10px" @click="copyMc">复制</el-button>
+                <span class="hint" style="margin-left:8px">出码时把这串发出去</span>
+              </el-descriptions-item>
+            </el-descriptions>
+
+            <!-- 指纹来源必须可见：忘了挂载宿主机标识时，机器码会随容器重建而变，
+                 那是最坏体验（升级一次授权就没了），必须提前警示而不是等出事。 -->
+            <el-alert v-if="licenseState && licenseState.fingerprint && !licenseState.fingerprint.reliable"
+                      type="warning" show-icon :closable="false" style="margin-top:12px">
+              <template #title>机器码可能不稳定，重建容器后有失效风险</template>
+              <div class="dash-alert-desc">{{ licenseState.fingerprint.hint }}</div>
+            </el-alert>
+            <p v-else-if="licenseState" class="hint" style="margin:12px 0 0">
+              机器码来源：{{ licenseState.fingerprint.hint }}
+              <span v-if="licenseState.locationMismatch">（数据目录变更过，仅作提示，不影响授权）</span>
+            </p>
+          </el-card>
+
+          <el-card shadow="never" style="margin-top:16px">
+            <template #header>
+              <div class="card-hdr"><span>填写授权码</span></div>
+            </template>
+            <p class="hint" style="margin:0 0 10px">
+              把上面的机器码发给管理员 → 拿到授权码 → 粘贴到这里 → 点激活。
+              激活即时生效，不用重启服务；换机器后需要重新出码（这是防整套拷贝白嫖的机制）。
+            </p>
+            <el-input v-model="lic.token" type="textarea" :rows="3"
+                      placeholder="粘贴授权码（一长串，形如 eyJ2IjoxLCJ0eXAiOiJkZXZpY2Ui…==.AbCdEf…）" />
+            <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <el-button type="primary" :loading="lic.activating" @click="doActivate">激活</el-button>
+              <el-button v-if="licenseState && licenseState.mode !== 'none'" @click="doDeactivate">解绑本机</el-button>
+              <span class="hint">解绑后回到受限状态，试用期起点不会重置</span>
+            </div>
+          </el-card>
+        </div>
+
         <div v-else-if="tab === 'help'">
           <el-card class="help">
             <template #header>
@@ -3416,6 +3505,129 @@ const metricGroups = computed(() => {
 
 /* 该报警的数字自己跳出来（没异常就不占地方）。
    投递失败是最典型的"不显示就等于没有"：外部系统没收到通知，界面上一片绿。 */
+// ---------------------------------------------------------------- 授权管理
+/**
+ * 授权状态（买断 / 年费订阅 / 45 天试用）。
+ *
+ * 为什么抽成全局状态而不是塞进某个页面：
+ *   1) 侧栏和仪表盘都要显示剩余天数，得有一处权威数据
+ *   2) 授权到期时所有业务接口都 403，需要统一识别并把人带到授权页
+ *
+ * ⚠ 定义位置必须在 dashAlerts 之前：computed 里引用了 licenseState，
+ *   而 computed 有可能在 setup 期就被求值，声明顺序反了会 TDZ 白屏。
+ */
+const licenseState = ref(null);
+const lic = reactive({ token: '', loading: false, activating: false });
+
+const licTagType = computed(() => {
+  const s = licenseState.value;
+  if (!s) return 'info';
+  if (!s.ok) return 'danger';
+  if (s.mode === 'trial') return (s.daysLeft !== null && s.daysLeft <= 7) ? 'warning' : 'info';
+  return 'success';
+});
+
+const licHeadline = computed(() => {
+  const s = licenseState.value;
+  if (!s) return '读取中…';
+  if (!s.ok) {
+    if (s.reason === 'trial_expired') return '试用已结束';
+    if (s.reason === 'expired') return '授权已到期';
+    if (s.reason === 'clock_back') return '系统时间异常，已暂停';
+    if (s.reason === 'bad_token') return '授权码无效';
+    return '授权不可用';
+  }
+  if (s.mode === 'master') return '主密钥授权';
+  if (s.mode === 'device') return s.perpetual ? '已激活 · 永久买断' : '已激活 · 年费订阅';
+  return '试用中（共 ' + s.trialDays + ' 天）';
+});
+
+const licModeText = computed(() => {
+  const s = licenseState.value;
+  if (!s) return '-';
+  if (s.mode === 'trial') return '试用（' + s.trialDays + ' 天全功能）';
+  if (s.mode === 'master') return '主密钥（通用授权，不限机器）';
+  if (s.mode === 'device') return s.perpetual ? '买断授权（绑定本机，永久有效）' : '订阅授权（绑定本机，到期停止）';
+  return '未激活';
+});
+
+function licTime(ms) {
+  if (!ms) return '-';
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+async function loadLicense() {
+  lic.loading = true;
+  try {
+    const { data } = await api.get('/license');
+    licenseState.value = data;
+  } catch (e) {
+    // 这条接口免鉴权、也不受门禁影响，走到这里基本是网络或服务端本身的问题
+    ElMessage.error('读取授权状态失败：' + (e.response?.data?.error || e.message));
+  } finally {
+    lic.loading = false;
+  }
+}
+
+async function doActivate() {
+  const t = lic.token.trim();
+  if (!t) return ElMessage.warning('请先粘贴授权码');
+  lic.activating = true;
+  try {
+    const { data } = await api.post('/license/activate', { token: t });
+    licenseState.value = data.state;
+    lic.token = '';
+    ElMessage.success('激活成功，已立即生效');
+  } catch (e) {
+    const d = e.response?.data || {};
+    ElMessage.error('激活失败：' + (d.error || e.message));
+    // 机器码不匹配时后端会回显本机机器码，顺手把最新状态刷新出来
+    if (d.machineCode) loadLicense();
+  } finally {
+    lic.activating = false;
+  }
+}
+
+async function doDeactivate() {
+  try {
+    await ElMessageBox.confirm(
+      '解绑后本机立即回到受限状态（试用期起点不会重置，不会因此重新获得 45 天）。确定解绑？',
+      '解绑本机授权', { type: 'warning' });
+  } catch { return; }
+  try {
+    const { data } = await api.post('/license/deactivate');
+    licenseState.value = data.state;
+    ElMessage.success('已解绑');
+  } catch (e) {
+    ElMessage.error('解绑失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+function copyMc() {
+  const mc = licenseState.value?.machineCode;
+  if (!mc) return;
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(mc)
+      .then(() => ElMessage.success('机器码已复制：' + mc))
+      .catch(() => ElMessage.warning('复制失败，请手动选中复制'));
+  } else {
+    ElMessage.warning('当前浏览器不支持自动复制，请手动选中复制');
+  }
+}
+
+// 业务接口被门禁拦下时（api.js 收到 403 LICENSE_REQUIRED 会派发）：
+// 把人带到授权页并同步最新状态。这是「怎么突然什么都点不动了」的唯一解释入口。
+window.addEventListener('xz-license-blocked', (ev) => {
+  if (ev.detail?.license) licenseState.value = ev.detail.license;
+  if (tab.value !== 'license') {
+    tab.value = 'license';
+    ElMessage.warning(ev.detail?.error || '授权不可用，已跳转到授权管理');
+  }
+});
+
 const dashAlerts = computed(() => {
   const s = stats.value;
   const list = [];
@@ -3435,6 +3647,16 @@ const dashAlerts = computed(() => {
       desc: '请假 / 补卡 / 外出 / 加班申请还等着处理。补卡审批通过后会自动补写当天的打卡记录，'
         + '不批的话那天就会一直算缺卡。',
       tab: 'attendance', action: '去审批',
+    });
+  }
+  // 授权不可用是「整站不可用」级别的问题，仪表盘必须置顶说明。
+  // 不这样的话，管理员看到的只是各页面零散的「加载失败」，看不出根因在授权。
+  if (licenseState.value && !licenseState.value.ok) {
+    list.unshift({
+      key: 'license', type: 'error',
+      title: licenseState.value.message || '授权不可用',
+      desc: '业务接口现在会返回 403：员工登录不进来、消息发不出去。在「授权管理」里填写授权码即可立即恢复（不用重启）。',
+      tab: 'license', action: '去激活',
     });
   }
   return list;
@@ -3676,6 +3898,9 @@ function rangeLabel(range) {
 }
 
 async function loadAll() {
+  // 授权状态优先取（免鉴权、不受门禁影响）：仪表盘提醒与顶栏标签都靠它。
+  // 不 await：它失败不该拖住正常数据的加载。
+  loadLicense();
   try {
     // 列表数据不再在登录时一次性全量拉（分页后没必要），切到对应页签再按需加载。
     // 但选择器要用的「全部用户」必须早点拿到，否则建群/考勤组会少人。
@@ -3717,6 +3942,7 @@ async function loadTab() {
   else if (tab.value === 'integrations') await loadIntegrations();
   else if (tab.value === 'clientconfig') { await loadCc(); await loadCcApplied(); }
   else if (tab.value === 'modules') { await loadMm(); await loadAppCatalog(); await loadUserOptions(); }
+  else if (tab.value === 'license') await loadLicense();
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
 }
 

@@ -88,7 +88,7 @@ let serverLog = '';
 
 async function startServer() {
   serverProc = spawn(process.execPath, [path.join(SERVER_DIR, 'src', 'index.js')], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR, ADMIN_PASSWORD: 'admin123' },
+    env: { ...process.env, PORT: String(PORT), DATA_DIR, ADMIN_PASSWORD: 'TestAdmin_123' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   serverProc.stdout.on('data', (d) => { serverLog += d.toString(); });

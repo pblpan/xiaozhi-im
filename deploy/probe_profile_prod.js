@@ -13,7 +13,7 @@ const http = require('http');
 
 const BASE = process.env.PROBE_BASE || 'http://192.168.31.44:3602';
 const USER = process.env.PROBE_USER || 'admin';
-const PASS = process.env.PROBE_PASS || 'admin123';
+const PASS = process.env.PROBE_PASS || '';
 
 let pass = 0;
 let fail = 0;

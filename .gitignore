@@ -26,7 +26,7 @@ data/
 *.sqlite
 *.sqlite3
 
-# 飞牛 NAS 连接凭据（绝不入库；本仓库是 Public）
+# 飞牛 NAS 连接凭据（绝不入库。仓库 2026-09-16 已转私有，但仍按公开来防）
 deploy/.fnos.env
 
 # 本机环境快照（如清场前备份的注册表项）—— 只对某台机器有意义，
@@ -47,3 +47,14 @@ admin/vite.config.js.timestamp-*.mjs
 # 验证脚本产出的截图等二进制证据（只对本机那一次运行有意义，不入版本库）
 deploy/_prod_shots/
 deploy/_ui_check/
+
+# 授权注册机（内含签发私钥，等同产品钥匙）—— 绝不能入库。
+# 实体放在工作区之外（桌面「小智 IM/授权注册机」），这里再兜一道，
+# 防止哪天图省事把它拷进项目里跟着提交上去。
+tools/keygen*
+**/keygen.cjs
+**/keygen.exe
+**/签发记录.log
+
+# 授权凭证：每台机器各自生成，含机器码与授权码，属于运行时数据
+license.json

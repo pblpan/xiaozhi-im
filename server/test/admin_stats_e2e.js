@@ -85,7 +85,7 @@ async function startServer() {
       ...process.env,
       PORT: String(PORT),
       DATA_DIR,
-      ADMIN_PASSWORD: 'admin123',
+      ADMIN_PASSWORD: 'TestAdmin_123',
       TZ: 'UTC',                    // 进程时区：UTC（= 飞牛容器）
       ATT_TIMEZONE: TZ_NAME,        // 业务时区：北京时间
     },
@@ -129,7 +129,7 @@ async function main() {
   await startServer();
 
   const login = await api('POST', '/api/auth/login', {
-    body: { username: 'admin', password: 'admin123' },
+    body: { username: 'admin', password: 'TestAdmin_123' },
   });
   ok('管理员登录 200', login.status === 200);
   const token = login.body?.token;

@@ -50,7 +50,7 @@ async function api(base, p, { method = 'GET', token, body } = {}) {
 
     // ---------- 1. 账号 ----------
     console.log('\n=== 1. 临时账号 ===');
-    const lg = await api(BASE_LAN, '/auth/login', { method: 'POST', body: { username: 'admin', password: 'admin123' } });
+    const lg = await api(BASE_LAN, '/auth/login', { method: 'POST', body: { username: 'admin', password: process.env.IM_PASS || '' } });
     adminTok = lg.body?.token;
     ok('admin 登录成功', !!adminTok);
 

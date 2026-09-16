@@ -21,7 +21,7 @@ function assert(cond, msg) { if (!cond) { console.error('❌ FAIL:', msg); proce
   const tA = a.data.token, tB = b.data.token, uidA = a.data.user.id, uidB = b.data.user.id;
 
   // 2. 管理员登录
-  const admin = await j('POST', '/api/auth/login', { body: { username: 'admin', password: 'admin123' } });
+  const admin = await j('POST', '/api/auth/login', { body: { username: 'admin', password: process.env.ADMIN_PASSWORD || '' } });
   assert(admin.status === 200 && admin.data.token, '管理员登录成功');
   const tAdmin = admin.data.token;
 

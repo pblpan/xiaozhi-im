@@ -62,10 +62,10 @@ async function uploadAudio(base, token, name) {
 
     // ---------- 1. 登录 ----------
     console.log('\n=== 1. 鉴权 ===');
-    const lg = await api(BASE_LAN, '/auth/login', { method: 'POST', body: { username: 'admin', password: 'admin123' } });
+    const lg = await api(BASE_LAN, '/auth/login', { method: 'POST', body: { username: 'admin', password: process.env.IM_PASS || '' } });
     adminTok = lg.body?.token;
     ok('admin 登录成功', !!adminTok);
-    const lgWan = await api(BASE_WAN, '/auth/login', { method: 'POST', body: { username: 'admin', password: 'admin123' } });
+    const lgWan = await api(BASE_WAN, '/auth/login', { method: 'POST', body: { username: 'admin', password: process.env.IM_PASS || '' } });
     ok('外网登录成功', lgWan.status === 200 && !!lgWan.body?.token);
 
     // ---------- 2. 建临时用户 ----------

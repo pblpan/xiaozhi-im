@@ -94,7 +94,7 @@ async function main() {
   // 心跳要带有效 token 才测得到：无 token 的连接会被服务端直接 4001 拒掉，
   // 那样只能验证"拒绝生效"，验证不了 pong。
   const USER = process.argv[3] || 'admin';
-  const PASS = process.argv[4] || 'admin123';
+  const PASS = process.argv[4] || '';
   const login = await post('/api/auth/login', { username: USER, password: PASS });
   if (login.status !== 200 || !login.body || !login.body.token) {
     ok(`用 ${USER} 登录拿 token`, false, `status=${login.status} ${login.raw || login.error}`);

@@ -71,7 +71,7 @@ let serverLog = '';
 
 async function startServer() {
   serverProc = spawn(process.execPath, [path.join(SERVER_DIR, 'src', 'index.js')], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR, ADMIN_PASSWORD: 'admin123' },
+    env: { ...process.env, PORT: String(PORT), DATA_DIR, ADMIN_PASSWORD: 'TestAdmin_123' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   serverProc.stdout.on('data', (d) => { serverLog += d.toString(); });
@@ -95,7 +95,7 @@ function stopServer() {
   await startServer();
   console.log('[attendance E2E] 服务端已就绪 ' + BASE + '\n');
 
-  let r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'admin123' } });
+  let r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'TestAdmin_123' } });
   const admin = r.body?.token;
   ok('管理员登录', !!admin, JSON.stringify(r.body));
 

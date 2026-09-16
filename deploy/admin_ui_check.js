@@ -36,7 +36,7 @@ let serverLog = '';
 
 async function startServer() {
   serverProc = spawn(process.execPath, [path.join(SERVER_DIR, 'src', 'index.js')], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR, ADMIN_PASSWORD: 'admin123' },
+    env: { ...process.env, PORT: String(PORT), DATA_DIR, ADMIN_PASSWORD: 'UiCheck_Tmp_9x2' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   serverProc.stdout.on('data', (d) => { serverLog += d.toString(); });
@@ -110,7 +110,7 @@ function seed() {
   const login = await (await fetch(`${API}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+    body: JSON.stringify({ username: 'admin', password: 'UiCheck_Tmp_9x2' }),
   })).json();
   if (!login.token) throw new Error('登录失败: ' + JSON.stringify(login));
 

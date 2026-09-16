@@ -8,7 +8,7 @@ const WebSocket = require(path.join(__dirname, '..', 'server', 'node_modules', '
 
 const BASE = process.argv[2] || 'http://192.168.31.44:3602';
 const USER = process.argv[3] || 'admin';
-const PASS = process.argv[4] || 'admin123';
+const PASS = process.argv[4] || '';
 const WSURL = BASE.replace(/^http/, 'ws') + '/ws';
 
 function post(p, body, token) {

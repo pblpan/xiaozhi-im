@@ -7,14 +7,14 @@
  * 用法：
  *   node demo_integration.js                      # 默认 http://127.0.0.1:3602
  *   node demo_integration.js http://192.168.31.44:3602
- *   BASE=... ADMIN_USER=admin ADMIN_PASS=admin123 node demo_integration.js
+ *   BASE=... ADMIN_USER=admin ADMIN_PASS=<管理台密码> node demo_integration.js
  */
 const http = require('http');
 const crypto = require('crypto');
 
 const BASE = (process.argv[2] || process.env.BASE || 'http://127.0.0.1:3602').replace(/\/$/, '');
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
-const ADMIN_PASS = process.env.ADMIN_PASS || 'admin123';
+const ADMIN_PASS = process.env.ADMIN_PASS || '';
 const RECV_PORT = Number(process.env.RECV_PORT || 3999);
 
 const line = (t = '') => console.log(t);
