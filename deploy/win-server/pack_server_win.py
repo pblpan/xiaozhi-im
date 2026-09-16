@@ -68,6 +68,45 @@ ICON = os.path.join(ROOT, 'client', 'windows', 'runner', 'resources', 'app_icon.
 DATA_DIR_NSIS = r'$LOCALAPPDATA' + '\\' + SHORT_NAME + r'\data'
 INSTALL_DIR_NSIS = r'$LOCALAPPDATA\Programs' + '\\' + SHORT_NAME
 
+# 分发包里**不该出现**的东西：开发者的真实内网地址与域名。
+# 当初真实的泄漏事故就发生在管理台 bundle 里的帮助文案 —— 而这个 exe 会把
+# 整个 server/public（含管理台 bundle）原样带进去，所以必须在打包时拦一道。
+# 这里用 hex 拼：仓库是公开的，直接写整串等于把它们又贴回来一遍。
+BANNED_IN_PKG = [
+    (bytes.fromhex('3139322e3136382e33312e3434'), '开发者真实内网地址'),  # 192.168.31.44
+    (bytes.fromhex('74616b696e2e6363'), '开发者真实域名'),            # takin.cc
+]
+
+# 扫描时跳过的目录：node_modules 是第三方代码，里面有 192.168.x 示例很正常
+SCAN_SKIP_DIRS = ('node_modules', '.git', '__pycache__')
+
+
+def scan_banned(root):
+    """逐字节扫描 staging 目录，返回 [(相对路径, 说明), ...]。
+
+    ⚠️ 不按后缀过滤：当初的泄漏就在 .js bundle 里，但也可能是 .cmd/.txt/.conf。
+       判据全是 ASCII 串，二进制里出现同样算命中。
+    ⚠️ 返回空列表 ≠ 一切正常 —— 调用方要另外确认"确实扫到了文件"，
+       否则扫了个空目录也会显示全绿（verify_fpk.py 里踩过这个假通过）。
+    """
+    hits = []
+    n = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SCAN_SKIP_DIRS]
+        for fn in filenames:
+            p = os.path.join(dirpath, fn)
+            try:
+                with open(p, 'rb') as f:
+                    blob = f.read()
+            except OSError:
+                continue
+            n += 1
+            rel = os.path.relpath(p, root)
+            for pat, why in BANNED_IN_PKG:
+                if pat in blob:
+                    hits.append((rel, '%s（%s）' % (pat.decode(), why)))
+    return hits, n
+
 
 def read_version():
     """版本号唯一来源：server/package.json（服务端自己报的版本就是它）"""
@@ -248,6 +287,22 @@ def main():
     print('NSIS 编译器：%s' % makensis)
 
     stage(version)
+
+    # ---- 出厂前拦一道：分发包不许带开发者的真实地址/域名 ----
+    hits, scanned = scan_banned(STAGE)
+    # 阈值别卡太死（实测正常 60 上下，node_modules 已排除）：只需拦住"扫了个空"，
+    # 卡到临界值反而会在服务端少几个文件时误拦，白白浪费一次排查。
+    if scanned < 30:
+        print('!! 只扫到 %d 个文件，staging 明显不对（正常 60 上下），先别出包' % scanned)
+        return 1
+    if hits:
+        print('!! staging 里发现不该出厂的内容，已中止出包：')
+        for rel, why in hits[:20]:
+            print('   - %s  ← %s' % (rel, why))
+        print('   共 %d 处。改掉源文件（多半是 admin/src 或 docs 里的示例地址）再重打。' % len(hits))
+        return 1
+    print('[1/4] 出厂前地址扫描：%d 个文件，未发现真实地址/域名' % scanned)
+
     os.makedirs(BUILD, exist_ok=True)
     out_name = '%s-Setup-v%s.exe' % (SHORT_NAME, version)
     out_path = os.path.join(BUILD, out_name)

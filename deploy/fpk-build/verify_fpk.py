@@ -32,10 +32,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SERVER = os.path.normpath(os.path.join(HERE, '..', '..', 'server'))
 DEFAULT_FPK = os.path.join(HERE, 'xiaozhi-im.fpk')
 
-# 包内不该出现的东西 —— 分发包不该带开发者的真实内网地址与域名
+# 包内不该出现的东西 —— 分发包不该带开发者的真实内网地址与域名。
+# 这里故意用 hex 拼：本仓库是公开的，直接写整串等于把它们又贴回来一遍。
+# 拼出来的字节串与原来逐字符相同，断言行为不变。
 BANNED_IN_PKG = [
-    (b'192.168.31.44', '开发者真实内网地址'),
-    (b'takin.cc', '开发者真实域名'),
+    (bytes.fromhex('3139322e3136382e33312e3434'), '开发者真实内网地址'),  # 192.168.31.44
+    (bytes.fromhex('74616b696e2e6363'), '开发者真实域名'),            # takin.cc
 ]
 
 FAILS = []
@@ -223,20 +225,36 @@ def main():
 
     # ---- 6. 分发包不该带的东西 ----
     print('\n[6] 不该出现在包里的东西')
-    # 只扫文本类文件，且**按文件打印命中位置** —— 只说"包里有生产地址"没法修，
+    # 扫描范围必须是**整个包**，不能只看 app.tgz 里那几个后缀。踩过两个坑：
+    #   ① 漏扫 fpk 顶层（manifest / cmd/* / config/* / ui/* / wizard/*）
+    #      —— 地址写进 manifest 或装机脚本一样会发出去；
+    #   ② 后缀白名单会跳过 .cmd/.vbs/.txt/.nsi，而安装脚本
+    #      恰恰最容易被写进真实地址。
+    # 所以：全量、逐字节扫。判据都是 ASCII 串，出现在二进制里同样算命中。
+    # 另外命中必须**逐文件报** —— 只说"包里有生产地址"没法修，
     # 得知道是哪个文件带进去的（上一次就是管理台 bundle 里的帮助文案）。
-    scanned = 0
+    scan_targets = []  # (显示名, 原始字节)
+    for mem in tar.getmembers():
+        if not mem.isfile() or mem.name == 'app.tgz':
+            continue  # app.tgz 的内容下面按 inner 逐文件算，避免整包重复计一次
+        f = tar.extractfile(mem)
+        scan_targets.append((mem.name, f.read() if f else b''))
+    for k, v in inner.items():
+        if k.endswith('/') and not v:
+            continue  # 目录占位项
+        scan_targets.append((k, v))
+
+    # 反"空扫"护栏：列表为空时上面每个"不含 XX"都会通过，看着全绿其实没验。
+    check(len(scan_targets) >= 40, '扫描覆盖面够大（不是空扫）',
+          '%d 个文件' % len(scan_targets))
+    # 正控：拿一个**必定存在**的串证明扫描真的读到了内容（而不只是遍历了名字）。
+    check(any(b'xiaozhi' in v for _, v in scan_targets),
+          '扫描自检：能读到已知存在的串（否则说明读文件那步坏了）')
+
     for pat, why in BANNED_IN_PKG:
-        hit_files = []
-        for k, v in inner.items():
-            if not k.endswith(('.js', '.json', '.yaml', '.yml', '.html', '.css', '.md', '.sh', '.conf')):
-                continue
-            if pat in v:
-                hit_files.append(k)
-        scanned = 1
+        hit_files = [k for k, v in scan_targets if pat in v]
         check(not hit_files, '不含 %s（%s）' % (pat.decode(), why),
               '命中：' + ', '.join(hit_files[:5]) if hit_files else '')
-    check(scanned == 1, '（文本文件已扫描）')
 
     print('\n' + '=' * 68)
     print('通过 %d 项，失败 %d 项' % (len(OKS), len(FAILS)))
