@@ -371,7 +371,7 @@
                   <tr><td>好友</td><td>认证附言（附言模板最多 10 条）、<b>好友备注</b>（只自己可见，不改变对方昵称）；对方不在线时发出的申请，他下次上线会收到提醒</td></tr>
                   <tr><td>个人资料</td><td>头像、昵称、个性签名、性别、地区、生日；<b>修改密码</b>在「个人信息 → 账号」</td></tr>
                   <tr><td>音视频通话</td><td>单聊语音 / 视频通话（群内最多 6 人同时通话），含来电界面与断线重连</td></tr>
-                  <tr><td>首次连接</td><td>装好后首次启动会<b>自动扫描局域网找服务器</b>；扫不到可在「服务器设置」手填内网地址，如 <code class="mono">http://192.168.31.44:3602</code></td></tr>
+                  <tr><td>首次连接</td><td>装好后首次启动会<b>自动扫描局域网找服务器</b>；扫不到可在「服务器设置」手填内网地址，如 <code class="mono">http://192.168.1.100:3602</code></td></tr>
                   <tr><td>远程协助</td><td>无人值守被控（Windows 端），需要远程看对方屏幕时用</td></tr>
                 </tbody>
               </table>
@@ -462,7 +462,7 @@
                 <li><b>自动扫描（推荐）</b>：首次启动，或在「服务器设置」里点<b>「扫描内网服务器」</b>。
                   客户端向局域网广播探测，服务器应答后把结果列出来（带公司名，一眼认出自家），点一下即填入。</li>
                 <li><b>手动填写</b>：在「服务器设置 → 内网地址」填 <code class="mono">http://服务器IP:3602</code>，
-                  例如 <code class="mono">http://192.168.31.44:3602</code>。</li>
+                  例如 <code class="mono">http://192.168.1.100:3602</code>。</li>
                 <li><b>服务端下发</b>：连上服务器后客户端会自动拉取服务端配置（公司名、功能开关、公告、升级地址），不需要手工配。</li>
               </ol>
               <p class="help-tip">
@@ -749,7 +749,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     请确认安装的是交付目录里版本号最高的那个 APK。</p>
                 </el-collapse-item>
                 <el-collapse-item title="客户端连不上服务器" name="6">
-                  <p>先在 App 内「服务器设置」确认地址正确（内网一般是 <code class="mono">http://192.168.31.44:3602</code>）。
+                  <p>先在 App 内「服务器设置」确认地址正确（内网一般是 <code class="mono">http://192.168.1.100:3602</code>）。
                     若人在外面，需要走外网访问通道；服务端本身只监听 3602 一个端口。</p>
                 </el-collapse-item>
                 <el-collapse-item title="员工登录后搜不到同事，也加不了好友" name="7">
@@ -1456,7 +1456,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     <template #label><span class="cc-label">服务器地址候选</span></template>
                     <div style="width:100%">
                       <el-input v-model="ccForm.addrText" type="textarea" :rows="3"
-                        placeholder="每行一个，按优先级排序，如：&#10;http://192.168.31.44:3602&#10;https://xxxx.hn.takin.cc" />
+                        placeholder="每行一个，按优先级排序，如：&#10;http://192.168.1.100:3602&#10;https://your-domain.example.com" />
                       <div class="hint">客户端未手动改过地址时按顺序探测；留空 = 用打包内置地址。改动后**不打断**在线连接，下次重连生效。</div>
                     </div>
                   </el-form-item>
