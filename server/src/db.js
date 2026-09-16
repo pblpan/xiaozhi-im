@@ -509,6 +509,47 @@ CREATE INDEX IF NOT EXISTS idx_files_size       ON files (size);
 CREATE INDEX IF NOT EXISTS idx_favorites_message ON favorites (message_id);
 `);
 
+// ---- iOS 推送（APNs）相关表 ----
+// 为什么不把设备令牌塞进 settings 的 JSON：令牌要按"用户 × 设备 × 环境
+// (sandbox/production)"多维组织，而且**单条失效**必须能单独下线
+// （APNs 回 410 只针对那一个令牌）。塞进一个 blob 迟早写坏，且没法查询。
+db.exec(`
+CREATE TABLE IF NOT EXISTS push_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  platform TEXT NOT NULL DEFAULT 'ios',    -- ios | android(预留) | ...
+  token TEXT NOT NULL,                     -- APNs 设备令牌：64 位十六进制
+  env TEXT NOT NULL DEFAULT 'production',  -- production | sandbox，两个环境的令牌不通用
+  topic TEXT,                              -- 推送主题 = App 的 Bundle ID
+  device_name TEXT,
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,       -- 0=令牌已失效（410/BadDeviceToken），不再投递
+  last_ok_at INTEGER,
+  last_error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(token)
+);
+CREATE INDEX IF NOT EXISTS idx_push_devices_user ON push_devices (user_id, active);
+
+CREATE TABLE IF NOT EXISTS push_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  device_id INTEGER,
+  -- 只留尾 8 位：日志要能追到"是哪台设备"，但不该把完整令牌堆在库里
+  token_tail TEXT,
+  ok INTEGER NOT NULL DEFAULT 0,
+  status INTEGER,                          -- APNs 的 :status（200/400/410/...）
+  reason TEXT,                             -- APNs 的 reason（BadDeviceToken / Unregistered ...）
+  title TEXT,
+  body TEXT,
+  apns_id TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_log_created ON push_log (created_at);
+CREATE INDEX IF NOT EXISTS idx_push_log_user ON push_log (user_id, created_at DESC);
+`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

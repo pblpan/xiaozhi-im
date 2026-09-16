@@ -49,9 +49,13 @@ app.use('/api/client', require('./routes/client'));
 app.use('/api/admin/integrations', require('./routes/integrations'));
 // 考勤管理端同理：路径前缀更长，必须排在 /api/admin 前面
 app.use('/api/admin/attendance', require('./routes/attendance').admin);
+// 推送管理端同理（配置 Apple 密钥 / 发测试推送 / 看投递日志）
+app.use('/api/admin/push', require('./routes/push').admin);
 app.use('/api/admin', require('./routes/admin'));
 // 考勤（工作模式下随工作模式启用）：员工端打卡/我的考勤/申请
 app.use('/api/attendance', require('./routes/attendance'));
+// 推送设备登记（iOS）：客户端拿到 APNs 令牌后上报，退出登录时注销
+app.use('/api/push', require('./routes/push'));
 // 对外开放：程序用令牌调用的运行时接口 + 免登录入站 Webhook
 app.use('/api/open', require('./routes/open'));
 app.use('/api/hooks', require('./routes/hooks'));
@@ -65,6 +69,8 @@ initWs(server);
 require('./discover').start();
 // 出站 Webhook 失败重试巡检
 dispatcher.start();
+// 推送：每天清一次老日志；已配置时开机打一行自检结果
+require('./push').start();
 
 server.listen(config.PORT, () => {
   console.log(`[小智IM] 服务端已启动: http://localhost:${config.PORT}`);

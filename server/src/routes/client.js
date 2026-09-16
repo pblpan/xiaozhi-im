@@ -13,6 +13,7 @@ const appmodules = require('../appmodules');
 const appregistry = require('../apps');
 const attendance = require('../attendance');
 const settings = require('../settings');
+const push = require('../push');
 const db = require('../db');
 const pkg = require('../../package.json');
 
@@ -45,6 +46,11 @@ router.get('/bootstrap', (req, res) => {
     // 不含任何用户数据，符合 SPEC §6.1 的免鉴权硬边界。
     ...settings.all(),
     modules: allModules,
+    // iOS 靠推送才能"退到后台还收得到消息"。客户端要知道**这台服务器到底配没配推送**，
+    // 才能决定"要不要请求通知权限"以及设置页里怎么显示 —— 没配就上报令牌，
+    // 用户会一直等一条永远不会来的通知。
+    // 只暴露"开没开 + 主题 + 环境名"，不含密钥（符合 §6.1 免鉴权硬边界）。
+    push: { enabled: push.enabled(), topic: push.info().topic, env: push.info().env },
     ts: Date.now(),
   });
 });

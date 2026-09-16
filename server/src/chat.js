@@ -2,6 +2,7 @@
 const db = require('./db');
 const hub = require('./hub');
 const events = require('./events');
+const push = require('./push');
 
 /** 撤回时限：2 分钟（与主流 IM 一致） */
 const RECALL_WINDOW_MS = 2 * 60 * 1000;
@@ -204,6 +205,86 @@ function mutedUntilOf(conversationId, userId) {
   return m?.muted_until || 0;
 }
 
+/**
+ * 消息内容的"一句话预览"（通知栏正文用）。
+ *
+ * 只在服务端做这一层，是因为**只有服务端知道 kind 是什么**：客户端各语言版本、
+ * 各平台各写一遍，早晚出现"iOS 上图片消息通知成空白"。
+ * 各类型都不带原始内容 —— 通知栏在锁屏上，不该把私聊正文整段摊开给别人看。
+ */
+function previewOf(m) {
+  switch (m.kind) {
+    case 'text': return String(m.content || '').slice(0, 120);
+    case 'image': return '[图片]';
+    case 'audio': return '[语音]';
+    case 'file': return '[文件]' + (m.file_name ? ' ' + m.file_name : '');
+    case 'call': return '[通话]';
+    case 'card': {
+      try {
+        const c = JSON.parse(m.content || '{}');
+        return '[卡片]' + (c.title ? ' ' + c.title : '');
+      } catch { return '[卡片]'; }
+    }
+    default: return '[消息]';
+  }
+}
+
+/** 该用户全部会话的未读数（通知角标用）。一条 COUNT 解决，不逐会话查。 */
+function unreadCount(userId) {
+  const r = db.prepare(`SELECT COUNT(*) AS n FROM messages m
+      JOIN conversation_members cm
+        ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
+      WHERE m.deleted = 0 AND m.id > COALESCE(cm.last_read_id, 0) AND m.sender_id != ?`)
+    .get(userId, userId);
+  return r ? r.n : 0;
+}
+
+/**
+ * 把一条新消息推送到"此刻没连着 WebSocket 的人"的手机上（iOS 专用链路）。
+ *
+ * 三条纪律：
+ *   ① 在线的人**不推** —— 消息已经实时到了，再推就是重复打扰；
+ *   ② 自己发的不推 —— 多端登录时自己的其他端靠 WS 同步，不需要通知；
+ *   ③ 全程 try/catch + 不 await —— 推送是"锦上添花"，**任何情况下都不能
+ *      让发消息这个动作变慢或失败**。APNs 抖动时投递结果只落 push_log。
+ *
+ * 标题/正文都在这里算（而不是在 push.js 里）：会话名、好友备注、消息类型
+ * 都是聊天的产品语义，只有这一层持有。
+ */
+function notifyPush(full) {
+  try {
+    if (!push.enabled()) return;
+    const convId = full.conversation_id;
+    const sender = db.prepare('SELECT id, username, nickname FROM users WHERE id = ?').get(full.sender_id);
+    const senderName = sender ? (sender.nickname || sender.username) : '有人';
+    const isGroup = db.prepare('SELECT type FROM conversations WHERE id = ?').get(convId)?.type === 'group';
+    const members = db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?').all(convId);
+    const preview = previewOf(full);
+
+    for (const m of members) {
+      if (m.user_id === full.sender_id) continue;
+      if (hub.isUserOnline(m.user_id)) continue;
+      // 单聊标题取"接收方视角的会话名"——对方给我起的备注应该出现在我的锁屏上
+      const conv = conversationTitle(convId, m.user_id);
+      const title = conv.title || senderName;
+      push.sendToUser(m.user_id, {
+        title: String(title).slice(0, 64),
+        body: (isGroup ? senderName + '：' : '') + preview,
+        // 同一会话的多条合并成一条，群里刷屏不至于把人手机震没电
+        collapseId: 'conv-' + convId,
+        threadId: 'conv-' + convId,
+        badge: unreadCount(m.user_id),
+        data: {
+          type: 'message',
+          conversationId: convId,
+          messageId: full.id,
+          senderId: full.sender_id,
+        },
+      }).catch(() => { /* 已落 push_log，这里不再上抛 */ });
+    }
+  } catch { /* 推送绝不能影响消息本身 */ }
+}
+
 function sendMessage({ conversationId, senderId, kind, content, fileId, mentions }) {
   const conv = db.prepare('SELECT id FROM conversations WHERE id = ?').get(conversationId);
   if (!conv) throw new Error('conversation not found');
@@ -254,6 +335,8 @@ function sendMessage({ conversationId, senderId, kind, content, fileId, mentions
   const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(res.lastInsertRowid);
   const full = withFileInfo(msg);
   hub.broadcastToConversation(db, conversationId, { type: 'message:new', message: full }, senderId);
+  // 推给不在线的人（iOS 后台收不到 WS，只能靠通知）
+  notifyPush(full);
   // 对外事件：外部系统（工厂V2/OA/脚本）订阅后即可拿到每条新消息
   events.emitMessageCreated(full);
   return full;
@@ -457,6 +540,7 @@ function forwardMessage({ messageId, userId, conversationIds }) {
 
     const full = withFileInfo(db.prepare('SELECT * FROM messages WHERE id = ?').get(res.lastInsertRowid));
     hub.broadcastToConversation(db, cid, { type: 'message:new', message: full }, userId);
+    notifyPush(full);
     events.emitMessageCreated(full);
     done.push({ conversationId: cid, message: full });
   }
@@ -557,5 +641,6 @@ module.exports = {
   addFavorite, removeFavorite, listFavorites,
   normalizeMentions, mutedUntilOf, parseMentions, serializeMentions, mentionLike,
   normalizeCard,
+  previewOf, unreadCount, notifyPush,
   RECALL_WINDOW_MS, KINDS, CARD_COLORS, MAX_TEXT_LEN, MENTION_ALL,
 };
