@@ -68,12 +68,27 @@ APPICON_SIZES = {
     'Icon-App-1024x1024@1x.png': 1024,
 }
 
-# ---- 内网地址白名单（ATS 明文 HTTP 例外用）----
-# ⚠️ ATS 例外**只能按域名/IP 逐个开**，不能写网段通配（iOS 不认 CIDR）。
-# 所以这里就把"可能用到的内网 IP"列全。用户换服务器 IP 时改这一行。
-# 只开白名单、不开 NSAllowsArbitraryLoads —— 全局放开会在 App Store 审核被
-# 要求书面说明理由，而我们确实只需要几个内网地址。
-PLAIN_HTTP_HOSTS = ['192.168.31.44']      # 飞牛 NAS（当前生产地址）
+# ---- 明文 HTTP（ATS）例外策略 ----
+# 🔴 2026-09-16 改：不再逐个列内网 IP，改用 NSAllowsLocalNetworking。
+#
+# 【为什么放弃"列 IP"】
+#   原来这里是 PLAIN_HTTP_HOSTS = ['192.168.31.44'] —— 把生产内网 IP 写进了
+#   工程文件（随包分发）。三个问题：
+#     1) 客户拿去连的是**他自己的**服务器，这个 IP 对他毫无意义；
+#     2) iOS 的 ATS 例外**不认 CIDR/网段**，只能逐个 IP 列 —— 用户换个网段
+#        就得改工程重新上架，实际不可行；
+#     3) 等于把内部网络结构随 App 一起发出去。
+#
+# 【改用 NSAllowsLocalNetworking（iOS 10+）】
+#   它一次性放行"本地网络"这一类目标：私有网段的 IP 字面量、*.local、
+#   以及不带域名后缀的主机名 —— 正好覆盖"内网 http://192.168.x.x:3602"
+#   这个真实场景，而且**不涉及任何具体地址**，任何客户的局域网都能用。
+#
+# ⚠️ 它**不**放行公网 plain http。所以外网地址必须用 https
+#    （我们的 ZeroNews 域名本来就是 https）—— 这一条要写进用户文档。
+# ⚠️ 仍然不开 NSAllowsArbitraryLoads：全局放开会在 App Store 审核时被要求
+#    书面说明理由，而我们确实只需要内网。
+ALLOW_LOCAL_NETWORKING = True  # 关掉它 = 内网 http 全被 ATS 拦死（现象是"连不上服务器"）
 
 # ---- Info.plist 权限声明段 ----
 # 这里生成的内容会插进 ios/Runner/Info.plist。
@@ -85,21 +100,16 @@ PERMISSIONS_MARK_END = '<!-- ===== PERMISSIONS END ===== -->'
 
 def permissions_block(indent='\t'):
     """生成权限声明段（含起止标记，便于幂等替换）。"""
-    hosts = []
-    for h in PLAIN_HTTP_HOSTS:
-        hosts.append(
-            '{i}\t\t<key>{h}</key>\n'
-            '{i}\t\t<dict>\n'
-            '{i}\t\t\t<key>NSExceptionAllowsInsecureHTTPLoads</key>\n'
-            '{i}\t\t\t<true/>\n'
-            '{i}\t\t\t<key>NSIncludesSubdomains</key>\n'
-            '{i}\t\t\t<true/>\n'
-            '{i}\t\t</dict>'.format(i=indent, h=h))
-    host_xml = '\n'.join(hosts)
+    if ALLOW_LOCAL_NETWORKING:
+        ats_extra = (
+            '{i}\t<key>NSAllowsLocalNetworking</key>\n'
+            '{i}\t<true/>\n').format(i=indent)
+    else:
+        ats_extra = ''
 
     return '''{i}{mb}
 {i}<!-- ⚠️ 本段由 client/tool/gen_ios_project.py 生成，手改会被下次重建覆盖。
-{i}     要增删权限请改脚本里的 PERMISSIONS 段 / PLAIN_HTTP_HOSTS。 -->
+{i}     要增删权限请改脚本里的 PERMISSIONS 段 / ALLOW_LOCAL_NETWORKING。 -->
 {i}<!-- 相机：视频通话 / 拍照发送。缺了会直接闪退（不是禁用，是崩） -->
 {i}<key>NSCameraUsageDescription</key>
 {i}<string>用于视频通话，以及拍照后发送给对方</string>
@@ -113,7 +123,6 @@ def permissions_block(indent='\t'):
 {i}<key>NSPhotoLibraryAddUsageDescription</key>
 {i}<string>用于把收到的图片保存到相册</string>
 {i}<!-- ⚠️⚠️ 本地网络：iOS 14 起连局域网设备**必须**声明。
-{i}     我们默认连内网 http://192.168.31.44:3602（飞牛 NAS）。
 {i}     漏了的典型现象：外网域名能连、内网地址连不上，且**不弹任何提示** ——
 {i}     极易被误判成"服务器挂了"，实际是这里少一行。 -->
 {i}<key>NSLocalNetworkUsageDescription</key>
@@ -124,19 +133,17 @@ def permissions_block(indent='\t'):
 {i}\t<string>_http._tcp</string>
 {i}</array>
 {i}<!-- ⚠️ ATS：iOS 默认禁止明文 HTTP。
-{i}     下面**不**全局放开（NSAllowsArbitraryLoads=false），只对指定内网 IP 开例外 ——
-{i}     全局放开会在 App Store 审核时被要求书面说明理由，而我们确实只需要这几个地址。 -->
+{i}     只开 NSAllowsLocalNetworking（私有网段 IP / *.local / 无后缀主机名），
+{i}     **不**开 NSAllowsArbitraryLoads，也**不**逐条列内网 IP —— 后者会把
+{i}     生产地址写进随包分发的工程文件，而且用户换网段就失效（ATS 不认 CIDR）。
+{i}     注意：它不放行公网 plain http，外网地址必须用 https。 -->
 {i}<key>NSAppTransportSecurity</key>
 {i}<dict>
 {i}\t<key>NSAllowsArbitraryLoads</key>
 {i}\t<false/>
-{i}\t<key>NSExceptionDomains</key>
-{i}\t<dict>
-{hosts}
-{i}\t</dict>
-{i}</dict>
+{ats_extra}{i}</dict>
 {i}{me}'''.format(i=indent, mb=PERMISSIONS_MARK_BEGIN, me=PERMISSIONS_MARK_END,
-                   hosts=host_xml)
+                   ats_extra=ats_extra)
 
 
 def patch_info_plist(plist_path):
@@ -167,7 +174,7 @@ def patch_info_plist(plist_path):
 
     with open(plist_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(text)
-    return len(PLAIN_HTTP_HOSTS)
+    return 1 if ALLOW_LOCAL_NETWORKING else 0
 
 
 def read_pubspec_version():
@@ -443,10 +450,15 @@ def main():
     must = ['NSCameraUsageDescription', 'NSMicrophoneUsageDescription',
             'NSPhotoLibraryUsageDescription', 'NSPhotoLibraryAddUsageDescription',
             'NSLocalNetworkUsageDescription', 'NSBonjourServices',
-            'NSAppTransportSecurity']
+            'NSAppTransportSecurity', 'NSAllowsLocalNetworking']
     missing = [k for k in must if '<key>%s</key>' % k not in check]
     if missing:
         raise SystemExit('Info.plist 权限写入不完整，缺：%s' % missing)
+    # 加固后工程文件里**不许**再出现生产地址（2026-09-16）
+    for banned in ('192.168.31.44', 'takin.cc'):
+        if banned in check:
+            raise SystemExit('Info.plist 里残留了生产地址 %s —— '
+                             'iOS 工程不该硬编码任何具体服务器地址' % banned)
     if check.count(PERMISSIONS_MARK_BEGIN) != 1:
         raise SystemExit('Info.plist 权限块标记数量异常（%d 个），可能有重复段'
                          % check.count(PERMISSIONS_MARK_BEGIN))
@@ -464,8 +476,8 @@ def main():
 
     print('已生成 %s' % IOS_DIR.replace('/', os.sep))
     print('  文本文件 %d 个 / 二进制 %d 个 / 图标重绘 %d 张' % (n_text, n_bin, len(made)))
-    print('  权限声明 %d 项已写入 Info.plist（含 %d 个内网明文 HTTP 例外）'
-          % (len(must), n_hosts))
+    print('  权限声明 %d 项已写入 Info.plist（ATS：NSAllowsLocalNetworking=%s，'
+          '未硬编码任何服务器地址）' % (len(must), 'on' if n_hosts else 'off'))
     print('  版本号 MARKETING_VERSION: %s -> %s（%d 处，回读校验 %d 组一致）'
           % (','.join(old_ver) or '(无)', ver, n_mv, n_ok))
     if n_cv:

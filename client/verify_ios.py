@@ -174,25 +174,24 @@ def check_plist():
         chk(isinstance(d.get(k), dict) and d[k], k, '缺失或空字典',
             '在 permissions_block() 里补上')
 
-    # ATS 必须"默认关、按域开例外"。全局放开会被审核质询。
+    # ATS 必须"默认关、只放行本地网络"（2026-09-16 起不再逐条列内网 IP）。
     ats = d.get('NSAppTransportSecurity') or {}
     chk(ats.get('NSAllowsArbitraryLoads') in (False, None),
         'ATS 未全局放开明文',
         'NSAllowsArbitraryLoads 被设为 true —— App Store 审核会要求书面说明理由',
-        '改成 false，把需要的 IP 加进 NSExceptionDomains')
-    doms = ats.get('NSExceptionDomains') or {}
-    chk(bool(doms), 'ATS 有内网例外域',
-        '没例外域则 http:// 内网地址会被 ATS 拦掉，表现为"连不上服务器"',
-        '在 gen_ios_project.py 的 PLAIN_HTTP_HOSTS 里加服务器 IP')
-    if VERBOSE and doms:
-        for h in doms:
-            print('         · 例外域 %s' % h)
-    # 每个例外域必须真的允许明文，只列域名不设开关是不生效的
-    bad_sw = [h for h, v in doms.items()
-              if not (v or {}).get('NSExceptionAllowsInsecureHTTPLoads')]
-    chk(not bad_sw, '例外域均已开启明文许可',
-        '这些域只列了名字没开 NSExceptionAllowsInsecureHTTPLoads：%s' % bad_sw,
-        'permissions_block() 里补上该键')
+        '改成 false，用 NSAllowsLocalNetworking 覆盖内网场景')
+    chk(ats.get('NSAllowsLocalNetworking') is True,
+        'ATS 已开 NSAllowsLocalNetworking',
+        '没开它，内网 http://192.168.x.x:3602 会被 ATS 拦掉，'
+        '表现为"连不上服务器"且不报错',
+        '在 gen_ios_project.py 里把 ALLOW_LOCAL_NETWORKING 设为 True 后重跑生成')
+    # 反过来：不许再用"逐条列 IP"的老写法 —— 那会把生产地址写进随包分发的工程文件
+    chk(not (ats.get('NSExceptionDomains') or {}),
+        'ATS 未逐条硬编码域名/IP',
+        'NSExceptionDomains 里还列着具体地址：%s —— iOS 工程不该知道任何一台'
+        '具体服务器（客户连的是他自己的那台，用户换网段还会直接失效）'
+        % list((ats.get('NSExceptionDomains') or {}).keys()),
+        '删掉 NSExceptionDomains，改用 NSAllowsLocalNetworking')
 
     # 显示名与 Bundle ID
     chk('$(PRODUCT_BUNDLE_IDENTIFIER)' == d.get('CFBundleIdentifier'),
@@ -202,6 +201,33 @@ def check_plist():
     chk(bool(d.get('CFBundleDisplayName')), 'CFBundleDisplayName 已设置',
         '没设则桌面图标名是工程名（xiaozhi_im_client），很难看',
         'gen_ios_project.py 的 DISPLAY_NAME')
+
+
+# ------------------------------------- 3b. 不许硬编码任何生产服务器地址
+# 与 APK 侧判据同源（verify_release.py 也查这两条串）。
+# 客户端加固纪律（2026-09-16）：地址必须来自运行时（局域网发现 / 用户手填 /
+# 管理台下发），工程文件里一个都不能有 —— 否则①客户拿到连不上自己那台
+# ②内部网络结构随安装包外流。
+BANNED_ADDRS = ['192.168.31.44', 'takin.cc']
+
+
+def check_no_hardcoded_addr():
+    print('\n[3b] 工程不含生产服务器地址')
+    hits = []
+    for dirpath, _d, files in os.walk(IOS):
+        for fn in files:
+            if os.path.splitext(fn)[1].lower() not in (
+                    '.swift', '.plist', '.pbxproj', '.xcconfig', '.storyboard',
+                    '.json', '.md', '.h', '.m', '.xcscheme', '.xcworkspacedata'):
+                continue
+            p = os.path.join(dirpath, fn)
+            t = read_text(p)
+            for b in BANNED_ADDRS:
+                if b in t:
+                    hits.append('%s -> %s' % (os.path.relpath(p, IOS), b))
+    chk(not hits, '无硬编码服务器地址',
+        '这些文件里写着生产地址：%s' % '; '.join(hits[:5]),
+        '用 NSAllowsLocalNetworking 覆盖内网场景；地址一律运行时获取')
 
 
 # ------------------------------------------------------------- 4. 版本号纪律
@@ -487,6 +513,7 @@ def main():
     check_skeleton()
     check_no_placeholders()
     check_plist()
+    check_no_hardcoded_addr()
     check_version()
     check_pbxproj_refs()
     check_icons()
