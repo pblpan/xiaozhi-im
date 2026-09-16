@@ -12,7 +12,13 @@ on:
 env:
   CLIENT_DIR: client
   FLUTTER_VERSION: "3.47.2"
-  BASE_URL: ${{ secrets.BASE_URL || 'http://192.168.31.44:3602' }}
+  # ⚠️ 客户端加固后**不再兜底任何生产地址**（2026-09-16，任务 #127）。
+  #    以前这里写着 `|| 'http://192.168.31.44:3602'` —— 等于把内网地址
+  #    随每个安装包发出去，客户拿到手还连不上（他要连的是自己那台服务器）。
+  #    留空时客户端的路径是：局域网自动发现 → 用户手填 → 管理台下发的候选地址。
+  #    确实要预置的内部包：在仓库 secrets 里配 BASE_URL / WAN_URL 即可（不配就是空）。
+  BASE_URL: ${{ secrets.BASE_URL }}
+  WAN_URL: ${{ secrets.WAN_URL }}
 
 jobs:
   build-android:
@@ -71,7 +77,7 @@ jobs:
 
       - name: Build APK (release)
         working-directory: ${{ env.CLIENT_DIR }}
-        run: flutter build apk --release --dart-define=BASE_URL=${{ env.BASE_URL }}
+        run: flutter build apk --release --dart-define=BASE_URL=${{ env.BASE_URL }} --dart-define=WAN_URL=${{ env.WAN_URL }}
 
       - name: Verify APK signing cert (断言签名证书)
         working-directory: ${{ env.CLIENT_DIR }}
@@ -118,7 +124,7 @@ jobs:
 
       - name: Build Windows (release)
         working-directory: ${{ env.CLIENT_DIR }}
-        run: flutter build windows --release --dart-define=BASE_URL=${{ env.BASE_URL }}
+        run: flutter build windows --release --dart-define=BASE_URL=${{ env.BASE_URL }} --dart-define=WAN_URL=${{ env.WAN_URL }}
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
