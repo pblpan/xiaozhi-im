@@ -36,14 +36,17 @@ class MainActivity : FlutterActivity() {
                 // 冷启动那一份。拷贝几十 MB 的图会卡住主线程，所以丢后台线程做；
                 // 但 result 的回复必须回主线程 —— platform channel 不允许跨线程回。
                 "getInitialShare" -> {
-                    val it = intent
-                    if (!isShare(it)) {
+                    // 变量名刻意不叫 it：Thread { } 是无参 lambda，里面写 it 时读到的
+                    // 究竟是"隐式参数"还是外层这个局部变量，全凭作用域规则解释。
+                    // 本机没法编译验证，不值得在这种地方省几个字母。
+                    val share = intent
+                    if (!isShare(share)) {
                         // 正常点图标启动：明确回 null，Dart 才知道"不用弹发送页"。
                         // 这里若不回、只挂起，App 会卡在等回复上。
                         result.success(null)
                     } else {
                         Thread {
-                            val payload = collect(it!!)
+                            val payload = collect(share!!)
                             runOnUiThread { result.success(payload) }
                         }.start()
                     }

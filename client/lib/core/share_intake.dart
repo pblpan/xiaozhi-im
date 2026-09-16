@@ -96,6 +96,13 @@ class ShareIntake {
   /// 待处理的分享（null = 没有）。首页外壳负责消费。
   static final ValueNotifier<SharedPayload?> pending = ValueNotifier(null);
 
+  /// 「分享确实进来了，但一个文件都没读到」的提示。
+  ///
+  /// 必须说一声：对端 App 没给 content:// 的读取授权、或内容已失效时，文件就是
+  /// 落不了地。这时静默什么都不做最糟 —— 用户只会得出"点了小智没反应"的结论，
+  /// 而那正是这次要修的现象。
+  static final ValueNotifier<String?> notice = ValueNotifier(null);
+
   static bool _inited = false;
 
   static Future<void> init() async {
@@ -120,8 +127,12 @@ class ShareIntake {
   }
 
   static void _accept(dynamic raw) {
+    if (raw == null) return; // 正常点图标启动：原生明确回了 null，无事发生
     final p = SharedPayload.from(raw);
-    if (p == null) return;
+    if (p == null) {
+      notice.value = '没读到你分享的内容，换个方式再试一次';
+      return;
+    }
     pending.value = p;
   }
 

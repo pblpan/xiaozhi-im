@@ -160,14 +160,32 @@ class _HomeShellState extends State<HomeShell> {
     // 消费点放在首页而不是 main()：分享完全可能比登录先到 —— 那时还没首页，
     // 直接弹页面会盖在登录页上；挂在这儿，用户登录进首页后自然被接手。
     ShareIntake.pending.addListener(_onShare);
+    ShareIntake.notice.addListener(_onShareNotice);
     _onShare(); // 冷启动时分享可能已经躺在 pending 里了
+    _onShareNotice();
   }
 
   @override
   void dispose() {
     Workspace.mode.removeListener(_onModeChanged);
     ShareIntake.pending.removeListener(_onShare);
+    ShareIntake.notice.removeListener(_onShareNotice);
     super.dispose();
+  }
+
+  /// 分享进来了但没读到内容 → 至少说一句，别让用户以为点了没反应。
+  void _onShareNotice() {
+    final m = ShareIntake.notice.value;
+    if (m == null || !mounted) return;
+    ShareIntake.notice.value = null;
+    // initState 里也会查一次（冷启动时提示可能早于首页诞生），那时还在构建阶段，
+    // 直接弹会踩 "setState() during build"。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(m), duration: const Duration(seconds: 3)),
+      );
+    });
   }
 
   /// 有分享进来 → 弹出「发送到小智」。
