@@ -45,8 +45,8 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
   @override
   void dispose() {
     _note.dispose();
-    // 离开页面时把还没发走的落地文件清掉。不复用 payload.disposeFiles() 是因为
-    // **已经发走的那些在发送时就已经删了**，这里只需要兜住剩下的（失败/未处理）。
+    // 清掉还留在缓存目录的临时副本。已经发走的那些在发送时就删了，这里兜住剩下的
+    // （失败的 / 用户没发的）。不清的话每分享一次就在手机上留一份，攒几次就看得见。
     widget.payload.disposeFiles();
     super.dispose();
   }
@@ -173,21 +173,27 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
   @override
   Widget build(BuildContext context) {
     final conv = _picked;
-    return Scaffold(
-      backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        title: const Text('发送到小智'),
-        backgroundColor: AppColors.bgElevated,
-      ),
-      body: Column(
-        children: [
-          if (_files.isNotEmpty) _attachBar(),
-          _noteField(),
-          if (_error != null) _errorBar(_error!),
-          const Divider(height: 1, color: AppColors.divider),
-          Expanded(child: _convList()),
-          _bottomBar(conv),
-        ],
+    return PopScope(
+      // 发送中不给返回：一返回就走到 dispose，把**正在上传的那份临时文件**也清掉了，
+      // 上传当场失败，而用户以为自己只是"退出了"。也就几秒钟，等它发完更符合预期。
+      // 只挂 canPop —— onPopInvoked 在 Flutter 3.24 前后改过名字，不碰它就没版本风险。
+      canPop: !_sending,
+      child: Scaffold(
+        backgroundColor: AppColors.bg,
+        appBar: AppBar(
+          title: const Text('发送到小智'),
+          backgroundColor: AppColors.bgElevated,
+        ),
+        body: Column(
+          children: [
+            if (_files.isNotEmpty) _attachBar(),
+            _noteField(),
+            if (_error != null) _errorBar(_error!),
+            const Divider(height: 1, color: AppColors.divider),
+            Expanded(child: _convList()),
+            _bottomBar(conv),
+          ],
+        ),
       ),
     );
   }
@@ -211,7 +217,6 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
 
   Widget _fileChip(SharedFile f, int i) {
     return Stack(
-      clipBehavior: Clip.none,
       children: [
         Container(
           width: 110,
@@ -256,8 +261,10 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
         ),
         // 发错了/不想发这张 → 直接删掉，不用返回重来
         Positioned(
-          right: -6,
-          top: -6,
+          // 放在卡的**内部**右上角，不是挂在外沿：横向 ListView 会裁掉超出的部分，
+          // 挂在外面的叉号会被切掉一半（看着像渲染坏了）。
+          right: 2,
+          top: 2,
           child: GestureDetector(
             onTap: _sending
                 ? null
