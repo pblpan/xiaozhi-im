@@ -463,6 +463,9 @@ const ALLOW = [
   '/api/auth/me',
   '/api/auth/password',
   '/api/client/bootstrap',
+  // 首次运行向导：授权未激活（或刚过期）时更要能进门设密码，
+  // 否则"没授权"和"不知道密码"两件事撞在一起，管理员连门都进不去看原因。
+  '/api/setup',
 ];
 
 function isAllowed(url) {

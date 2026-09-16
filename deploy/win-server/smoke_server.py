@@ -137,6 +137,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--install', default=None, help='安装包路径；给了就先静默安装')
     ap.add_argument('--uninstall', action='store_true', help='冒烟结束后卸载')
+    ap.add_argument('--force', action='store_true',
+                    help='允许在"已经装过"的机器上跑（结论会失真，自担其责）')
     args = ap.parse_args()
 
     print('=' * 70)
@@ -147,6 +149,15 @@ def main():
 
     # ---------- 0. 需要的话先静默安装 ----------
     if args.install:
+        # 这台机器上已经装过就别跑了：本脚本验的是「**全新安装**」，里面有断言
+        # 依赖"data\.env 是这次新生成的""日志里有「已创建管理员账号」"。数据目录
+        # 已存在时（本机装过、或上次冒烟留下的）这些必然失败，报出来的错看着像
+        # **安装包坏了**，其实只是机器不干净 —— 比不跑更危险。
+        if os.path.isfile(os.path.join(DATA_DIR, '.env')) and not args.force:
+            print('\n!! 这台机器上已经装过了：%s 存在。' % os.path.join(DATA_DIR, '.env'))
+            print('   本脚本验的是「全新安装」，在这种机器上跑会报出一堆**假失败**。')
+            print('   要么先卸载并清掉数据目录，要么加 --force 自担其责。')
+            return 2
         print('[0] 静默安装 %s' % os.path.basename(args.install))
         r = subprocess.run([args.install, '/S'], capture_output=True, text=True,
                            timeout=300)
@@ -260,7 +271,17 @@ def main():
     # 能正确识别 UTF-8 —— 没有它，客户打开日志是满屏乱码）
     txt = open(log, encoding='utf-8-sig', errors='replace').read() if os.path.isfile(log) else ''
     check(len(txt) > 0, '后台启动的日志确实写进了 data\\logs\\server.log', '%d 字节' % len(txt))
-    check('启动 v' in txt, '日志里有本次启动标记（且中文没乱码 —— 编码统一为 UTF-8）')
+    # 启动标记是 _hidden.cmd 交给 _ascii_stamp.cmd 写的，形如
+    #   ================ 2026-09-16 22:47:45 start v0.17.1 ================
+    # 那行**只能是 ASCII**：_hidden.cmd 是 GBK，它 echo 中文出去就是往 UTF-8 的
+    # 日志里混 GBK 字节，记事本里一片花屏。所以标记词是 `start` 不是「启动」。
+    # （原先这里找的是「启动 v」，永远命中不了 —— 一条不可能通过的断言。）
+    check(re.search(r'start v\d+\.\d+\.\d+', txt) is not None,
+          '日志里有本次启动标记（_ascii_stamp 写的 start vX.Y.Z 行）')
+    # 「中文没乱码」这条单独验：服务端自己打印的中文行必须原样可读。
+    # 只判断"出现过中文"等于没判 —— 乱码后同样是"出现过中文"。
+    check('服务端已启动: http://localhost' in txt,
+          '日志里有服务端自己的中文启动行（中文没乱码 —— 编码统一为 UTF-8）')
     check('\ufffd' not in txt, '日志里没有替换字符（说明没有编码错位）')
     # 服务端首次建库时会打印「已创建管理员账号: admin / <口令>」。
     # 判据要精确到这句 —— 只判断"日志里出现过'管理员'"等于没判（任何管理台相关日志都含它）。

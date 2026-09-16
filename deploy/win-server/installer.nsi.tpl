@@ -219,8 +219,16 @@ Section "小智IM 服务端" SEC_MAIN
     StrCpy $XZ_PASS "(生成失败，请看数据目录里的 .env 文件)"
   xz_pass_ok:
 
-  ; 完成页那一行：客户自己设的就不回显（他知道自己输了什么），
-  ; 随机生成的一定要显示出来 —— 否则他又没得抄了。
+  ; 完成页那一行，分三种情况 —— 关键是**不能报一个可能已经过期的密码**：
+  ;   · 这次没走设密码页（装过，HASENV=1）→ .env 里那串可能早就被客户在管理台
+  ;     改掉了，照报出来等于让他拿着一个登不上的密码去试。只说明"沿用原有密码"
+  ;     并指路去查看，别冒充"初始密码"。
+  ;   · 客户在向导里自己设的 → 不回显（他知道自己输了什么）
+  ;   · 随机生成的 → 一定要显示，否则他又没得抄
+  StrCmp $XZ_HASENV "1" 0 xz_line_fresh
+    StrCpy $XZ_PASS_LINE "沿用原有密码（忘了的话：双击安装目录里的「查看管理员密码.cmd」）"
+    Goto xz_line_done
+  xz_line_fresh:
   StrCmp $XZ_CUSTOM "1" 0 xz_line_random
     StrCpy $XZ_PASS_LINE "密码：你刚才在安装向导里设置的那个"
     Goto xz_line_done

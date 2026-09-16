@@ -1,6 +1,31 @@
 <template>
   <div class="login-wrap" v-if="!token">
-    <el-card class="login-card">
+    <!-- 首次运行：这台服务器还没人给管理台定过密码 → 先请管理员自己设一个。
+         为什么不能只靠安装程序那一页：数据目录在卸载/重装后是**刻意保留**的，
+         它一存在，安装向导就会跳过「设置管理后台密码」那一页；飞牛 fpk 更是
+         压根没有那一页（口令由装机脚本随机生成）。两种情况客户看到的都一样 ——
+         只有一个登录页，却不知道该往里输什么。 -->
+    <el-card class="login-card login-card-wide" v-if="needSetup">
+      <h2 style="text-align:center;margin-bottom:6px">{{ brand }}</h2>
+      <p style="text-align:center;color:#909399;font-size:12.5px;margin:0 0 14px">首次运行 · 初始化</p>
+      <el-alert type="info" show-icon :closable="false" style="margin-bottom:12px"
+        title="请为管理台设置一个登录密码"
+        description="这台服务器还没有人设过管理密码。现在就设一个，以后用 admin 加这个密码登录。" />
+      <el-alert v-if="err" :title="err" type="error" show-icon :closable="false" style="margin-bottom:12px" />
+      <el-input v-model="setupForm.username" disabled />
+      <el-input v-model="setupForm.password" type="password" show-password placeholder="设置密码" style="margin-top:12px" @keyup.enter="doSetup" />
+      <el-input v-model="setupForm.confirm" type="password" show-password placeholder="再输一遍确认" style="margin-top:12px" @keyup.enter="doSetup" />
+      <el-button type="primary" style="width:100%;margin-top:18px" :loading="loading" @click="doSetup">完成初始化并进入管理台</el-button>
+      <p style="margin-top:10px;color:#999;font-size:12px;text-align:center">
+        6~64 位，只能用字母、数字和 . _ - @ ! * + ? 这几种符号 ——
+        这串密码还要写进配置文件，空格和引号会在那里出问题。
+      </p>
+      <p style="margin-top:4px;text-align:center">
+        <a style="font-size:12px;color:#909399;cursor:pointer;text-decoration:none" @click="needSetup = false">我已经知道密码，直接登录</a>
+      </p>
+    </el-card>
+
+    <el-card class="login-card" v-else>
       <h2 style="text-align:center;margin-bottom:6px">{{ brand }}</h2>
       <p style="text-align:center;color:#909399;font-size:12.5px;margin:0 0 16px">服务端可视化管理后台</p>
       <el-alert v-if="err" :title="err" type="error" show-icon :closable="false" style="margin-bottom:12px" />
@@ -9,7 +34,9 @@
       <el-button type="primary" style="width:100%;margin-top:18px" :loading="loading" @click="login">登录</el-button>
       <!-- 不写默认密码：从前这里写着「默认 admin / admin123」，等于在登录页上
            教所有人用弱口令，而那段代码还在公开仓库里待过。 -->
-      <p style="margin-top:10px;color:#999;font-size:12px;text-align:center">首次登录请用部署时设置的管理员密码</p>
+      <p style="margin-top:10px;color:#999;font-size:12px;text-align:center">
+        Windows 版忘记密码：双击安装目录里的「查看管理员密码.cmd」可以查回来
+      </p>
     </el-card>
   </div>
 
@@ -735,9 +762,15 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </ol>
                 </el-collapse-item>
                 <el-collapse-item title="忘记管理员密码了" name="3">
-                  <p>登录后可在「系统设置」页直接改（无需重启服务）。若已经登不进去，用环境变量
-                    <code class="mono">ADMIN_USERNAME</code> / <code class="mono">ADMIN_PASSWORD</code>
-                    重启服务端做引导；用户名不存在时会自动补建这个管理员账号。</p>
+                  <p><b>先看能不能自己查回来</b>：Windows 版双击安装目录里的
+                    <code class="mono">查看管理员密码.cmd</code>，它会读出当前密码
+                    （首次运行向导里设的密码也会同步写进那份配置）。</p>
+                  <p>登录后可在「系统设置」页直接改（无需重启服务）。若已经登不进去、也查不到，
+                    用环境变量 <code class="mono">ADMIN_USERNAME</code> /
+                    <code class="mono">ADMIN_PASSWORD</code> 重启服务端做引导；
+                    用户名不存在时会自动补建这个管理员账号。</p>
+                  <p><b>全新服务器</b>（还从没设过管理密码）打开管理台会自动进「首次运行」向导，
+                    当场设一个就行，不用去翻任何配置文件。</p>
                 </el-collapse-item>
                 <el-collapse-item title="数据怎么备份 / 迁移" name="4">
                   <p>全部数据都在 NAS 的应用目录（<code class="mono">/vol1/@appcenter/xiaozhi-im</code>）下：
@@ -3424,6 +3457,13 @@ const brand = computed(() => (pub.value.companyName ? pub.value.companyName + '�
 const form = ref({ username: '', password: '' });
 const loading = ref(false);
 const err = ref('');
+// 首次运行向导：这台服务器还没人给管理台设过密码时，先显示设置页而不是登录页。
+// 判定由服务端做（server/src/setup.js）—— 界面不自己猜，只照办。
+const needSetup = ref(false);
+const setupForm = ref({ username: 'admin', password: '', confirm: '' });
+// 与安装程序 (init-env.js) 和服务端 (setup.js) 用同一套字符集：
+// 这串密码要写进 data\.env，再被 cmd 的 for /f 读出来，空格/引号/=/# 都会出事。
+const PW_RE = /^[A-Za-z0-9._@!*+?-]{6,64}$/;
 const tab = ref('dashboard');
 const stats = ref({});
 const info = ref({});
@@ -3784,6 +3824,35 @@ const setupSteps = computed(() => {
 const setupDoneCount = computed(() => setupSteps.value.filter((s) => s.done).length);
 const setupDone = computed(() => setupDoneCount.value === setupSteps.value.length);
 const setupPercent = computed(() => Math.round((setupDoneCount.value / setupSteps.value.length) * 100));
+
+/**
+ * 首次运行：设置管理台密码。
+ * 成功即拿服务端返回的 token 直接进管理台 —— 刚设完密码再让人输一遍没有意义。
+ */
+async function doSetup() {
+  err.value = '';
+  const pw = setupForm.value.password;
+  // 本地先挡一道：字符集不对、长度不对，不必往返一趟才知道
+  if (!PW_RE.test(pw)) { err.value = '密码 6~64 位，只能用字母、数字和 . _ - @ ! * + ?'; return; }
+  if (pw !== setupForm.value.confirm) { err.value = '两次输入的密码不一致'; return; }
+  loading.value = true;
+  try {
+    const { data } = await api.post('/setup/init', { password: pw });
+    if (data && data.token) {
+      token.value = data.token;
+      localStorage.setItem('xz_token', data.token);
+      loadAll();
+    } else {
+      err.value = '设置失败';
+    }
+  } catch (e) {
+    err.value = e.response?.data?.error || '设置失败';
+    // 409 = 另一个窗口刚设过了 → 切回登录页，别让人对着一个再也交不上去的表单干瞪眼
+    if (e.response?.status === 409) needSetup.value = false;
+  } finally {
+    loading.value = false;
+  }
+}
 
 async function login() {
   err.value = '';
@@ -5786,6 +5855,15 @@ onMounted(async () => {
   try {
     pub.value = (await api.get('/client/bootstrap')).data || {};
   } catch { /* 服务器没连上就算了，退回默认名 */ }
+  // 没登录才需要问"要不要走向导"；已经登录的人直接从 localStorage 进管理台。
+  // 老服务端没有 /setup/status（会 404）→ 安静地退回登录页，不影响使用。
+  if (!token.value) {
+    try {
+      const { data } = await api.get('/setup/status');
+      needSetup.value = !!data?.needSetup;
+      if (data?.username) setupForm.value.username = data.username;
+    } catch { /* 老版本服务端，照常登录 */ }
+  }
   if (token.value) loadAll();
 });
 </script>
@@ -5794,6 +5872,8 @@ onMounted(async () => {
 body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .login-wrap { height: 100vh; display: flex; align-items: center; justify-content: center; background: #f0f2f5; }
 .login-card { width: 340px; }
+/* 向导那张卡文字多（说明 + 字符集提示 + 两个输入框），340px 里要折四行，太挤 */
+.login-card-wide { width: 400px; }
 .aside { background: #0F2620; display: flex; flex-direction: column; }
 .logo { color: #fff; font-size: 20px; font-weight: 700; text-align: center; padding: 18px 0; }
 .aside-foot { margin-top: auto; padding: 11px 14px; color: #8a8f99; font-size: 12px;

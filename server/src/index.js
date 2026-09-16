@@ -29,6 +29,10 @@ app.use('/api', license.gate);
 // 授权状态与激活：免鉴权可看状态，激活需管理员
 app.use('/api/license', require('./routes/license'));
 
+// 首次运行初始化（管理台设置密码向导）：必须在登录之前就能用，
+// 所以既免鉴权、也在 license 放行名单里（未授权/过期的机器同样要能设密码进门）。
+app.use('/api/setup', require('./routes/setup'));
+
 // API 路由
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
