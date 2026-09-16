@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 call "%~dp0_env.cmd"
 rem 写 HKCU\...\Run：登录 Windows 后自动在后台起服务端（不显示窗口）。
 rem 用 HKCU 而不是 HKLM：用户级写入不需要管理员权限，卸载也好清。

@@ -1,12 +1,11 @@
 @echo off
-chcp 65001 >nul
 call "%~dp0_env.cmd"
 echo.
 echo   ============================================================
 echo     小智IM 服务端 —— 管理账号
 echo   ============================================================
-echo     管理后台（本机）   http://127.0.0.1:3602/admin
-echo     管理后台（局域网） http://%XZ_LANIP%:3602/admin
+echo     管理后台（本机）   http://127.0.0.1:%PORT%/admin
+echo     管理后台（局域网） http://%XZ_LANIP%:%PORT%/admin
 echo.
 echo     管理账号： admin
 echo     初始密码： %ADMIN_PASSWORD%

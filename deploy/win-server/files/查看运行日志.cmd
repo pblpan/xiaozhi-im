@@ -1,5 +1,8 @@
 @echo off
-chcp 65001 >nul
+rem  编码：GBK，全程不调用 chcp（原因见 _env.cmd 顶部说明）。
+rem  日志文件是 UTF-8，直接 type 到 GBK 控制台会花屏，
+rem  所以开一个**独立的新控制台窗口**，在那里切到 UTF-8 再打印 ——
+rem  代码页只影响那个新窗口，不会污染本脚本。
 call "%~dp0_env.cmd"
 set "LOG=%XZ_DATA%\logs\server.log"
 if not exist "%LOG%" (
@@ -9,6 +12,5 @@ if not exist "%LOG%" (
   pause
   exit /b 0
 )
-rem 直接打开日志文件（用记事本）。文件很大时记事本会慢，但这里只是为了
-rem "客户的电脑上不装任何东西也能看日志"，够用。
-start "" notepad "%LOG%"
+start "小智IM 运行日志" cmd /c ""%~dp0_ascii_show_log.cmd" "%LOG%""
+exit /b 0

@@ -35,7 +35,28 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 SHORT_NAME = '小智IM服务端'
-INSTALL_DIR = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', SHORT_NAME)
+def installed_dir():
+    """实际安装目录 —— 先问注册表，问不到再用默认值。
+
+    别写死 %LOCALAPPDATA%\\Programs：NSIS 的 `InstallDirRegKey` 会在重新安装时
+    沿用注册表里上次的 InstallLocation，客户完全可能把服务端装到 D 盘
+    （实测就是这样）。写死的话脚本会去一个空目录里找文件，然后报"缺 N 个文件"，
+    看着像安装失败，其实只是找错了地方。
+    """
+    try:
+        import winreg
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r'Software\Microsoft\Windows\CurrentVersion\Uninstall\XiaozhiIMServer') as k:
+            path, _ = winreg.QueryValueEx(k, 'InstallLocation')
+            if path and os.path.isdir(path):
+                return path
+    except OSError:
+        pass
+    return os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', SHORT_NAME)
+
+
+INSTALL_DIR = installed_dir()
 DATA_DIR = os.path.join(os.environ.get('LOCALAPPDATA', ''), SHORT_NAME, 'data')
 PORT = 3602
 

@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 setlocal enabledelayedexpansion
 call "%~dp0_env.cmd"
 
@@ -7,7 +6,7 @@ rem 按"谁在监听 3602"找进程，而不是 taskkill /IM node.exe ——
 rem 客户机上很可能还有别的 node 程序（别的系统、别的脚本），
 rem 按映像名杀会把它们一起干掉，属于不可接受的副作用。
 set "PID="
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3602 " ^| findstr "LISTENING"') do set "PID=%%a"
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%PORT% " ^| findstr "LISTENING"') do set "PID=%%a"
 
 if not defined PID (
   echo.

@@ -1,24 +1,23 @@
 @echo off
-chcp 65001 >nul
-rem ============================================================
-rem  装完第一次点这个：后台起服务端 → 等服务端就绪 → 打开管理后台
-rem  安装程序的「完成」页上那个勾选框就是跑它。
+rem  编码：GBK，全程不调用 chcp（原因见 _env.cmd 顶部说明）。
+rem  安装程序「完成」页上那个勾选框，跑的就是这个脚本。
 rem
 rem  【注意】必须 enabledelayedexpansion：下面的 for 循环里要**边写边读**变量，
 rem     用 %READY% 是解析期展开，循环里写的值外面永远看不到（经典坑）。
-rem ============================================================
 setlocal enabledelayedexpansion
 call "%~dp0_env.cmd"
 
-rem 已在跑就别重复启动（安装前若手动起过）
-netstat -ano | findstr ":3602 " | findstr "LISTENING" >nul 2>&1
-if not "%ERRORLEVEL%"=="0" start "" "%~dp0后台启动服务端.vbs"
+echo.
+echo   正在后台启动服务端，请稍候 ...
+echo   （首次启动要建数据库，慢的话十几秒，请不要关这个窗口）
+echo.
 
-rem 等服务端就绪：最多 20 秒。首次启动要建库，客户机器慢 / 杀软扫描还会更久
-rem —— 不等就直接开浏览器，客户会看到"无法访问"，以为装坏了。
+netstat -ano | findstr ":%PORT% " | findstr "LISTENING" >nul 2>&1
+if not "!ERRORLEVEL!"=="0" start "" "%~dp0后台启动服务端.vbs"
+
 set "READY=0"
-for /l %%i in (1,1,20) do (
-  netstat -ano | findstr ":3602 " | findstr "LISTENING" >nul 2>&1
+for /l %%i in (1,1,30) do (
+  netstat -ano | findstr ":%PORT% " | findstr "LISTENING" >nul 2>&1
   if !ERRORLEVEL! equ 0 (
     set "READY=1"
     goto openit
@@ -27,14 +26,20 @@ for /l %%i in (1,1,20) do (
 )
 
 :openit
-if "!READY!"=="0" (
-  echo.
-  echo   服务端启动较慢或未能启动，先不打开浏览器了。
-  echo   请双击「启动服务端.cmd」看具体输出，或看日志：
-  echo     %XZ_DATA%\logs\server.log
-  echo.
-  pause
-  exit /b 0
-)
-start "" "http://127.0.0.1:3602/admin"
+if "!READY!"=="0" goto xz_failed
+echo   服务端已启动，正在打开管理后台 ...
+start "" "http://127.0.0.1:%PORT%/admin"
+timeout /t 2 /nobreak >nul
+exit /b 0
+
+:xz_failed
+echo.
+echo   [!] 服务端没能启动，先不打开浏览器了。
+echo.
+echo   下一步怎么办：
+echo     1) 双击安装目录里的「启动服务端.cmd」，那个窗口会显示具体报错；
+echo     2) 或双击「查看运行日志.cmd」看日志；
+echo     3) 日志文件： %XZ_DATA%\logs\server.log
+echo.
+pause
 exit /b 0

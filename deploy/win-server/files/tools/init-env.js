@@ -3,29 +3,35 @@
  * 小智IM 服务端（Windows 版）—— 安装时的本地初始化
  *
  * 由安装程序在**装完文件之后**调用一次：
- *     node.exe init-env.js <数据目录>
+ *     node.exe init-env.js <数据目录> [--password-file=<临时文件>]
  *
  * 做三件事：
  *   1) 建数据目录 / 日志目录（服务端自己也建，但这里先建好，安装程序才好往下走）
- *   2) 首次安装生成 data\.env —— 随机的管理台初始口令 + JWT 密钥
+ *   2) 首次安装生成 data\.env —— 管理台口令（**客户自己设的那个**，没设就随机）+ JWT 密钥
  *   3) 探测本机局域网 IP，交给安装程序显示在「安装完成」页
  *
- * ── 为什么非得有这一步 ───────────────────────────────────────────────
- * 服务端在 ADMIN_PASSWORD 缺失时会自己生成一个随机口令，但它把口令**打进日志**。
- * Windows 版是隐藏窗口跑在后台的，客户根本看不到日志 ——
- * 结果就是"装完了不知道拿什么登录"，比给个默认口令更糟。
- * 所以这里显式生成、落到 data\.env，安装完成页直接读出来显示给客户。
+ * ── 为什么让客户自己设密码 ───────────────────────────────────────────
+ * 早期版本一律随机生成 20 位 hex，安装完成页显示出来。
+ * 实际用下来：客户根本不会去抄那串东西，装完就卡在登录页。
+ * 所以现在安装向导里有一页让客户自己设 —— 这是他一定会记住的密码。
+ * 留空不填才退回随机生成（并且完成页会把随机值显示出来）。
+ *
+ * ── 为什么密码走临时文件而不是命令行参数 ──────────────────────────────
+ * 客户可能输入 $ " 空格 等字符，直接拼进 nsExec 的命令行会被 NSIS / cmd
+ * 二次解析，轻则密码不对，重则命令跑飞。写文件读文件没这个问题。
  *
  * ── 幂等 ───────────────────────────────────────────────────────────
  * data\.env 已存在（重装 / 升级 / 修复安装）就**一个字都不改** ——
  * 客户可能已经改过管理台密码，重装把密码冲掉会让人在门口进不去。
+ * 也就是说：只有全新安装时，客户设的密码才会生效。
  *
  * 输出（供安装程序用 ExecToStack 抓，一行一个 KEY=VALUE）：
  *     XIAOZHI_ENV_FILE=...
  *     XIAOZHI_DATA_DIR=...
  *     XIAOZHI_ADMIN_PASSWORD=...
  *     XIAOZHI_LAN_IP=192.168.x.x
- *     XIAOZHI_FRESH=1|0        （1=这次新生成的密码，0=沿用旧的）
+ *     XIAOZHI_FRESH=1|0        （1=这次新建的密码，0=沿用旧的）
+ *     XIAOZHI_CUSTOM=1|0       （1=用的是客户自己设的密码，0=程序随机生成）
  */
 'use strict';
 
@@ -39,6 +45,33 @@ const HERE = __dirname;
 /** 管理台初始口令：20 位 hex（80 bit 熵），人能手抄，也扛得住在线爆破 */
 function genPassword() {
   return crypto.randomBytes(10).toString('hex');
+}
+
+/**
+ * 客户自己设的密码要走 .env + cmd 的 `for /f` 这一整条链路，字符集必须克制：
+ *   #       → .env 里被当注释行，整行作废（服务端读不到密码）
+ *   =       → key=value 的分隔符，值会被截断
+ *   % ^ & | < > "  → cmd 的元字符，`for /f` 读进来时会被二次解析
+ *   空白     → .env 里前后空格会被 trim 掉，客户以为设了其实不是那个
+ * 允许的这几个符号够用了：. _ - @ ! * + ?
+ */
+const CUSTOM_PW_RE = /^[A-Za-z0-9._@!*+?-]{6,64}$/;
+
+function readCustomPassword() {
+  const arg = process.argv.find((a) => a.startsWith('--password-file='));
+  if (!arg) return { pw: '', ok: true };
+  const file = arg.slice('--password-file='.length);
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (_) {
+    // 读不到就当客户没设 —— 退回随机生成，安装照样能完成
+    return { pw: '', ok: true };
+  }
+  // NSIS 的 FileWrite 不带行尾；去掉可能出现的 BOM / CR / LF / 首尾空白
+  const pw = raw.replace(/^\uFEFF/, '').replace(/[\r\n]+$/g, '').trim();
+  if (!pw) return { pw: '', ok: true };
+  return { pw, ok: CUSTOM_PW_RE.test(pw) };
 }
 
 /** JWT 密钥用 base64url：不含 + / 和易看错的符号 */
@@ -101,9 +134,18 @@ function main() {
   let pass = old.ADMIN_PASSWORD || '';
   let secret = old.JWT_SECRET || '';
   let fresh = 0;
+  let custom = 0;
 
   if (!pass) {
-    pass = genPassword();
+    // 全新安装：优先用客户在安装向导里自己填的那个 —— 他记得住。
+    // （.env 已存在的重装场景走不进这里：客户的密码不能被重装冲掉。）
+    const want = readCustomPassword();
+    if (want.pw && want.ok) {
+      pass = want.pw;
+      custom = 1;
+    } else {
+      pass = genPassword();
+    }
     fresh = 1;
   }
   if (!secret) {
@@ -141,6 +183,7 @@ function main() {
       path.join(dataDir, '.install-result.ini'),
       '[install]\r\n' +
       'adminPassword=' + pass + '\r\n' +
+      'passwordIsCustom=' + custom + '\r\n' +
       'lanIp=' + ip + '\r\n' +
       'dataDir=' + dataDir + '\r\n' +
       'envFile=' + envFile + '\r\n' +
@@ -155,6 +198,7 @@ function main() {
     'XIAOZHI_ADMIN_PASSWORD=' + pass,
     'XIAOZHI_LAN_IP=' + ip,
     'XIAOZHI_FRESH=' + fresh,
+    'XIAOZHI_CUSTOM=' + custom,
   ];
   process.stdout.write(out.join('\n') + '\n');
 }

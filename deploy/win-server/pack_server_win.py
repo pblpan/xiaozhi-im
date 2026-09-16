@@ -148,28 +148,77 @@ def fresh_dir(path):
     os.makedirs(path)
 
 
+def _gbk_ok(ch):
+    try:
+        ch.encode('gbk')
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def precheck_scripts():
+    """出包前把所有脚本的编码问题**一次报全**。
+
+    写 write_cmd 时逐个文件抛错也能拦住，但那样得改一处、跑一次、再失败一处 ——
+    实测连着失败两轮（先是 emoji、再是 ⚠️）。这里先扫一遍，一次把问题摆出来。
+    """
+    problems = []
+    for fn in sorted(os.listdir(FILES)):
+        if not fn.endswith(('.cmd', '.vbs')):
+            continue
+        text = open(os.path.join(FILES, fn), encoding='utf-8').read()
+        if all(ord(c) < 128 for c in text):
+            continue    # 纯 ASCII 桥接脚本，随便
+        if re.search(r'(?mi)^\s*chcp\b', text):
+            problems.append('%s：含中文却调用了 chcp（会让 cmd 按字节偏移解析错位）' % fn)
+        for ch in sorted({c for c in text if ord(c) >= 128 and not _gbk_ok(c)}):
+            problems.append('%s：GBK 编不了的字符 %r (U+%04X)' % (fn, ch, ord(ch)))
+    return problems
+
+
 def write_cmd(src, dst, version):
-    """写 .cmd / .vbs：占位符替换 + 统一 CRLF，**保持 UTF-8、不转 GBK**。
+    """写 .cmd / .vbs：占位符替换 + 统一 CRLF + **按内容自动决定编码**。
 
-    编码为什么用 UTF-8（而不是中文系统惯用的 GBK）：
-      .cmd 既要 echo 中文提示，又要把 node 的输出直接打到控制台 / 日志文件，
-      而 Node 的 stdout 永远是 UTF-8。若脚本用 GBK 存，两种编码就会同时出现在
-      同一个窗口、同一个日志文件里 —— 必然有一半是乱码（实测：日志里
-      cmd 写的标记行是 GBK、node 写的行是 UTF-8，客户打开就是花屏）。
-      统一成 UTF-8 + 每个脚本开头 `chcp 65001`，脚本 / 控制台 / node 输出 /
-      日志文件就都在一套编码上。
-      代价：netsh、netstat 这些系统工具的**中文**输出会显示成乱码 ——
-      所以脚本里对这些调用一律 `>nul` 抑制输出，只留自己的提示。
+    ── 编码规则（踩过真实事故，别改）────────────────────────────
+    含中文的脚本 → 写 **GBK**，并且**禁止调用 chcp**。
+      中文 Windows 的控制台默认就是 GBK，cmd 原生就能读。
+      反过来"UTF-8 脚本 + 第二行 chcp 65001"是个致命组合：
+      cmd.exe 是按**字节偏移**逐行读批处理文件的，中途切代码页之后
+      它对多字节字符的长度判断变了，于是会从**注释行的中间**开始解析，
+      中文注释的后半截被当成命令执行。客户装完看到的是一屏
+        'xx值外面永远看不到（经典坑）。' is not recognized as an…
+      然后窗口闪退 —— 而且极难往编码上想。
+    纯 ASCII 的桥接脚本 → 保持 ASCII，允许 chcp。
+      它们由**独立的新控制台窗口**启动，代码页切换隔离在那个窗口里，
+      不会污染调用方（chcp 改的是整个控制台窗口的属性）。
 
-    ⚠️ 不能写成 utf-8-sig（带 BOM）：cmd.exe 会把 BOM 当成第一行命令的一部分，
-       报「'@echo' 不是内部或外部命令」，而且很难往编码上想。
+    ⚠️ 不能写成 utf-8-sig（带 BOM）：cmd.exe 会把 BOM 当成第一行命令的
+       一部分，报「'@echo' 不是内部或外部命令」。
        （NSIS 脚本则**必须**带 BOM，两者要求正好相反，别写串了。）
     """
     text = open(src, encoding='utf-8').read()
     text = text.replace('__VERSION__', version)
     text = text.replace('\r\n', '\n').replace('\n', '\r\n')
+    name = os.path.basename(dst)
+
+    if all(ord(c) < 128 for c in text):
+        data = text.encode('ascii')
+    else:
+        # 只认"真的在调用 chcp"，注释里提到不算
+        if re.search(r'(?mi)^\s*chcp\b', text):
+            raise SystemExit(
+                '出包中止：%s 含中文却调用了 chcp。\n'
+                '  这会让 cmd 解析错位，客户看到满屏「不是内部或外部命令」并闪退。\n'
+                '  处理：去掉 chcp（脚本以 GBK 存），或把那段挪进纯 ASCII 的桥接脚本。' % name)
+        try:
+            data = text.encode('gbk')
+        except UnicodeEncodeError as e:
+            raise SystemExit(
+                '出包中止：%s 含 GBK 编不了的字符 %r。\n'
+                '  cmd 脚本里不要用 emoji / 特殊符号（客户的控制台是 GBK）。'
+                % (name, e.object[e.start:e.end]))
     with open(dst, 'wb') as f:
-        f.write(text.encode('utf-8'))
+        f.write(data)
 
 
 def write_text_gbk(dst, text):
@@ -215,7 +264,7 @@ def stage(version):
         if fn.endswith(('.cmd', '.vbs')):
             write_cmd(os.path.join(FILES, fn), os.path.join(STAGE, fn), version)
             n += 1
-    print('      脚本 %d 个（UTF-8 无 BOM + CRLF）' % n)
+    print('      脚本 %d 个（含中文的走 GBK，纯 ASCII 桥接脚本保持 ASCII）' % n)
 
     # --- 交付说明（随包一份，客户翻目录时看得到）---
     write_text_gbk(os.path.join(STAGE, '版本说明.txt'), f"""小智IM 服务端（Windows 版）  v{version}
@@ -285,6 +334,14 @@ def main():
     makensis = find_makensis()
     print('服务端版本：%s（取自 server/package.json）' % version)
     print('NSIS 编译器：%s' % makensis)
+
+    problems = precheck_scripts()
+    if problems:
+        print('出包中止：脚本编码预检没过 ——')
+        for p in problems:
+            print('  - %s' % p)
+        print('  规则：含中文的脚本 = GBK 且不含 chcp；纯 ASCII 桥接脚本 = 可带 chcp。')
+        return 1
 
     stage(version)
 

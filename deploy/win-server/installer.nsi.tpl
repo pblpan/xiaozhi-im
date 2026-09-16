@@ -5,6 +5,9 @@
 ;     直接改这个文件**不会**生效（要改就改模板，下次打包会用新内容）。
 ;
 ;  __XXX__ 形式的占位符由 Python 替换；$XXX 是 NSIS 自己的变量，别动。
+;
+;  ⚠️ 本文件必须存成 **UTF-8 带 BOM**（NSIS 的硬要求；不带 BOM 的话
+;     中文界面全是乱码）。注意这跟 .cmd 的要求正好相反 —— .cmd 绝不能带 BOM。
 ; ============================================================
 Unicode true
 SetCompressor /SOLID lzma
@@ -13,6 +16,8 @@ SetDatablockOptimize on
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "nsDialogs.nsh"
+!include "LogicLib.nsh"
 
 !insertmacro GetSize
 
@@ -44,9 +49,18 @@ VIAddVersionKey "CompanyName" "${PUBLISHER}"
 VIAddVersionKey "FileVersion" "__VI_VERSION__"
 VIAddVersionKey "LegalCopyright" "Copyright © ${PUBLISHER}"
 
-Var XZ_PASS       ; 管理台初始口令（安装时从 .env 读出来显示在完成页）
-Var XZ_LAN        ; 本机局域网 IP
+Var XZ_PASS        ; 数据目录 .env 里**实际生效**的管理台密码
+Var XZ_CUSTOM      ; 1 = 客户自己在安装向导里设的，0 = 程序随机生成
+Var XZ_LAN         ; 本机局域网 IP
 Var InstSizeKB
+
+Var XZ_PWD_DIALOG  ; 自定义页：控件句柄
+Var XZ_PWD_CTL
+Var XZ_PWD_CTL2
+Var XZ_NEWPASS     ; 客户在向导里输入的密码（空 = 随机生成）
+Var XZ_NEWPASS2
+Var XZ_PASS_LINE   ; 完成页上那一行"密码：…"（按上面两种情况拼）
+Var XZ_HASENV      ; 1 = 数据目录里已经有 .env（装过）→ 跳过设密码页
 
 !define MUI_ICON      "__ICON__"
 !define MUI_UNICON    "__ICON__"
@@ -55,17 +69,94 @@ Var InstSizeKB
 ; 完成页 = 客户装完唯一会认真看的一屏。
 ; 所以这里直接把「用哪个地址登录、账号是什么、密码是什么」摆出来，
 ; 而不是让人自己去翻目录里的说明文件。
-!define MUI_FINISHPAGE_TEXT "小智IM 服务端 ${VERSION} 已安装完成。$\r$\n$\r$\n管理后台（本机）：http://127.0.0.1:3602/admin$\r$\n管理后台（局域网）：http://$XZ_LAN:3602/admin$\r$\n$\r$\n管理账号：admin$\r$\n初始密码：$XZ_PASS$\r$\n$\r$\n这个密码同样保存在数据目录的 .env 文件里，以后可以用安装目录下的「查看管理员密码.cmd」再查。$\r$\n$\r$\n提示：要让同一局域网的手机连上，请右键「配置防火墙.cmd」→「以管理员身份运行」。"
+!define MUI_FINISHPAGE_TEXT "小智IM 服务端 ${VERSION} 已安装完成。$\r$\n$\r$\n管理后台（本机）：http://127.0.0.1:3602/admin$\r$\n管理后台（局域网）：http://$XZ_LAN:3602/admin$\r$\n$\r$\n管理账号：admin$\r$\n$XZ_PASS_LINE$\r$\n$\r$\n忘了密码：双击安装目录下的「查看管理员密码.cmd」再查。$\r$\n$\r$\n提示：要让同一局域网的手机连上，请右键「配置防火墙.cmd」→「以管理员身份运行」。"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\首次启动并打开后台.cmd"
 !define MUI_FINISHPAGE_RUN_TEXT "立即在后台启动服务端，并打开管理后台"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
+Page custom xzPwdPageCreate xzPwdPageLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
+
+; ============================================================
+;  自定义页：设置管理后台密码
+;
+;  为什么要这一页：早期版本一律随机生成 20 位 hex、摆到完成页上让客户抄。
+;  实际用下来客户根本不抄（反馈原话："装完不知道拿什么登录"），
+;  装完就卡在登录页。让他自己设一个记得住的，比给一串随机字符有用得多。
+;
+;  留空 = 不设，退回随机生成（随机值会显示在完成页上）。
+;  静默安装（/S）不走这一页，$XZ_NEWPASS 为空 → 同样退回随机生成，
+;  所以自动化部署不受影响。
+; ============================================================
+Function xzPwdPageCreate
+  ; 装过（数据目录里已经有 .env）就跳过这一页。
+  ; 因为那种情况下 init-env.js 会**原样沿用**已有的 .env（刻意的：
+  ; 客户可能早就把密码改过了，重装把它冲掉等于把人锁在门外）。
+  ; 让客户白设一次、结果设了不生效，比不让他设更糟。
+  StrCmp $XZ_HASENV "1" 0 xz_pwd_show
+    Abort
+  xz_pwd_show:
+
+  !insertmacro MUI_HEADER_TEXT "设置管理后台密码" "登录管理后台用的密码（管理账号固定为 admin）"
+
+  nsDialogs::Create 1018
+  Pop $XZ_PWD_DIALOG
+  ${If} $XZ_PWD_DIALOG == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 34u "请给管理后台设置一个登录密码。$\r$\n密码 6 位以上，建议字母加数字。$\r$\n$\r$\n不想现在设也行 —— 留空，安装完成后由程序随机生成，并显示在「完成」页上等你抄下来。"
+  Pop $0
+
+  ${NSD_CreateLabel} 0 50u 100% 11u "密码："
+  Pop $0
+  ${NSD_CreatePassword} 0 63u 100% 13u ""
+  Pop $XZ_PWD_CTL
+
+  ${NSD_CreateLabel} 0 84u 100% 11u "再输一次确认："
+  Pop $0
+  ${NSD_CreatePassword} 0 97u 100% 13u ""
+  Pop $XZ_PWD_CTL2
+
+  ${NSD_CreateLabel} 0 120u 100% 26u "密码会写进数据目录的 .env 文件（不是明文存到别处）。$\r$\n以后忘了，双击安装目录下的「查看管理员密码.cmd」就能再看到。"
+  Pop $0
+
+  nsDialogs::Show
+FunctionEnd
+
+Function xzPwdPageLeave
+  ${NSD_GetText} $XZ_PWD_CTL $XZ_NEWPASS
+  ${NSD_GetText} $XZ_PWD_CTL2 $XZ_NEWPASS2
+
+  ; 两个都空 → 客户选择随机生成，放行
+  ${If} $XZ_NEWPASS == ""
+  ${AndIf} $XZ_NEWPASS2 == ""
+    Return
+  ${EndIf}
+
+  ${If} $XZ_NEWPASS != $XZ_NEWPASS2
+    MessageBox MB_OK|MB_ICONEXCLAMATION "两次输入的密码不一致，请重新输入。"
+    Abort
+  ${EndIf}
+
+  ; 长度。字符集不在这里卡 —— 由 init-env.js 兜底（它的 CUSTOM_PW_RE），
+  ; 万一客户真输了不支持的字符，完成页会显示**实际生效**的那个密码，
+  ; 不会出现"我设了 A、结果登录要用 B"这种哑巴亏。
+  StrLen $1 $XZ_NEWPASS
+  ${If} $1 < 6
+    MessageBox MB_OK|MB_ICONEXCLAMATION "密码太短了，至少要 6 位。"
+    Abort
+  ${EndIf}
+  ${If} $1 > 64
+    MessageBox MB_OK|MB_ICONEXCLAMATION "密码太长了，最多 64 位。"
+    Abort
+  ${EndIf}
+FunctionEnd
 
 Function .onInit
   ; 覆盖安装 / 修复安装：先把正在跑的旧服务端请走。
@@ -78,6 +169,12 @@ Function .onInit
     nsExec::ExecToLog 'cmd /c ""$INSTDIR\_stop_silent.cmd""'
     Sleep 1200
   xz_init_done:
+
+  ; 装过没有？看数据目录里有没有 .env。有 → 设密码页会被跳过（见那边说明）。
+  StrCpy $XZ_HASENV "0"
+  IfFileExists "__DATA_DIR__\.env" 0 xz_init_fresh
+    StrCpy $XZ_HASENV "1"
+  xz_init_fresh:
 FunctionEnd
 
 Section "小智IM 服务端" SEC_MAIN
@@ -91,24 +188,45 @@ Section "小智IM 服务端" SEC_MAIN
   CreateDirectory "__DATA_DIR__\logs"
   CreateDirectory "__DATA_DIR__\files"
 
-  ; ---------- 生成 data\.env（随机的管理台口令 + JWT 密钥）----------
-  ; 为什么非做不可：服务端在 ADMIN_PASSWORD 缺失时会自己生成随机口令，
-  ; 但只打进日志；而 Windows 版是隐藏窗口跑的，客户看不到日志 ——
-  ; 结果就是"装完了不知道拿什么登录"。这里生成完读回来显示。
-  DetailPrint "生成配置文件与管理台初始密码 …"
-  nsExec::ExecToStack '"$INSTDIR\node\node.exe" "$INSTDIR\app\tools\init-env.js" "__DATA_DIR__"'
+  ; ---------- 生成 data\.env（管理台密码 + JWT 密钥）----------
+  DetailPrint "生成配置文件与管理台密码 …"
+  StrCmp $XZ_NEWPASS "" xz_env_nocustom
+    ; 客户自己设了密码 → 写进临时文件再交给 init-env.js。
+    ; 不拼命令行：密码里可能有 $ " 空格，会被 NSIS 和 cmd 二次解析，
+    ; 轻则密码对不上，重则整条命令跑飞。
+    FileOpen $9 "$TEMP\xz-password.tmp" w
+    FileWrite $9 "$XZ_NEWPASS"
+    FileClose $9
+    nsExec::ExecToStack '"$INSTDIR\node\node.exe" "$INSTDIR\app\tools\init-env.js" "__DATA_DIR__" "--password-file=$TEMP\xz-password.tmp"'
+    Delete "$TEMP\xz-password.tmp"
+    Goto xz_env_done
+  xz_env_nocustom:
+    nsExec::ExecToStack '"$INSTDIR\node\node.exe" "$INSTDIR\app\tools\init-env.js" "__DATA_DIR__"'
+  xz_env_done:
   Pop $0
   Pop $1
+
   ; 用 ReadINIStr 而不是解析 stdout：少一处"装出来密码是空的"
-  ReadINIStr $XZ_PASS "__DATA_DIR__\.install-result.ini" "install" "adminPassword"
-  ReadINIStr $XZ_LAN  "__DATA_DIR__\.install-result.ini" "install" "lanIp"
+  ReadINIStr $XZ_PASS   "__DATA_DIR__\.install-result.ini" "install" "adminPassword"
+  ReadINIStr $XZ_CUSTOM "__DATA_DIR__\.install-result.ini" "install" "passwordIsCustom"
+  ReadINIStr $XZ_LAN    "__DATA_DIR__\.install-result.ini" "install" "lanIp"
   Delete "__DATA_DIR__\.install-result.ini"
+
   StrCmp $XZ_LAN "" 0 xz_lan_ok
     StrCpy $XZ_LAN "本机IP"
   xz_lan_ok:
   StrCmp $XZ_PASS "" 0 xz_pass_ok
-    StrCpy $XZ_PASS "(生成失败，请查看数据目录里的 .env 文件)"
+    StrCpy $XZ_PASS "(生成失败，请看数据目录里的 .env 文件)"
   xz_pass_ok:
+
+  ; 完成页那一行：客户自己设的就不回显（他知道自己输了什么），
+  ; 随机生成的一定要显示出来 —— 否则他又没得抄了。
+  StrCmp $XZ_CUSTOM "1" 0 xz_line_random
+    StrCpy $XZ_PASS_LINE "密码：你刚才在安装向导里设置的那个"
+    Goto xz_line_done
+  xz_line_random:
+    StrCpy $XZ_PASS_LINE "初始密码：$XZ_PASS"
+  xz_line_done:
 
   ${GetSize} "$INSTDIR" "/M=*.* /S=0K" $2 $3 $4
   IntFmt $InstSizeKB "0x%08X" $2
