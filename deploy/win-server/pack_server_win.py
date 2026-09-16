@@ -227,6 +227,11 @@ def build_nsi(version, out_file, nsis_path):
            .replace('__OUT_FILE__', out_file))
     # NSIS 按 ANSI 读脚本会把中文变成方块，必须 UTF-8 **带 BOM**。
     # 少 BOM 时安装界面上一片问号，而且只有真跑一次安装才看得出来。
+    #
+    # ⚠️ 写之前先把行尾归一成 LF：本机 git 配了 core.autocrlf=true，模板被
+    #    重新检出后会变成 CRLF，而下面 newline='\r\n' 又会把每个 \n 补成 \r\n
+    #    —— 两者叠加就写出 \r\r\n，是那种"今天能编、过几天突然编不过"的坑。
+    nsi = nsi.replace('\r\n', '\n')
     with open(nsis_path, 'w', encoding='utf-8-sig', newline='\r\n') as f:
         f.write(nsi)
     return nsis_path

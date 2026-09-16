@@ -323,6 +323,12 @@ def build_nsi(version, out_file, nsis_path, per_user=True):
 
     # ⚠️ NSIS 按 ANSI 读脚本会把中文变成乱码方块，必须是 UTF-8 **带 BOM**。
     # 少了 BOM 时安装界面上是问号，而且这类问题只有真跑安装才看得出来。
+    #
+    # ⚠️ 写之前先把行尾归一成 LF：本机 git 配了 core.autocrlf=true，这个 .py
+    #    被重新检出后会变成 CRLF，模板字符串里也就跟着带 \r\n，而下面
+    #    newline='\r\n' 会把每个 \n 再补一个 \r —— 叠加成 \r\r\n。属于
+    #    "今天能编、过几天突然编不过"的那类坑，一行归一化挡掉。
+    nsi = nsi.replace('\r\n', '\n')
     with open(nsis_path, 'w', encoding='utf-8-sig', newline='\r\n') as f:
         f.write(nsi)
     return nsis_path
