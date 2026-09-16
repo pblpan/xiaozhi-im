@@ -46,6 +46,22 @@ xiaozhi_gen_secret() {
   fi
 }
 
+# 管理台初始密码：这个要**人手输入**，所以比密钥短一些（20 字符 hex，80 bit 熵）。
+#
+# 为什么必须有这个函数（2026-09-16 安全整改）：
+#   从前 ADMIN_PASSWORD 是靠 compose 的 `${ADMIN_PASSWORD:-admin123}` 兜底的，
+#   也就是说**每一台默认装出来的机器，管理台密码都是 admin123**。
+#   而仓库有过一段 Public 的历史，README 和管理台登录页上都写着这个默认值，
+#   实测拿 admin/admin123 可直接从网络登录成功 —— 等于门开着还贴了张纸条。
+#   改成安装时生成强随机值写进 .env，升级沿用（和 TURN_PASSWORD 同一套路）。
+xiaozhi_gen_admin_pass() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 10
+  else
+    head -c 10 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+
 # 历史上写死过的公开默认中继口令 —— 出现在 .env / turn.env 里都等于没设
 XIAOZHI_TURN_PASS_LEGACY="xiaozhi-turn-2026"
 
@@ -112,12 +128,14 @@ xiaozhi_env() {
   local OLD_CF_ID=""
   local OLD_CF_TOKEN=""
   local OLD_TURN_PASS=""
+  local OLD_ADMIN_PASS=""
   if [ -f "$ENV_FILE" ]; then
     SECRET=$(grep -E '^JWT_SECRET=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
     OLD_IP=$(grep -E '^TURN_EXTERNAL_IP=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
     OLD_CF_ID=$(grep -E '^CF_TURN_KEY_ID=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
     OLD_CF_TOKEN=$(grep -E '^CF_TURN_API_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
     OLD_TURN_PASS=$(grep -E '^TURN_PASSWORD=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
+    OLD_ADMIN_PASS=$(grep -E '^ADMIN_PASSWORD=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
   fi
   [ -z "$SECRET" ] && SECRET=$(xiaozhi_gen_secret)
 
@@ -127,6 +145,17 @@ xiaozhi_env() {
   # coturn 却用新口令 —— 表现为「中继配着但一通就断」，比直接不配更难查。
   local TURNPASS
   TURNPASS=$(xiaozhi_turn_pass_resolve "$OLD_TURN_PASS")
+
+  # 管理台初始密码：首次安装生成强随机、升级沿用。
+  # 对**已经跑起来的部署没有影响** —— 服务端只在首次建库时用它创建管理员账号，
+  # 之后改密码走管理台或 /api/auth/password（db.js 不会覆盖已存在的账号）。
+  # 所以这一行是"别让下一个新装的人再用 admin123"，不是"去改现有客户的密码"。
+  local ADMINPASS
+  if [ -n "$OLD_ADMIN_PASS" ]; then
+    ADMINPASS="$OLD_ADMIN_PASS"
+  else
+    ADMINPASS=$(xiaozhi_gen_admin_pass)
+  fi
 
   # 公网 IP：每次安装/升级都重探（家宽基本是动态 IP，写死过几天就失效）。
   # 探测失败时沿用上次的值 —— 别把一份可能还能用的配置擦成空的。
@@ -167,6 +196,12 @@ TRIM_APPDEST=$TRIM_APPDEST
 XIAOZHI_DATA_DIR=$SHARE_DIR/data
 JWT_SECRET=$SECRET
 
+# 管理台管理员口令：首次安装生成、升级沿用。
+# 忘了的话就在这台机器上执行：  grep ADMIN_PASSWORD $TRIM_APPDEST/docker/.env
+# 注意：它只在**首次建库**时用来创建 admin 账号；之后改密码请用管理台。
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=$ADMINPASS
+
 # ---- 方案一（推荐）：Cloudflare Realtime TURN ----
 # 只用出站连接、走 443/TLS，**完全不需要端口映射**，免费额度 1TB/月。
 # 家宽没有公网 IP 时这是最省事的通路。开通：
@@ -194,7 +229,7 @@ $TURN_URL_LINE
 TURN_USER=${TURN_USER:-xiaozhi}
 TURN_PASSWORD=$TURNPASS
 EOF
-  echo "[$APPNAME] 已写入 $ENV_FILE (TURN_EXTERNAL_IP=${PUBIP:-无}, Cloudflare TURN=$([ -n "$OLD_CF_ID" ] && echo 已配置 || echo 未配置), 中继口令=$([ -n "$TURNPASS" ] && echo 已设置 || echo 缺失))"
+  echo "[$APPNAME] 已写入 $ENV_FILE (TURN_EXTERNAL_IP=${PUBIP:-无}, Cloudflare TURN=$([ -n "$OLD_CF_ID" ] && echo 已配置 || echo 未配置), 中继口令=$([ -n "$TURNPASS" ] && echo 已设置 || echo 缺失), 管理台口令=$([ -n "$ADMINPASS" ] && echo 已设置 || echo 缺失))"
 }
 
 # 释放端口：清理同名旧容器

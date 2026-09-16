@@ -8,6 +8,47 @@ const FILES_DIR = path.join(DATA_DIR, 'files');
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------------------------------------------------------------------------
+// 初始密钥：宁可随机，也绝不留写死的弱默认值
+//
+// 为什么（2026-09-16 安全整改）：
+//   这里原本是  ADMIN_PASSWORD || 'admin123'  和  JWT_SECRET || 'change-me-...'
+//   本仓库有过一段 Public 的历史，于是前者等于**把管理台密码公开**
+//   （已实测：拿 admin/admin123 直接从网络登录成功），后者等于公开了签发登录
+//   凭证的密钥（知道它就能自己伪造一个管理员 token）。
+//   删掉代码擦不掉 git 历史，所以默认值必须彻底去掉。
+//
+// 策略：
+//   · ADMIN_PASSWORD 缺失 → 生成随机口令。它只在**首次创建管理员**时用一次，
+//     db.js 会把实际使用的口令打进日志；漏配的后果是"拿到一串随机密码"，
+//     而不是"一个人人皆知的口令"。
+//   · JWT_SECRET 缺失 → 生成随机值并**持久化**到数据目录。不持久化的话每次重启
+//     所有人都掉线；持久化后既安全又不影响可用性。
+// ---------------------------------------------------------------------------
+const crypto = require('crypto');
+
+function randomSecret() {
+  // base64url：不含 +/ 和易看错的符号；15 字节≈20 字符
+  return crypto.randomBytes(15).toString('base64url');
+}
+
+function persistentJwtSecret(dir) {
+  const f = path.join(dir, '.jwt-secret');
+  try {
+    const v = fs.readFileSync(f, 'utf8').trim();
+    if (v) return v;
+  } catch (_) { /* 还没有，下面生成 */ }
+  const v = crypto.randomBytes(32).toString('base64url');
+  try {
+    fs.writeFileSync(f, v, { mode: 0o600 });
+    console.warn('[小智IM] 未设置 JWT_SECRET，已生成随机密钥并保存到 %s', f);
+    console.warn('[小智IM] ⚠️ 该文件丢了会导致所有人重新登录，别删。');
+  } catch (e) {
+    console.warn('[小智IM] JWT_SECRET 未能落盘（%s），本次重启后登录态会失效', e.message);
+  }
+  return v;
+}
+
+// ---------------------------------------------------------------------------
 // ICE（WebRTC 网络穿透）配置
 //
 // 为什么不写死在客户端：能不能打通取决于 STUN/TURN 在**当前网络**是否可用。
@@ -330,12 +371,14 @@ async function probeTurnCredentials(keyId, apiToken) {
 
 module.exports = {
   PORT: Number(process.env.PORT || 3602),
-  JWT_SECRET: process.env.JWT_SECRET || 'change-me-xiaozhi-im-secret',
+  JWT_SECRET: process.env.JWT_SECRET || persistentJwtSecret(DATA_DIR),
   DATA_DIR,
   FILES_DIR,
   DB_PATH: process.env.DB_PATH || path.join(DATA_DIR, 'xiaozhi-im.db'),
   ADMIN_USERNAME: process.env.ADMIN_USERNAME || 'admin',
-  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin123',
+  // 没有默认口令。部署时必须由安装脚本写入 docker/.env 的 ADMIN_PASSWORD；
+  // 万一漏了，这里给的是随机值（见文件上方说明），不是 admin123。
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || randomSecret(),
   MAX_FILE_MB: Number(process.env.MAX_FILE_MB || 50),
   PUBLIC_URL: process.env.PUBLIC_URL || '',
   ICE_STUN,

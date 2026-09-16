@@ -7,7 +7,9 @@
       <el-input v-model="form.username" placeholder="管理员账号" @keyup.enter="login" />
       <el-input v-model="form.password" type="password" placeholder="密码" style="margin-top:12px" @keyup.enter="login" />
       <el-button type="primary" style="width:100%;margin-top:18px" :loading="loading" @click="login">登录</el-button>
-      <p style="margin-top:10px;color:#999;font-size:12px;text-align:center">默认 admin / admin123，请在部署时修改</p>
+      <!-- 不写默认密码：从前这里写着「默认 admin / admin123」，等于在登录页上
+           教所有人用弱口令，而那段代码还在公开仓库里待过。 -->
+      <p style="margin-top:10px;color:#999;font-size:12px;text-align:center">首次登录请用部署时设置的管理员密码</p>
     </el-card>
   </div>
 

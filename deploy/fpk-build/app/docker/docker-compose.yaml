@@ -13,9 +13,11 @@ services:
       # 数据落在飞牛自动创建的共享目录（config/resource 的 data-share 声明）
       - DATA_DIR=/data
       - DB_PATH=/data/xiaozhi-im.db
-      - JWT_SECRET=${JWT_SECRET:-xiaozhi-im-change-me-secret}
+      # 密钥不留默认值（2026-09-16 整改）：安装脚本写进 .env，缺失时服务端生成随机值。
+      # 从前这里是 xiaozhi-im-change-me-secret / admin123 —— 仓库公开期间等于全部泄漏。
+      - JWT_SECRET=${JWT_SECRET:-}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - MAX_FILE_MB=${MAX_FILE_MB:-50}
       # 中继地址下发给客户端：改了不用重发客户端包
       - TURN_URLS=${TURN_URLS:-}

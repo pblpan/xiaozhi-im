@@ -26,8 +26,10 @@ xiaozhi-im/
 ```bash
 cd server
 npm install
-PORT=3602 JWT_SECRET=testsecret node src/index.js
-# 管理后台: http://localhost:3602/admin   (默认 admin / admin123)
+# 密钥必须显式给。不给也能起来，但服务端会用随机值：
+# JWT 密钥会持久化到数据目录，管理员密码会打印在启动日志里（且仅首次建库时生效）。
+PORT=3602 JWT_SECRET=$(openssl rand -hex 32) ADMIN_PASSWORD='换成你的强密码' node src/index.js
+# 管理后台: http://localhost:3602/admin   (账号 admin / 上面设的 ADMIN_PASSWORD)
 # 冒烟测试: node smoketest.js
 ```
 

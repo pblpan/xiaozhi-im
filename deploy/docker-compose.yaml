@@ -10,9 +10,13 @@ services:
       - "3616:3616/udp"
     environment:
       - PORT=3602
-      - JWT_SECRET=${JWT_SECRET:-change-me-xiaozhi-im}
+      # 密钥一律不留默认值（2026-09-16 整改）：缺失时服务端会生成随机值，
+      # JWT 密钥还会持久化到数据目录。从前这里写的是 change-me-... / admin123，
+      # 而本仓库有过一段 Public 历史 —— 那等于把登录密钥和管理台密码一起公开。
+      # 安装脚本会把强随机值写进 docker/.env。
+      - JWT_SECRET=${JWT_SECRET:-}
       - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - MAX_FILE_MB=50
       # 中继地址下发给客户端（改了不用重发安装包）
       - ICE_STUN=${ICE_STUN:-}
