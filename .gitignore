@@ -29,6 +29,12 @@ data/
 # 飞牛 NAS 连接凭据（绝不入库。仓库 2026-09-16 已转私有，但仍按公开来防）
 deploy/.fnos.env
 
+# ChmlFrp 隧道配置 —— 内含账户 token（user=）与统一鉴权串（token=），等同凭据。
+# 只存在于本机 + 飞牛 /vol1/@appdata/chmlfrp/frpc.ini（权限 600），绝不入库。
+deploy/.chmlfrp.ini
+deploy/.chmlfrp.service.tmp
+deploy/.chmlfrp-pkg.tar.gz
+
 # 本机环境快照（如清场前备份的注册表项）—— 只对某台机器有意义，
 # 换台机器就是垃圾，且可能带上本机路径，不该进版本库
 deploy/backup/

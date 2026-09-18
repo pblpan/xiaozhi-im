@@ -1,7 +1,7 @@
 name: xiaozhi_im_client
 description: 小智 IM 客户端 (Windows + Android)
 publish_to: 'none'
-version: 0.14.4+42
+version: 0.14.5+43
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -45,6 +45,19 @@ dependencies:
   # 聊天图片磁盘缓存：解决"每次重开 App 图片都要重新下载"（外网极慢）。
   # 作为全 App 图片加载的唯一出口，统一收口 cache 配置。
   cached_network_image: ^3.3.1
+  # 门店盘点：手机摄像头扫条码。
+  # 底层 Android 走 CameraX + MLKit、iOS 走 AVFoundation/Apple Vision。
+  #
+  # 🔴 **必须用默认的 bundled 版 MLKit**，绝对不要往 android/gradle.properties 里加
+  #    dev.steenbakker.mobile_scanner.useUnbundled=true —— unbundled 版是"首次使用时
+  #    通过 Google Play Services 下载模型"，而门店里这些国产手机根本没有 GSF，
+  #    加了那个开关 = 现场一片扫不出来。bundled 版把模型打进 APK（大约 +3~10MB），
+  #    装上就能用，不依赖任何 Google 服务。
+  #
+  # 🔴 只支持 Android / iOS / macOS / Web，**不支持 Windows**。
+  #    桌面端实例化 MobileScanner 会抛 UnimplementedError，所以入口必须按平台判断
+  #    （见 screens/stocktake_scan.dart 的 StocktakeScanPage.supported）。
+  mobile_scanner: ^7.4.2
 
 # ── SQLite 原生库从哪来（构建期配置；不写会让 APK 构建必挂）────────────
 # `sqlite3` 这个包默认在构建时**从 GitHub Releases 下载**预编译的

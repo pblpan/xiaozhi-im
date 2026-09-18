@@ -9,6 +9,7 @@
    注意 AAPT2 也不做有损压缩，但 CRC 会变，所以不能比 sha256。
 """
 import io
+import os
 import re
 import subprocess
 import sys
@@ -16,11 +17,24 @@ import zipfile
 
 from PIL import Image
 
-APK = r'D:\Users\pblpa\Desktop\小智 IM\小智IM-Android-v0.14.4.apk'
-RES = r'C:\Users\pblpa\WorkBuddy\2026-09-08-11-01-42\xiaozhi-im\client\android\app\src\main\res'
-AAPT = r'C:\Users\pblpa\WorkBuddy\2026-09-08-11-01-42\tools\android-sdk\build-tools\36.0.0\aapt.exe'
+SRC = r'C:\Users\pblpa\WorkBuddy\2026-09-08-11-01-42\xiaozhi-im\client'
+RES = os.path.join(SRC, 'android', 'app', 'src', 'main', 'res')
+AAPT = (r'C:\Users\pblpa\WorkBuddy\2026-09-08-11-01-42\tools\android-sdk'
+        r'\build-tools\36.0.0\aapt.exe')
 DPI2DIR = {'160': 'mipmap-mdpi', '240': 'mipmap-hdpi', '320': 'mipmap-xhdpi',
            '480': 'mipmap-xxhdpi', '640': 'mipmap-xxxhdpi'}
+
+
+def _apk_path():
+    """版本从 pubspec 现读，绝不写死（写死会在下次换版本时静默去验上一个包）。"""
+    with open(os.path.join(SRC, 'pubspec.yaml'), encoding='utf-8') as f:
+        m = re.search(r'^version:\s*([0-9A-Za-z.+_-]+)', f.read(), re.M)
+    ver = m.group(1).split('+')[0]
+    return (sys.argv[1] if len(sys.argv) > 1 else
+            r'D:\Users\pblpa\Desktop\小智 IM\小智IM-Android-v%s.apk' % ver)
+
+
+APK = _apk_path()
 
 
 def compare(a, b):

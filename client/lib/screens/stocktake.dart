@@ -5,6 +5,7 @@ import '../core/stocktake_export.dart';
 import '../core/stocktake_repo.dart';
 import '../core/theme.dart';
 import 'stocktake_result.dart';
+import 'stocktake_scan.dart';
 
 /// 门店盘点：采集页。
 ///
@@ -82,7 +83,10 @@ class _StocktakePageState extends State<StocktakePage> {
     }
   }
 
-  Future<void> _reload() async {
+  /// [refocus] 刷完要不要把焦点抢回输入框。
+  /// 扫码枪需要（焦点丢了枪就打偏），但从摄像头页返回时不要 ——
+  /// 用户刚从相机回来，再给他弹一次软键盘是纯打扰。
+  Future<void> _reload({bool refocus = true}) async {
     final rows = await _repo.listWithMaster(_sheetNo);
     final sum = await _repo.summary(_sheetNo);
     if (!mounted) return;
@@ -91,7 +95,7 @@ class _StocktakePageState extends State<StocktakePage> {
       _summary = sum;
       _loading = false;
     });
-    _refocus();
+    if (refocus) _refocus();
   }
 
   /// 把焦点还给输入框。延迟一帧是因为刚 setState 完，焦点请求可能被重建打断。
@@ -120,6 +124,19 @@ class _StocktakePageState extends State<StocktakePage> {
       if (!mounted) return;
       setState(() => _error = '写入失败：$e');
     }
+  }
+
+  /// 打开摄像头扫码页。扫到的码由那一页直接落库，这里只负责回来刷新。
+  Future<void> _openCamera() async {
+    if (!StocktakeScanPage.supported) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => StocktakeScanPage(sheetNo: _sheetNo, repo: _repo),
+      ),
+    );
+    if (!mounted) return;
+    // 从相机回来不抢焦点（见 _reload 的 refocus 说明）
+    await _reload(refocus: false);
   }
 
   Future<void> _syncMaster() async {
@@ -321,19 +338,53 @@ class _StocktakePageState extends State<StocktakePage> {
         padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
         child: Row(
           children: [
+            // 手机端把「扫码」放最左、给足面积 —— 现场大多数店没有扫码枪，
+            // 摄像头才是主路径，输入框是兜底。
+            if (StocktakeScanPage.supported) ...[
+              Material(
+                color: AppColors.brand.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(AppRadii.sm),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(AppRadii.sm),
+                  onTap: _openCamera,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.qr_code_scanner,
+                            color: AppColors.brand, size: 20),
+                        SizedBox(width: 6),
+                        Text('扫码',
+                            style: TextStyle(
+                                color: AppColors.brand,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
             Expanded(
               child: TextField(
                 controller: _input,
                 focusNode: _focus,
                 autofocus: true,
-                // 扫码枪可能扫出带字母的码，但不能让输入法去联想/纠错
-                keyboardType: TextInputType.visiblePassword,
+                // 🔴 这里**不能**用 TextInputType.visiblePassword。
+                // 之前用它本意是"压掉输入法联想/纠错"（扫码枪会敲出一串数字+回车），
+                // 但 Android 把它当成密码框处理 → 弹出来的是**密码安全键盘**，
+                // 数字全被打成圆点、布局也和普通键盘不一样，员工当场就懵了。
+                // 真正要做的是"关掉输入法干预"，那是下面两个开关的活，
+                // 跟键盘类型无关：普通键盘 + 关联想 + 关纠错就够了。
+                keyboardType: TextInputType.text,
                 enableSuggestions: false,
                 autocorrect: false,
                 textInputAction: TextInputAction.done,
                 style: const TextStyle(color: AppColors.text, fontSize: 15),
                 decoration: InputDecoration(
-                  hintText: '扫码枪直接扫，或手输条码后回车',
+                  hintText: '扫码枪直接打，或手输条码回车',
                   hintStyle:
                       const TextStyle(color: AppColors.textWeak, fontSize: 13),
                   filled: true,
@@ -397,13 +448,15 @@ class _StocktakePageState extends State<StocktakePage> {
 
   Widget _list() {
     if (_rows.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
+          padding: const EdgeInsets.all(24),
           child: Text(
-            '还没有扫码记录\n把光标放在上面的输入框，用扫码枪扫即可',
+            StocktakeScanPage.supported
+                ? '还没有扫码记录\n点左上角「扫码」用摄像头扫，\n或用扫码枪对着上面的输入框扫'
+                : '还没有扫码记录\n把光标放在上面的输入框，用扫码枪扫即可',
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textWeak, fontSize: 13),
+            style: const TextStyle(color: AppColors.textWeak, fontSize: 13),
           ),
         ),
       );

@@ -247,6 +247,15 @@ ANDROID_ONLY_MARKS = [
     'xiaozhi/share',        # Dart ↔ 原生的通道名（两端逐字一致，写错=分享进来毫无反应）
     'share_target.dart',    # 「发送到小智」页面
     'ShareTargetScreen',    # 该页面类名
+    # v0.14.5 摄像头扫码。**只在 Android 有意义**：
+    #   mobile_scanner 的 Platform Support 是 Android/iOS/macOS/Web，没有 Windows，
+    #   所以这段代码在 Windows 产物里会被 AOT 剔掉（跟托盘那批同理）。
+    #   放进 WIN_MARKS 会让每次 Windows 校验都假报缺失。
+    'StocktakeScanPage',    # 扫码页类名
+    'stocktake_scan.dart',  # 该页所在文件（AOT 为栈回溯保留文件名）
+    'shouldAcceptScan',     # 🔴 去重判据本身：证明"自己控重复"这段逻辑真的编进去了
+                            #    （唯一能防住 DetectionSpeed.noDuplicates 那个坑的东西）
+    '扫码盘点',              # 扫码页标题（UTF-16LE）
 ]
 APK_MARKS = list(WIN_MARKS) + ANDROID_ONLY_MARKS
 
@@ -506,6 +515,54 @@ def check_win(zf, marks):
     return 0 if all_ok else 1
 
 
+# v0.14.5 摄像头扫码：**必须能在包里证明 MLKit 走的是 bundled**。
+#
+# mobile_scanner 的 android/build.gradle.kts 是二选一：
+#   useUnbundled=true → com.google.android.gms:play-services-mlkit-barcode-scanning（模型联网下）
+#   else（默认）       → com.google.mlkit:barcode-scanning（模型打进包）
+#
+# 一旦有人往 android/gradle.properties 里加了 useUnbundled=true，会发生什么：
+#   **构建照样成功、APK 照样能装、在我们本机甚至照样能扫**（开发机/模拟器有 GSF），
+#   但门店那些没有 Google 服务框架的国产手机**一打开就是扫不出东西**，
+#   而且给的报错很含糊，现场根本查不出来 —— 是最难排查的那类问题。
+#
+# 所以拿"只有 bundled 才有的东西"当硬判据。
+# 实测依据（2026-09-19，读 Gradle 缓存里的真实 AAR）：
+#   com.google.mlkit:barcode-scanning:17.3.0          → barhopper 4 项 + 模型 3 个
+#   play-services-mlkit-barcode-scanning:18.3.1       → barhopper 0 项 + 模型 0 个（瘦客户端）
+# ⚠️ 后者是前者的**传递依赖**，会带进一个 play-services-mlkit-barcode-scanning.properties
+#    —— 那个文件**不能当判据**（它一直在，无论哪种配置），照它判会得出相反结论。
+MLKIT_ABIS = ['arm64-v8a', 'armeabi-v7a', 'x86_64']
+MLKIT_BUNDLED_ASSETS = [
+    'assets/mlkit_barcode_models/oned_auto_regressor_mobile.tflite',
+    'assets/mlkit_barcode_models/oned_feature_extractor_mobile.tflite',
+    'assets/mlkit_barcode_models/barcode_ssd_mobilenet_v1_dmp25_quant.tflite',
+]
+
+
+def check_apk_bundled_mlkit(names):
+    """确认 MLKit 是 bundled（模型在包里），而不是依赖 Google Play 服务。"""
+    print('\n-- 摄像头扫码：MLKit 是不是 bundled（= 无 GSF 的国产手机能不能扫）--')
+    ok = True
+    for abi in MLKIT_ABIS:
+        want = 'lib/%s/libbarhopper_v3.so' % abi
+        hit = want in names
+        print('  %-44s %s' % (want, '在 ✓' if hit else '不在 ✗'))
+        ok = ok and hit
+    for a in MLKIT_BUNDLED_ASSETS:
+        hit = a in names
+        print('  %-44s %s'
+              % (a.replace('assets/mlkit_barcode_models/', '模型 '),
+                 '在 ✓' if hit else '不在 ✗'))
+        ok = ok and hit
+    if not ok:
+        print('  ⚠️ 缺 bundled 证据 → 很可能被改成了 useUnbundled=true。')
+        print('     后果：没有 Google 服务框架的手机扫不出任何条码（报错还含糊）。')
+        print('     修法：删掉 android/gradle.properties 里的')
+        print('           dev.steenbakker.mobile_scanner.useUnbundled')
+    return ok
+
+
 def check_apk(zf, marks):
     names = zf.namelist()
     so = [n for n in names if n.endswith('libapp.so')]
@@ -527,9 +584,11 @@ def check_apk(zf, marks):
     ok_native = len(native) >= 3
     gone_ok = check_gone(data)
     native_ok = check_apk_native(zf, names)
+    mlkit_ok = check_apk_bundled_mlkit(names)
     snd_ok = check_sounds(zf, names, 'assets/flutter_assets/')
     print('\nWebRTC 原生库三架构: %s' % ('齐全 ✓' if ok_native else '不足 ✗'))
-    all_ok = not bad and ok_native and gone_ok and native_ok and snd_ok
+    all_ok = (not bad and ok_native and gone_ok and native_ok and mlkit_ok
+              and snd_ok)
     print('结论: %s' % ('新代码已编入产物 ✓' if all_ok else '有问题 ✗'))
     return 0 if all_ok else 1
 
