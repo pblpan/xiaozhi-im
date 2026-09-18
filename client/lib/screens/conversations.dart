@@ -886,12 +886,19 @@ class ConversationsScreenState extends State<ConversationsScreen> {
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
           titleSpacing: 16,
-          title: const Row(
+          title: Row(
             children: [
-              BrandLogo(size: 28),
-              SizedBox(width: 10),
-              Text('小智 IM',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              const BrandLogo(size: 28),
+              const SizedBox(width: 10),
+              // 标题跟随服务端公司名（「好又多小智」）。以前这里写死『小智 IM』，
+              // 管理台改了公司名，登录页变了、登进来又变回去 —— 龙哥 2026-09-18
+              // 报的"服务器改了客户端没改"就是这个。规则只在 Workspace.brand 一处。
+              ValueListenableBuilder<String>(
+                valueListenable: Workspace.brand,
+                builder: (_, b, __) => Text(b,
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w700)),
+              ),
             ],
           ),
           actions: [

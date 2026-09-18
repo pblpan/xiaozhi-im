@@ -171,7 +171,18 @@ void main() {
       // 判据从 v0.13.3 起一直红着，没人跑 flutter test 就没人发现。
       // 一个长期红的判据等于没有判据（和"探针全绿其实没验"是同一类病），
       // 所以这里顺手补绿，并在两端各留一句注释。
-      expect(kBuiltinAppIds, {'attendance', 'my_requests', 'work_org', 'att_admin'});
+      //
+      // 2026-09-19 补上 'stocktake'（门店盘点）。⚠️ **以后每加一个内置应用，
+      // 必须同时改三处**：① 本文件 kBuiltinAppIds ② server/src/apps.js 的
+      // BUILTIN_APPS ③ 下面这份期望值。漏任何一处，要么入口不显示，
+      // 要么这条判据变红。**加完请立刻跑 flutter test 确认。**
+      expect(kBuiltinAppIds, {
+        'attendance',
+        'my_requests',
+        'work_org',
+        'att_admin',
+        'stocktake',
+      });
     });
 
     test('不认识的 id 返回 null，让调用方跳过而不是崩', () {

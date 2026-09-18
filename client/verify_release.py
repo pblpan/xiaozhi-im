@@ -173,6 +173,24 @@ WIN_MARKS = [
     '连接你的服务器',              # 引导页标题
     '未配置服务器',                # 服务器设置页里的"未配置"状态文案
     'Integrity',                # core/integrity.dart：完整性校验入口类
+    # ---- v0.14.3 门店盘点（2026-09-19，原生离线盘点模块）----
+    # 这一期客户端新增了「采集页 → 本地落库 → 盈亏表/导出」三段链路。
+    # 判据**不挑 UI 文案**，挑的是三段链路各自真的在包里：
+    #   ① 采集：StocktakePage          ② 落库：本地表名（离线可用的根）
+    #   ③ 出数：StocktakeResultPage / StocktakeExport
+    # ✅ 2026-09-19 在真实 APK 的**三架构 libapp.so** 上逐条实测命中
+    #    （ascii 是 UTF-8；中文串走 UTF-16LE，scan_bytes 两种编码都试）。
+    #    改这里的任一条之前，先重跑那次实测 —— 别凭感觉写判据。
+    'StocktakePage',            # 采集页（扫码 → 记一笔）类名
+    'StocktakeResultPage',      # 盈亏表页类名
+    'StocktakeExport',          # 盈亏汇总 + 通用 CSV 导出
+    'stocktake_result.dart',    # 出数页所在文件（AOT 为栈回溯保留文件名）
+    'scan_record',              # 本地盘点流水表名：断网也能存，就靠它
+    'stock_master',             # 本地商品档案表名：扫码能显示品名/账面，就靠它
+    '盘点盈亏',                  # 盈亏表页标题（UTF-16LE）
+    # ⚠️ 判据不是越多越好。StocktakeRepo / StockMasterRepo / LocalDb 同样命中，
+    #    但三条新链路已经有代表，再堆只会让"哪天想改判据"变成考古。
+    #    真正该加的是**下一期的新链路**，不是把同类再抄一遍。
 ]
 
 # 只有 Windows 产物才有的记号。**绝不许混进 APK_MARKS**。

@@ -29,13 +29,20 @@ import '../screens/attendance.dart';
 import '../screens/attendance_admin.dart';
 import '../screens/attendance_request.dart';
 import '../screens/org_screen.dart';
+import '../screens/stocktake.dart';
 
 /// 内置应用 id 清单（与服务端 apps.js 的 BUILTIN_APPS 一一对应）
 ///
 /// `attendance` / `my_requests` 是**员工专属**（自己打卡、自己提申请）；
 /// `att_admin` 是**管理员专属**（今日看板 + 代补卡）。谁看得见由服务端按角色
 /// 算好下发（server/src/apps.js 的 listFor），客户端只负责认不认得这个 id。
-const kBuiltinAppIds = {'attendance', 'my_requests', 'work_org', 'att_admin'};
+const kBuiltinAppIds = {
+  'attendance',
+  'my_requests',
+  'work_org',
+  'att_admin',
+  'stocktake',
+};
 
 /// 该 id 是否是本客户端认识的内置应用。
 /// 服务端下发了但这里不认识 → 工作台直接不显示（而不是显示一个点进去崩的图标）。
@@ -52,6 +59,8 @@ Widget? builtinAppPage(String id) {
       return const OrgScreen();
     case 'att_admin':
       return const AttendanceAdminPage();
+    case 'stocktake':
+      return const StocktakePage();
     default:
       return null;
   }

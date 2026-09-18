@@ -85,10 +85,12 @@ class _ModulePageState extends State<ModulePage> {
   }
 
   static String _friendlyDataError(Object e) {
-    // 第三期才实现 /api/hooks/*，现在 404 属预期，别让用户以为坏了
+    // 这里的 404 是**上游自己**回的（服务端把上游状态原样透传），
+    // 不是"这条链路还没做" —— 网关侧的问题（没登记/停用/超时/连不上）都由服务端
+    // 归成 502 并带一句能看懂的中文，走下面的原样透出分支。
     final s = e.toString();
-    if (s.contains('404') || s.contains('请求失败 (HTTP 404)')) {
-      return '取数接口尚未开放（第三期上线）';
+    if (s.contains('404')) {
+      return '上游没有这个接口（地址或子路径可能写错了，去管理台「上游接口」试跑一下）';
     }
     return s;
   }

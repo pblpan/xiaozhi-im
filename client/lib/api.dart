@@ -305,7 +305,13 @@ class ImApi {
 
   /// 调用受控转发接口 `/api/hooks/*`（SPEC §4.4）。
   /// 上游地址只能由管理台登记，客户端无法指定完整 URL —— 这是防 SSRF 的关键。
-  /// 第三期上线该路由；现在调用会拿到 404，调用方按"取数失败"处理即可。
+  ///
+  /// 服务端（0.18.0 起）在 `/api/hooks/up/<名字>/<子路径>` 上实现了这条转发，
+  /// 所以这里传的 path 形如 `/api/hooks/up/tiger/report/daily?day=2026-09-16`。
+  ///
+  /// 回包是**带 data 外壳**的：`{ ok, upstream, url, status, ms, truncated, data }`，
+  /// 模块的 `dataPath` 因此写 `data.rows` / `data.items`（内置模板就是这么写的）。
+  /// 别把它当"裸数据"直接用，否则表格永远是空的。
   Future<dynamic> hookCall(String path,
       {String method = 'GET', Map<String, dynamic>? body}) async {
     final p = path.startsWith('/api') ? path.substring(4) : path;

@@ -43,6 +43,9 @@ void main() async {
   // 工作台/组织通讯录的一级入口）。先吃本地缓存保证离线也能定形态，
   // 网络那次在后台拉，不阻塞启动。
   await Workspace.load();
+  // 订阅 settings:changed：管理台改公司名/好友模式后，这里的标题与导航当场跟上，
+  // 不用等重启。放在 load() 之后是为了先有缓存值，避免订阅到第一帧时状态还是空的。
+  Workspace.bindSocket();
   await RemoteConfig().init(); // 配置中心：先吃本地缓存，再后台拉最新（含地址候选）
   await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
   await SoundService().init(); // 读提示音开关 + 预加载音频
@@ -93,21 +96,26 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        title: '小智 IM',
-        navigatorKey: appNavigatorKey,
-        theme: AppTheme.dark(),
-        // 挂在 builder 而不是包某一条路由：协作请求必须**在任何页面之上**
-        // 弹出来（用户在聊天页里照样要能看到），"正在被协助"的警示条同理。
-        // 包 login 或 home 都做不到 —— 一旦 push 了新路由就盖不住了。
-        builder: (ctx, child) =>
-            RemoteAssistWatcher(child: child ?? const SizedBox.shrink()),
-        // 完整性校验没过就**不进入** App：挡在最外层，连登录页都不给。
-        // 这是唯一一个"不给绕过"的界面 —— 签名对不上意味着这个包不可能是我们出的。
-        home: Integrity.blocked != null
-            ? IntegrityBlockedScreen(reason: Integrity.blocked!)
-            : const AuthGate(),
-        debugShowCheckedModeBanner: false,
+  Widget build(BuildContext context) => ValueListenableBuilder<String>(
+        // 窗口 / 任务栏标题也跟随公司名（Windows 桌面端最显眼的位置）。
+        // 只在公司名变化时重建一次，MaterialApp 的 Element 会复用，不丢状态。
+        valueListenable: Workspace.brand,
+        builder: (_, brand, __) => MaterialApp(
+          title: brand,
+          navigatorKey: appNavigatorKey,
+          theme: AppTheme.dark(),
+          // 挂在 builder 而不是包某一条路由：协作请求必须**在任何页面之上**
+          // 弹出来（用户在聊天页里照样要能看到），"正在被协助"的警示条同理。
+          // 包 login 或 home 都做不到 —— 一旦 push 了新路由就盖不住了。
+          builder: (ctx, child) =>
+              RemoteAssistWatcher(child: child ?? const SizedBox.shrink()),
+          // 完整性校验没过就**不进入** App：挡在最外层，连登录页都不给。
+          // 这是唯一一个"不给绕过"的界面 —— 签名对不上意味着这个包不可能是我们出的。
+          home: Integrity.blocked != null
+              ? IntegrityBlockedScreen(reason: Integrity.blocked!)
+              : const AuthGate(),
+          debugShowCheckedModeBanner: false,
+        ),
       );
 }
 

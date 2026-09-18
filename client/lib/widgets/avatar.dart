@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
+import 'package:xiaozhi_im_client/widgets/cached_image.dart';
 
 /// 用户头像。
 ///
@@ -108,16 +109,15 @@ class UserAvatar extends StatelessWidget {
             alignment: Alignment.center,
             child: url == null
                 ? _initialBox()
-                : Image.network(
-                    url,
+                : XzCachedImage(
+                    url: url,
                     width: size,
                     height: size,
                     fit: BoxFit.cover,
                     // 加载中先铺首字母：头像在列表里高频出现，
                     // 留白会闪出一片空格子，比慢一点更难看
-                    loadingBuilder: (c, child, p) =>
-                        p == null ? child : _initialBox(),
-                    errorBuilder: (c, e, s) => _initialBox(),
+                    progressIndicatorBuilder: (c, u, p) => _initialBox(),
+                    errorWidget: (c, e, s) => _initialBox(),
                   ),
           ),
           if (showOnlineDot)

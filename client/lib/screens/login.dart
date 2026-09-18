@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
-import 'package:xiaozhi_im_client/core/remote_config.dart';
+import 'package:xiaozhi_im_client/core/workspace.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/screens/register.dart';
 import 'package:xiaozhi_im_client/screens/home_shell.dart';
@@ -24,21 +24,20 @@ class _LoginScreenState extends State<LoginScreen> {
   /// 最近一次登录异常的原始对象，用于决定要不要显示"切换服务器"按钮
   ApiException? _lastErr;
 
-  /// 服务器端设置的公司名；空 = 未设置，标题回落「小智 IM」。
-  /// 显示规则（xxxx小智）在客户端拼 —— 服务端只存公司原文。
-  String _companyTitle = '小智 IM';
-
   @override
   void initState() {
     super.initState();
-    _loadCompany();
+    // 公司名 / 好友模式统一交给 Workspace 拉取和拼装（Workspace.brandOf）。
+    // 以前这里自己再发一次 fetchPublic、自己拼 '$name小智'，于是主界面标题
+    // 各写一份规则 —— 管理台改了公司名就成了"登录页变了、登进去又变回来"。
+    Workspace.refresh();
   }
 
-  Future<void> _loadCompany() async {
-    final b = await RemoteConfig.fetchPublic();
-    final name = (b['companyName'] ?? '').toString().trim();
-    final title = name.isEmpty ? '小智 IM' : '$name小智';
-    if (mounted && title != _companyTitle) setState(() => _companyTitle = title);
+  /// 换服务器后重拉：旧公司名属于上一台服务器，**必须先清掉再拉新的**。
+  /// 新服务器拉不到就回落「小智 IM」，绝不把上一台的品牌名留在新服务器上。
+  Future<void> _reloadCompany() async {
+    await Workspace.apply(companyName: '');
+    await Workspace.refresh();
   }
 
   @override
@@ -52,7 +51,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final changed = await showServerSettings(context);
     if (changed == true && mounted) {
       setState(() {});
-      _loadCompany(); // 换了服务器，公司名可能也换了
+      _reloadCompany(); // 换了服务器，公司名可能也换了
     }
   }
 
@@ -128,11 +127,14 @@ class _LoginScreenState extends State<LoginScreen> {
                       const Center(child: BrandLogo(size: 68)),
                       const SizedBox(height: 20),
                       Center(
-                        child: Text(_companyTitle,
-                            style: const TextStyle(
-                                fontSize: 25,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1)),
+                        child: ValueListenableBuilder<String>(
+                          valueListenable: Workspace.brand,
+                          builder: (_, brand, __) => Text(brand,
+                              style: const TextStyle(
+                                  fontSize: 25,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 1)),
+                        ),
                       ),
                       const SizedBox(height: 6),
                       const Center(

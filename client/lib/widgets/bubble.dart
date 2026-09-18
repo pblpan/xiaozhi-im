@@ -8,6 +8,7 @@ import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/core/voice.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
+import 'package:xiaozhi_im_client/widgets/cached_image.dart';
 
 class MessageBubble extends StatelessWidget {
   final Message msg;
@@ -516,23 +517,22 @@ class MessageBubble extends StatelessWidget {
             ),
             child: Container(
               color: AppColors.surfaceHi,
-              child: Image.network(
-                url,
+              child: XzCachedImage(
+                url: url,
                 width: 210,
                 fit: BoxFit.cover,
-                loadingBuilder: (c, child, progress) {
-                  if (progress == null) return child;
-                  return const SizedBox(
-                    width: 210,
-                    height: 150,
-                    child: Center(
-                        child: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2))),
-                  );
-                },
-                errorBuilder: (_, __, ___) => const SizedBox(
+                progressIndicatorBuilder: (_, __, ___) => const SizedBox(
+                  width: 210,
+                  height: 150,
+                  child: Center(
+                      child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+                ),
+                errorWidget: (_, __, ___) => const SizedBox(
                   width: 210,
                   height: 130,
                   child: Column(
@@ -808,10 +808,10 @@ class FullScreenImage extends StatelessWidget {
             tag: url,
             child: InteractiveViewer(
               maxScale: 6,
-              child: Image.network(
-                url,
+              child: XzCachedImage(
+                url: url,
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => const Center(
+                errorWidget: (_, __, ___) => const Center(
                   child: Text('图片加载失败',
                       style: TextStyle(color: Colors.white70)),
                 ),

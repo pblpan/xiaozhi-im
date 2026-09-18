@@ -34,11 +34,23 @@ void main() {
     Config.currentUrl = '';
   }
 
+  /// 把启动时的 bootstrap 重试**跑完**再结束测试。
+  ///
+  /// 冷启动会不 await 地拉一次 bootstrap（core/workspace.dart 的 refresh()），
+  /// 失败要重试 2 次：**6s 超时 + 2s/4s 退避**，加起来约 24s 的假时钟。
+  /// 测试里远端地址不可达，这些 Timer 就会被留在那儿，
+  /// 测试框架在结尾断言 "没有未完成的 Timer" 直接判红 ——
+  /// 红的原因跟被测功能一点关系都没有。**长红的测试等于没有测试**，
+  /// 所以这里主动把假时钟推过去，让重试自然走完。
+  Future<void> drainBootTimers(WidgetTester tester) =>
+      tester.pump(const Duration(seconds: 26));
+
   testWidgets('未登录时冷启动进入登录页（已配置服务器）', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({}); // 无 token
     withConfiguredServer();
     await tester.pumpWidget(const MyApp());
     await tester.pumpAndSettle();
+    await drainBootTimers(tester);
 
     expect(find.text('小智 IM'), findsOneWidget);
     expect(find.text('登录到你的私有通讯'), findsOneWidget);
@@ -49,6 +61,7 @@ void main() {
     withConfiguredServer();
     await tester.pumpWidget(const MyApp());
     await tester.pumpAndSettle();
+    await drainBootTimers(tester);
 
     expect(find.text('账号'), findsOneWidget);
     expect(find.text('密码'), findsOneWidget);

@@ -1,7 +1,7 @@
 name: xiaozhi_im_client
 description: 小智 IM 客户端 (Windows + Android)
 publish_to: 'none'
-version: 0.14.0+38
+version: 0.14.4+42
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -33,6 +33,55 @@ dependencies:
   win32: ^6.4.0
   tray_manager: ^0.5.3
   window_manager: ^0.5.2
+  # 离线地基：本地 SQLite 持久化（盘点模块弱网/断网靠它落地）。
+  # - sqflite：移动端（Android/iOS）走默认 factory
+  # - sqflite_common_ffi + sqlite3_flutter_libs：桌面端（Windows/Linux/macOS）
+  #   无 sqflite 默认 factory，必须走 FFI 绑定原生 sqlite3 库
+  # - path：拼库文件路径（桌面 getApplicationSupportDirectory 下、移动 getDatabasesPath 下）
+  sqflite: ^2.3.3
+  sqflite_common_ffi: ^2.3.6
+  sqlite3_flutter_libs: ^0.5.20
+  path: ^1.9.0
+  # 聊天图片磁盘缓存：解决"每次重开 App 图片都要重新下载"（外网极慢）。
+  # 作为全 App 图片加载的唯一出口，统一收口 cache 配置。
+  cached_network_image: ^3.3.1
+
+# ── SQLite 原生库从哪来（构建期配置；不写会让 APK 构建必挂）────────────
+# `sqlite3` 这个包默认在构建时**从 GitHub Releases 下载**预编译的
+# libsqlite3.*.so。国内网络下这一步必然超时（实测：跑 3 分半后
+# BUILD FAILED，报 "attempted to download .../libsqlite3.arm.android.so"），
+# 整个 APK 出不来。
+#
+# 而 Android 端**根本不需要**这个库：本地库在移动端走 sqflite 插件自带的
+# 系统实现（见 core/local_db.dart 的平台分支，只有桌面端才 FFI 加载 sqlite3）。
+# 所以让 Android 直接找系统库（system = dlopen("libsqlite3.so")）：
+# 构建期不下载，产物里也不多塞一份 .so。
+#
+# ⚠️ **Windows 必须保持默认（下载），不能跟着写 system**。
+# 我试过 `windows: system`（理由看上去很顺：sqlite3_flutter_libs 本来就会用 CMake
+# 编出 sqlite3.dll 放进 exe 同级目录，见它的 windows/CMakeLists.txt），结果
+# **本机 flutter test 直接挂 5 条本地库测试**：
+#     Failed to load dynamic library 'sqlite3.dll': The specified module could not
+#     be found. (error code: 126)
+# 因为 test 跑在 Dart VM 上，那时候还没有"flutter build 出来的 exe 目录"，
+# 也没有 PATH 里的 dll —— system 这条路的库在**测试环境下根本不存在**。
+# 这个坑的特点：只在跑测试时暴露，构建本身是好的，很容易被当成"测试自己坏了"。
+#
+# 而"下载"这条路在本机实测是**通的**，只是慢：
+#   sqlite3.x64.windows.dll 1.7MB / 40s / ≈42KB/s，且下完的 sha256
+#   c5a4ebf9922c63fa252a01c4679992f1fbaa2762b962b78ba6cbdc5cbf7ca91c
+#   与包内 asset_hashes.dart 里的期望值**逐字一致**（说明拿到的就是官方文件）。
+# 下载结果会缓存，不是每次构建都下。
+#
+# 其余平台（iOS/macOS/Linux）同样保持默认：那几端还没出过包，
+# 没有实测依据就不改 —— 猜着写配置比不写更坏。
+hooks:
+  user_defines:
+    sqlite3:
+      source:
+        android: system
+        default: sqlite3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
