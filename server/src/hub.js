@@ -48,4 +48,20 @@ function broadcastToConversation(db, conversationId, payload, excludeUserId) {
   }
 }
 
-module.exports = { userSockets, addSocket, removeSocket, send, broadcastToUser, broadcastToConversation, isUserOnline };
+/**
+ * 广播给**所有在线用户**（跨用户，与好友/群无关）。
+ *
+ * 【用途】全服务生效的设置变更：公司名、好友模式。这两项直接决定客户端
+ * 顶部标题和底部导航形态，改完必须让已经开着的 App 当场跟上 ——
+ * 不然就出现"管理台改了、客户端还是老样子"（龙哥 2026-09-18 报的那个）。
+ * 【注意】只发给已登录的连接。未登录/离线的人靠下次 `Workspace.refresh()` 拿，
+ * 所以这里**不是**唯一通道，不必为它做补发。
+ * 【安全】只广播公开字段（bootstrap 里本来就免鉴权可得），别往里塞任何内部数据。
+ */
+function broadcastAll(payload) {
+  for (const set of userSockets.values()) {
+    for (const ws of set) send(ws, payload);
+  }
+}
+
+module.exports = { userSockets, addSocket, removeSocket, send, broadcastToUser, broadcastToConversation, broadcastAll, isUserOnline };

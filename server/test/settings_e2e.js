@@ -5,6 +5,7 @@
 // 起隔离实例，覆盖：默认值、脏输入拦截、越权、免鉴权下发、显示名拼接约定。
 
 const { spawn } = require('child_process');
+const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -140,8 +141,63 @@ function stopServer() {
   r = await api('PUT', '/api/admin/settings', { token: admin, body: 'not an object' });
   ok('非对象 body 被拒', r.status === 400, JSON.stringify(r.body));
 
+  // ---------------- 设置变更实时广播（WS） ----------------
+  //
+  // 为什么必须有这段：公司名/好友模式改完要**推给已开着的客户端**，否则用户
+  // 看到的永远是"我在服务器上改了，客户端没改"。但光验"推到了"不够 ——
+  // 反向还要验"设置被拒时不许推"（否则客户端会跟着一个非法值乱跳）和
+  // "未登录连不上"（否则任何人都能挂着 WS 偷看服务端设置）。
+  console.log('\n【五】设置变更实时广播');
+  const frames = [];
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?token=${encodeURIComponent(admin)}`);
+  const wsErr = await new Promise((res) => {
+    const t = setTimeout(() => res('timeout'), 5000);
+    ws.on('open', () => { clearTimeout(t); res(null); });
+    ws.on('error', (e) => { clearTimeout(t); res(e.message); });
+  });
+  ok('管理员 WS 连接成功', wsErr === null, String(wsErr));
+  ws.on('message', (d) => {
+    try { frames.push(JSON.parse(d.toString())); } catch { /* 非 JSON 帧忽略 */ }
+  });
+  await sleep(200); // 等 connected 帧
+
+  r = await api('PUT', '/api/admin/settings', { token: admin, body: { companyName: '好又多' } });
+  await sleep(300);
+  let hits = frames.filter((f) => f.type === 'settings:changed');
+  ok('改公司名 → 在线客户端收到 settings:changed', hits.length === 1, JSON.stringify(frames));
+  ok('广播带新公司名', hits[0]?.companyName === '好又多', JSON.stringify(hits[0]));
+  ok('广播带好友模式（客户端据此切导航）', hits[0]?.friendMode === 'normal', JSON.stringify(hits[0]));
+
+  frames.length = 0;
+  r = await api('PUT', '/api/admin/settings', { token: admin, body: { friendMode: 'work' } });
+  await sleep(300);
+  hits = frames.filter((f) => f.type === 'settings:changed');
+  ok('改好友模式 → 同样推送', hits.length === 1 && hits[0].friendMode === 'work', JSON.stringify(frames));
+
+  // 反向断言：400 时不许推。推了的话客户端会把一个非法值当真。
+  frames.length = 0;
+  r = await api('PUT', '/api/admin/settings', { token: admin, body: { companyName: 'x'.repeat(21) } });
+  ok('非法公司名被拒（前置条件）', r.status === 400, JSON.stringify(r.body));
+  await sleep(250);
+  ok('设置被拒 → 不广播', frames.filter((f) => f.type === 'settings:changed').length === 0,
+    JSON.stringify(frames));
+
+  // 反向断言：没有 token 的连接根本连不上，收不到任何设置帧。
+  const unauth = await new Promise((res) => {
+    const w2 = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+    const t = setTimeout(() => res('timeout'), 3000);
+    w2.on('close', (code) => { clearTimeout(t); res(code); });
+    w2.on('error', () => { clearTimeout(t); res('error'); });
+  });
+  ok('未带 token 的 WS 被拒（4001）', unauth === 4001, String(unauth));
+
+  ws.close();
+  // 把状态放回【六】持久化期待的值（这段改过的都必须还原，否则下游断言被连坐）
+  await api('PUT', '/api/admin/settings', { token: admin, body: { companyName: '盛京' } });
+  await api('PUT', '/api/admin/settings', { token: admin, body: { friendMode: 'normal' } });
+
   // ---------------- 持久化（重启不丢） ----------------
-  console.log('\n【五】持久化');
+  console.log('\n【六】持久化');
   r = await api('GET', '/api/admin/settings', { token: admin });
   ok('设置仍在（同进程内）', r.body.companyName === '盛京' && r.body.friendMode === 'normal', JSON.stringify(r.body));
 

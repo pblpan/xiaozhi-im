@@ -324,6 +324,41 @@ CREATE TABLE IF NOT EXISTS module_submissions (
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_submissions_module ON module_submissions(module_id, created_at DESC);`);
 
+// ---- 上游接口登记（动态模块第三期：让自建应用真的能取到数）----
+//
+// 背景：动态模块的 `onLoad` / `action` 只允许 `/api/hooks/` 前缀（防 SSRF），
+// 但那一层一直没实现，于是 list/table/chart 三种组件只能渲染空壳。
+//
+// 这里存的就是"允许被转发的上游"。安全边界是**白名单**，而不是"只准公网 IP"
+// —— 上游本来就在内网（工厂 V2、餐饮 POS、门店数据桥接器都在 192.168 段），
+// 禁内网等于这个功能没用。真正防的是"客户端能打到任意 URL"这件事：
+// 路径由登记的名字查出来，客户端永远只给得出一个名字。
+//
+// 凭证（auth_header）由服务端持有，**绝不下发给客户端**，也不会回显在列表里。
+//
+// allow_roles：哪些角色能通过这条上游取数。空数组 = 所有已登录用户。
+// 为什么必须有这一列：模块的 visibleTo 只管"入口给谁看"，管不住"接口给谁调"。
+// 门店日报这类经营数据如果只靠前端隐藏入口，任何员工拿自己的 token 直接打
+// /api/hooks/up/report/... 就能拿到 —— 入口可见性和数据权限是两件事。
+db.exec(`
+CREATE TABLE IF NOT EXISTS upstreams (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,          -- URL 里用的名字：/api/hooks/up/<name>/...
+  label TEXT,                          -- 中文说明，管理台显示
+  base_url TEXT NOT NULL,              -- 如 http://192.168.31.44:3700
+  auth_header TEXT,                    -- 可选。整条 Authorization 值，服务端持有
+  allow_roles TEXT NOT NULL DEFAULT '[]', -- 允许的角色白名单，空=所有登录用户
+  timeout_ms INTEGER NOT NULL DEFAULT 10000,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  updated_by TEXT
+);
+`);
+// 兜底：万一某台机器的 upstreams 是在加 allow_roles 之前建的，
+// CREATE TABLE IF NOT EXISTS 是空操作、列会缺 → 后面读出来 JSON.parse(null) 直接崩。
+ensureColumn('upstreams', 'allow_roles', "allow_roles TEXT NOT NULL DEFAULT '[]'");
+
 // ---- 远程协助（对标 UU 远程）----
 // 两张表，职责严格分开：
 //   remote_sessions        每次会话的**审计记录**（谁被谁控、多久、什么模式、怎么结束的）

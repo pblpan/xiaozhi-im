@@ -275,6 +275,131 @@ function seed() {
     await page.screenshot({ path: `${SHOT_DIR}/admin-files-orphans.png`, fullPage: true }).catch(() => {});
   });
 
+  // 上游接口（v0.18.0 新增）：这一页的失败方式与别处不同 ——
+  // 保存/试跑里的运行时错误**不会**让页面白屏，只是点了没反应；
+  // 所以必须真的点一遍"登记 → 保存 → 试跑"，光看文案在不在没用。
+  console.log('\n== 上游接口（v0.18.0） ==');
+  await openTab('上游接口', 'upstreams', async (txt) => {
+    ok('  说明文案点明"点进去看"而不是只有推送', txt.includes('点进去看'));
+    ok('  有「登记上游接口」入口', txt.includes('登记上游接口'));
+    ok('  表头含「客户端调用的路径」（管理台要把它抄进模块）', txt.includes('客户端调用的路径'));
+    ok('  有「怎么用」指引', txt.includes('怎么用'));
+    ok('  空态给出引导而不是一片空白',
+      (await page.locator('.el-empty').count()) > 0 || txt.includes('还没有上游'));
+
+    // ---- 真的登记一条：地址指向本临时服务端自己的 /api（免鉴权 health 能真通）----
+    await page.click('button:has-text("登记上游接口")');
+    await page.waitForTimeout(900);
+    const dlg = page.locator('.el-dialog').filter({ hasText: '登记上游接口' }).first();
+    ok('  登记弹窗能打开（模板没崩）', await dlg.count() > 0);
+    if (await dlg.count() === 0) return;
+
+    const dt = await dlg.innerText();
+    ok('    字段齐全（接口名/上游地址/凭据/超时/允许的角色）',
+      ['接口名', '上游地址', '凭据', '超时', '允许的角色'].every((x) => dt.includes(x)));
+    ok('    说清"留空 = 所有登录用户"', dt.includes('留空 = 所有登录用户'));
+    ok('    新建时说明凭据由服务端注入（客户端拿不到）', dt.includes('服务端在转发时注入'));
+    ok('    说清接口名登记后不能改（改名字等于换一条接口）', dt.includes('不能改名'));
+
+    await dlg.locator('input[placeholder*="小写字母"]').first().fill('uitest');
+    await dlg.locator('input[placeholder*="门店日报数据源"]').first().fill('UI 自检');
+    await dlg.locator('input[placeholder*="192.168.31.44"]').first()
+      .fill(`http://127.0.0.1:${PORT}/api`);
+    // 故意带一条凭据：既验证"配了就显示已配置"，也验证**编辑时回显为空**
+    await dlg.locator('input[type="password"]').first().fill('Bearer ui-dummy-credential');
+    await dlg.locator('button:has-text("保存")').first().click();
+    await page.waitForTimeout(1600);
+
+    const after = await page.innerText('body');
+    ok('    保存后列表里出现 uitest', after.includes('uitest'));
+    ok('    列表里给出客户端可用的路径前缀', after.includes('/api/hooks/up/uitest'));
+    ok('    凭据列显示「已配置」（配了就是配了）', after.includes('已配置'));
+    // 明文不能出现在列表里 —— 页面上任何一个角落都不行
+    ok('    列表里看不到凭据明文', !after.includes('ui-dummy-credential'));
+
+    // 操作列不放 fixed、宽度给够：5 个按钮挤在一起会换行，最后一个（删除）被裁到视口外。
+    // 这种问题**只有截图/量位置才看得出来**，文案断言一律通过。
+    const lastBtn = page.locator('table button:has-text("删除")').first();
+    if (await lastBtn.count() > 0) {
+      const box = await lastBtn.boundingBox();
+      const vw = page.viewportSize().width;
+      ok('    操作列不裁按钮（删除按钮完整落在视口内）',
+        box && box.x >= 0 && box.x + box.width <= vw,
+        box ? `x=${Math.round(box.x)} w=${Math.round(box.width)} vw=${vw}` : 'no box');
+      ok('    操作列不换行（按钮高度一致 → 在同一行）',
+        box ? box.height < 40 : false, box && box.height);
+    }
+    await page.screenshot({ path: `${SHOT_DIR}/admin-upstreams.png`, fullPage: true }).catch(() => {});
+
+    // ---- 编辑：凭据必须回显为空，并给"清空"开关 ----
+    const editBtn = page.locator('button:has-text("编辑")').first();
+    if (await editBtn.count() > 0) {
+      await editBtn.click();
+      await page.waitForTimeout(900);
+      const ed = page.locator('.el-dialog').filter({ hasText: '编辑上游' }).first();
+      ok('  编辑弹窗能打开', await ed.count() > 0);
+      if (await ed.count() > 0) {
+        const et = await ed.innerText();
+        ok('    编辑时说明"不回显、留空 = 保持原值"',
+          et.includes('不回显') && et.includes('保持原值'), et.replace(/\n/g, ' | ').slice(0, 200));
+        ok('    提供「清空已存凭据」开关', et.includes('清空已存凭据'));
+        const pwInput = ed.locator('input[type="password"]').first();
+        ok('    凭据输入框是空的（不把已存凭据回填到页面）',
+          (await pwInput.inputValue()) === '', await pwInput.inputValue());
+        // placeholder 是"看得见的提示"，但它不在 innerText 里，得单独取
+        ok('    凭据框提示"已配置（留空 = 不改动）"',
+          /已配置/.test(await pwInput.getAttribute('placeholder') || ''),
+          await pwInput.getAttribute('placeholder'));
+        // 接口名在编辑态应锁定：改名等于换一条接口
+        const nameInput = ed.locator('input[placeholder*="小写字母"]').first();
+        ok('    接口名在编辑态被锁住不能改',
+          await nameInput.isDisabled().catch(() => false));
+        await page.locator('.el-dialog__headerbtn').last().click().catch(() => {});
+        await page.waitForTimeout(500);
+      }
+    }
+  });
+
+  // 试跑：管理台"配完当场看真实返回"，是"照着看到的填 dataPath"的唯一依据
+  {
+    const runBtn = page.locator('button:has-text("试跑")').first();
+    if (await runBtn.count() > 0) {
+      await runBtn.click();
+      await page.waitForTimeout(900);
+      const td = page.locator('.el-dialog').filter({ hasText: '试跑上游' }).first();
+      ok('试跑弹窗能打开', await td.count() > 0);
+      if (await td.count() > 0) {
+        await td.locator('input').first().fill('health');
+        await td.locator('button:has-text("试跑")').last().click();
+        await page.waitForTimeout(2000);
+        const body = await td.innerText();
+        ok('  试跑拿到真实回包（不是报错）', /HTTP 200/.test(body), body.replace(/\n/g, ' | ').slice(0, 160));
+        ok('  显示的是整包（含 data 外壳），与客户端收到的完全一致', body.includes('"data"'));
+        ok('  明确提示 dataPath 要带 data. 前缀（否则管理员会填成裸字段名）',
+          body.includes('data.字段名'), body.replace(/\n/g, ' | ').slice(0, 200));
+        await page.screenshot({ path: `${SHOT_DIR}/admin-upstreams-test.png`, fullPage: true }).catch(() => {});
+        await page.locator('.el-dialog__headerbtn').last().click().catch(() => {});
+        await page.waitForTimeout(500);
+      }
+    } else {
+      ok('试跑按钮存在', false, '列表里找不到「试跑」');
+    }
+  }
+
+  // 探活：只打 base_url，配完点一下就知道地址对不对
+  {
+    const probe = page.locator('button:has-text("探活")').first();
+    if (await probe.count() > 0) {
+      await probe.click();
+      await page.waitForTimeout(1800);
+      const t = await page.innerText('body');
+      ok('  探活给出明确结果（通 / 连不上，不带含糊）',
+        /通得了|连不上/.test(t), t.slice(0, 120));
+    } else {
+      ok('探活按钮存在', false);
+    }
+  }
+
   await openTab('消息管理', 'messages', async (txt) => {
     ok('  默认 30 天窗提示', txt.includes('最近 30 天'));
     ok('  时间快捷选项齐全（今天/7天/30天/90天/全部时间）',

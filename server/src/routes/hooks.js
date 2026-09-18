@@ -194,4 +194,95 @@ router.post('/incoming/:token', (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+//  上游受控转发（动态模块第三期）
+//
+//    GET/POST /api/hooks/up/<名字>/<子路径>
+//
+//  让动态模块的 list / table / chart 真能取到数。与上面 /incoming/<token>
+//  是**两种安全模型**，不要混：
+//    · /incoming/<token>  —— "地址即凭证"，免登录，只能**写**（往群里推消息）
+//    · /up/<name>/...     —— **必须已登录**，只能**读**。因为上游回的是业务数据
+//                            （营业额、库存、考勤），靠一个 URL 就拿到是不可接受的。
+//
+//  路径里只有「名字」，真实地址由服务端查表得出 → 客户端给不出任意 URL，
+//  SSRF 从"能不能构造 URL"退化成"能不能猜到一个已登记的名字"。
+// ─────────────────────────────────────────────────────────────────────
+const { verifyToken } = require('../auth');
+const upstream = require('../upstream');
+
+/** 转发限流：按用户计，防止一个客户端把上游打穿（上游常是内网小机器） */
+const upHits = new Map();
+const UP_RATE_MAX = 120;
+
+function upstreamRateLimited(uid) {
+  const now = Date.now();
+  const rec = upHits.get(uid);
+  if (!rec || now > rec.resetAt) {
+    upHits.set(uid, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return false;
+  }
+  rec.count++;
+  // 顺手清理过期条目，避免这张表跟着用户数无限长
+  if (upHits.size > 512) {
+    for (const [k, v] of upHits) if (now > v.resetAt) upHits.delete(k);
+  }
+  return rec.count > UP_RATE_MAX;
+}
+
+const upRouter = express.Router();
+
+upRouter.use((req, res, next) => {
+  const c = verifyToken(String(req.headers.authorization || '').replace('Bearer ', ''));
+  if (!c) return res.status(401).json({ error: 'unauthorized' });
+  if (upstreamRateLimited(c.uid)) {
+    return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
+  }
+  req._upUid = c.uid;
+  req._upRole = c.role;
+  next();
+});
+
+// ⚠️ 刻意用 `use` + 手工拆路径，不用 `'/up/:name/*'` 这种模式：
+//    Express 5 换成了 path-to-regexp v8，**裸 `*` 不再合法**（要写 `*splat`），
+//    且不同小版本的报错方式不一样。手工拆与框架版本无关，升级 Express 不会坏。
+upRouter.use((req, res) => {
+  const seg = String(req.path || '').replace(/^\/+/, '').split('/');
+  const name = (seg.shift() || '').trim();
+  const sub = seg.join('/');
+
+  // query 用**原始串**透传：上游自己的参数语义（分页、日期）不该被这里改写
+  const qi = String(req.originalUrl || '').indexOf('?');
+  const search = qi >= 0 ? String(req.originalUrl).slice(qi + 1) : '';
+
+  Promise.resolve(upstream.forward(name, sub, {
+    method: req.method, search, body: req.body, role: req._upRole,
+  }))
+    .then((r) => {
+      if (r.error) {
+        // 403 = 这条上游设了角色白名单，这个用户不在里面。
+        // 与"路径不对(404)""上游连不上(502)"分开报，排障时才知道该改哪儿。
+        if (r.forbidden) {
+          return res.status(403).json({ error: r.error, upstream: name });
+        }
+        // 502 = 网关侧问题（没登记 / 连不上 / 超时）。与"上游正常回了个 404"区分开，
+        // 否则客户端看到 404 会以为是"这个接口不存在"，去查错地方。
+        return res.status(502).json({ error: r.error, upstream: name, url: r.url || null });
+      }
+      // 上游的 HTTP 状态原样透传
+      res.status(r.status).json({
+        ok: r.ok,
+        upstream: name,
+        url: r.url,
+        status: r.status,
+        ms: r.ms,
+        truncated: r.truncated,
+        data: r.data,
+      });
+    })
+    .catch((e) => res.status(500).json({ error: '转发异常：' + e.message, upstream: name }));
+});
+
+router.use('/up', upRouter);
+
 module.exports = router;

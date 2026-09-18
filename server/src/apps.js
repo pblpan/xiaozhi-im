@@ -85,6 +85,23 @@ const BUILTIN_APPS = [
     // 这个入口就跟着消失，不会出现"点进去报错"的状态。
     need: { workMode: true, attendance: true, orgMember: true, adminOnly: true },
   },
+  {
+    id: 'stocktake',
+    title: '门店盘点',
+    // 图标名必须落在 appmodules.js 的 ICONS 白名单（以及客户端
+    // module_renderer.dart 的 kModuleIcons）里，否则会退化成通用图标。
+    icon: 'inventory',
+    group: 'work',
+    desc: '扫码盘点，离线可用，盘完生成盈亏表',
+
+    // 为什么只要求工作模式，不像考勤那样还要求 orgMember：
+    //   盘点是**门店现场作业**，跟"这个人有没有被录进组织名册"是两回事 ——
+    //   老板自己、临时来帮忙的人都要能盘。加 orgMember 会让"明明装了却看不到
+    //   入口"这种最难查的问题再次出现（历史上在考勤上踩过：账号没录组织 →
+    //   入口消失，现象是"功能没做"，实际是数据没录）。
+    //   入口和权限必须是同一套判据：这里不需要额外权限，就别额外设限。
+    need: { workMode: true },
+  },
 ];
 
 /**

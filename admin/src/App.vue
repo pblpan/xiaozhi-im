@@ -55,6 +55,7 @@
         <el-menu-item index="integrations">集成对接</el-menu-item>
         <el-menu-item index="clientconfig">客户端配置</el-menu-item>
         <el-menu-item index="modules">动态模块</el-menu-item>
+        <el-menu-item index="upstreams">上游接口</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
         <el-menu-item index="license">授权管理</el-menu-item>
         <el-menu-item index="help">系统帮助</el-menu-item>
@@ -1931,7 +1932,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                         <el-input v-else-if="c.onTap.action === 'copy'" v-model="c.onTap.text" placeholder="要复制的文字" />
                         <el-input v-else v-model="c.onTap.url" placeholder="https://…（只允许 https）" />
                       </div>
-                      <div class="hint">接口路径必须以 <code class="mono">/api/hooks/</code> 开头；上游地址在「上游接口」里登记（第三期）。</div>
+                      <div class="hint">
+                        接口路径必须以 <code class="mono">/api/hooks/</code> 开头；
+                        上游的真实地址在「<b>上游接口</b>」里登记，这里只填
+                        <code class="mono">{{ us.pathPrefix }}&lt;接口名&gt;/&lt;子路径&gt;</code>。
+                        填之前先去那一页「试跑」一下，按真实返回的字段拼数据路径，比猜快。
+                      </div>
                     </template>
 
                     <!-- form -->
@@ -2868,6 +2874,180 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               同一天同一类型可以有多条流水（员工"更新打卡"会保留历史），统计只取上班最早、下班最晚。
             </div>
           </el-dialog>
+        </div>
+
+        <div v-else-if="tab === 'upstreams'">
+          <el-alert type="success" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              把内网系统的数据<b>接到客户端里</b>。在这里登记一次地址，「动态模块」的列表 / 表格 / 图表
+              就能取到真数据 —— 员工在小智里<b>点进去看</b>，不用把数字推到群里刷屏。
+              客户端只提交一个<b>名字</b>，真实地址和凭据都在服务端，所以猜不到别的地址、也拿不到凭据。
+            </template>
+          </el-alert>
+
+          <div class="page-bar">
+            <el-button type="primary" @click="openUsDialog()">登记上游接口</el-button>
+            <span class="hint">
+              只允许 GET / POST；子路径跳不出填的地址（<code class="mono">..</code> /
+              完整 URL / <code class="mono">//</code> 一律拒绝）。
+            </span>
+          </div>
+
+          <!-- 列宽是**算出来的**，不是随手填的：这块表要能塞进 1366 宽的笔记本屏，
+               否则最右边的「删除」会被挤到视口外，而表格看着"挺正常"，
+               人只会以为这个功能没做。当前合计 ≈1315。 -->
+          <el-table :data="us.list" border stripe>
+            <el-table-column label="接口名 / 说明" width="145">
+              <template #default="{ row }">
+                <code class="mono">{{ row.name }}</code>
+                <div v-if="row.label" class="hint">{{ row.label }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="上游地址" width="175">
+              <template #default="{ row }">
+                <span class="mono" :title="row.baseUrl">{{ row.baseUrl }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="客户端调用的路径" width="195">
+              <template #default="{ row }">
+                <code class="mono">{{ us.pathPrefix + row.name }}/…</code>
+                <el-button size="small" text type="primary"
+                  @click="copy(us.pathPrefix + row.name + '/')">复制</el-button>
+              </template>
+            </el-table-column>
+            <el-table-column label="凭据" width="68">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.hasAuth ? 'success' : 'info'" effect="plain">
+                  {{ row.hasAuth ? '已配置' : '无' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="超时" width="92">
+              <template #default="{ row }">{{ row.timeoutMs }}ms</template>
+            </el-table-column>
+            <el-table-column label="允许的角色" width="108">
+              <template #default="{ row }">
+                <el-tag v-if="!row.allowRoles.length" size="small" effect="plain">全部登录用户</el-tag>
+                <el-tag v-for="r in row.allowRoles" v-else :key="r" size="small" style="margin-right:3px">{{ r }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="68">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.enabled ? 'success' : 'danger'">
+                  {{ row.enabled ? '启用' : '已停用' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="最后修改" width="115">
+              <template #default="{ row }">
+                <div>{{ fmtTime(row.updatedAt) }}</div>
+                <div class="hint">{{ row.updatedBy }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="340">
+              <template #default="{ row }">
+                <el-button size="small" :loading="usProbing === row.id" @click="probeUs(row)">探活</el-button>
+                <el-button size="small" @click="openUsTest(row)">试跑</el-button>
+                <el-button size="small" @click="openUsDialog(row)">编辑</el-button>
+                <el-button size="small" @click="toggleUs(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
+                <el-button size="small" type="danger" @click="delUs(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-if="!us.list.length" description="还没有上游。点「登记上游接口」把内网系统的地址填进来" />
+
+          <div class="hint" style="margin-top:12px">
+            <b>怎么用</b>：登记完回到「动态模块」，新建一个 <code class="mono">table</code> 或
+            <code class="mono">chart</code>，把「数据来源」填成上表里那条路径（例如
+            <code class="mono">/api/hooks/up/tiger/report/daily?day=…</code>），再按试跑返回的字段拼列/轴。
+            员工端<b>下拉刷新</b>就能看到，不用重装 App。
+          </div>
+        <!-- ===== 上游接口（动态模块第三期：让列表/表格/图表取到真数据） ===== -->
+        <el-dialog v-model="usDlg" :title="usSel ? `编辑上游「${usSel}」` : '登记上游接口'" width="640px">
+          <el-form label-width="130px" label-position="left">
+            <el-form-item label="接口名">
+              <el-input v-model="usForm.name" :disabled="!!usSel"
+                placeholder="小写字母开头，如 tiger / factory / pos" />
+              <div class="hint">
+                这个名字会出现在路径里（客户端只认名字，不认地址）—— 改名字等于换一条接口，
+                所以登记后不能改名，要改就删掉重建。
+              </div>
+            </el-form-item>
+            <el-form-item label="说明">
+              <el-input v-model="usForm.label" placeholder="如：门店日报数据源（给自己看的）" />
+            </el-form-item>
+            <el-form-item label="上游地址">
+              <el-input v-model="usForm.baseUrl" placeholder="http://192.168.31.44:3666（写到端口即可，不要带子路径）" />
+              <div class="hint">
+                必须是服务端**能访问到**的地址。填 127.0.0.1 时注意：跑的是容器/服务器上的本机，
+                不是你自己电脑。
+              </div>
+            </el-form-item>
+            <el-form-item label="凭据（Authorization）">
+              <el-input v-model="usForm.authHeader" type="password" show-password
+                :placeholder="usEditingHasAuth ? '已配置（留空 = 不改动）' : '如 Bearer xxxxx（留空 = 不带凭据）'" />
+              <div class="hint">
+                <template v-if="usEditingHasAuth">
+                  出于安全考虑这里<b>不回显</b>已存的凭据。留空提交 = 保持原值；
+                  要换就整条重填，要清掉请勾下面。
+                </template>
+                <template v-else>
+                  由服务端在转发时注入，客户端拿不到也不需要知道。
+                </template>
+                <div v-if="usEditingHasAuth" style="margin-top:6px">
+                  <el-checkbox v-model="usForm.clearAuth">清空已存凭据</el-checkbox>
+                </div>
+              </div>
+            </el-form-item>
+            <el-form-item label="超时">
+              <el-input-number v-model="usForm.timeoutMs" :min="us.capability.minTimeout || 1000"
+                :max="us.capability.maxTimeout || 30000" :step="1000" />
+              <span class="hint" style="margin-left:8px">
+                毫秒。上游常是内网小机器，给太短会误报超时。
+              </span>
+            </el-form-item>
+            <el-form-item label="允许的角色">
+              <el-select v-model="usForm.allowRoles" multiple allow-create filterable
+                placeholder="留空 = 所有登录用户" style="width:100%">
+                <el-option label="管理员 admin" value="admin" />
+                <el-option label="普通用户 user" value="user" />
+              </el-select>
+              <div class="hint">
+                留空 = 任何登录用户都能取到数（适合门店日报这类人人可看的）。
+                填了就<b>只</b>放这些角色 —— 注意 admin 不在列表里也没权限，规则只有一套，
+                免得"设了白名单管理员却能绕过"当惊喜。
+              </div>
+            </el-form-item>
+            <el-form-item label="启用">
+              <el-switch v-model="usForm.enabled" active-text="启用" inactive-text="停用" />
+              <span class="hint" style="margin-left:8px">停用 = 该接口对所有角色关闸，不用删配置就能临时关掉。</span>
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="usDlg = false">取消</el-button>
+            <el-button type="primary" :loading="usBusy" @click="saveUs">保存</el-button>
+          </template>
+        </el-dialog>
+
+        <el-dialog v-model="usTestDlg" :title="`试跑上游「${usTestName}」`" width="760px">
+          <div class="hint" style="margin-bottom:10px">
+            这里直接按服务端转发一次，下面显示的是<b>客户端会拿到的那一整包</b>（包含
+            <code class="mono">data</code> 外壳、耗时、真实 URL）。
+            所以填 <code class="mono">dataPath</code> 时要带上前缀，写成
+            <code class="mono">data.字段名</code> —— 只写字段名在客户端取不到值，表格会是空的。
+          </div>
+          <el-input v-model="usTestSub" placeholder="子路径，如 report/daily 或 report/daily/2026-09-16">
+            <template #prepend>{{ us.pathPrefix + usTestName }}/</template>
+            <template #append>
+              <el-button :loading="usTestBusy" @click="runUsTest">试跑</el-button>
+            </template>
+          </el-input>
+          <el-alert v-if="usTestErr" type="error" :closable="false" style="margin-top:12px"
+            :title="usTestErr" />
+          <div v-if="usTestMeta" class="hint" style="margin-top:10px">{{ usTestMeta }}</div>
+          <pre v-if="usTestOut" class="mm-json" style="margin-top:10px">{{ usTestOut }}</pre>
+        </el-dialog>
+
         </div>
 
         <div v-else-if="tab === 'settings'">
@@ -4010,6 +4190,7 @@ async function loadTab() {
   else if (tab.value === 'integrations') await loadIntegrations();
   else if (tab.value === 'clientconfig') { await loadCc(); await loadCcApplied(); }
   else if (tab.value === 'modules') { await loadMm(); await loadAppCatalog(); await loadUserOptions(); }
+  else if (tab.value === 'upstreams') await loadUs();
   else if (tab.value === 'license') await loadLicense();
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
 }
@@ -4551,6 +4732,168 @@ function applyTemplate(t) {
     body: m.body || [],
   };
   ElMessage.info(`已载入模板「${t.name}」，确认内容后点保存`);
+}
+
+// ====== 上游接口（动态模块第三期：让列表 / 表格 / 图表真能取到数） ======
+// 这一页要解决的是"**点进来看**"而不是"推到群里刷屏"：地址登记一次，
+// 员工的动态模块按需拉数。所以界面上必须让人①一眼看到客户端该填哪条路径
+// ②一键试跑看到真实返回形状 —— 否则管理员只能靠猜字段名去拼表格列。
+const us = ref({
+  list: [],
+  capability: { methods: [], defaultTimeout: 10000, minTimeout: 1000, maxTimeout: 30000 },
+  pathPrefix: '/api/hooks/up/',
+});
+const usDlg = ref(false);
+const usBusy = ref(false);
+const usSel = ref('');          // 正在编辑的接口名（'' = 新建）
+const usProbing = ref(0);
+const usTestDlg = ref(false);
+const usTestName = ref('');
+const usTestSub = ref('');
+const usTestBusy = ref(false);
+const usTestOut = ref('');
+const usTestErr = ref('');
+const usTestMeta = ref('');
+const usEditingHasAuth = ref(false);   // 编辑的这条是否已存凭据 → 决定 placeholder 与"清空"勾选框
+
+function usNewForm() {
+  return {
+    name: '', label: '', baseUrl: '', authHeader: '', clearAuth: false,
+    timeoutMs: 10000, allowRoles: [], enabled: true,
+  };
+}
+const usForm = ref(usNewForm());
+
+async function loadUs() {
+  try {
+    const { data } = await api.get('/admin/upstreams');
+    us.value = {
+      list: data.upstreams || [],
+      capability: data.capability || us.value.capability,
+      pathPrefix: data.capability?.pathPrefix || '/api/hooks/up/',
+    };
+  } catch (e) {
+    ElMessage.error('读取上游接口失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+function openUsDialog(row) {
+  if (row) {
+    usSel.value = row.name;
+    usEditingHasAuth.value = !!row.hasAuth;
+    usForm.value = {
+      name: row.name,
+      label: row.label || '',
+      baseUrl: row.baseUrl || '',
+      // 刻意留空：服务端不回显凭据明文，空 = 不改。填了才覆盖。
+      authHeader: '',
+      clearAuth: false,
+      timeoutMs: row.timeoutMs || us.value.capability.defaultTimeout,
+      allowRoles: [...(row.allowRoles || [])],
+      enabled: !!row.enabled,
+    };
+  } else {
+    usSel.value = '';
+    usEditingHasAuth.value = false;
+    usForm.value = usNewForm();
+  }
+  usDlg.value = true;
+}
+
+async function saveUs() {
+  const f = usForm.value;
+  if (!f.name.trim()) return ElMessage.warning('请填接口名');
+  if (!f.baseUrl.trim()) return ElMessage.warning('请填上游地址');
+
+  const body = {
+    name: f.name.trim().toLowerCase(),
+    label: f.label,
+    baseUrl: f.baseUrl.trim(),
+    timeoutMs: f.timeoutMs,
+    allowRoles: f.allowRoles,
+    enabled: f.enabled,
+  };
+  // 凭据三态：勾了清空 > 填了新的 > 没动。
+  // **没动时不下发这个字段**，服务端才会保持原值（这是"不回显明文"能成立的前提）。
+  if (f.clearAuth) body.authHeader = '';
+  else if (f.authHeader.trim()) body.authHeader = f.authHeader.trim();
+
+  usBusy.value = true;
+  try {
+    await api.post('/admin/upstreams', body);
+    ElMessage.success(f.enabled ? '已保存' : '已保存（当前为停用状态，客户端取不到数）');
+    usDlg.value = false;
+    await loadUs();
+  } catch (e) {
+    ElMessage.error('保存失败：' + (e.response?.data?.error || e.message));
+  } finally { usBusy.value = false; }
+}
+
+async function toggleUs(row) {
+  try {
+    // 只提交 enabled —— 服务端支持部分更新，不会因为"没带地址"而失败
+    await api.post('/admin/upstreams', { name: row.name, enabled: !row.enabled });
+    await loadUs();
+  } catch (e) {
+    ElMessage.error('操作失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+async function delUs(row) {
+  try {
+    await ElMessageBox.confirm(
+      `删除上游「${row.name}」后，用到它的动态模块会立刻取不到数（客户端会看到"没有登记"）。确定删除？`,
+      '删除确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/admin/upstreams/${row.id}`);
+    ElMessage.success('已删除');
+    await loadUs();
+  } catch (e) {
+    ElMessage.error('删除失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+async function probeUs(row) {
+  usProbing.value = row.id;
+  try {
+    const { data } = await api.post(`/admin/upstreams/${row.id}/probe`);
+    if (data.reachable) ElMessage.success(`通得了：HTTP ${data.status}，${data.ms}ms`);
+    else ElMessage.warning(`连不上：${data.error}（地址写错了？还是服务端到不了这个网段？）`);
+  } catch (e) {
+    ElMessage.error('探活失败：' + (e.response?.data?.error || e.message));
+  } finally { usProbing.value = 0; }
+}
+
+function openUsTest(row) {
+  usTestName.value = row.name;
+  usTestSub.value = '';
+  usTestOut.value = '';
+  usTestErr.value = '';
+  usTestMeta.value = '';
+  usTestDlg.value = true;
+}
+
+async function runUsTest() {
+  const row = us.value.list.find((x) => x.name === usTestName.value);
+  if (!row) return;
+  usTestBusy.value = true;
+  usTestErr.value = '';
+  usTestOut.value = '';
+  usTestMeta.value = '';
+  try {
+    const { data } = await api.post(`/admin/upstreams/${row.id}/test`,
+      { subPath: usTestSub.value.trim() });
+    // ⚠️ 显示**整包**，不是只显示 data 里的内容。
+    // 只显示内层的话，管理员照着看到的字段名去填 dataPath 会少个 data. 前缀，
+    // 到客户端就取不到值 —— 而他在管理台里看到的每一样都是对的，无从怀疑。
+    usTestMeta.value = `HTTP ${data.status} · ${data.ms}ms · ${data.url}`;
+    usTestOut.value = JSON.stringify(data, null, 2);
+  } catch (e) {
+    // 502 也走这里：把服务端那句"没有登记 / 已停用 / 超时 / 连不上"原样给人看，
+    // 排障时才能一眼知道该改哪儿
+    usTestErr.value = e.response?.data?.error || e.message;
+  } finally { usTestBusy.value = false; }
 }
 
 // 监听 tab 切换

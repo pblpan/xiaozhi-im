@@ -6,8 +6,10 @@ const config = require('../config');
 const { verifyToken, hashPassword, verifyPassword } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
+const upstream = require('../upstream');
 const appregistry = require('../apps');
 const settings = require('../settings');
+const hub = require('../hub');
 const orgs = require('./orgs');
 const paging = require('../paging');
 // 只是借它的时区工具算"今天"的边界：容器 TZ 常是 UTC，
@@ -199,6 +201,15 @@ router.put('/settings', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
   const r = settings.update(req.body, uid);
   if (r.error) return res.status(400).json({ error: r.error });
+  // 推给所有在线客户端：公司名决定顶部标题、好友模式决定底部导航形态，
+  // 这两样改完不推的话，已经开着的 App 要等重启或切后台才变 ——
+  // 用户看到的就是"我在服务器上改了，客户端没改"。
+  // 只推公开字段（bootstrap 里本来就免鉴权能拿到这两个），不掺内部数据。
+  hub.broadcastAll({
+    type: 'settings:changed',
+    companyName: r.settings.companyName,
+    friendMode: r.settings.friendMode,
+  });
   res.json(r.settings);
 });
 
@@ -1100,6 +1111,70 @@ router.get('/apps/why', (req, res) => {
   if (n.role === 'employee') reasons.push('管理员账号本身不参与考勤，属正常（管理员看的是「考勤记录」）');
   if (n.adminOnly) reasons.push('这是管理员专属入口（主管看板的入口，员工看不到是正常的）');
   res.json({ id, title: app.title, visible: reasons.length === 0, reasons });
+});
+
+/* ============ 上游接口登记（第三期：让动态模块真能取到数） ============ */
+
+/** 清单。**不回传凭据明文**，只回 hasAuth 标志 */
+router.get('/upstreams', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json({
+    upstreams: upstream.list(),
+    capability: {
+      methods: upstream.ALLOWED_METHODS,
+      defaultTimeout: upstream.DEFAULT_TIMEOUT,
+      minTimeout: upstream.MIN_TIMEOUT,
+      maxTimeout: upstream.MAX_TIMEOUT,
+      // 客户端能拼出的完整前缀，管理台直接抄进模块的 onLoad.path
+      pathPrefix: '/api/hooks/up/',
+    },
+  });
+});
+
+/** 新建/更新（按 name 幂等）。authHeader 不提交 = 保持原值，不会被空值清掉 */
+router.post('/upstreams', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const r = upstream.upsert(req.body, u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, ...r });
+});
+
+router.delete('/upstreams/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  if (!upstream.remove(req.params.id)) return res.status(404).json({ error: '上游接口不存在' });
+  res.json({ ok: true });
+});
+
+/** 探活：只打 base_url，配完点一下就知道通不通（内网地址最容易写错） */
+router.post('/upstreams/:id/probe', async (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json(await upstream.probe(Number(req.params.id)));
+});
+
+/** 直连试跑：管理台当场验证"这条路走不走得通、回的是什么形状"。
+ *
+ *  ⚠️ 回包字段必须与 `/api/hooks/up/...` 给客户端的**逐字一致**（ok/upstream/url/status/ms/truncated/data）。
+ *  管理台这一页的用途就是"我先看一眼再决定 dataPath 怎么写"，两边形状只要有一点不一样，
+ *  管理员按试跑结果拼出来的 `dataPath` 到客户端就取不到数 —— 这类"照着看到的填却不对"
+ *  最难查，因为每一步看着都对。
+ */
+router.post('/upstreams/:id/test', async (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const row = db.prepare('SELECT name FROM upstreams WHERE id=?').get(Number(req.params.id));
+  if (!row) return res.status(404).json({ error: '上游接口不存在' });
+  const sub = String(req.body?.subPath || '');
+  const r = await upstream.forward(row.name, sub, { method: 'GET', search: '' });
+  if (r.error) return res.status(502).json({ error: r.error, upstream: row.name, url: r.url || null });
+  res.json({
+    ok: r.ok,
+    upstream: row.name,
+    url: r.url,
+    status: r.status,
+    ms: r.ms,
+    truncated: r.truncated,
+    data: r.data,
+  });
 });
 
 /* ==================== 动态模块（v0.9.0 第二期） ==================== */
