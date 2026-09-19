@@ -63,6 +63,11 @@ app.use('/api/push', require('./routes/push'));
 // 对外开放：程序用令牌调用的运行时接口 + 免登录入站 Webhook
 app.use('/api/open', require('./routes/open'));
 app.use('/api/hooks', require('./routes/hooks'));
+// 盘点（inventory 模块）：点位 / 库位货架位 / 单据 / 三遍制明细上传。
+// ⚠️ 路径里的 stocktake 指「盘点」，不是客户端那个 id 也叫 stocktake 的「扫码枪」。
+app.use('/api/stocktake', require('./routes/inventory'));
+// 商品 ↔ 货架位：查商品在哪个货架位 / 属于哪个盘点位，以及绑定解绑
+app.use('/api/location', require('./routes/inventory').location);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.use((req, res) => res.status(404).json({ error: 'not found' }));

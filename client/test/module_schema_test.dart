@@ -172,16 +172,23 @@ void main() {
       // 一个长期红的判据等于没有判据（和"探针全绿其实没验"是同一类病），
       // 所以这里顺手补绿，并在两端各留一句注释。
       //
-      // 2026-09-19 补上 'stocktake'（扫码枪；原名"门店盘点"，已改名让出"盘点"）。⚠️ **以后每加一个内置应用，
-      // 必须同时改三处**：① 本文件 kBuiltinAppIds ② server/src/apps.js 的
-      // BUILTIN_APPS ③ 下面这份期望值。漏任何一处，要么入口不显示，
-      // 要么这条判据变红。**加完请立刻跑 flutter test 确认。**
+      // 2026-09-19 补上 'stocktake'（扫码枪；原名"门店盘点"，已改名让出"盘点"）。
+      //
+      // 2026-09-19 再补上 'inventory'（**盘点**本体，M1 落地）。⚠️ 这两个
+      // id 极容易看混：`stocktake` 是扫码枪（把条码扫成一笔账的工具），
+      // `inventory` 才是盘点（盘点位 / 货架位 / 初盘-复盘-抽盘）。
+      // 区别见 docs/盘点复刻与开放接口方案-v1.md §3.0。
+      //
+      // ⚠️ **以后每加一个内置应用，必须同时改三处**：① core/apps.dart 的
+      // kBuiltinAppIds ② server/src/apps.js 的 BUILTIN_APPS ③ 下面这份期望值。
+      // 漏任何一处，要么入口不显示，要么这条判据变红。**加完请立刻跑 flutter test。**
       expect(kBuiltinAppIds, {
         'attendance',
         'my_requests',
         'work_org',
         'att_admin',
         'stocktake',
+        'inventory',
       });
     });
 

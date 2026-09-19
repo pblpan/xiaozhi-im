@@ -28,6 +28,7 @@ import 'package:flutter/material.dart';
 import '../screens/attendance.dart';
 import '../screens/attendance_admin.dart';
 import '../screens/attendance_request.dart';
+import '../screens/inventory.dart';
 import '../screens/org_screen.dart';
 import '../screens/stocktake.dart';
 
@@ -36,12 +37,17 @@ import '../screens/stocktake.dart';
 /// `attendance` / `my_requests` 是**员工专属**（自己打卡、自己提申请）；
 /// `att_admin` 是**管理员专属**（今日看板 + 代补卡）。谁看得见由服务端按角色
 /// 算好下发（server/src/apps.js 的 listFor），客户端只负责认不认得这个 id。
+///
+/// ⚠️ `stocktake`（扫码枪）与 `inventory`（盘点）是**两个不同的应用**，
+/// 名字很容易看混 —— 区分见 `docs/盘点复刻与开放接口方案-v1.md` §3.0：
+/// 扫码枪是"把条码扫成一笔账"的工具；盘点有盘点位、货架位与三遍制。
 const kBuiltinAppIds = {
   'attendance',
   'my_requests',
   'work_org',
   'att_admin',
   'stocktake',
+  'inventory',
 };
 
 /// 该 id 是否是本客户端认识的内置应用。
@@ -61,6 +67,8 @@ Widget? builtinAppPage(String id) {
       return const AttendanceAdminPage();
     case 'stocktake':
       return const StocktakePage();
+    case 'inventory':
+      return const InventoryPage();
     default:
       return null;
   }

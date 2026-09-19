@@ -77,5 +77,16 @@ if (st) {
   check(!/盘点/.test(st.title), 'stocktake 显示名里不含「盘点」（把名字让给盘点模块）');
 }
 
+// ── ⑤ 盘点（inventory）必须在，且名字就叫「盘点」
+// 两个模块的显示名是**故意**和 id 不一致的（stocktake=扫码枪、inventory=盘点），
+// 所以只钉 id 是钉不住的 —— 谁把 inventory 的标题改成「库存」也没人拦着，
+// 而用户看到的名字就是标题。这里把名字一起钉死。
+const inv = BUILTIN_APPS.find((a) => a.id === 'inventory');
+check(!!inv, "存在 id='inventory' 的内置应用（盘点）");
+if (inv) {
+  check(inv.title === '盘点', `inventory 显示名是「盘点」（实际「${inv.title}」）`);
+  check(inv.icon === 'inventory', `inventory 用 inventory 图标（实际「${inv.icon}」）`);
+}
+
 console.log('\n结果:', failed === 0 ? 'ALL PASS' : `FAILED ${failed}`);
 process.exit(failed === 0 ? 0 : 1);

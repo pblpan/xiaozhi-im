@@ -3,12 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../core/file_io.dart';
-import '../core/file_share.dart';
 import '../core/stock_master_repo.dart';
 import '../core/stocktake_export.dart';
 import '../core/stocktake_repo.dart';
 import '../core/theme.dart';
-import '../core/win_shell.dart';
+import '../widgets/export_flow.dart';
+import '../widgets/qty_edit.dart';
 import 'stocktake_result.dart';
 import 'stocktake_scan.dart';
 
@@ -79,8 +79,10 @@ class _StocktakePageState extends State<StocktakePage> {
       _error = null;
     });
     try {
-      // 有没盘完的单就接着盘，别一进来就开新单（上次的数据会"消失"）
-      final sheets = await _repo.listSheets();
+      // 有没盘完的单就接着盘，别一进来就开新单（上次的数据会"消失"）。
+      // 只认扫码枪自己的单（PD 开头）—— 盘点单（INV-）共用同一张流水表，
+      // 不筛的话这里会把盘点单当成"上次没扫完的扫码单"接着扫。
+      final sheets = await _repo.listSheets(prefix: StocktakeRepo.sheetPrefix);
       final no = sheets.isEmpty ? StocktakeRepo.newSheetNo() : sheets.first['sheet_no'] as String;
       final masterCount = await StockMasterRepo().countLocal();
       if (!mounted) return;
@@ -183,7 +185,7 @@ class _StocktakePageState extends State<StocktakePage> {
   }
 
   Future<void> _pickSheet() async {
-    final sheets = await _repo.listSheets();
+    final sheets = await _repo.listSheets(prefix: StocktakeRepo.sheetPrefix);
     if (!mounted) return;
     final picked = await showModalBottomSheet<String>(
       context: context,
@@ -275,46 +277,14 @@ class _StocktakePageState extends State<StocktakePage> {
     final id = r['id'] as int;
     final cur = (r['qty'] as num?)?.toDouble() ?? 0;
 
-    final v = await showDialog<String>(
-      context: context,
-      builder: (ctx) => _QtyDialog(
-        subtitle: '${StocktakeExport.scanNameOf(r)}　${r['barcode']}',
-        initial: StocktakeExport.fmtNum(cur),
-      ),
+    final n = await askQty(
+      context,
+      subtitle: '${StocktakeExport.scanNameOf(r)}　${r['barcode']}',
+      current: cur,
+      confirmText: '确定删除 ${r['barcode']} 这一行？',
+      onMessage: _snack,
     );
-    if (v == null || !mounted) return;
-
-    final n = double.tryParse(v.trim());
-    if (n == null) {
-      _snack('「${v.trim()}」不是数字，没改');
-      return;
-    }
-    if (n < 0) {
-      _snack('数量不能是负数');
-      return;
-    }
-    if (n == 0) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: AppColors.bgElevated,
-          title: const Text('改成 0 = 删掉这一行',
-              style: TextStyle(color: AppColors.text, fontSize: 16)),
-          content: Text('确定删除 ${r['barcode']} 这一行？',
-              style: const TextStyle(color: AppColors.textSub)),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('取消')),
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child:
-                    const Text('删除', style: TextStyle(color: AppColors.danger))),
-          ],
-        ),
-      );
-      if (ok != true) return;
-    }
+    if (n == null || !mounted) return;
 
     try {
       await _repo.setQty(id, n);
@@ -368,112 +338,22 @@ class _StocktakePageState extends State<StocktakePage> {
     }
   }
 
-  /// 导出后给几条路。**第一优先是"直接发给同事"** ——
-  /// 导出的目的就是发出去，先落盘再让用户自己去文件管理器找回来发，
-  /// 中间那两步纯属白干（这也是龙哥 2026-09-19 提的原话）。
+  /// 导出后给几条路（打开 / 发给同事 / 另存为）。
   ///
-  /// 平台差异见 [FileShare.canShareToOthers]：手机端是真分享面板，
-  /// 桌面端没有这玩意，就换成"打开所在文件夹"让他拖进微信 ——
-  /// 不做假按钮（点了没反应比没这个按钮更糟）。
+  /// 弹层本体已抽到 `widgets/export_flow.dart`，与盈亏表页、盘点采集页共用一份。
+  /// 各写一份的代价是：下次修"某个平台少了微信"只改一处，
+  /// 另一处就变成"看起来有、点了没反应"的坑。
   Future<void> _afterExport(File f, int rows) async {
-    final channel = FileShare.channel;
-    final act = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: AppColors.bgElevated,
-      builder: (ctx) => SafeArea(
-        // 弹层里现在最多 5 条，小屏 + 系统大字体下会超出底部弹层的最大高度，
-        // 最后一条（"先不用"）会落在屏幕外**点不到**。给个滚动兜底。
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.check_circle_outline,
-                    color: AppColors.brand),
-                title: Text(
-                    '已生成 $rows 行：${fileNameOf(f)}',
-                    style: const TextStyle(color: AppColors.text, fontSize: 13)),
-              ),
-              // 只给这台设备真能走的那一条 —— 见 FileShare.channelFor 的说明：
-              // 在桌面上摆一个"发给同事"就是假按钮（点了没反应）。
-              if (channel == ShareChannel.systemShare)
-                ListTile(
-                  key: const Key('share-to-others'),
-                  leading: const Icon(Icons.send, color: AppColors.brand),
-                  title: const Text('发给同事（微信 / 企微 / 钉钉…）',
-                      style: TextStyle(
-                          color: AppColors.text, fontWeight: FontWeight.w600)),
-                  onTap: () => Navigator.pop(ctx, 'share'),
-                )
-              else if (channel == ShareChannel.openFolder)
-                ListTile(
-                  key: const Key('share-to-others'),
-                  leading: const Icon(Icons.folder_open, color: AppColors.brand),
-                  title: const Text('打开所在文件夹（拖进微信发送）',
-                      style: TextStyle(
-                          color: AppColors.text, fontWeight: FontWeight.w600)),
-                  onTap: () => Navigator.pop(ctx, 'folder'),
-                ),
-              ListTile(
-                leading: const Icon(Icons.open_in_new, color: AppColors.textSub),
-                title: const Text('打开（用 WPS / Excel / 记事本看）',
-                    style: TextStyle(color: AppColors.text)),
-                onTap: () => Navigator.pop(ctx, 'open'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.save_alt, color: AppColors.textSub),
-                title: const Text('另存为 / 发到别处',
-                    style: TextStyle(color: AppColors.text)),
-                onTap: () => Navigator.pop(ctx, 'save'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.close, color: AppColors.textWeak),
-                title: const Text('先不用',
-                    style: TextStyle(color: AppColors.textSub)),
-                onTap: () => Navigator.pop(ctx),
-              ),
-            ],
-          ),
-        ),
-      ),
+    await ExportFlow.show(
+      context,
+      f,
+      rows: rows,
+      suggestName: ExportFlow.asDocName(f)
+          ? StocktakeExport.scanDocName(_sheetNo)
+          : StocktakeExport.scanCsvName(_sheetNo),
+      onMessage: _snack,
     );
-    if (act == null || !mounted) return;
-
-    if (act == 'share') {
-      // 分享面板是系统的，拉起来就完事 —— 用户选谁发是他自己的事，
-      // 我们拿不到"发没发成功"的回执（Android 不给），所以这里只说"已打开"。
-      //
-      // 标题取**实际文件名**，不是拿单号现拼一个：导出文档(.txt) 与
-      // 导出表格(.csv) 是两个文件，标题写错会让接收方以为拿到的不是这份。
-      final err = await FileShare.toOthers(f, subject: fileNameOf(f));
-      if (!mounted) return;
-      _snack(err.isEmpty ? '已打开分享面板，选同事发送即可' : err);
-      return;
-    }
-    if (act == 'folder') {
-      final ok = WinShell.revealInExplorer(f.path);
-      if (!mounted) return;
-      _snack(ok ? '已在资源管理器中定位到该文件' : '打开文件夹失败：${f.path}');
-      return;
-    }
-    if (act == 'open') {
-      final err = await FileIo.open(f);
-      if (!mounted) return;
-      _snack(err.isEmpty ? '已交给系统打开' : err);
-      return;
-    }
-    final where = await FileIo.saveAs(f, asDocName(f)
-        ? StocktakeExport.scanDocName(_sheetNo)
-        : StocktakeExport.scanCsvName(_sheetNo));
-    if (!mounted) return;
-    _snack(where == null ? '已取消' : '已保存：$where');
   }
-
-  static bool asDocName(File f) => f.path.toLowerCase().endsWith('.txt');
-
-  /// 文件的实际名字（含扩展名）。分享标题、提示文案都用它，
-  /// 不去拿单号现拼 —— 拼出来的名字和真实文件可能不是一份。
-  static String fileNameOf(File f) => f.path.split(Platform.pathSeparator).last;
 
   void _snack(String msg) {
     if (!mounted) return;
@@ -879,103 +759,6 @@ class _StocktakePageState extends State<StocktakePage> {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// 「改数量」对话框。
-///
-/// 🔴 **为什么必须是独立的 StatefulWidget，而不是在 `_editQty` 里 new 一个
-///    TextEditingController、`await showDialog(...)` 回来就 `dispose()`：**
-///
-/// `await showDialog(...)` 在 `Navigator.pop` 那一刻就返回了，可这时对话框
-/// **还在播退场动画**，`TextField` 这 200ms 里还在重建、还在向控制器注册监听。
-/// 提前 dispose 会直接抛 `A TextEditingController was used after being disposed`，
-/// 并连带把焦点树和布局搞乱 —— 实测报 `RenderFlex overflowed by 99634 pixels`，
-/// 报错指向的是"布局溢出"，跟真凶（控制器生命周期）看着毫无关系，极难倒查。
-///
-/// 交给对话框自己持有 → 它的 `State.dispose()` 在**路由真正被移除时**才跑，
-/// 时序天然正确；而且"用户点对话框外面关掉"那条路径也自动覆盖到了
-/// （在 `_editQty` 里手动 dispose 的话，很容易只处理 保存/取消 两条路）。
-class _QtyDialog extends StatefulWidget {
-  const _QtyDialog({required this.subtitle, required this.initial});
-
-  /// 副标题：商品名 + 条码，让人确认改的是哪一行
-  final String subtitle;
-  final String initial;
-
-  @override
-  State<_QtyDialog> createState() => _QtyDialogState();
-}
-
-class _QtyDialogState extends State<_QtyDialog> {
-  late final TextEditingController _ctrl =
-      TextEditingController(text: widget.initial);
-
-  @override
-  void initState() {
-    super.initState();
-    // 全选：员工要的是"直接覆盖"，不是先删掉原来那串再输
-    _ctrl.selection =
-        TextSelection(baseOffset: 0, extentOffset: _ctrl.text.length);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppColors.bgElevated,
-      title: const Text('改数量',
-          style: TextStyle(color: AppColors.text, fontSize: 16)),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            widget.subtitle,
-            style: const TextStyle(color: AppColors.textWeak, fontSize: 12),
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _ctrl,
-            autofocus: true,
-            // 数量可能是小数（称重商品按公斤），所以允许小数点
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            style: const TextStyle(color: AppColors.text, fontSize: 16),
-            textInputAction: TextInputAction.done,
-            onSubmitted: (s) => Navigator.pop(context, s),
-            decoration: InputDecoration(
-              hintText: '数量',
-              hintStyle: const TextStyle(color: AppColors.textWeak),
-              filled: true,
-              fillColor: AppColors.surface,
-              isDense: true,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide.none,
-              ),
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context), child: const Text('取消')),
-        TextButton(
-          onPressed: () => Navigator.pop(context, _ctrl.text),
-          child: const Text('保存',
-              style:
-                  TextStyle(color: AppColors.brand, fontWeight: FontWeight.w600)),
-        ),
-      ],
     );
   }
 }

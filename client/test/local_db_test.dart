@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 import 'package:xiaozhi_im_client/core/local_db.dart';
 
 /// 本地 SQLite 引擎（离线地基）的单元测试。
@@ -188,5 +188,181 @@ void main() {
     final after = await db.query('stock_master');
     expect(after, hasLength(1),
         reason: '约束异常抛了但数据还是写进去了，主键形同虚设');
+  });
+
+  // ============================================================
+  // v1 → v2 迁移（盘点内核）
+  // ============================================================
+  //
+  // 这一组测的是**老用户升级**，不是"新装能不能用"。
+  // 新装永远跑 onCreate（一次性跑完全部迁移），不会暴露 onUpgrade 的 bug；
+  // 而线上绝大多数人是从上一版升上来的，走的是 onUpgrade。
+  // 所以必须**真的造一个 v1 的老库**再用生产入口打开 —— 而且是用真身的
+  // 迁移函数造（LocalDb.migrationsForTest），不是测试里另抄一份 DDL。
+  group('v1 → v2 迁移', () {
+    /// 用真身迁移建一个 v1 老库（等价于老用户手机上那个文件）。
+    Future<Database> openLegacyV1() async {
+      sqfliteFfiInit();
+      final path = await LocalDb.I.dbPathForTest();
+      return databaseFactoryFfi.openDatabase(
+        path,
+        options: OpenDatabaseOptions(
+          version: 1,
+          onCreate: (db, v) async {
+            for (var i = 1; i <= v; i++) {
+              await LocalDb.migrationsForTest[i - 1](db);
+            }
+          },
+        ),
+      );
+    }
+
+    test('老 v1 库升到 v2：老数据不丢，新表在新列可用', () async {
+      // ── 造老库：一个商品 + 一笔扫码流水 ──
+      final old = await openLegacyV1();
+
+      // 前置条件自检：此刻**必须**还是个真正的 v1 库。
+      // 不检查的话，万一 openLegacyV1 实际建成了 v2，"升级不丢数据"就成了
+      // 一句空话 —— 什么都没升过，当然不丢。
+      final ver = (await old.rawQuery('PRAGMA user_version')).first.values.first;
+      expect(ver, 1, reason: '老库没建成 v1，onUpgrade 根本不会触发，这轮测的是空气');
+      final v1Cols =
+          (await old.rawQuery('PRAGMA table_info(scan_record)')).map((r) => r['name']);
+      expect(v1Cols, isNot(contains('phase')), reason: '老库里居然已经有 phase 了');
+      expect(v1Cols, isNot(contains('loc_code')));
+
+      await old.insert('stock_master', {
+        'barcode': '6901234599999',
+        'name': '老库里的海盐饼干',
+        'spec': '200g/袋',
+        'unit': '袋',
+        'unit_price': 12.5,
+        'account_qty': 30.0,
+        'source': 'server',
+        'updated_at': 1700000000000,
+      });
+      await old.insert('scan_record', {
+        'sheet_no': 'PD20260901090000',
+        'barcode': '6901234599999',
+        'qty': 7.0,
+        'scanned_at': 1700000001111,
+        'note': '三号架',
+        'uploaded': 1,
+      });
+      await old.close();
+
+      // ── 用生产入口打开：这一步才会跑 onUpgrade(1 → 2) ──
+      final db = await LocalDb.I.db();
+      expect((await db.rawQuery('PRAGMA user_version')).first.values.first,
+          LocalDb.schemaVersion);
+
+      // 老数据逐字段核对（不是"还在就算过"）
+      final m = await db.query('stock_master',
+          where: 'barcode = ?', whereArgs: ['6901234599999']);
+      expect(m, hasLength(1), reason: '升级把商品档案弄丢了');
+      expect(m.first['name'], '老库里的海盐饼干');
+      expect(m.first['unit_price'], isA<double>());
+      expect(m.first['account_qty'], 30.0);
+
+      final s = await db.query('scan_record',
+          where: 'sheet_no = ?', whereArgs: ['PD20260901090000']);
+      expect(s, hasLength(1), reason: '升级把扫码流水弄丢了');
+      expect(s.first['qty'], 7.0);
+      expect(s.first['note'], '三号架');
+      // 🔴 存量行的语义必须是"初盘、无货架位"：
+      //    非 1 的话老流水会被算进复盘/抽盘的差异里，账面直接错。
+      expect(s.first['phase'], 1,
+          reason: 'ALTER 的 DEFAULT 没生效，老流水被塞进了别的阶段');
+      expect(s.first['loc_code'], isNull,
+          reason: '老流水不该凭空长出一个货架位');
+      // uploaded 不能被升级重置成 0，否则整库数据会被重复回传一遍
+      expect(s.first['uploaded'], 1, reason: '升级把 uploaded 标记清了，会重复上传');
+
+      // 新表真的建出来了，而且能用（建表语句写错的话这一步会抛）
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await db.insert('stocktake_zone', {
+        'zone_code': 'Z01',
+        'zone_name': '生鲜区',
+        'store_code': 'S001',
+        'locked': 0,
+        'created_at': now,
+      });
+      await db.insert('location', {
+        'loc_code': 'Z01-A01',
+        'loc_name': 'A01 货架',
+        'zone_code': 'Z01',
+        'sort_no': 1,
+        'created_at': now,
+      });
+      await db.insert('barcode_location', {
+        'barcode': '6901234599999',
+        'loc_code': 'Z01-A01',
+        'bound_at': now,
+      });
+      await db.insert('stocktake_sheet', {
+        'sheet_no': 'INV-Z01-1-20260919130000',
+        'zone_code': 'Z01',
+        'phase': 1,
+        'status': 0,
+        'operator': 'pblpa',
+        'started_at': now,
+      });
+      expect(await db.query('stocktake_zone'), hasLength(1));
+      expect(await db.query('location'), hasLength(1));
+      expect(await db.query('barcode_location'), hasLength(1));
+      final sh = await db.query('stocktake_sheet');
+      expect(sh, hasLength(1));
+      expect(sh.first['phase'], 1);
+
+      // 升级后再关再开一次：v2 的东西不能是"只在本次连接里才存在"
+      await LocalDb.I.close();
+      final db2 = await LocalDb.I.db();
+      expect((await db2.rawQuery('PRAGMA user_version')).first.values.first, 2);
+      expect(await db2.query('stocktake_zone'), hasLength(1),
+          reason: '重开后 v2 的表没了，说明迁移没落盘/被重复执行');
+    });
+
+    test('新装直接到 v2：四张新表和两列都在，且索引齐', () async {
+      // resetForTest 已由 setUp 删过文件，这里 db() 走的是 onCreate 全量路径。
+      final db = await LocalDb.I.db();
+      final cols = (await db.rawQuery('PRAGMA table_info(scan_record)'))
+          .map((r) => r['name'])
+          .toList();
+      expect(cols, containsAll(<String>['phase', 'loc_code']));
+
+      final idx = (await db.rawQuery(
+              "SELECT name FROM sqlite_master WHERE type = 'index'"))
+          .map((r) => r['name'])
+          .toList();
+      expect(
+          idx,
+          containsAll(<String>[
+            'idx_scan_record_sheet',
+            'idx_scan_record_sheet_phase',
+            'idx_location_zone',
+            'idx_barcode_location_loc',
+            'idx_sheet_zone_phase',
+          ]),
+          reason: '索引没建齐，场景里全靠全表扫');
+    });
+
+    test('barcode_location 主键是 (barcode, loc_code)：一品多位可共存，重复绑定被拒', () async {
+      final db = await LocalDb.I.db();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      // 同一个商品绑两个货架位 —— 必须允许（一品多点，盘点是靠这个找货的）
+      await db.insert('barcode_location',
+          {'barcode': '6901', 'loc_code': 'A01', 'bound_at': now});
+      await db.insert('barcode_location',
+          {'barcode': '6901', 'loc_code': 'B02', 'bound_at': now});
+      expect(await db.query('barcode_location'), hasLength(2),
+          reason: '主键写成了单列 barcode，第二个货架位把第一个顶掉了');
+
+      // 反向：同一对再绑一次必须被主键拒（不是静默覆盖，也不是插两行）
+      expect(
+          () => db.insert('barcode_location',
+              {'barcode': '6901', 'loc_code': 'A01', 'bound_at': now}),
+          throwsA(isA<DatabaseException>()));
+      expect(await db.query('barcode_location'), hasLength(2));
+    });
   });
 }

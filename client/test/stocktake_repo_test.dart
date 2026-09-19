@@ -215,6 +215,32 @@ void main() {
       expect(sheets.length, 2);
     });
 
+    // 盘点（inventory 模块）的单号是 INV- 开头，和扫码枪共用 scan_record 这张表。
+    // 这条是**反向断言**：不筛前缀就必须能看见盘点单，筛了就必须看不见 ——
+    // 只写正向（"PD 单看得见"）的话，把 prefix 实现成"永远返回全部"也会假通过。
+    test('listSheets 按前缀过滤：扫码枪不该看见盘点单', () async {
+      final repo = StocktakeRepo();
+      await repo.addScan('PD20260919120000', '69001');
+      // 盘点单更晚，不带前缀过滤的话它会排在最前
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await repo.addScan('INV-Z01-1-20260919130000', '69002');
+
+      // 不带前缀 = 全都要（盘点模块自己要这么用）
+      final all = await repo.listSheets();
+      expect(all.map((r) => r['sheet_no']).toList(),
+          containsAll(<String>['PD20260919120000', 'INV-Z01-1-20260919130000']),
+          reason: '不带前缀过滤时反而漏了单，listSheets 的 where 拼错了');
+
+      final onlyScan = await repo.listSheets(prefix: StocktakeRepo.sheetPrefix);
+      expect(onlyScan, hasLength(1),
+          reason: '盘点单混进了扫码枪的"继续上次没扫完的单"');
+      expect(onlyScan.first['sheet_no'], 'PD20260919120000');
+
+      final onlyInv = await repo.listSheets(prefix: 'INV-');
+      expect(onlyInv, hasLength(1));
+      expect(onlyInv.first['sheet_no'], 'INV-Z01-1-20260919130000');
+    });
+
     test('deleteSheet 整单清掉，别的单不受影响', () async {
       final repo = StocktakeRepo();
       await repo.addScan('PDA', '69001');

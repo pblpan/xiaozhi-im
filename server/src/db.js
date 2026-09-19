@@ -585,6 +585,81 @@ CREATE INDEX IF NOT EXISTS idx_push_log_created ON push_log (created_at);
 CREATE INDEX IF NOT EXISTS idx_push_log_user ON push_log (user_id, created_at DESC);
 `);
 
+// ---- 盘点（inventory 模块）----
+//
+// 🔴 命名说明：接口路径按方案文档用 `/api/stocktake/...`，但**这里的
+//    「stocktake」指的是盘点**，不是客户端那个 id 也叫 stocktake 的「扫码枪」。
+//    两者是不同模块（扫码枪=快速扫码成账，盘点=点位/三遍制）。
+//    别看到 /api/stocktake 就以为在改扫码枪。
+//
+// 🔴 为什么 inv_scans 要存 account_qty（账面数）：
+//    服务端**没有商品档案**（商档在客户端本地，从泰格上游拉的）。
+//    所以差异集没法在服务端自己算出来 —— 由客户端上传时把当时的账面数
+//    一并带上来。这样服务端的单据详情能独立给出差异，不必再连泰格。
+//    account_qty 为 NULL 是一个**有效且重要**的状态：账上没有这个商品
+//    （新品/错码），这本身就是最严重的一类差异，绝不能被当成"没差异"。
+db.exec(`
+CREATE TABLE IF NOT EXISTS inv_zones (
+  zone_code TEXT PRIMARY KEY,
+  zone_name TEXT,
+  store_code TEXT,
+  locked INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inv_locations (
+  loc_code TEXT PRIMARY KEY,
+  loc_name TEXT,
+  zone_code TEXT NOT NULL,
+  sort_no INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inv_locations_zone ON inv_locations (zone_code, sort_no);
+
+CREATE TABLE IF NOT EXISTS inv_barcode_locations (
+  barcode TEXT NOT NULL,
+  loc_code TEXT NOT NULL,
+  bound_at INTEGER NOT NULL,
+  PRIMARY KEY (barcode, loc_code)
+);
+CREATE INDEX IF NOT EXISTS idx_inv_bl_loc ON inv_barcode_locations (loc_code);
+
+CREATE TABLE IF NOT EXISTS inv_sheets (
+  sheet_no TEXT PRIMARY KEY,
+  zone_code TEXT NOT NULL,
+  phase INTEGER NOT NULL DEFAULT 1,      -- 1初盘 2复盘 3抽盘
+  status INTEGER NOT NULL DEFAULT 0,     -- 0进行中 1已提交 2已上传
+  operator TEXT,
+  operator_id INTEGER,
+  device_id TEXT,                        -- 哪台设备传上来的（排查"两台机器各传一半"）
+  started_at INTEGER,
+  submitted_at INTEGER,
+  uploaded_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inv_sheets_zone ON inv_sheets (zone_code, phase, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS inv_scans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sheet_no TEXT NOT NULL,
+  zone_code TEXT NOT NULL,
+  phase INTEGER NOT NULL DEFAULT 1,
+  barcode TEXT NOT NULL,
+  qty REAL NOT NULL DEFAULT 0,
+  account_qty REAL,                      -- 上传时的账面数；NULL=账上没有这个商品
+  loc_code TEXT,
+  scanned_at INTEGER,
+  uploaded_at INTEGER NOT NULL,
+  -- 幂等键：同一张单、同一阶段、同一条码只占一行。
+  -- 客户端断网重传时靠它 UPSERT，不会变成两行（多算一个品种）。
+  UNIQUE (sheet_no, phase, barcode)
+);
+CREATE INDEX IF NOT EXISTS idx_inv_scans_sheet ON inv_scans (sheet_no);
+CREATE INDEX IF NOT EXISTS idx_inv_scans_zone_phase ON inv_scans (zone_code, phase);
+`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

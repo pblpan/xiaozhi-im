@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
@@ -15,6 +16,11 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 ///     从服务端拉一份缓存到本地，断网时也能查到"这个条码是什么、账面是多少"。
 ///   - scan_record：扫码流水（哪张扫码单、哪个条码、扫了多少、何时扫、是否已上传），
 ///     弱网时只管往里写，uploaded 标记等联网后回写。
+///
+/// v2（盘点内核）在这一层之上又加了四张表：盘点位 stocktake_zone、
+/// 库位货架位 location、商品↔货架位绑定 barcode_location、盘点单 stocktake_sheet，
+/// 并给 scan_record 追加 phase（初盘/复盘/抽盘）+ loc_code。
+/// 见 [_migrations] 里 v2 那段注释。
 ///
 /// 迁移框架为什么要写成「有序列表」？
 /// --------------------------------
@@ -34,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 1;
+  static const int schemaVersion = 2;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -72,7 +78,100 @@ class LocalDb {
       await db.execute(
           'CREATE INDEX idx_scan_record_sheet ON scan_record(sheet_no)');
     },
+
+    // v2：盘点内核（盘点位 / 库位货架位 / 商品→货架位绑定 / 盘点单），
+    //     并给 scan_record 追加 phase + loc_code 两列。
+    //
+    // 🔴 表名沿用方案文档（docs/盘点复刻与开放接口方案-v1.md §P1）：
+    //    stocktake_zone / location / barcode_location / stocktake_sheet。
+    //    别自作主张改成 inv_ 前缀 —— 文档、接口、管理台三处都以这套名字对齐，
+    //    单方面改名只会让"文档写的和代码里的不是一张表"。
+    //
+    // 🔴 为什么 scan_record 是**加列**而不是建新表：
+    //    盘点单和扫码单共用这一张流水表（都是"某单某条码某数量"），
+    //    phase 默认 1 让**老的扫码流水一行都不用改**就能继续读 ——
+    //    扫码枪（stocktake 模块）完全不知道自己脚下多了两列。
+    //    存量行 phase=1、loc_code=NULL，语义正好是"没分阶段的采集"。
+    (Database db) async {
+      // 盘点位（一个门店可以有多个盘点位，如"生鲜区""日配区"）
+      await db.execute('''
+        CREATE TABLE stocktake_zone (
+          zone_code  TEXT PRIMARY KEY,
+          zone_name  TEXT,
+          store_code TEXT,
+          locked     INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER
+        )
+      ''');
+
+      // 库位 / 货架位（挂在盘点位下）
+      await db.execute('''
+        CREATE TABLE location (
+          loc_code   TEXT PRIMARY KEY,
+          loc_name   TEXT,
+          zone_code  TEXT,
+          sort_no    INTEGER,
+          created_at INTEGER
+        )
+      ''');
+      await db.execute(
+          'CREATE INDEX idx_location_zone ON location(zone_code)');
+
+      // 商品 ↔ 货架位 绑定。一个商品可以在多个货架位（一品多点），
+      // 所以主键是 (barcode, loc_code) 而不是单列 ——
+      // 单列主键会让第二个货架位的绑定把第一个顶掉，盘点时货就"消失"了。
+      await db.execute('''
+        CREATE TABLE barcode_location (
+          barcode  TEXT NOT NULL,
+          loc_code TEXT NOT NULL,
+          bound_at INTEGER,
+          PRIMARY KEY (barcode, loc_code)
+        )
+      ''');
+      await db.execute(
+          'CREATE INDEX idx_barcode_location_loc ON barcode_location(loc_code)');
+
+      // 盘点单：一张单 = 一个盘点位 × 一个阶段。
+      // phase  1初盘 2复盘 3抽盘
+      // status 0进行中 1已提交(已锁) 2已上传
+      await db.execute('''
+        CREATE TABLE stocktake_sheet (
+          sheet_no     TEXT PRIMARY KEY,
+          zone_code    TEXT,
+          phase        INTEGER NOT NULL DEFAULT 1,
+          status       INTEGER NOT NULL DEFAULT 0,
+          operator     TEXT,
+          started_at   INTEGER,
+          submitted_at INTEGER,
+          uploaded_at  INTEGER
+        )
+      ''');
+      await db.execute(
+          'CREATE INDEX idx_sheet_zone_phase ON stocktake_sheet(zone_code, phase)');
+
+      // 存量扫码流水落成"初盘、无货架位"，语义上等于改造前的行为。
+      await db.execute(
+          'ALTER TABLE scan_record ADD COLUMN phase INTEGER NOT NULL DEFAULT 1');
+      await db.execute('ALTER TABLE scan_record ADD COLUMN loc_code TEXT');
+      // 按 (单号, 阶段) 取流水是最热的查询：界面每扫一次都要重算。
+      await db.execute(
+          'CREATE INDEX idx_scan_record_sheet_phase ON scan_record(sheet_no, phase)');
+    },
   ];
+
+  /// 有序迁移列表（**仅供测试**读取）。生产代码不要碰它。
+  ///
+  /// 为什么必须把它开出来：唯一能真正验证"老用户升级不丢数据"的做法，
+  /// 就是**用真身**在 v1 建一个库、塞数据、再用 db() 打开触发升级。
+  /// 若测试里自己抄一份 v1 DDL，那份抄本和真身一旦漂移，测试会给出
+  /// **假安心**（"升级没问题"—— 其实测的是抄出来那个不存在的库）。
+  @visibleForTesting
+  static List<Future<void> Function(Database)> get migrationsForTest =>
+      _migrations;
+
+  /// 库文件路径（**仅供测试**：用它在测试里手动建老版本库）。
+  @visibleForTesting
+  Future<String> dbPathForTest() => _dbPath();
 
   /// 单例访问点：懒开，开了缓存 handle，后续调用都返回同一个实例。
   Future<Database> db() async {

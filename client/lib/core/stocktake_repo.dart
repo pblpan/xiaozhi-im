@@ -187,8 +187,14 @@ class StocktakeRepo {
   }
 
   /// 本机已有的扫码单（最近在前），用于"继续上次没扫完的单"。
-  Future<List<Map<String, dynamic>>> listSheets() async {
+  ///
+  /// [prefix] 只取以它开头的单号。**扫码枪必须传 `sheetPrefix`（'PD'）**：
+  /// 盘点（inventory 模块）的单号是 `INV-...`，两者共用 `scan_record` 这张表，
+  /// 不筛的话盘点单会出现在扫码枪的"继续上次没扫完的单"里，
+  /// 员工点进去发现是一堆盘点数据（表头都是扫码的列），只会以为是坏了。
+  Future<List<Map<String, dynamic>>> listSheets({String? prefix}) async {
     final db = await LocalDb.I.db();
+    final where = prefix == null || prefix.isEmpty ? '' : 'where sheet_no like ?';
     return db.rawQuery(
       '''
       select sheet_no,
@@ -196,9 +202,11 @@ class StocktakeRepo {
              coalesce(sum(qty), 0)  as total_qty,
              max(scanned_at)        as last_at
         from scan_record
+       $where
        group by sheet_no
        order by last_at DESC
       ''',
+      prefix == null || prefix.isEmpty ? null : <Object?>['$prefix%'],
     );
   }
 

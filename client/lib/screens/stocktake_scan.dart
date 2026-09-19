@@ -1,40 +1,19 @@
-import 'dart:async';
-
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 
-import '../core/scan_dedup.dart';
-import '../core/stocktake_export.dart';
+import '../core/scan_sink.dart';
 import '../core/stocktake_repo.dart';
-import '../core/theme.dart';
+import 'camera_scan.dart';
 
-/// 扫码枪：**手机摄像头扫码页**。
+/// 扫码枪：手机摄像头扫码页。
 ///
-/// ── 这一页解决的是什么问题 ──────────────────────────────────────
-/// 采集页那个输入框是给**扫码枪**设计的（蓝牙/无线扫码枪在 Android 上就是一个
-/// HID 键盘，把条码敲进有焦点的输入框再补一个回车）。
-/// 但现场很多店没有枪，员工手上只有手机 —— 那时候"调出键盘手输 13 位条码"
-/// 是最慢、也最容易输错的一条路。所以补上摄像头直扫。
+/// ── 这一页现在只是个"壳" ────────────────────────────────────────
+/// 相机那套机制（去重判据、写入闸门、闪绿反馈、相机报错兜底）已经搬到
+/// [CameraScanPage]，因为盘点（inventory）要用**一模一样**的一套 ——
+/// 那几百行里最容易做错的正是这些不报错的判定，抄第二份等于给它留了
+/// 第二条复活的路。
 ///
-/// ── 为什么扫到不停下来确认 ──────────────────────────────────────
-/// 扫码是一格一格过的连贯动作。每扫一件都弹一次"确认？"会让整件事慢一个量级。
-/// 所以这里是**连续扫**：扫到就落库，底部给即时反馈，员工一路扫到扫完。
-///
-/// ── 🔴 去重策略（本页最容易做错的地方）──────────────────────────
-/// **绝对不能用 `DetectionSpeed.noDuplicates`。** 它在 mobile_scanner 里的语义是：
-///   "同一个条码只会被扫到一次，**直到扫到另一个条码之前都不会再报**"。
-/// 而扫码最常见的动作恰恰是**连扫同一个商品的第 2 件、第 3 件** ——
-/// 用 noDuplicates 会把这些件数**静默丢掉**：界面上什么都不发生，
-/// 员工只会以为"软件坏了"，最后盘出来的数比实际少，而且不报任何错。
-///
-/// 这里改用 `DetectionSpeed.normal`（按 detectionTimeoutMs 反复上报），
-/// 再由 [_sameCodeCooldownMs] 做"同码冷却"：
-///   · 换成**另一个**条码 → 立刻计入（不受冷却影响）
-///   · **同一个**条码在冷却期内反复上报 → 视为"相机还对着同一件"，不重复计
-///   · 冷却过了再对同一个码 → 正常计入（第二件、第三件）
-/// 再加一个显式的「再记 1 件」按钮兜底：这是唯一不依赖"手感"的出口，
-/// 也顺手覆盖了"这一件条码磨损、相机读不出来"的情况。
+/// 这里剩下的是扫码枪**特有**的一点：把"扫到的码"接到 [StocktakeRepo] 上。
+/// 构造签名与 `supported` 保持不变，调用方（采集页）不用动。
 class StocktakeScanPage extends StatefulWidget {
   const StocktakeScanPage({
     super.key,
@@ -45,367 +24,49 @@ class StocktakeScanPage extends StatefulWidget {
   final String sheetNo;
   final StocktakeRepo repo;
 
-  /// 摄像头扫码只在手机上有意义。
-  /// `mobile_scanner` 的 Platform Support 是 Android/iOS/macOS/Web —— **没有 Windows**，
-  /// 桌面端（我们是 Windows）实例化 MobileScanner 会直接抛 UnimplementedError。
-  /// 所以入口必须按平台判断；这里再兜一层，双保险。
-  static bool get supported =>
-      defaultTargetPlatform == TargetPlatform.android ||
-      defaultTargetPlatform == TargetPlatform.iOS;
+  /// 摄像头扫码只在手机上有意义（桌面端 mobile_scanner 没有实现）。
+  static bool get supported => cameraScanSupported;
 
   @override
   State<StocktakeScanPage> createState() => _StocktakeScanPageState();
 }
 
 class _StocktakeScanPageState extends State<StocktakeScanPage> {
-  late final MobileScannerController _cam = MobileScannerController(
-    detectionSpeed: DetectionSpeed.normal,
-    torchEnabled: false,
-  );
-
-  /// 同一个码在这个窗口内重复上报 = 相机还对着同一件，不重复计数。
-  /// 判据本体在 core/scan_dedup.dart（纯函数，有独立单测）。
-  static const int _sameCodeCooldownMs = kSameCodeCooldownMs;
-
-  String? _lastCode;
-  int _lastAcceptAt = 0;
-
-  /// 🔴 落库是异步的。上一笔还没写完又来一笔，会并发写同一个 (单号, 条码) 行
-  /// —— 结果是数量算错，而且**不报错**。所以整个写入过程用一个闸门串起来。
-  bool _writing = false;
-
-  int _sessionCount = 0;
-  Map<String, dynamic>? _lastHit;
-  Map<String, dynamic> _sum = const {};
-  String? _error;
-
-  /// 扫码成功时取景框闪一下 —— 现场很吵、手机拿得远，没有这个反馈员工不确定扫上没有。
-  bool _flash = false;
-  Timer? _flashTimer;
+  late final _StocktakeSink _sink = _StocktakeSink(widget.repo);
 
   @override
-  void initState() {
-    super.initState();
-    unawaited(_loadSum());
-  }
+  Widget build(BuildContext context) => CameraScanPage(
+        title: '扫码枪',
+        sheetNo: widget.sheetNo,
+        sink: _sink,
+      );
+}
+
+/// 把扫码枪的仓库适配成相机页认识的 [ScanSink]。
+///
+/// ── 一个刻意的差异 ──────────────────────────────────────────────
+/// 扫码枪**不做任何准入判定**（它是"把条码扫成一笔账"的工具，
+/// 没有点位、没有阶段，没什么可判的）。所以这里永远返回 accepted
+/// —— 和它对盘点说的"该商品不属于本盘点位"完全是两回事。
+class _StocktakeSink implements ScanSink {
+  _StocktakeSink(this.repo);
+
+  final StocktakeRepo repo;
 
   @override
-  void dispose() {
-    _flashTimer?.cancel();
-    unawaited(_cam.dispose());
-    super.dispose();
-  }
-
-  Future<void> _loadSum() async {
-    final s = await widget.repo.summary(widget.sheetNo);
-    if (!mounted) return;
-    setState(() => _sum = s);
-  }
-
-  Future<void> _onDetect(BarcodeCapture capture) async {
-    if (_writing) return;
-
-    // 一帧里可能同时识别出多个码；取第一个能用的。
-    String? code;
-    for (final b in capture.barcodes) {
-      final v = b.rawValue?.trim();
-      if (v != null && v.isNotEmpty) {
-        code = v;
-        break;
-      }
-    }
-    if (code == null) return;
-
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (!shouldAcceptScan(
-      code: code,
-      lastCode: _lastCode,
-      lastAcceptAt: _lastAcceptAt,
-      now: now,
-      cooldownMs: _sameCodeCooldownMs,
-    )) {
-      return; // 相机还对着同一件
-    }
-    await _record(code);
-  }
-
-  /// 「再记 1 件」：对刚扫过的那个码再加一件。
-  Future<void> _addAgain() async {
-    final code = _lastCode;
-    if (code == null) return;
-    _lastAcceptAt = 0; // 手动加不参与冷却
-    await _record(code);
-  }
-
-  Future<void> _record(String code) async {
-    if (_writing) return;
-    _writing = true;
-    try {
-      await widget.repo.addScan(widget.sheetNo, code);
-      final rows = await widget.repo.listWithMaster(widget.sheetNo);
-      final s = await widget.repo.summary(widget.sheetNo);
-      if (!mounted) return;
-      _lastCode = code;
-      _lastAcceptAt = DateTime.now().millisecondsSinceEpoch;
-      setState(() {
-        _error = null;
-        _sum = s;
-        _sessionCount += 1;
-        _lastHit = rows.cast<Map<String, dynamic>?>().firstWhere(
-              (r) => r != null && r['barcode'] == code,
-              orElse: () => null,
-            );
-      });
-      _flashTimer?.cancel();
-      setState(() => _flash = true);
-      _flashTimer = Timer(const Duration(milliseconds: 260), () {
-        if (mounted) setState(() => _flash = false);
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = '写入失败：$e');
-    } finally {
-      _writing = false;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: AppColors.bgElevated,
-        foregroundColor: AppColors.text,
-        title: const Text('扫码枪', style: TextStyle(fontSize: 17)),
-        actions: [
-          // 手电筒：货架背面、冷柜里光线很差，没有这个基本没法用。
-          ValueListenableBuilder<MobileScannerState>(
-            valueListenable: _cam,
-            builder: (_, st, __) {
-              final on = st.torchState == TorchState.on;
-              return IconButton(
-                tooltip: on ? '关手电' : '开手电',
-                icon: Icon(
-                  on ? Icons.flashlight_on : Icons.flashlight_off,
-                  color: on ? AppColors.warn : AppColors.textSub,
-                ),
-                onPressed: () => _cam.toggleTorch(),
-              );
-            },
+  Future<ScanFeedback> record(String sheetNo, String code) async {
+    await repo.addScan(sheetNo, code);
+    final rows = await repo.listWithMaster(sheetNo);
+    return ScanFeedback(
+      accepted: true,
+      hit: rows.cast<Map<String, dynamic>?>().firstWhere(
+            (r) => r != null && r['barcode'] == code,
+            orElse: () => null,
           ),
-          IconButton(
-            tooltip: '切换前后摄像头',
-            icon: const Icon(Icons.cameraswitch_outlined,
-                color: AppColors.textSub),
-            onPressed: () => _cam.switchCamera(),
-          ),
-        ],
-      ),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          MobileScanner(
-            controller: _cam,
-            fit: BoxFit.cover,
-            onDetect: _onDetect,
-            errorBuilder: (_, e) => _cameraError(e),
-            placeholderBuilder: (_) => const ColoredBox(
-              color: Colors.black,
-              child: Center(child: CircularProgressIndicator()),
-            ),
-          ),
-          _scanWindow(),
-          Positioned(top: 0, left: 0, right: 0, child: _topHint()),
-          Positioned(left: 0, right: 0, bottom: 0, child: _panel()),
-        ],
-      ),
     );
   }
 
-  /// 取景框。用半透明遮罩压暗框外区域，让"该把条码放哪"一眼就懂。
-  Widget _scanWindow() {
-    final frameColor = _flash ? AppColors.brand : Colors.white70;
-    return IgnorePointer(
-      child: Center(
-        child: Container(
-          width: 268,
-          height: 172,
-          decoration: BoxDecoration(
-            border: Border.all(color: frameColor, width: _flash ? 4 : 2.5),
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: _flash
-                ? [
-                    BoxShadow(
-                      color: AppColors.brand.withValues(alpha: 0.55),
-                      blurRadius: 22,
-                      spreadRadius: 4,
-                    ),
-                  ]
-                : null,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _topHint() => Container(
-        padding: EdgeInsets.fromLTRB(
-            14, 10 + MediaQuery.of(context).padding.top * 0, 14, 10),
-        color: Colors.black.withValues(alpha: 0.45),
-        child: Text(
-          _flash ? '已记下 ✓' : '把条码对准框内，不用按任何键',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: _flash ? AppColors.brand : Colors.white,
-            fontSize: 13,
-            fontWeight: _flash ? FontWeight.w600 : FontWeight.normal,
-          ),
-        ),
-      );
-
-  Widget _panel() {
-    final hit = _lastHit;
-    final name = (hit?['name'] ?? '').toString();
-    final unknown = hit != null && name.isEmpty;
-    final qty = hit == null ? '0' : StocktakeExport.fmtNum(hit['qty']);
-
-    return Container(
-      color: AppColors.bgElevated.withValues(alpha: 0.96),
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_error != null) ...[
-            Text(_error!, style: const TextStyle(color: AppColors.danger, fontSize: 12)),
-            const SizedBox(height: 6),
-          ],
-          Row(
-            children: [
-              _stat('本次连扫', '$_sessionCount'),
-              const SizedBox(width: 14),
-              _stat('本单合计', StocktakeExport.fmtNum(_sum['total_qty'])),
-              const SizedBox(width: 14),
-              _stat('品种', '${_sum['kinds'] ?? 0}'),
-              const Spacer(),
-              Text(
-                widget.sheetNo,
-                style: const TextStyle(color: AppColors.textWeak, fontSize: 11),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: (unknown ? AppColors.warn : AppColors.brand)
-                  .withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(AppRadii.sm),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  hit == null
-                      ? Icons.qr_code_scanner
-                      : (unknown ? Icons.help_outline : Icons.check_circle_outline),
-                  size: 16,
-                  color: hit == null
-                      ? AppColors.textWeak
-                      : (unknown ? AppColors.warn : AppColors.brand),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    hit == null
-                        ? '还没扫到东西'
-                        : (unknown
-                            ? '未知条码 ${hit['barcode']} × $qty（商档里没有）'
-                            : '$name × $qty'),
-                    style: const TextStyle(color: AppColors.text, fontSize: 13),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // 「再记 1 件」是唯一不依赖手感的出口：同一个商品连扫第 N 件、
-                // 或者条码磨损读不出来时，都靠它。
-                SizedBox(
-                  height: 32,
-                  child: FilledButton.tonal(
-                    onPressed: hit == null ? null : _addAgain,
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      backgroundColor: AppColors.brand.withValues(alpha: 0.18),
-                      foregroundColor: AppColors.brand,
-                    ),
-                    child: const Text('再记 1 件', style: TextStyle(fontSize: 12)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            '同一个条码连续对着不会重复计数；要再记一件点右边按钮。',
-            style: TextStyle(color: AppColors.textWeak, fontSize: 11),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _stat(String label, String value) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(label,
-              style: const TextStyle(color: AppColors.textWeak, fontSize: 10)),
-          const SizedBox(height: 1),
-          Text(value,
-              style: const TextStyle(
-                  color: AppColors.text,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600)),
-        ],
-      );
-
-  /// 相机起不来时的兜底。
-  /// 员工看到的必须是一句人话 + 怎么自救，而不是一个异常堆栈。
-  Widget _cameraError(MobileScannerException e) => ColoredBox(
-        color: AppColors.bg,
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.no_photography_outlined,
-                    size: 44, color: AppColors.warn),
-                const SizedBox(height: 14),
-                const Text('摄像头打不开',
-                    style: TextStyle(color: AppColors.text, fontSize: 16)),
-                const SizedBox(height: 10),
-                const Text(
-                  '常见原因：\n'
-                  '① 相机权限被拒绝 —— 到 手机设置 → 应用 → 小智IM → 权限 → 相机 打开\n'
-                  '② 后置摄像头正被别的 App 占用 —— 关掉相机/视频通话类 App 再回来\n'
-                  '\n'
-                  '也可以先返回，改用扫码枪或手输条码。',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      color: AppColors.textSub, fontSize: 12, height: 1.6),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  '$e',
-                  textAlign: TextAlign.center,
-                  maxLines: 4,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: AppColors.textWeak, fontSize: 10),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
+  @override
+  Future<Map<String, dynamic>> summary(String sheetNo) =>
+      repo.summary(sheetNo);
 }
