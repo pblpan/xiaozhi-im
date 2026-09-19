@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  出站分享用的 FileProvider 路径表。
+
+  ── 为什么必须有这个文件 ─────────────────────────────────────
+  Android 7.0（API 24）起，把 `file://` 地址交给外部 App 会直接抛
+  FileUriExposedException —— 系统不让别的进程拿你的私有文件路径。
+  正确做法是把自己的文件**经 FileProvider 暴露成 `content://`**，
+  再交给系统分享面板；外部 App 拿到的是受控的临时读权限，而不是路径。
+
+  ── 为什么路径写 `.` 而不是 downloads 子目录 ────────────────
+  导出的账（扫码明细 .txt/.csv、盈亏表 .csv、商档模板 .csv）都落在
+  `core/file_io.dart` 的 `dir()` 下，而它取的是
+  `getApplicationSupportDirectory()`。Android 上这个目录就是
+  `<应用私有>/files`，导出文件在 `files/downloads/...`。
+  这里把 `files-path` 的根整体开出去（path="."），是为了以后换导出目录
+  不用同步改这个 xml —— 少一处"改了一边忘另一边"的静默失配。
+
+  ⚠️ 这两个 path 都是**应用私有目录**，开出去的只是"能被分享面板读"，
+  不是"谁都能读"：只有拿着我们发出的 content:// URI 的那一个 App，
+  且在本次分享期间，才读得到。
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="app_files" path="." />
+    <cache-path name="app_cache" path="." />
+</paths>

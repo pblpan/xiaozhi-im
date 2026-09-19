@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>小智扫码枪 · 使用说明</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "微软雅黑", "PingFang SC", sans-serif;
+    color: #1f2430; font-size: 10.5pt; line-height: 1.62; margin: 0;
+  }
+  h1 { font-size: 19pt; margin: 0 0 2px; letter-spacing: .5px; }
+  .sub { color: #6b7484; font-size: 9pt; margin-bottom: 14px; }
+  h2 {
+    font-size: 12.5pt; margin: 18px 0 7px; padding-left: 9px;
+    border-left: 4px solid #10B981; line-height: 1.25;
+  }
+  h3 { font-size: 10.5pt; margin: 12px 0 5px; color: #0f766e; }
+  p { margin: 5px 0; }
+  ol, ul { margin: 5px 0 5px 20px; padding: 0; }
+  li { margin: 3px 0; }
+  code {
+    background: #f1f5f4; padding: 1px 5px; border-radius: 3px;
+    font-family: Consolas, "Courier New", monospace; font-size: 9.5pt;
+  }
+  .box {
+    background: #f6fbf9; border: 1px solid #cfeae0; border-radius: 6px;
+    padding: 9px 12px; margin: 9px 0;
+  }
+  .warn { background: #fff8ec; border-color: #f0d9ae; }
+  .danger { background: #fdf1f0; border-color: #f3cdc9; }
+  .box b { color: #0b4f3f; }
+  .warn b { color: #8a5a00; }
+  .danger b { color: #9a2f26; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 9.8pt; }
+  th, td { border: 1px solid #d8dee6; padding: 5px 8px; text-align: left; }
+  th { background: #f2f6f5; font-weight: 600; }
+  .ok { color: #0f766e; font-weight: 600; }
+  .no { color: #b23c30; font-weight: 600; }
+  .foot {
+    margin-top: 20px; padding-top: 8px; border-top: 1px solid #e3e8ee;
+    color: #6b7484; font-size: 8.8pt;
+  }
+  .two { display: flex; gap: 14px; }
+  .two > div { flex: 1; }
+  .kbd {
+    display: inline-block; border: 1px solid #cfd6de; border-bottom-width: 2px;
+    border-radius: 4px; padding: 0 5px; font-size: 9pt; background: #fafbfc;
+  }
+</style>
+</head>
+<body>
+
+<h1>小智扫码枪 · 使用说明</h1>
+<div class="sub">Android 版 v1.0.0 ｜ 独立离线扫码工具 ｜ 2026-09-19</div>
+
+<h2>一、这是什么</h2>
+<p>一个<strong>独立的小 App</strong>，专门用来拿手机 / 扫码枪把条码扫成一笔账，然后导出发给同事。</p>
+<p>它和「小智 IM」是<strong>两个 App</strong>（包名不同），可以同时装在一台手机上，互不覆盖、互不影响。</p>
+<div class="box">
+<b>装完就能用，不需要任何设置。</b>这个 App <strong>一次网络请求都不发</strong> ——
+不用输服务器地址、不用登录、不依赖厂里的网。商品资料靠<strong>导入一份表格</strong>带进去。
+</div>
+
+<h2>二、第一次使用：先导入商品档案</h2>
+<p>不导入也能扫，只是每个条码都会显示「未知条码」。要让手机认得商品，走这五步：</p>
+<ol>
+  <li>打开 App，点输入框右边那个<strong>「商档」按钮</strong>（图标像一摞盒子）。</li>
+  <li>先选 <strong>「导出商档模板（照着填）」</strong> → 会生成一份表格文件，点「发给同事」发到电脑（或直接发给自己）。</li>
+  <li>用 Excel / WPS 打开模板，按列填商品：<code>条码</code>、<code>品名</code>、<code>规格</code>、<code>单位</code>、<code>售价</code>、<code>账面数</code>。</li>
+  <li>填好的表格传回手机（微信发给自己就行）。</li>
+  <li>再点「商档」→ <strong>「导入商档 CSV」</strong> → 选那份文件。提示
+      <code>商档已导入：N 个商品</code> 就成了。</li>
+</ol>
+
+<h3>表格要求（认得很宽，不用改格式）</h3>
+<table>
+  <tr><th style="width:26%">这一列</th><th>表头可以叫这些名字（任选一个）</th></tr>
+  <tr><td>条码（必填）</td><td>条码 / 条形码 / 商品条码 / 国际条码 / 商品编码 / 编码 / 货号 / PLU / barcode / code</td></tr>
+  <tr><td>品名</td><td>品名 / 商品名称 / 商品名 / 名称 / name</td></tr>
+  <tr><td>规格</td><td>规格 / 规格型号 / 型号 / spec</td></tr>
+  <tr><td>单位</td><td>单位 / 计量单位 / unit</td></tr>
+  <tr><td>售价</td><td>售价 / 零售价 / 销售价 / 单价 / 价格 / price</td></tr>
+  <tr><td>账面数</td><td>账面数 / 账面数量 / 账面库存 / 系统库存 / 库存数 / 库存 / qty</td></tr>
+</table>
+<ul>
+  <li><strong>编码不用管</strong>：UTF-8 和 GBK（Excel 默认存出来的那种）都能读，直接导就行。</li>
+  <li><strong>条码不能空</strong>：空条码的行会被跳过，App 会告诉你跳了几行。</li>
+  <li>只填「条码 + 品名」也够用；没有的列留空即可。</li>
+</ul>
+<div class="danger">
+<b>注意：导入是「整份替换」，不是追加。</b>
+这一次文件里没有的条码，手机上原来的记录会被清掉。所以要导就导<strong>全量清单</strong>，
+别拿一个分店的部分表去"补充"。
+</div>
+
+<h2>三、怎么扫</h2>
+<h3>方式一：蓝牙 / 无线扫码枪（推荐，最快）</h3>
+<ol>
+  <li>用<strong>手指点一下</strong>页面上方那个输入框，让光标停在里面。</li>
+  <li>拿枪对着条码按一下。枪扫出来的字会自己进输入框，并自动回车 —— 这一笔就记上了。</li>
+  <li>扫完接着扫下一件，<strong>不用再点输入框</strong>。</li>
+</ol>
+<div class="warn">
+<b>「扫了没反应」九成是光标不在输入框里。</b>界面上表现为输入框没有光标 / 键盘收起来了。
+再<strong>点一下那个输入框</strong>就能继续扫 —— 不用重启 App。
+</div>
+
+<h3>方式二：用手机摄像头</h3>
+<p>点左边蓝色的 <strong>「扫码」</strong> 按钮，对着条码即可。没带枪的时候用这个。</p>
+
+<h3>扫完给什么反馈</h3>
+<table>
+  <tr><th style="width:22%">结果</th><th>声音</th><th>震动</th></tr>
+  <tr><td class="ok">记上了</td><td>短促的一声「嘀」</td><td>轻震一下</td></tr>
+  <tr><td class="no">没记上 / 出错</td><td>两声低音「嗡—嗡」</td><td>重震一下</td></tr>
+</table>
+<p>右上角的<strong>喇叭图标</strong>可以开关提示音（在冷柜旁边想静音时用）。震动一直开着 ——
+现场吵的时候，震动是唯一能感觉到的反馈。</p>
+
+<h2>四、看结果 / 导出</h2>
+<ul>
+  <li><strong>明细列表</strong>：序号 / 条码 / 数量 / 商品名称。点右边的垃圾桶删掉一行；点数量可以手工改（改成 0 就是删）。</li>
+  <li><strong>同一个条码扫两遍 = 数量累加</strong>（不是多出一行）。扫重了删掉一行或把数量改小。</li>
+  <li><strong>右上「盈亏表」</strong>：账面数 vs 实盘数、差异、金额。</li>
+  <li><strong>底部两个导出按钮</strong>：
+    <ul>
+      <li>「导出文档」= <code>.txt</code>，微信里点开就能看</li>
+      <li>「导出表格」= <code>.csv</code>，Excel / WPS 打开</li>
+    </ul>
+  </li>
+  <li>导出后会弹出选项，<strong>第一项就是「发给同事」</strong> → 微信 / 企微 / 钉钉都直接列在里面。</li>
+</ul>
+<div class="box">
+<b>表格里的条码列已经做过保护</b>，用 Excel 打开是完整的
+<code>6921817824327</code>，不会变成 <code>6.92E+12</code> 那种科学计数法。
+</div>
+
+<h2>五、扫码单</h2>
+<p>每次采集都落在一张<strong>扫码单</strong>上，单号形如 <code>PD20260919150235</code>（就是开始扫的时间）。</p>
+<ul>
+  <li>点右上「切换 / 新建扫码单」可以新开一单，或者翻回以前某一单继续扫。</li>
+  <li>导出是按单走的 —— 一张单一个文件，不会混在一起。</li>
+  <li>「清空本单」会把这单的记录全删掉，删之前会问一次。</li>
+</ul>
+
+<h2>六、常见问题</h2>
+<table>
+  <tr><th style="width:38%">现象</th><th>怎么办</th></tr>
+  <tr><td>用扫码枪扫，屏幕上没反应</td><td>先<strong>点一下输入框</strong>把光标点进去。还不行就看右上角提示音是不是被关了，把音量确认一下。</td></tr>
+  <tr><td>显示「未知条码」</td><td>这个条码不在手机的商品档案里。先在「商档」里导一次 CSV。</td></tr>
+  <tr><td>导入失败，说「没读到任何商品」</td><td>确认表里有一列叫「条码 / 商品条码 / PLU」之类的名字，并且那一列不是空的。也可以先「导出商档模板」照着做一份。</td></tr>
+  <tr><td>数量比自己数得多</td><td>同一条码重复扫是<strong>累加数量</strong>。在列表里把数量改小，或删掉那行。</td></tr>
+  <tr><td>导出的表格打不开 / 乱码</td><td>用 Excel 或 WPS 打开 <code>.csv</code>；手机上也可以用「导出文档」拿 <code>.txt</code>。</td></tr>
+  <tr><td>换了手机，数据不见了</td><td>数据存在手机本地，<strong>不上传服务器</strong>。换机前先把明细导出发给自己。</td></tr>
+</table>
+
+<h2>七、这一版有意没做的（别当故障报）</h2>
+<ul>
+  <li><strong>数据不回传服务器</strong>：采完导出、发出去，就是完整闭环。回传以后再加。</li>
+  <li><strong>没有账号 / 登录</strong>：员工装上就用。</li>
+  <li><strong>不做盘点制度</strong>：这里只负责"把条码扫成一笔账"。盘点位、初盘/复盘/抽盘那套是另一个模块，不在这台手机上。</li>
+</ul>
+
+<div class="foot">
+小智扫码枪 v1.0.0（Android）· 包名 com.pblpan.xiaozhi_scanner ·
+需要 Android 5.0 及以上 · 摄像头扫码需授权相机；不授权也能用扫码枪扫
+</div>
+
+</body>
+</html>

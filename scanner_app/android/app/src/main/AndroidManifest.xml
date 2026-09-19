@@ -1,0 +1,107 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- ── 我们自己的代码一次网络请求都不发 ─────────────────────────
+         扫码写本地 SQLite、商档靠导入 CSV、导出走系统分享面板。
+         装完就能用，不认服务器 IP，不会因为"服务端没部署"而开天窗。
+
+         ⚠️ **但打出来的 APK 里会有 INTERNET 权限** —— 不是我们声明的，
+            是下面这条依赖链**合并进来的**（2026-09-19 用合并报告实测确认）：
+              mobile_scanner（bundled MLKit）
+                → com.google.mlkit:barcode-scanning
+                → com.google.android.datatransport:transport-backend-cct:2.3.3
+                → <uses-permission android:name="android.permission.INTERNET"/>
+            查法（出包后跑，能看到是谁注入的）：
+              build/app/intermediates/manifest_merge_blame_file/release/
+                  processReleaseMainManifest/manifest-merger-blame-release-report.txt
+            同样的方式可以查到 open_filex 带进来
+            READ_EXTERNAL_STORAGE / READ_MEDIA_IMAGES / READ_MEDIA_VIDEO / READ_MEDIA_AUDIO
+            （它走 FileProvider + Intent 打开文件，运行时并不去要这几个权限，
+             所以**不会弹权限框**，只是躺在清单里）。
+
+            为什么不去掉：删权限要用 tools:node="remove"，而这两个库
+            （MLKit 的遥测上传、open_filex 的打开流程）都只在**真机上运行到那一步**
+            才暴露问题 —— 编译全绿、装机才崩。这一版是给测试人员第一次装的包，
+            要的是"装上就能扫"，所以**先留着、如实说明**，
+            等真机验收过了再评估能不能摘。
+            对现场的实质影响：没有。不联网这件事由代码保证，不由权限保证。 -->
+
+    <!-- 摄像头扫码（手机当扫码枪用）。权限申请由 mobile_scanner 插件自己发起。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 扫码反馈的震动：冷柜旁边、生鲜区那种环境里声音会被盖掉，
+         震动是那时候员工唯一能感觉到的"记上了"。 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 相机不是必需的：门店主力是蓝牙/无线扫码枪（HID 键盘），
+         摄像头只是没带枪时的备用。写成 required=false，
+         没摄像头的设备（部分工业手持终端）也能装。 -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <application
+        android:label="小智扫码枪"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!-- 出站分享：把导出的账（.txt/.csv）直接交给系统分享面板（微信/企微/钉钉…）。
+             Android 7.0 起不允许把 file:// 交给外部 App（FileUriExposedException），
+             必须经 FileProvider 转成 content:// 并只授一次性读权限。
+
+             ⚠️ authority 用**独立后缀** `.sharefiles`，刻意不与 open_filex 的
+                `${applicationId}.fileProvider.com.crazecoder.openfile` 撞名。
+                两个 provider 同 authority 会在安装期就崩，而且报错很难读
+                （"Failed to find configured root" / "Couldn't find meta-data"）。
+             ⚠️ exported=false + grantUriPermissions=true 是标准组合：
+                别人拿不到我们没主动给出去的地址。 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.sharefiles"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/share_paths" />
+        </provider>
+    </application>
+
+    <queries>
+        <!-- Flutter 引擎的 ProcessTextPlugin 要用（模板自带，别删） -->
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- 出站分享时 MainActivity 会先探一下"有没有 App 认 text/csv 这个具体类型"，
+             不认就退到 */* 再拉分享面板。**Android 11+ 不声明可见性，这个探测
+             永远返回 null** —— 于是每次都静默走兜底分支：功能看着对，
+             但那段代码实际从没生效过（写错 mime 也不会被发现）。
+             这里声明 SEND + */* 就够了：一个 */* 覆盖全部能收分享的 App。 -->
+        <intent>
+            <action android:name="android.intent.action.SEND"/>
+            <data android:mimeType="*/*"/>
+        </intent>
+    </queries>
+</manifest>

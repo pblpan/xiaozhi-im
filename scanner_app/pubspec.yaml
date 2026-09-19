@@ -1,0 +1,97 @@
+name: xiaozhi_scanner
+description: 小智扫码枪 —— 独立离线扫码工具（Android）
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+# ── 这个包为什么"只留这么点依赖" ──────────────────────────────────
+# 它是从 IM 客户端里**切出来**的：那边有通话（flutter_webrtc / record）、
+# 有登录（http / web_socket_channel）、有桌面端（window_manager / tray_manager
+# / win32），这些在扫码现场一样都用不上，而且每一条都会往 APK 里塞几 MB 的
+# .so（WebRTC 一族尤其夸张）。留着它们的代价是"装包变大、启动变慢、权限变多"，
+# 却换不来任何功能 —— 所以整条砍掉。
+#
+# 剩下的这条链是**完全离线**的：
+#   扫码 → 本地 SQLite → 导出 CSV/TXT → 系统分享面板发出去
+# 一次网络请求都不发（商档也是导入 CSV，不走服务端），
+# 所以这里**没有 http**，清单里也不会有 INTERNET 权限。
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 商档 CSV 导入：从文件管理器挑文件。
+  # ⚠️ 走的是系统 SAF（ACTION_OPEN_DOCUMENT），**不需要任何存储权限** ——
+  #    见 AndroidManifest 里的说明，别再回去加 READ_EXTERNAL_STORAGE。
+  file_picker: ^12.2.0
+
+  # 导出后用系统程序打开（WPS / Excel / 记事本）
+  open_filex: ^4.7.0
+
+  # 落盘目录（getApplicationSupportDirectory）+ 拼路径
+  path_provider: ^2.1.6
+  path: ^1.9.0
+
+  # 本地 SQLite：扫码流水 + 商档底表，断网照盘。
+  # - sqflite：Android 走系统自带的原生实现
+  # - sqflite_common_ffi：core/local_db.dart 里桌面端的分支要 import 它。
+  #   🔴 **不能删**：那是编译期 import，删了直接编不过，
+  #      哪怕这一版只出 Android 包。
+  sqflite: ^2.3.3
+  sqflite_common_ffi: ^2.3.6
+
+  # ⚠️ 这一行是**必须的**，不是"顺手升个级"。
+  # 下面 hooks 里那段 `source: {android: system, default: sqlite3}`
+  # 用的是"按目标平台给不同取值"的写法 —— 这个能力是 sqlite3 **3.6.0** 才有的
+  # （3.5.x 只认 `source: <一个字符串>`）。不钉住的话 pub 会解出 3.5.2，
+  # 于是 `flutter test` 直接挂在构建期：
+  #     Invalid argument (source): Unknown source. Must be sqlite3, sqlite3mc,
+  #     system, process or executable: _Map len:2
+  #     Building assets for package:sqlite3 failed.
+  # 这个报错完全不提"版本不对"，很容易被误判成 hooks 语法写错了。
+  # 主 App（xiaozhi-im/client）那边解出来就是 3.6.0，所以它一直是对的。
+  sqlite3: ^3.6.0
+
+  # 扫码反馈音：成功「嘀」/ 失败「嗡-嗡」（core/scan_feedback.dart）
+  audioplayers: ^6.8.1
+
+  # 记住"声音/震动"开关
+  shared_preferences: ^2.2.0
+
+  # 手机摄像头扫条码（screens/camera_scan.dart）
+  #
+  # 🔴 **必须用默认的 bundled 版 MLKit**，绝对不要往 android/gradle.properties 里加
+  #    dev.steenbakker.mobile_scanner.useUnbundled=true —— unbundled 版是"首次使用时
+  #    通过 Google Play Services 下载模型"，而门店里这些国产手机根本没有 GSF，
+  #    加了那个开关 = 现场一片扫不出来。bundled 版把模型打进 APK（大约 +3~10MB），
+  #    装上就能用，不依赖任何 Google 服务。
+  mobile_scanner: ^7.4.2
+
+# ── SQLite 原生库从哪来（构建期配置；不写会让 APK 构建必挂）────────────
+# `sqlite3`（sqflite_common_ffi 的传递依赖）默认在构建时**从 GitHub Releases 下载**
+# 预编译的 libsqlite3.*.so。国内网络下这一步必然超时（实测：跑 3 分半后 BUILD FAILED，
+# 报 "attempted to download .../libsqlite3.arm.android.so"），整个 APK 出不来。
+#
+# 而 Android 端**根本不需要**这个库：本地库在移动端走 sqflite 插件自带的系统实现
+# （见 core/local_db.dart 的平台分支，只有桌面端才 FFI 加载 sqlite3）。
+# 所以让 Android 直接找系统库（system = dlopen("libsqlite3.so")）：构建期不下载。
+hooks:
+  user_defines:
+    sqlite3:
+      source:
+        android: system
+        default: sqlite3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    # 扫码反馈音（由 tools/gen_sounds.py 纯数学合成，不依赖外部素材）。
+    # 只需要这两个，IM 那边的消息音/来电铃声/回铃都不拷进来。
+    - assets/sounds/scan_ok.wav
+    - assets/sounds/scan_fail.wav
