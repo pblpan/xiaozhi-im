@@ -6,6 +6,7 @@ import 'core/call_service.dart';
 import 'core/config.dart';
 import 'core/integrity.dart';
 import 'core/remote_config.dart';
+import 'core/scan_feedback.dart';
 import 'screens/remote.dart';
 import 'core/settings.dart';
 import 'core/share_intake.dart';
@@ -50,6 +51,10 @@ void main() async {
   await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
   await SoundService().init(); // 读提示音开关 + 预加载音频
   SoundService().attach(); // 全局监听新消息，收到就响一声
+  // 扫码反馈（成功「嘀」/ 失败「嗡-嗡」+ 触感）。**必须在这里预加载**：
+  // AudioPlayer 第一次播 asset 要走一轮 rootBundle 解码（100~300ms），
+  // 不预热的话第一枪会慢半拍，员工以为没扫上就会重复扫。
+  await ScanFeedbackService.I.init();
   CallService().navKey = appNavigatorKey;
   await CallService().attach(); // 订阅通话信令，随时能接来电
   // 桌面端：托盘 + "关闭=缩到托盘"，必须赶在 runApp 之前装好拦截，

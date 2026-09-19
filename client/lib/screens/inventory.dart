@@ -290,13 +290,13 @@ class _InventoryPageState extends State<InventoryPage> {
         child: Text(text, style: TextStyle(color: color, fontSize: 13)),
       );
 
-  Widget _empty() => const Center(
+  Widget _empty() => Center(
         child: Padding(
           padding: EdgeInsets.all(28),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.inventory_2_outlined,
+              Icon(Icons.inventory_2_outlined,
                   size: 46, color: AppColors.textWeak),
               const SizedBox(height: 14),
               const Text('还没有盘点位',

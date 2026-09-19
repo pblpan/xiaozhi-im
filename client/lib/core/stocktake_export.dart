@@ -1,3 +1,5 @@
+import 'csv_fmt.dart';
+
 /// 扫码枪出数：把一张扫码单算成"老板要看的那几个数"，并导出成**通用文件**。
 ///
 /// ── 为什么导出 CSV 而不是"泰格导入模板" ──────────────────────
@@ -103,7 +105,7 @@ class StocktakeExport {
   /// 导出 CSV 文本。**开头带 UTF-8 BOM**，Excel 双击不乱码。
   static String toCsv(List<Map<String, dynamic>> rows) {
     final sb = StringBuffer('\uFEFF'); // BOM：Excel 认它是 UTF-8
-    sb.writeln(headers.map(_esc).join(','));
+    sb.writeln(headers.map(csvEsc).join(','));
     for (final r in rows) {
       final qty = _d(r['qty']);
       final account = r['account_qty'] == null ? null : _d(r['account_qty']);
@@ -112,7 +114,7 @@ class StocktakeExport {
       final amt = (diff == null || price == null) ? null : diff * price;
 
       sb.writeln(<Object?>[
-        r['barcode'] ?? '',
+        barcodeCsvCell(r['barcode']),
         r['name'] ?? '',
         r['spec'] ?? '',
         r['unit'] ?? '',
@@ -122,7 +124,7 @@ class StocktakeExport {
         diff == null ? '' : _num(diff),
         amt == null ? '' : _num(amt),
         r['note'] ?? '',
-      ].map((v) => _esc(v.toString())).join(','));
+      ].map((v) => csvEsc(v.toString())).join(','));
     }
     return sb.toString();
   }
@@ -212,15 +214,15 @@ class StocktakeExport {
   /// 扫码明细 CSV。开头带 UTF-8 BOM（同 toCsv，Excel 双击不乱码）。
   static String toScanCsv(List<Map<String, dynamic>> rows) {
     final sb = StringBuffer('\uFEFF');
-    sb.writeln(scanHeaders.map(_esc).join(','));
+    sb.writeln(scanHeaders.map(csvEsc).join(','));
     for (var i = 0; i < rows.length; i++) {
       final r = rows[i];
       sb.writeln(<Object?>[
         i + 1,
-        r['barcode'] ?? '',
+        barcodeCsvCell(r['barcode']),
         _num(_d(r['qty'])),
         scanNameOf(r),
-      ].map((v) => _esc(v.toString())).join(','));
+      ].map((v) => csvEsc(v.toString())).join(','));
     }
     return sb.toString();
   }
@@ -264,16 +266,6 @@ class StocktakeExport {
 
   static double _d(Object? v) =>
       v is num ? v.toDouble() : double.tryParse((v ?? '').toString()) ?? 0;
-
-  /// CSV 转义：含逗号/引号/换行就加引号，内部引号翻倍。
-  /// 商品名里带逗号（"苹果,红富士"）不转义会直接把列冲掉。
-  static String _esc(String s) {
-    if (s.contains(',') || s.contains('"') || s.contains('\n') ||
-        s.contains('\r')) {
-      return '"${s.replaceAll('"', '""')}"';
-    }
-    return s;
-  }
 
   /// 数量/金额：整数不带 .0，其余最多 3 位小数并去掉尾随 0
   static String _num(double d) {

@@ -53,4 +53,14 @@ abstract class ScanSink {
   ///   · `total_qty` 合计数量
   ///   · `kinds`     品种数
   Future<Map<String, dynamic>> summary(String sheetNo);
+
+  /// 最近扫到的几条（**新的在前**），信息区列表用。
+  ///
+  /// ── 为什么要列表而不只是一行"刚扫了什么" ────────────────────────
+  /// 只显示最后一笔的话，员工发现"刚才那件好像扫重了"时**没法回头查** ——
+  /// 得退出扫码页、回到列表页翻。而那正是他需要当场确认的时刻。
+  /// 信息区占屏幕一大半的意义就在能一眼看到前面几笔，扫错了立刻发现。
+  ///
+  /// 返回空列表 = 这个业务不提供明细，信息区就不显示列表。
+  Future<List<Map<String, dynamic>>> recent(String sheetNo, {int limit = 40});
 }

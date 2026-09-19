@@ -69,4 +69,11 @@ class _StocktakeSink implements ScanSink {
   @override
   Future<Map<String, dynamic>> summary(String sheetNo) =>
       repo.summary(sheetNo);
+
+  @override
+  Future<List<Map<String, dynamic>>> recent(String sheetNo,
+      {int limit = 40}) async {
+    final rows = await repo.listWithMaster(sheetNo);
+    return rows.take(limit).toList();
+  }
 }

@@ -349,5 +349,49 @@ void main() {
       expect(StocktakeExport.scanDocName('PD1'), '扫码明细_PD1.txt');
       expect(StocktakeExport.fileName('PD1'), '扫码_PD1.csv');
     });
+
+    // ── 龙哥 2026-09-19 报的"条码栏是乱码" ──────────────────────
+    // 真因不是编码（BOM 一直在），是 Excel 把 13 位数字条码当**数值**：
+    // 显示成 6.92182E+12，超过 15 位还会把末尾置零。
+    // 下面两条**必须成对**：只测"有 =" 不测"裸串不见了"，
+    // 万一哪天函数改了但导出没接上，前者会假绿。
+    test('🔴 13 位条码落进 CSV 是 ="..." 形式（Excel 打开按文本显示）', () {
+      final csv = StocktakeExport.toScanCsv([
+        {'id': 1, 'barcode': '6921817824327', 'qty': 1, 'name': '矿泉水'},
+      ]);
+      expect(csv, contains('"=""6921817824327"""'));
+    });
+
+    test('🔴 反向：CSV 里不能出现裸的长数字条码', () {
+      final csv = StocktakeExport.toScanCsv([
+        {'id': 1, 'barcode': '6921817824327', 'qty': 1, 'name': '矿泉水'},
+      ]);
+      expect(csv, isNot(contains(',6921817824327,')),
+          reason: '裸着写出去，Excel 会显示成 6.92182E+12 —— 就是龙哥说的乱码');
+    });
+
+    test('短码 / 带字母的码不做处理（加了反而平白变成公式）', () {
+      final csv = StocktakeExport.toScanCsv([
+        {'id': 1, 'barcode': '6901', 'qty': 1, 'name': '甲'},
+        {'id': 2, 'barcode': 'AB-001', 'qty': 1, 'name': '乙'},
+      ]);
+      expect(csv, contains(',6901,'));
+      expect(csv, contains(',AB-001,'));
+      expect(csv, isNot(contains('="')));
+    });
+
+    test('盈亏表那份 CSV 的条码列同样要保护（别只改了明细）', () {
+      final csv = StocktakeExport.toCsv([
+        {
+          'barcode': '6921817824327',
+          'name': '矿泉水',
+          'qty': 1,
+          'account_qty': 2,
+          'unit_price': 3,
+        },
+      ]);
+      expect(csv, contains('"=""6921817824327"""'));
+      expect(csv, isNot(contains(',6921817824327,')));
+    });
   });
 }

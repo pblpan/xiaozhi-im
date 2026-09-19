@@ -187,4 +187,101 @@ void main() {
       );
     });
   });
+
+  // ── 确认制闸门 ────────────────────────────────────────────────
+  //
+  // 龙哥 2026-09-19 现场反馈："扫成功后不移开物品，会直接自动重复扫描"。
+  // 光靠冷却压不住 —— 冷却一过它就又算一件。确认制是给"这件扫完了"
+  // 一个**人为信号**，闸门关上后件数不可能自己涨。
+  group('确认制闸门 ScanConfirmGate', () {
+    test('默认必须开着', () {
+      expect(ScanConfirmGate().confirmMode, isTrue,
+          reason: '默认关 = 把"件数自己往上涨"这个 bug 又放回来');
+    });
+
+    test('扫到就关门，后续帧一律不收', () {
+      final g = ScanConfirmGate();
+      expect(g.accept(writing: false), isTrue);
+      g.onRecorded();
+      expect(g.awaiting, isTrue);
+      expect(g.accept(writing: false), isFalse,
+          reason: '等确认期间还在收帧 = 件数会自己涨');
+    });
+
+    test('点「继续扫」之后才放行', () {
+      final g = ScanConfirmGate();
+      g.onRecorded();
+      g.resume();
+      expect(g.awaiting, isFalse);
+      expect(g.accept(writing: false), isTrue);
+    });
+
+    test('🔴 上一笔还没写完时不收（并发写同一行会让数量算错且不报错）', () {
+      final g = ScanConfirmGate();
+      expect(g.accept(writing: true), isFalse,
+          reason: '落库是异步的，必须串行');
+    });
+
+    test('🔴 关掉确认制要**同时开门** —— 否则确认卡消失了就再也点不到"继续"', () {
+      final g = ScanConfirmGate();
+      g.onRecorded();
+      expect(g.awaiting, isTrue);
+      g.setConfirmMode(false);
+      expect(g.awaiting, isFalse,
+          reason: '卡片被隐藏而闸门还关着 = 页面卡死在这一笔上');
+      expect(g.accept(writing: false), isTrue);
+    });
+
+    test('关掉再打开，确认制重新生效', () {
+      final g = ScanConfirmGate();
+      g.setConfirmMode(false);
+      g.onRecorded();
+      expect(g.awaiting, isFalse);
+      g.setConfirmMode(true);
+      g.onRecorded();
+      expect(g.awaiting, isTrue);
+    });
+  });
+
+  group('确认制 + 冷却 合起来（就是"不移开物品"那个现场场景）', () {
+    /// 相机每 100ms 上报一帧，同一个条码在画面里停 [ms] 毫秒，
+    /// 返回实际计进去的件数。
+    int simulate({required bool confirm, int ms = 10000}) {
+      final g = ScanConfirmGate()..confirmMode = confirm;
+      String? lastCode;
+      var lastAt = 0;
+      var n = 0;
+      for (var t = 0; t <= ms; t += 100) {
+        if (!g.accept(writing: false)) continue;
+        if (!shouldAcceptScan(
+          code: '6901',
+          lastCode: lastCode,
+          lastAcceptAt: lastAt,
+          now: t,
+        )) {
+          continue;
+        }
+        n++;
+        lastCode = '6901';
+        lastAt = t;
+        g.onRecorded();
+      }
+      return n;
+    }
+
+    test('🔴 扫完之后 10 秒不移开 → 确认制下只记 1 件', () {
+      expect(simulate(confirm: true), 1,
+          reason: '这就是龙哥报的问题：不移开商品，件数自己往上涨');
+    });
+
+    test('反证：关掉确认制，同一个场景会记很多件（所以默认必须开）', () {
+      final n = simulate(confirm: false);
+      expect(n, greaterThan(1),
+          reason: '关掉确认制后仍然只记 1 件的话，说明这条测试根本没'
+              '验证到闸门 —— 冷却窗口把两种结果都压成一样了');
+      // 10 秒 / 1.2 秒冷却 ≈ 9 件。写死 9 太脆（改冷却值就红），
+      // 只钉"明显多于 1 件"这个性质。
+      expect(n, lessThan(20));
+    });
+  });
 }

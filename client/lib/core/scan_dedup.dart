@@ -70,3 +70,52 @@ bool shouldAcceptScan({
   if (lastCode == null || code != lastCode) return true;
   return (now - lastAcceptAt) >= cooldownMs;
 }
+
+/// 确认制的闸门：**扫到一件之后必须停下，等人工放行才会再收下一帧**。
+///
+/// ── 为什么要有这个东西（龙哥 2026-09-19 现场反馈）────────────────
+/// "扫成功后不移开物品，会直接自动重复扫描"。
+/// 根因不在去重判据上 —— [shouldAcceptScan] 已经能挡住冷却期内的重复，
+/// 但**冷却一过它就会再算一次**：员工扫完一件没把商品移开（或者
+/// 这一排都是同款、他还在原地整理），件数就自己往上涨了。
+///
+/// 相机每秒上报十几帧，它**不知道你扫完了没有**。只要没有一个人为的
+/// "这件完了"信号，件数就只能靠时间猜 —— 而时间猜不准。
+/// 确认卡就是那个信号：扫到 → 闸门关 → 必须点「继续扫」才开。
+///
+/// 抽成纯类是同一条理由：这段逻辑在页面里是 `State` 的私有字段，
+/// 而相机页在 Windows 测试机上根本起不来（mobile_scanner 没有桌面实现），
+/// 不抠出来就**永远测不到**，等于没测试。
+class ScanConfirmGate {
+  /// 确认制总开关。老手嫌慢可以关，回到"连续扫"。
+  /// ⚠️ 默认必须开 —— 关掉的默认值等于把上面那个 bug 又放回来。
+  bool confirmMode = true;
+
+  /// 正在等人工放行。
+  bool awaiting = false;
+
+  /// 这一帧要不要收。
+  ///
+  /// [writing] 是上一笔的写入闸门：落库是异步的，上一笔没写完又来一笔
+  /// 会并发写同一行 → 数量算错**且不报错**。
+  bool accept({required bool writing}) => !writing && !awaiting;
+
+  /// 记完一笔：确认制开着就关门，等人工放行。
+  void onRecorded() {
+    awaiting = confirmMode;
+  }
+
+  /// 「继续扫」：放行下一帧。
+  void resume() {
+    awaiting = false;
+  }
+
+  /// 切换确认制。
+  ///
+  /// ⚠️ **关掉的那一刻必须同时开门**：否则已经弹着确认卡、
+  /// 而关掉开关的人又看不到"继续"按钮（卡片被隐藏），页面就卡死在这一笔上了。
+  void setConfirmMode(bool v) {
+    confirmMode = v;
+    if (!v) awaiting = false;
+  }
+}

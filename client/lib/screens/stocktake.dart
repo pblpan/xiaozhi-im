@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import '../core/file_io.dart';
+import '../core/scan_feedback.dart';
 import '../core/stock_master_repo.dart';
 import '../core/stocktake_export.dart';
 import '../core/stocktake_repo.dart';
@@ -127,6 +129,11 @@ class _StocktakePageState extends State<StocktakePage> {
     _input.clear();
     try {
       await _repo.addScan(_sheetNo, code);
+      // 🔴 声音**先于界面**：扫码枪是连贯动作，员工靠这一声确认"记上了"
+      // 才敢扫下一件。等列表刷完再响就慢半拍了。
+      // 这一页没有"拒绝"这回事（扫码枪扫什么都入账），所以只有成功音；
+      // 异常走 catch 给失败音 —— 写库失败必须听得出来，不能静默吞掉。
+      unawaited(ScanFeedbackService.I.forResult(accepted: true));
       final rows = await _repo.listWithMaster(_sheetNo);
       final hit = rows.cast<Map<String, dynamic>?>().firstWhere(
             (r) => r != null && r['barcode'] == code,
@@ -136,6 +143,7 @@ class _StocktakePageState extends State<StocktakePage> {
       setState(() => _lastHit = hit);
       await _reload();
     } catch (e) {
+      unawaited(ScanFeedbackService.I.forResult(accepted: false));
       if (!mounted) return;
       setState(() => _error = '写入失败：$e');
     }

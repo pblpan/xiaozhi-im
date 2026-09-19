@@ -1,3 +1,4 @@
+import 'csv_fmt.dart';
 import 'qty_fmt.dart';
 
 /// 盘点导出的排版层（**纯函数**，一行 IO 都没有）。
@@ -42,17 +43,17 @@ class InventoryExport {
   ///    中文商品名全是乱码 —— 现场第一反应是"导出的文件坏了"。
   static String toRowsCsv(List<Map<String, dynamic>> rows) {
     final b = StringBuffer('\uFEFF');
-    b.writeln(rowHeaders.map(_q).join(','));
+    b.writeln(rowHeaders.map(csvEsc).join(','));
     for (final r in rows) {
       b.writeln(<String>[
-        _q(r['barcode']),
-        _q(nameOf(r)),
-        _q(r['spec']),
-        _q(r['unit']),
-        _q(fmtQty(r['qty'])),
-        r['account_qty'] == null ? '' : _q(fmtQty(r['account_qty'])),
-        r['diff_qty'] == null ? '' : _q(fmtQty(r['diff_qty'])),
-        _q(r['loc_code']),
+        csvEsc(barcodeCsvCell(r['barcode'])),
+        csvEsc(nameOf(r)),
+        csvEsc(r['spec']),
+        csvEsc(r['unit']),
+        csvEsc(fmtQty(r['qty'])),
+        r['account_qty'] == null ? '' : csvEsc(fmtQty(r['account_qty'])),
+        r['diff_qty'] == null ? '' : csvEsc(fmtQty(r['diff_qty'])),
+        csvEsc(r['loc_code']),
       ].join(','));
     }
     return b.toString();
@@ -93,17 +94,17 @@ class InventoryExport {
   /// 阶段差异表 → CSV（带 BOM）
   static String toDiffCsv(List<Map<String, dynamic>> rows) {
     final b = StringBuffer('\uFEFF');
-    b.writeln(diffHeaders.map(_q).join(','));
+    b.writeln(diffHeaders.map(csvEsc).join(','));
     for (final r in rows) {
       b.writeln(<String>[
-        _q(r['barcode']),
-        _q(nameOf(r)),
-        _q(r['spec']),
-        _q(r['unit']),
-        _q(fmtQty(r['qty'])),
-        r['account_qty'] == null ? '' : _q(fmtQty(r['account_qty'])),
-        r['diff_qty'] == null ? '' : _q(fmtQty(r['diff_qty'])),
-        amtOf(r) == null ? '' : _q(amtOf(r)!.toStringAsFixed(2)),
+        csvEsc(barcodeCsvCell(r['barcode'])),
+        csvEsc(nameOf(r)),
+        csvEsc(r['spec']),
+        csvEsc(r['unit']),
+        csvEsc(fmtQty(r['qty'])),
+        r['account_qty'] == null ? '' : csvEsc(fmtQty(r['account_qty'])),
+        r['diff_qty'] == null ? '' : csvEsc(fmtQty(r['diff_qty'])),
+        amtOf(r) == null ? '' : csvEsc(amtOf(r)!.toStringAsFixed(2)),
       ].join(','));
     }
     return b.toString();
@@ -211,7 +212,7 @@ class InventoryExport {
 
   /// CSV 转义：含逗号/引号/换行的字段必须包引号并把引号翻倍，
   /// 否则一个带逗号的商品名就能把整张表挤错列。
-  static String _q(Object? v) {
+  static String csvEsc(Object? v) {
     final s = (v ?? '').toString();
     if (s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r')) {
       return '"${s.replaceAll('"', '""')}"';
