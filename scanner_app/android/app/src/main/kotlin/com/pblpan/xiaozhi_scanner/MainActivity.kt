@@ -51,6 +51,37 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
+                    // 把 APK 里内置的商品档案拷到内部存储，把**路径**给 Dart。
+                    //
+                    // 为什么要绕这一下，而不是让 Dart 直接 rootBundle 读：
+                    // 内置档案放在 android 的 assets srcDirs 里（只有 hyd 这个
+                    // flavor 才有），而 rootBundle 只认 flutter_assets —— 读不到。
+                    // 所以原生拷一份到 filesDir，Dart 再按普通文件读。
+                    //
+                    // 为什么返回路径而不是把字节传过去：这份文件 6.6MB，
+                    // 走 MethodChannel 传字节要在 Dart 侧再占一份内存
+                    // （老机器上就是一次没必要的 GC 压力）。
+                    "builtinMaster" -> {
+                        try {
+                            val out = File(filesDir, BUILTIN_NAME)
+                            // 已经拷过就别再拷（6.6MB，每次启动都来一遍纯浪费）
+                            if (!out.exists() || out.length() == 0L) {
+                                val tmp = File(filesDir, "$BUILTIN_NAME.tmp")
+                                assets.open(BUILTIN_NAME).use { input ->
+                                    tmp.outputStream().use { output -> input.copyTo(output) }
+                                }
+                                // 拷完再改名：中途断电/被杀不会留下一个半截文件，
+                                // 下次启动看到的是"没拷过"，重新拷一遍就行。
+                                if (out.exists()) out.delete()
+                                tmp.renameTo(out)
+                            }
+                            result.success(out.absolutePath)
+                        } catch (e: Exception) {
+                            // 通用版（std）里没有这份 asset —— **不是错误**，
+                            // 返回 null，Dart 侧据此不显示"内置档案"入口。
+                            result.success(null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -104,5 +135,9 @@ class MainActivity : FlutterActivity() {
     companion object {
         /// 与 Dart 侧 FileShare 的通道名必须逐字一致（写错 = 点了分享毫无反应）
         private const val CHANNEL = "xiaozhi/share"
+
+        /// APK 里内置商品档案的文件名。**刻意用纯 ASCII**：
+        /// aapt 对中文资源路径有坑（打包期报错还很难读懂），别给自己找事。
+        private const val BUILTIN_NAME = "builtin_master.csv"
     }
 }

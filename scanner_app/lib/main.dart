@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'core/scan_feedback.dart';
 import 'core/theme.dart';
+import 'screens/bootstrap.dart';
 import 'screens/stocktake.dart';
 
 /// 小智扫码枪（独立 App）入口。
@@ -28,10 +29,14 @@ class ScannerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      // 桌面图标名由 Android 的 android:label 决定（按 flavor 给），
+      // 这里只是系统任务列表里显示的名字
       title: '小智扫码枪',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
-      home: const StocktakePage(),
+      // 开屏先把内置档案装完（通用版会立刻放行），再进采集页。
+      // 见 screens/bootstrap.dart 里"为什么必须有这一屏"。
+      home: const BootstrapPage(child: StocktakePage()),
     );
   }
 }

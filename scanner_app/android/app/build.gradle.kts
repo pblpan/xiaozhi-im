@@ -40,6 +40,43 @@ android {
         versionName = flutter.versionName
     }
 
+    // ── 品牌变体（flavor）──────────────────────────────────────
+    //
+    // 两种包：
+    //   std —— 通用版，商档靠自己导 CSV
+    //   hyd —— 好又多版，APK 里**自带一份商品档案**（12.7 万条），装完就能扫
+    //
+    // 为什么用 flavor 而不是复制一份工程：两份代码必然会长歪（改了这边忘那边），
+    // 而真正的差异只有两个：包名后缀 + 内置那份档案。
+    //
+    // 为什么 hyd 要换包名（.hyd 后缀）：好又多版和通用版**能同时装在一台手机上**，
+    // 互不覆盖。给门店装的通常只有一个版本，但龙哥自己手机上两个都要留着。
+    flavorDimensions += "brand"
+    productFlavors {
+        create("std") {
+            dimension = "brand"
+            manifestPlaceholders["appLabel"] = "小智扫码枪"
+        }
+        create("hyd") {
+            dimension = "brand"
+            applicationIdSuffix = ".hyd"
+            manifestPlaceholders["appLabel"] = "小智扫码枪-好又多版"
+        }
+    }
+
+    // 内置档案**只进 hyd 包**。
+    //
+    // ⚠️ 不能放进 pubspec 的 assets：那份是被打进 flutter_assets 的，
+    //    两个 flavor 都会带上，通用版平白胖 6.6MB，还带着别人的商品数据。
+    //    放 android 的 assets srcDirs 就只属于 hyd —— 代价是 Dart 的
+    //    rootBundle 读不到（它只认 flutter_assets），要靠原生拷出来给 Dart，
+    //    见 MainActivity 的 builtinMaster 通道。
+    sourceSets {
+        getByName("hyd") {
+            assets.srcDirs("src/hyd/assets")
+        }
+    }
+
     signingConfigs {
         create("release") {
             if (hasReleaseKeystore) {

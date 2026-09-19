@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../core/builtin_master.dart';
 import '../core/file_io.dart';
 import '../core/scan_feedback.dart';
 import '../core/stock_master_repo.dart';
@@ -66,6 +67,9 @@ class _StocktakePageState extends State<StocktakePage> {
   /// 最近一次扫码的反馈（品名/数量/账面），null = 还没扫过
   Map<String, dynamic>? _lastHit;
 
+  /// 这个安装包带不带内置商品档案（决定"恢复内置"菜单显不显示）。
+  bool _hasBuiltin = false;
+
   @override
   void initState() {
     super.initState();
@@ -91,9 +95,13 @@ class _StocktakePageState extends State<StocktakePage> {
       final sheets = await _repo.listSheets(prefix: StocktakeRepo.sheetPrefix);
       final no = sheets.isEmpty ? StocktakeRepo.newSheetNo() : sheets.first['sheet_no'] as String;
       final masterCount = await StockMasterRepo().countLocal();
+      // 有没有内置档案要问原生（APK 里有没有那份 asset）。**缓存下来**：
+      // 之后每次开菜单都问一遍的话，通用版会白跑两次失败的 asset 打开。
+      final hasBuiltin = await BuiltinMaster.hasBuiltin();
       if (!mounted) return;
       _sheetNo = no;
       _masterCount = masterCount;
+      _hasBuiltin = hasBuiltin;
       await _reload();
     } catch (e) {
       if (!mounted) return;
@@ -202,6 +210,19 @@ class _StocktakePageState extends State<StocktakePage> {
                     style: TextStyle(color: AppColors.text)),
                 onTap: () => Navigator.pop(ctx, 'template'),
               ),
+              // 只有带内置档案的版本（好又多版）才有这一项。
+              // 员工自己导过一份之后，那份可能不全（比如只导了某个柜组），
+              // 得给他一条回到"出厂那份全的"的路 —— 否则要重装 App 才行。
+              if (_hasBuiltin)
+                ListTile(
+                  leading:
+                      const Icon(Icons.restore, color: AppColors.textSub),
+                  title: const Text('恢复内置商品档案',
+                      style: TextStyle(color: AppColors.text)),
+                  subtitle: const Text('把商档换回安装包里自带的那份（会覆盖现在的）',
+                      style: TextStyle(color: AppColors.textWeak, fontSize: 12)),
+                  onTap: () => Navigator.pop(ctx, 'builtin'),
+                ),
               ListTile(
                 leading: const Icon(Icons.close, color: AppColors.textWeak),
                 title:
@@ -215,6 +236,7 @@ class _StocktakePageState extends State<StocktakePage> {
     );
     if (act == 'import') await _importMaster();
     if (act == 'template') await _exportMasterTemplate();
+    if (act == 'builtin') await _restoreBuiltin();
   }
 
   /// 从 CSV 导入商档。
@@ -274,6 +296,32 @@ class _StocktakePageState extends State<StocktakePage> {
       if (!mounted) return;
       setState(() => _syncing = false);
       _snack('导出模板失败：$e');
+    }
+  }
+
+  /// 把商档换回安装包里自带的那份。
+  ///
+  /// 什么时候会用到：员工自己导过一份**不全**的（比如只导了他那个柜组），
+  /// 之后扫别的柜组全是"未知条码"。没有这个入口他就得卸载重装 ——
+  /// 而重装会连已经扫出来的账一起清掉，那才是真损失。
+  Future<void> _restoreBuiltin() async {
+    setState(() => _syncing = true);
+    try {
+      final r = await BuiltinMaster.load(clearFirst: true);
+      if (!mounted) return;
+      setState(() {
+        _masterCount = r.written;
+        _syncing = false;
+        _error = null;
+      });
+      _snack(r.skipped > 0
+          ? '已恢复内置商品档案：${r.written} 个商品（跳过 ${r.skipped} 行）'
+          : '已恢复内置商品档案：${r.written} 个商品');
+      await _reload();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _syncing = false);
+      _snack('恢复内置商品档案失败：$e');
     }
   }
 

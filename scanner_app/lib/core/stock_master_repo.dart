@@ -31,41 +31,71 @@ class StockMasterRepo {
   ///
   /// 🔴 但 `items` 为空时**一律不清理**：一次空文件/选错文件，
   /// 不能把整张底表清空 —— 宁可留旧数据，也不能让员工扫什么都是"未知商品"。
+  /// 一次事务里最多写这么多条。
+  ///
+  /// ── 为什么要分批 ────────────────────────────────────────────
+  /// 内置档案有 12.7 万条（好又多版）。一次性攒一个 12.7 万条的 batch，
+  /// 中途没有任何进度、界面像卡死；真失败也是整批回滚、前功尽弃。
+  /// 2000 条一批是实测出来的折中：单批几十毫秒，进度能看着走。
+  static const int _chunk = 2000;
+
   static Future<int> upsertAll(
     Database db,
     List<Map<String, dynamic>> items, {
     String source = sourceTag,
     bool purgeMissing = true,
+    void Function(int done, int total)? onProgress,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
 
-    await db.transaction((txn) async {
-      final batch = txn.batch();
-      for (final it in items) {
-        batch.insert(
-          'stock_master',
-          <String, dynamic>{
-            ...it,
-            'source': source,
-            'updated_at': now,
-          },
-          // 同 barcode 覆盖：商档是"全量对齐"语义，不是追加。
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
-      }
+    // ── 先清掉"本次没带来的"旧记录 ────────────────────────────
+    //
+    // ⚠️ `NOT IN (?,?,?...)` 里的占位符**不能一次给 12.7 万个**：
+    //    SQLite 的 SQL 变量数有上限（默认 999~32766，看版本），超了直接
+    //    "too many SQL variables" —— 12.7 万条必炸，而几千条的商档永远不会
+    //    触发，所以这个坑只会在内置档案这条路上第一次露脸。
+    //    修法是切成 500 个一批、分多次删。
+    if (purgeMissing && items.isNotEmpty) {
+      final keep = items.map((e) => e['barcode'].toString()).toList();
+      await db.transaction((txn) async {
+        const step = 500;
+        for (var i = 0; i < keep.length; i += step) {
+          final part = keep.sublist(
+              i, i + step > keep.length ? keep.length : i + step);
+          final ph = List<String>.filled(part.length, '?').join(',');
+          await txn.delete(
+            'stock_master',
+            where: 'source = ? AND barcode NOT IN ($ph)',
+            whereArgs: <Object?>[source, ...part],
+          );
+        }
+      });
+    }
 
-      if (purgeMissing && items.isNotEmpty) {
-        final keep = items.map((e) => e['barcode'].toString()).toList();
-        final placeholders = List<String>.filled(keep.length, '?').join(',');
-        batch.delete(
-          'stock_master',
-          where: 'source = ? AND barcode NOT IN ($placeholders)',
-          whereArgs: <Object?>[source, ...keep],
-        );
-      }
-
-      await batch.commit(noResult: true);
-    });
+    var done = 0;
+    for (var start = 0; start < items.length; start += _chunk) {
+      final end =
+          start + _chunk > items.length ? items.length : start + _chunk;
+      final part = items.sublist(start, end);
+      await db.transaction((txn) async {
+        final batch = txn.batch();
+        for (final it in part) {
+          batch.insert(
+            'stock_master',
+            <String, dynamic>{
+              ...it,
+              'source': source,
+              'updated_at': now,
+            },
+            // 同 barcode 覆盖：商档是"全量对齐"语义，不是追加。
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+        await batch.commit(noResult: true);
+      });
+      done += part.length;
+      onProgress?.call(done, items.length);
+    }
 
     return items.length;
   }

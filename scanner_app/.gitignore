@@ -53,3 +53,8 @@ app.*.map.json
 /android/key.properties
 /android/*.keystore
 /android/*.jks
+
+# 内置商品档案（6.6MB，由 tools/build_builtin_master.py 从门店的
+# 商品信息.txt 生成）。**不入库**：它是门店数据，且随时能从源表重跑出来。
+# 要打好又多版就先跑一次那个脚本，再 build --flavor hyd。
+/android/app/src/hyd/assets/builtin_master.csv
