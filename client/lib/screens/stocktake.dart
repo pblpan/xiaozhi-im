@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
+import '../core/file_io.dart';
 import '../core/stock_master_repo.dart';
 import '../core/stocktake_export.dart';
 import '../core/stocktake_repo.dart';
@@ -7,10 +10,17 @@ import '../core/theme.dart';
 import 'stocktake_result.dart';
 import 'stocktake_scan.dart';
 
-/// 门店盘点：采集页。
+/// 扫码枪：采集页。
+///
+/// ── 这一页为什么不叫「盘点」 ──────────────────────────────────
+/// 它的本职是**把条码快速扫成一笔账**：扫码 + 明细列表 + 导出 + 盈亏表。
+/// 它是"采集工具"，不是"盘点制度"。
+/// 真正的盘点（盘点位 / 库位货架位 / 初盘-复盘-抽盘三遍制 / 抽盘授权）是
+/// 另一个模块，名字已经留给它。所以这里**用词一律是"扫码"，不再出现"盘点"** ——
+/// 否则两个模块会在界面上、在导出文件名上互相打架，员工也分不清哪个是哪个。
 ///
 /// ── 这一页为什么完全不发网络请求 ──────────────────────────────
-/// 盘点在货架之间做，那里的网络不归我们管。所以"扫一个码 → 记一笔"
+/// 扫码是在货架之间做的，那里的网络不归我们管。所以"扫一个码 → 记一笔"
 /// 整条路径只写本地 SQLite（core/stocktake_repo.dart），断网照盘。
 /// 联网只用在两个地方：① 同步商档（把商品底表拉到手机）② 以后回传。
 ///
@@ -42,6 +52,7 @@ class _StocktakePageState extends State<StocktakePage> {
 
   bool _loading = true;
   bool _syncing = false;
+  bool _exporting = false;
   String? _error;
 
   /// 最近一次扫码的反馈（品名/数量/账面），null = 还没扫过
@@ -77,7 +88,7 @@ class _StocktakePageState extends State<StocktakePage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '打开盘点失败：$e';
+        _error = '打开扫码枪失败：$e';
         _loading = false;
       });
     }
@@ -166,7 +177,7 @@ class _StocktakePageState extends State<StocktakePage> {
       _summary = const {};
     });
     await _reload();
-    _snack('已新建盘点单 $_sheetNo');
+    _snack('已新建扫码单 $_sheetNo');
   }
 
   Future<void> _pickSheet() async {
@@ -181,7 +192,7 @@ class _StocktakePageState extends State<StocktakePage> {
           children: [
             ListTile(
               leading: const Icon(Icons.add, color: AppColors.brand),
-              title: const Text('新建一张盘点单',
+              title: const Text('新建一张扫码单',
                   style: TextStyle(color: AppColors.text)),
               onTap: () => Navigator.pop(ctx, '__new__'),
             ),
@@ -212,7 +223,7 @@ class _StocktakePageState extends State<StocktakePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('清空本张盘点单？',
+        title: const Text('清空本张扫码单？',
             style: TextStyle(color: AppColors.text)),
         content: Text('将删除 $_sheetNo 的全部扫码记录，不可恢复。',
             style: const TextStyle(color: AppColors.textSub)),
@@ -233,7 +244,23 @@ class _StocktakePageState extends State<StocktakePage> {
     await _reload();
   }
 
-  /// 出数：打开盈亏表。盘完顺手看一眼才敢收工，所以入口就放在采集页顶上。
+  /// 删除一整行（该条码本单的累计全部清掉）。
+  /// 员工把某个码扫多了，最直觉的操作就是行尾那个删除按钮，
+  /// 而不是"减到 0"——一行点 N 次减号在货架边上是不可接受的。
+  Future<void> _deleteRow(Map<String, dynamic> r) async {
+    try {
+      await _repo.deleteScan(r['id'] as int);
+      setState(() => _lastHit = null);
+      await _reload();
+      if (!mounted) return;
+      _snack('已删除 ${r['barcode']}');
+    } catch (e) {
+      if (!mounted) return;
+      _snack('删除失败：$e');
+    }
+  }
+
+  /// 出数：打开盈亏表。扫完顺手看一眼才敢收工，所以入口就放在采集页顶上。
   Future<void> _openResult() async {
     await Navigator.push(
       context,
@@ -243,6 +270,89 @@ class _StocktakePageState extends State<StocktakePage> {
     if (!mounted) return;
     await _reload();
   }
+
+  /// 底部导出：[asDoc] = 文本文档（.txt），否则表格（.csv）。
+  /// 两份都是"扫码明细"这一份原始账，口径与界面列表完全一致。
+  Future<void> _exportScanList({required bool asDoc}) async {
+    final rows = _rows;
+    if (rows.isEmpty) {
+      _snack('还没有扫码记录，先扫几条再导出');
+      return;
+    }
+    setState(() => _exporting = true);
+    try {
+      final name = FileIo.safeName(asDoc
+          ? StocktakeExport.scanDocName(_sheetNo)
+          : StocktakeExport.scanCsvName(_sheetNo));
+      final text = asDoc
+          ? StocktakeExport.toScanDoc(rows, sheetNo: _sheetNo)
+          : StocktakeExport.toScanCsv(rows);
+      final dir = await FileIo.dir();
+      final f = File('${dir.path}${Platform.pathSeparator}$name');
+      await f.writeAsString(text); // UTF-8；CSV 的 BOM 由 toScanCsv 负责
+      if (!mounted) return;
+      setState(() => _exporting = false);
+      await _afterExport(f, rows.length);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _exporting = false);
+      _snack('导出失败：$e');
+    }
+  }
+
+  /// 导出后给两条路：直接打开（WPS/Excel/记事本）或另存到微信/下载目录。
+  Future<void> _afterExport(File f, int rows) async {
+    final act = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.bgElevated,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.check_circle_outline,
+                  color: AppColors.brand),
+              title: Text(
+                  '已生成 $rows 行：${f.path.split(Platform.pathSeparator).last}',
+                  style: const TextStyle(color: AppColors.text, fontSize: 13)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.open_in_new, color: AppColors.brand),
+              title: const Text('打开（用 WPS / Excel / 记事本看）',
+                  style: TextStyle(color: AppColors.text)),
+              onTap: () => Navigator.pop(ctx, 'open'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.save_alt, color: AppColors.textSub),
+              title: const Text('另存为 / 发到别处',
+                  style: TextStyle(color: AppColors.text)),
+              onTap: () => Navigator.pop(ctx, 'save'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.close, color: AppColors.textWeak),
+              title:
+                  const Text('先不用', style: TextStyle(color: AppColors.textSub)),
+              onTap: () => Navigator.pop(ctx),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (act == null || !mounted) return;
+    if (act == 'open') {
+      final err = await FileIo.open(f);
+      if (!mounted) return;
+      _snack(err.isEmpty ? '已交给系统打开' : err);
+      return;
+    }
+    final where = await FileIo.saveAs(
+        f,
+        asDocName(f) ? StocktakeExport.scanDocName(_sheetNo) : StocktakeExport.scanCsvName(_sheetNo));
+    if (!mounted) return;
+    _snack(where == null ? '已取消' : '已保存：$where');
+  }
+
+  static bool asDocName(File f) => f.path.toLowerCase().endsWith('.txt');
 
   void _snack(String msg) {
     if (!mounted) return;
@@ -255,16 +365,16 @@ class _StocktakePageState extends State<StocktakePage> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('门店盘点',
+        title: const Text('扫码枪',
             style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
           IconButton(
-            tooltip: '盈亏表 / 导出',
+            tooltip: '盈亏表',
             icon: const Icon(Icons.assessment_outlined, color: AppColors.brand),
             onPressed: _openResult,
           ),
           IconButton(
-            tooltip: '切换/新建盘点单',
+            tooltip: '切换/新建扫码单',
             icon: const Icon(Icons.receipt_long, color: AppColors.textSub),
             onPressed: _pickSheet,
           ),
@@ -290,11 +400,64 @@ class _StocktakePageState extends State<StocktakePage> {
                 _inputBar(),
                 if (_lastHit != null) _hitBanner(),
                 const Divider(height: 1, color: AppColors.divider),
+                // 表头**常显**：空列表时也要让人看见这个列表有哪几列。
+                // 之前是 _rows.isNotEmpty 才画，结果没扫之前整页看不出有列表，
+                // 现场被当成"这功能没做"。列表结构本身也是要给人看的。
+                _listHeader(),
                 Expanded(child: _list()),
               ],
             ),
+      // 导出栏同样常显（空单时点它会给"先扫几条再导出"的提示），理由同上：
+      // 底部的能力要一眼可见，不能"扫完才长出来"。
+      bottomNavigationBar: _loading ? null : _exportBar(),
     );
   }
+
+  /// 底部导出栏：文档（.txt，微信里直接能看）+ 表格（.csv，Excel/WPS 可开）。
+  /// 挂在 bottomNavigationBar 上，列表再长也始终可见、不用滚到底找。
+  Widget _exportBar() => Container(
+        decoration: const BoxDecoration(
+          color: AppColors.bgElevated,
+          border: Border(top: BorderSide(color: AppColors.divider)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed:
+                        _exporting ? null : () => _exportScanList(asDoc: true),
+                    icon: const Icon(Icons.description_outlined, size: 18),
+                    label: const Text('导出文档',
+                        style: TextStyle(fontSize: 14)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed:
+                        _exporting ? null : () => _exportScanList(asDoc: false),
+                    icon: const Icon(Icons.table_view_outlined, size: 18),
+                    label: const Text('导出表格',
+                        style: TextStyle(fontSize: 14)),
+                  ),
+                ),
+                if (_exporting) ...[
+                  const SizedBox(width: 10),
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
 
   Widget _banner(String text, Color color) => Container(
         width: double.infinity,
@@ -453,7 +616,7 @@ class _StocktakePageState extends State<StocktakePage> {
           padding: const EdgeInsets.all(24),
           child: Text(
             StocktakeScanPage.supported
-                ? '还没有扫码记录\n点左上角「扫码」用摄像头扫，\n或用扫码枪对着上面的输入框扫'
+                ? '还没有扫码记录\n点左边「扫码」用摄像头扫，\n或用扫码枪对着上面的输入框扫'
                 : '还没有扫码记录\n把光标放在上面的输入框，用扫码枪扫即可',
             textAlign: TextAlign.center,
             style: const TextStyle(color: AppColors.textWeak, fontSize: 13),
@@ -461,88 +624,123 @@ class _StocktakePageState extends State<StocktakePage> {
         ),
       );
     }
+    // 表格式列表：序号 | 条码 | 数量 | 商品名称 | 删除。
+    // 列宽常量集中在 [_listHeader] 和 [_row] 两处共用，改一处必须同步另一处。
     return ListView.separated(
-      padding: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.only(bottom: 12),
       itemCount: _rows.length,
       separatorBuilder: (_, __) =>
           const Divider(height: 1, color: AppColors.divider),
-      itemBuilder: (_, i) => _row(_rows[i]),
+      itemBuilder: (_, i) => _row(i, _rows[i]),
     );
   }
 
-  Widget _row(Map<String, dynamic> r) {
+  /// 表头。列宽与 [_row] 严格共用同一组常量，保证表头和内容对齐。
+  static const double _kIdxW = 36; // 序号
+  static const double _kQtyW = 56; // 数量
+  static const double _kDelW = 44; // 删除按钮
+  static const double _kCodeFlex = 5; // 条码
+  static const double _kNameFlex = 6; // 商品名称
+
+  Widget _listHeader() => Container(
+        color: AppColors.bgElevated,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        child: Row(
+          children: [
+            _hCell('序号', _kIdxW),
+            const SizedBox(width: 8),
+            const Expanded(
+              flex: 5,
+              child: Text('条码',
+                  style: TextStyle(color: AppColors.textWeak, fontSize: 11)),
+            ),
+            const SizedBox(width: 8),
+            _hCell('数量', _kQtyW),
+            const SizedBox(width: 8),
+            const Expanded(
+              flex: 6,
+              child: Text('商品名称',
+                  style: TextStyle(color: AppColors.textWeak, fontSize: 11)),
+            ),
+            const SizedBox(width: _kDelW),
+          ],
+        ),
+      );
+
+  Widget _hCell(String text, double w) => SizedBox(
+        width: w,
+        child: Text(text,
+            textAlign: text == '数量' ? TextAlign.right : TextAlign.left,
+            style: const TextStyle(color: AppColors.textWeak, fontSize: 11)),
+      );
+
+  Widget _row(int index, Map<String, dynamic> r) {
     final name = (r['name'] ?? '').toString();
     final qty = (r['qty'] as num?)?.toDouble() ?? 0;
-    final account = (r['account_qty'] as num?)?.toDouble();
-    final diff = (r['diff_qty'] as num?)?.toDouble();
-    final unit = (r['unit'] ?? '').toString();
+    final unknown = name.trim().isEmpty;
 
-    return ListTile(
-      tileColor: AppColors.bg,
-      title: Text(
-        name.isEmpty ? '未知条码' : name,
-        style: TextStyle(
-          color: name.isEmpty ? AppColors.warn : AppColors.text,
-          fontSize: 15,
-        ),
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      // 行级 key：让测试能精确指到"这一行"的数量/删除按钮，
+      // 而不是靠 findsWidgets 猜（"2"既可能是序号也可能是数量，猜不准）。
+      key: ValueKey<String>('scan-row-${r['barcode']}'),
+      color: AppColors.bg,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(
         children: [
-          const SizedBox(height: 3),
-          Text(r['barcode'].toString(),
-              style: const TextStyle(color: AppColors.textWeak, fontSize: 12)),
-          const SizedBox(height: 2),
-          Text(
-            account == null
-                ? '账面：—'
-                : '账面 ${StocktakeExport.fmtNum(account)}$unit'
-                    '${diff == null ? '' : '　${_diffText(diff)}'}',
-            style: TextStyle(
-              color: diff == null
-                  ? AppColors.textWeak
-                  : (diff == 0
-                      ? AppColors.textWeak
-                      : (diff > 0 ? AppColors.brand : AppColors.danger)),
-              fontSize: 12,
+          // ① 序号
+          SizedBox(
+            width: _kIdxW,
+            child: Text('${index + 1}',
+                style:
+                    const TextStyle(color: AppColors.textWeak, fontSize: 13)),
+          ),
+          const SizedBox(width: 8),
+          // ② 条码
+          Expanded(
+            flex: _kCodeFlex.toInt(),
+            child: Text(r['barcode'].toString(),
+                style: const TextStyle(color: AppColors.text, fontSize: 12),
+                overflow: TextOverflow.ellipsis),
+          ),
+          const SizedBox(width: 8),
+          // ③ 数量（重复扫同一个码，这里直接 +1）
+          SizedBox(
+            key: ValueKey<String>('scan-qty-${r['barcode']}'),
+            width: _kQtyW,
+            child: Text(
+              StocktakeExport.fmtNum(qty),
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                  color: AppColors.brand,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // ④ 商品名称（商档里没有的用预留值「未知条码」）
+          Expanded(
+            flex: _kNameFlex.toInt(),
+            child: Text(
+              StocktakeExport.scanNameOf(r),
+              style: TextStyle(
+                  color: unknown ? AppColors.warn : AppColors.text,
+                  fontSize: 13),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // ⑤ 行尾固定删除按钮
+          SizedBox(
+            width: _kDelW,
+            height: 36,
+            child: IconButton(
+              tooltip: '删除本行',
+              icon: const Icon(Icons.delete_outline,
+                  color: AppColors.danger, size: 20),
+              onPressed: () => _deleteRow(r),
             ),
           ),
         ],
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.remove_circle_outline,
-                color: AppColors.textSub, size: 20),
-            onPressed: () async {
-              await _repo.addScan(_sheetNo, r['barcode'].toString(), qty: -1);
-              await _reload();
-            },
-          ),
-          Text(StocktakeExport.fmtNum(qty),
-              style: const TextStyle(color: AppColors.text, fontSize: 15)),
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline,
-                color: AppColors.brand, size: 20),
-            onPressed: () async {
-              await _repo.addScan(_sheetNo, r['barcode'].toString());
-              await _reload();
-            },
-          ),
-        ],
-      ),
-      onLongPress: () async {
-        await _repo.deleteScan(r['id'] as int);
-        setState(() => _lastHit = null);
-        await _reload();
-      },
     );
   }
-
-  String _diffText(double d) {
-    if (d == 0) return '持平';
-    return d > 0 ? '盘盈 +${StocktakeExport.fmtNum(d)}' : '盘亏 ${StocktakeExport.fmtNum(d)}';
-  }
-
 }

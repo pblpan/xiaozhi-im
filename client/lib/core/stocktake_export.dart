@@ -1,7 +1,7 @@
-/// 盘点出数：把一张盘点单算成"老板要看的那几个数"，并导出成**通用文件**。
+/// 扫码枪出数：把一张扫码单算成"老板要看的那几个数"，并导出成**通用文件**。
 ///
 /// ── 为什么导出 CSV 而不是"泰格导入模板" ──────────────────────
-/// 这套盘点不只接泰格。现场扫的可能是泰格、可能是超盘这类盘点软件、
+/// 这套扫码出数不只接泰格。现场扫的可能是泰格、可能是超盘这类盘点软件、
 /// 也可能是别的进销存 —— 它们的导入格式各不相同，而且会变。
 /// 把导出格式焊死在某一家的模板上，等于每次换系统都要改代码。
 /// 所以这里只出**一份干净的 CSV**：条码/品名/实盘/账面/差异/差异金额，
@@ -36,7 +36,7 @@ class StocktakeExport {
   ///   diff < 0 → 盘亏（实际比账面少）
   ///   金额一律取**正数**表示"盈了多少 / 亏了多少"，净额再相减。
   ///   混用符号的话，"亏了 300" 会被显示成 "-300"，跟"盈了 300"的
-  ///   报表行放一起时极易看反 —— 这是盘点报表最典型的误读。
+  ///   报表行放一起时极易看反 —— 这是盈亏报表最典型的误读。
   ///
   /// 账面缺失（account_qty 为 null）的行**不计入盈亏统计**，
   /// 只单独计数：不知道账面多少，就不能说它盈了还是亏了。
@@ -184,8 +184,77 @@ class StocktakeExport {
     return out;
   }
 
-  /// 导出文件名：盘点_单号.csv
-  static String fileName(String sheetNo) => '盘点_$sheetNo.csv';
+  /// 导出文件名：扫码_单号.csv
+  static String fileName(String sheetNo) => '扫码_$sheetNo.csv';
+
+  // ── 扫码明细导出（采集页底部「导出」用） ─────────────────────────
+  //
+  // 采集页的列表就是员工扫进来的原始账：序号/条码/数量/商品名称。
+  // 和盈亏表那一份（含账面/差异/金额）是**两份不同的东西**：
+  //   · 盈亏表给老板看结果 → 文件名「扫码_单号.csv」
+  //   · 扫码明细给录单/对账用 → 文件名「扫码明细_单号.csv / .txt」
+  // 文件名故意错开，免得两份文件在微信里发来发去后搞混。
+
+  /// 明细表头。改这里要同步改 toScanCsv 与测试。
+  static const List<String> scanHeaders = <String>[
+    '序号',
+    '条码',
+    '数量',
+    '商品名称',
+  ];
+
+  /// 没扫到名称时统一用这个占位值（界面与导出一致，别一处"未知"一处空）。
+  static String scanNameOf(Map<String, dynamic> r) {
+    final n = (r['name'] ?? '').toString().trim();
+    return n.isEmpty ? '未知条码' : n;
+  }
+
+  /// 扫码明细 CSV。开头带 UTF-8 BOM（同 toCsv，Excel 双击不乱码）。
+  static String toScanCsv(List<Map<String, dynamic>> rows) {
+    final sb = StringBuffer('\uFEFF');
+    sb.writeln(scanHeaders.map(_esc).join(','));
+    for (var i = 0; i < rows.length; i++) {
+      final r = rows[i];
+      sb.writeln(<Object?>[
+        i + 1,
+        r['barcode'] ?? '',
+        _num(_d(r['qty'])),
+        scanNameOf(r),
+      ].map((v) => _esc(v.toString())).join(','));
+    }
+    return sb.toString();
+  }
+
+  /// 扫码明细文本文档（.txt）。给"发微信里直接看"的场景：
+  /// 不依赖 Excel，记事本/WPS 打开就是一张能读的清单。
+  static String toScanDoc(List<Map<String, dynamic>> rows,
+      {String sheetNo = ''}) {
+    final total = rows.fold<double>(0, (s, r) => s + _d(r['qty']));
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final ts = '${now.year}-${two(now.month)}-${two(now.day)} '
+        '${two(now.hour)}:${two(now.minute)}';
+
+    final sb = StringBuffer();
+    sb.writeln('扫码枪 · 扫码明细');
+    if (sheetNo.isNotEmpty) sb.writeln('扫码单号：$sheetNo');
+    sb.writeln('导出时间：$ts');
+    sb.writeln('品种 ${rows.length}　合计数量 ${_num(total)}');
+    sb.writeln('--------------------------------');
+    for (var i = 0; i < rows.length; i++) {
+      final r = rows[i];
+      sb.writeln(
+          '${i + 1}. 条码 ${r['barcode'] ?? ''}　数量 ${_num(_d(r['qty']))}');
+      sb.writeln('   名称：${scanNameOf(r)}');
+    }
+    sb.writeln('--------------------------------');
+    sb.writeln('共 ${rows.length} 行');
+    return sb.toString();
+  }
+
+  /// 扫码明细文件名（与盈亏表的 fileName 故意错开，见上）。
+  static String scanCsvName(String sheetNo) => '扫码明细_$sheetNo.csv';
+  static String scanDocName(String sheetNo) => '扫码明细_$sheetNo.txt';
 
   /// 数量/金额的显示格式（整数不带 .0，小数最多 3 位）。
   ///

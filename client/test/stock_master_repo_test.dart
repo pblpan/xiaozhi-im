@@ -147,7 +147,7 @@ void main() {
       await StockMasterRepo.upsertAll(db, second);
 
       final rows = await db.query('stock_master');
-      expect(rows, hasLength(1), reason: '同条码被插成了多行，盘点会重复计数');
+      expect(rows, hasLength(1), reason: '同条码被插成了多行，扫码会重复计数');
       expect(rows.first['name'], '苹果（新名）');
       expect(rows.first['unit_price'], 6.5);
       expect(rows.first['account_qty'], 40.0);
@@ -235,7 +235,7 @@ void main() {
     });
 
     test('同一条码不同来源不能共存：barcode 是唯一主键，后写的覆盖先写的', () async {
-      // 这是刻意的业务选择：一个条码在盘点里只该有一条档案，
+      // 这是刻意的业务选择：一个条码在扫码里只该有一条档案，
       // 所以"手工改价"覆盖泰格数据是预期行为，不是 bug。
       final db = await LocalDb.I.db();
       await StockMasterRepo.upsertAll(db, [

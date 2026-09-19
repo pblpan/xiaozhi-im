@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xiaozhi_im_client/core/stocktake_export.dart';
 
-/// 盘点出数的测试。
+/// 扫码枪出数的测试。
 ///
 /// 这里钉死的三件事，都是**错了不报错、但数字会骗人**的那类：
 ///   ① CSV 开头必须有 BOM（没有的话 Excel 打开全是乱码，老板以为系统坏了）；
@@ -258,9 +258,9 @@ void main() {
   });
 
   group('fileName', () {
-    test('盘点_单号.csv', () {
+    test('扫码_单号.csv', () {
       expect(StocktakeExport.fileName('PD20260919220000'),
-          '盘点_PD20260919220000.csv');
+          '扫码_PD20260919220000.csv');
     });
   });
 
@@ -285,6 +285,69 @@ void main() {
       final csv = StocktakeExport.toCsv(rows);
       expect(csv, contains('999999'));
       expect(() => StocktakeExport.toCsv(rows), returnsNormally);
+    });
+  });
+
+  group('扫码明细导出（采集页底部「导出」）', () {
+    test('CSV 开头带 UTF-8 BOM，表头 4 列', () {
+      final csv = StocktakeExport.toScanCsv([
+        {'id': 1, 'barcode': '6901028000001', 'qty': 3, 'name': '矿泉水'},
+      ]);
+      expect(csv.startsWith('\uFEFF'), isTrue);
+      final head =
+          csv.split('\n')[0].replaceFirst('\uFEFF', '').trim();
+      expect(head, '序号,条码,数量,商品名称');
+      expect(
+          head.split(',').length, StocktakeExport.scanHeaders.length);
+    });
+
+    test('序号从 1 连续编号，数量与界面同一格式化出口', () {
+      final csv = StocktakeExport.toScanCsv([
+        {'id': 1, 'barcode': 'A001', 'qty': 2, 'name': '甲'},
+        {'id': 2, 'barcode': 'A002', 'qty': 12.0, 'name': '乙'},
+      ]);
+      final lines =
+          csv.split('\n').where((l) => l.trim().isNotEmpty).toList();
+      expect(lines.length, 3);
+      expect(lines[1], '1,A001,2,甲');
+      // 整数不带 .0（fmtNum / _num 同一出口）
+      expect(lines[2], '2,A002,12,乙');
+    });
+
+    test('没有名称的行用预留值「未知条码」，界面与导出一致', () {
+      final csv = StocktakeExport.toScanCsv([
+        {'id': 1, 'barcode': '999999', 'qty': 1, 'name': null},
+      ]);
+      expect(csv, contains('未知条码'));
+      expect(StocktakeExport.scanNameOf({'name': '  '}), '未知条码');
+      expect(StocktakeExport.scanNameOf({'name': '矿泉水'}), '矿泉水');
+    });
+
+    test('名称带逗号/引号正常转义，不冲掉列', () {
+      final csv = StocktakeExport.toScanCsv([
+        {'id': 1, 'barcode': 'A001', 'qty': 1, 'name': '苹果,红富士"大"'},
+      ]);
+      expect(csv, contains('"苹果,红富士""大"""'));
+    });
+
+    test('文本文档带单号/时间/合计，行号连续', () {
+      final doc = StocktakeExport.toScanDoc([
+        {'id': 1, 'barcode': 'A001', 'qty': 2, 'name': '甲'},
+        {'id': 2, 'barcode': '999999', 'qty': 3, 'name': ''},
+      ], sheetNo: 'PD20260919120000');
+      expect(doc, contains('扫码单号：PD20260919120000'));
+      expect(doc, contains('品种 2'));
+      expect(doc, contains('合计数量 5'));
+      expect(doc, contains('1. 条码 A001'));
+      expect(doc, contains('2. 条码 999999'));
+      expect(doc, contains('名称：未知条码'));
+      expect(doc, contains('共 2 行'));
+    });
+
+    test('明细文件名与盈亏表文件名错开，不会互相覆盖', () {
+      expect(StocktakeExport.scanCsvName('PD1'), '扫码明细_PD1.csv');
+      expect(StocktakeExport.scanDocName('PD1'), '扫码明细_PD1.txt');
+      expect(StocktakeExport.fileName('PD1'), '扫码_PD1.csv');
     });
   });
 }

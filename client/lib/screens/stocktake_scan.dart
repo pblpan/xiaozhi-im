@@ -9,7 +9,7 @@ import '../core/stocktake_export.dart';
 import '../core/stocktake_repo.dart';
 import '../core/theme.dart';
 
-/// 门店盘点：**手机摄像头扫码页**。
+/// 扫码枪：**手机摄像头扫码页**。
 ///
 /// ── 这一页解决的是什么问题 ──────────────────────────────────────
 /// 采集页那个输入框是给**扫码枪**设计的（蓝牙/无线扫码枪在 Android 上就是一个
@@ -18,13 +18,13 @@ import '../core/theme.dart';
 /// 是最慢、也最容易输错的一条路。所以补上摄像头直扫。
 ///
 /// ── 为什么扫到不停下来确认 ──────────────────────────────────────
-/// 盘点是一格一格过的连贯动作。每扫一件都弹一次"确认？"会让整件事慢一个量级。
+/// 扫码是一格一格过的连贯动作。每扫一件都弹一次"确认？"会让整件事慢一个量级。
 /// 所以这里是**连续扫**：扫到就落库，底部给即时反馈，员工一路扫到扫完。
 ///
 /// ── 🔴 去重策略（本页最容易做错的地方）──────────────────────────
 /// **绝对不能用 `DetectionSpeed.noDuplicates`。** 它在 mobile_scanner 里的语义是：
 ///   "同一个条码只会被扫到一次，**直到扫到另一个条码之前都不会再报**"。
-/// 而盘点最常见的动作恰恰是**连扫同一个商品的第 2 件、第 3 件** ——
+/// 而扫码最常见的动作恰恰是**连扫同一个商品的第 2 件、第 3 件** ——
 /// 用 noDuplicates 会把这些件数**静默丢掉**：界面上什么都不发生，
 /// 员工只会以为"软件坏了"，最后盘出来的数比实际少，而且不报任何错。
 ///
@@ -176,7 +176,7 @@ class _StocktakeScanPageState extends State<StocktakeScanPage> {
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
         foregroundColor: AppColors.text,
-        title: const Text('扫码盘点', style: TextStyle(fontSize: 17)),
+        title: const Text('扫码枪', style: TextStyle(fontSize: 17)),
         actions: [
           // 手电筒：货架背面、冷柜里光线很差，没有这个基本没法用。
           ValueListenableBuilder<MobileScannerState>(

@@ -12,7 +12,7 @@ import 'package:xiaozhi_im_client/core/local_db.dart';
 ///   - 库能开、schema 版本对得上（以后升版本迁移框架不能把它搞丢）；
 ///   - 两张表插入→查询往返，字段值**和类型**都对（REAL 不能变 int、INTEGER 不能变 double）；
 ///   - idempotent：连续 db() 拿同一个 handle，close 后再开不丢数据；
-///   - 索引存在（盘点查某张单的所有扫码要靠它）；
+///   - 索引存在（查某张扫码单的所有记录要靠它）；
 ///   - 反向断言：同 barcode 插两行必须被主键拒绝——这条不过说明主键没生效，
 ///     要回头修 schema，不能删断言；
 ///   - 桌面 ffi 分支在本机（Windows）能真的打开并落盘。
@@ -146,7 +146,7 @@ void main() {
     final rows = await db2.query('stock_master',
         where: 'barcode = ?', whereArgs: ['6901234500002']);
     expect(rows, hasLength(1),
-        reason: '重开后查不到——本地持久化没落地，盘点数据会丢');
+        reason: '重开后查不到——本地持久化没落地，扫码数据会丢');
     expect(rows.first['name'], '椰子水');
   });
 
@@ -182,7 +182,7 @@ void main() {
           'source': 'server',
           'updated_at': 2,
         }), throwsA(isA<DatabaseException>()),
-        reason: '同 barcode 居然插进去了——PRIMARY KEY 没生效，盘点会重复落库');
+        reason: '同 barcode 居然插进去了——PRIMARY KEY 没生效，扫码会重复落库');
 
     // 确认只有一行（拒绝是真正的拒绝，不是异常被吞了）。
     final after = await db.query('stock_master');

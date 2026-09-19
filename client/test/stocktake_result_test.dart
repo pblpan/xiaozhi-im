@@ -7,7 +7,7 @@ import 'package:xiaozhi_im_client/core/local_db.dart';
 import 'package:xiaozhi_im_client/core/stocktake_repo.dart';
 import 'package:xiaozhi_im_client/screens/stocktake_result.dart';
 
-/// 盘点盈亏页的 widget 测试。
+/// 扫码盈亏页的 widget 测试。
 ///
 /// 这一页的价值全在"数算得对不对、有没有显示在屏幕上"，
 /// 光看代码存在说明不了任何事，所以这里真跑一遍：
@@ -135,7 +135,7 @@ void main() {
   testWidgets('空单不炸，给回去扫码的出口', (WidgetTester tester) async {
     await pumpEmpty(tester);
 
-    expect(find.text('这张盘点单还没有扫码记录'), findsOneWidget);
+    expect(find.text('这张扫码单还没有扫码记录'), findsOneWidget);
     expect(find.text('回去扫码'), findsOneWidget);
   });
 }

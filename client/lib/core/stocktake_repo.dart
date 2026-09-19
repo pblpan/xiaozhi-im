@@ -1,13 +1,13 @@
 import 'local_db.dart';
 
-/// 盘点采集的本地仓库：扫码流水（`scan_record`）的读写。
+/// 扫码枪采集的本地仓库：扫码流水（`scan_record`）的读写。
 ///
 /// ── 为什么整页都只在本地打转 ──────────────────────────────────
-/// 盘点发生在货架之间：手机可能没信号、Wi-Fi 可能连的是个假热点。
+/// 扫码发生在货架之间：手机可能没信号、Wi-Fi 可能连的是个假热点。
 /// 所以"扫一个码 → 记一笔"这条路径**一次网络请求都不发**，全部落在本地
 /// SQLite（见 core/local_db.dart 的 scan_record）。联网是后面的事（回传、
 /// 出盈亏表），采集这一段必须离线可用 —— 否则员工扫到一半发现存不进去，
-/// 这一轮盘点就白干了。
+/// 这一轮扫码就白干了。
 ///
 /// ── 一条最重要的业务语义 ──────────────────────────────────────
 /// **同一个条码在同一张单里只占一行，重复扫是数量累加，不是插新行。**
@@ -18,11 +18,11 @@ import 'local_db.dart';
 /// 这条靠 `addScan` 内部的"先查再增"实现，并且包在事务里 ——
 /// 扫码枪连发时两次写入可能挨得很近，不加事务会竞态丢一次。
 class StocktakeRepo {
-  /// 盘点单号前缀。单号要能一眼看出"这是哪天哪次盘"，
+  /// 扫码单号前缀。单号要能一眼看出"这是哪天哪次扫"，
   /// 所以带日期时间，不单独维护流水表（手机上不值得）。
   static const String sheetPrefix = 'PD';
 
-  /// 生成盘点单号：PD + yyyyMMdd + HHmmss。
+  /// 生成扫码单号：PD + yyyyMMdd + HHmmss。
   /// 同一秒开两张单的概率可以接受；真撞了就以库里已存在的为准（见 listSheets）。
   static String newSheetNo([DateTime? now]) {
     final d = now ?? DateTime.now();
@@ -186,7 +186,7 @@ class StocktakeRepo {
     };
   }
 
-  /// 本机已有的盘点单（最近在前），用于"继续上次没盘完的单"。
+  /// 本机已有的扫码单（最近在前），用于"继续上次没扫完的单"。
   Future<List<Map<String, dynamic>>> listSheets() async {
     final db = await LocalDb.I.db();
     return db.rawQuery(

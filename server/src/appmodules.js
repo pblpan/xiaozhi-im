@@ -38,7 +38,7 @@ const ICONS = [
   'inventory', 'build', 'list', 'table_chart', 'assessment', 'note', 'report',
   'people', 'schedule', 'store', 'factory', 'restaurant', 'local_shipping',
   'attach_money', 'shopping_cart', 'warning', 'info', 'settings', 'dashboard',
-  'campaign', 'task', 'engineering', 'handyman', 'receipt_long',
+  'campaign', 'task', 'engineering', 'handyman', 'receipt_long', 'barcode',
 ];
 
 /** 图表类型 */

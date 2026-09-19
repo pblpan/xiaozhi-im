@@ -7,7 +7,7 @@ import '../core/stocktake_export.dart';
 import '../core/stocktake_repo.dart';
 import '../core/theme.dart';
 
-/// 盘点出数：一张单的盈亏表 + 导出。
+/// 扫码枪出数：一张扫码单的盈亏表 + 导出。
 ///
 /// ── 这一页回答的是"盘完了，然后呢" ────────────────────────────
 /// 采集页只管把码扫进来。老板要的是三句话：**盘盈多少、盘亏多少、
@@ -69,7 +69,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '读盘点数据失败：$e';
+        _error = '读扫码数据失败：$e';
         _loading = false;
       });
     }
@@ -169,7 +169,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('盘点盈亏',
+            const Text('扫码盈亏',
                 style: TextStyle(color: AppColors.text, fontSize: 17)),
             Text(widget.sheetNo,
                 style:
@@ -217,7 +217,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
               const Icon(Icons.inbox_outlined,
                   size: 48, color: AppColors.textWeak),
               const SizedBox(height: 12),
-              const Text('这张盘点单还没有扫码记录',
+              const Text('这张扫码单还没有扫码记录',
                   style: TextStyle(color: AppColors.textSub, fontSize: 14)),
               const SizedBox(height: 16),
               OutlinedButton(
@@ -240,7 +240,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
   ///
   /// 盘盈/盘亏金额一律显示**正数**（"盈了多少 / 亏了多少"），
   /// 净额才带符号。混着用符号的话，"亏 300" 写成 "-300"，
-  /// 和"盈 300"并排看时极易看反 —— 这是盘点报表最典型的误读。
+  /// 和"盈 300"并排看时极易看反 —— 这是盈亏报表最典型的误读。
   Widget _summaryCard() {
     final gainAmt = (_sum['gain_amt'] as num?)?.toDouble() ?? 0;
     final lossAmt = (_sum['loss_amt'] as num?)?.toDouble() ?? 0;

@@ -87,12 +87,18 @@ const BUILTIN_APPS = [
   },
   {
     id: 'stocktake',
-    title: '门店盘点',
+    // 🔴 显示名是「扫码枪」，不是「盘点」——「盘点」这个名字留给真正的盘点模块
+    //   （盘点位 / 库位货架位 / 初盘-复盘-抽盘三遍制 / 抽盘授权）。
+    //   这个模块的本职只是"把条码快速扫成一笔账"：扫码 → 明细 → 导出 → 盈亏表。
+    //   id 'stocktake' 发布后不可改名（改名等于老客户端丢入口），所以名字与 id
+    //   在这里是故意不一致的，别按 id 去猜标题。
+    title: '扫码枪',
     // 图标名必须落在 appmodules.js 的 ICONS 白名单（以及客户端
-    // module_renderer.dart 的 kModuleIcons）里，否则会退化成通用图标。
-    icon: 'inventory',
+    // widgets/module_renderer.dart 的 kModuleIcons）里，否则会退化成通用图标。
+    // 两处都有测试钉着（server/test/apps_icon_test.js）。
+    icon: 'barcode',
     group: 'work',
-    desc: '扫码盘点，离线可用，盘完生成盈亏表',
+    desc: '扫码采集，离线可用，导出文档/表格 + 生成盈亏表',
 
     // 为什么只要求工作模式，不像考勤那样还要求 orgMember：
     //   盘点是**门店现场作业**，跟"这个人有没有被录进组织名册"是两回事 ——

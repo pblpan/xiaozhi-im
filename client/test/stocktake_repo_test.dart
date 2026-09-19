@@ -6,7 +6,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:xiaozhi_im_client/core/local_db.dart';
 import 'package:xiaozhi_im_client/core/stocktake_repo.dart';
 
-/// 盘点采集（本地扫码流水）的单元测试。
+/// 扫码枪采集（本地扫码流水）的单元测试。
 ///
 /// 这一层最容易出事的地方不是"存不进去"，而是**存进去了但语义不对**：
 ///   · 同条码重复扫被插成两行 → 汇总多算一个品种；
