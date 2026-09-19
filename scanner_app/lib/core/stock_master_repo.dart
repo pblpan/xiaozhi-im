@@ -153,7 +153,7 @@ class MasterImportResult {
 /// 商档 CSV 的**解析**与**模板**。
 ///
 /// ── 为什么自己解析而不引 csv 包 ────────────────────────────────
-/// 就为了读一份六列的表引一个依赖不划算；更要紧的是这里有几个
+/// 就为了读一份四列的表引一个依赖不划算；更要紧的是这里有几个
 /// **通用 CSV 库不会替你做、但现场一定会踩**的处理，必须在自己手里：
 ///   ① 编码：国内 Win 上导出的默认是 GBK（见 [Gbk.decodeSmart]）
 ///   ② `="6921817824327"` 这种"Excel 文本公式"包裹（我们自己导出的
@@ -164,13 +164,24 @@ class MasterCsv {
   MasterCsv._();
 
   /// 标准列名（模板用，也是导入时**首选**的匹配名）。
+  ///
+  /// ── 2026-09-19 龙哥定的：只要 4 列 ──────────────────────────
+  /// `序号 / 条码 / 商品名字 / 数量`。规格、单位、售价那几列在盘点场景里
+  /// 用不上，留着只会让人填表时多打几列、还容易填错列。
+  /// 「序号」是**给人看的**（对着纸质表核对行号），程序不读它 ——
+  /// 所以它不在 [aliases] 里，解析时被忽略。
   static const List<String> headers = <String>[
+    '序号',
     '条码',
-    '品名',
-    '规格',
-    '单位',
-    '售价',
-    '账面数',
+    '商品名字',
+    '数量',
+  ];
+
+  /// 无表头文件兜底时的列序（**不含序号**，因为它不被解析）。
+  static const List<String> _noHeaderOrder = <String>[
+    'barcode',
+    'name',
+    'account_qty',
   ];
 
   /// 列别名 → 内部字段。
@@ -193,7 +204,8 @@ class MasterCsv {
     'barcode': 'barcode',
     'code': 'barcode',
     'ean': 'barcode',
-    // 品名
+    // 商品名字（模板列名；旧的"品名/商品名称"继续认，老文件不用改）
+    '商品名字': 'name',
     '品名': 'name',
     '商品名称': 'name',
     '商品名': 'name',
@@ -216,6 +228,13 @@ class MasterCsv {
     '价格': 'unit_price',
     'price': 'unit_price',
     'unitprice': 'unit_price',
+    // 数量（模板列名）
+    //
+    // ⚠️ 导入语义上这一列是**账面数**（系统里现在有多少），不是实盘数。
+    // 导出的扫码明细里也有「数量」列，但那是**实盘数**——把那份明细当商档
+    // 导回来的话，账面=实盘，盈亏表会全变 0（看起来"盘得特别准"，其实没比对）。
+    // 说明书里写了这条；列名叫"数量"是龙哥定的，不改。
+    '数量': 'account_qty',
     // 账面数
     '账面数': 'account_qty',
     '账面数量': 'account_qty',
@@ -232,21 +251,44 @@ class MasterCsv {
   static MasterCsvResult parse(String text) => _parse(text);
 
   /// 一份可以直接照着填的模板（含 BOM，Excel 打开不乱码）。
+  ///
+  /// ⚠️ 示例行的条码**必须走 [barcodeCsvCell]**：模板是拿 Excel 打开照着填的，
+  /// 不做保护的话 13 位条码会显示成 `6.92E+12` —— 员工看到的就是"模板坏了"，
+  /// 然后自己手打一列不知道对不对的条码进去。（导出明细那边早就保护了，
+  /// 模板这里之前漏了，2026-09-19 一并补上。）
   static String template() {
     final sb = StringBuffer('\uFEFF'); // BOM：Excel 靠它认 UTF-8
     sb.writeln(headers.map(csvEsc).join(','));
-    sb.writeln(<Object>['6921817824327', '示例商品A', '500g', '袋', 12.5, 30]
-        .map(csvEsc)
-        .join(','));
-    sb.writeln(<Object>['6901234567892', '示例商品B', '1L', '瓶', 8.0, 12]
-        .map(csvEsc)
-        .join(','));
+
+    String row(int serial, String barcode, String name, Object qty) =>
+        <Object>[serial, csvEsc(barcodeCsvCell(barcode)), csvEsc(name), qty]
+            .join(',');
+
+    sb.writeln(row(1, '6921817824327', '示例商品A', 30));
+    sb.writeln(row(2, '6901234567892', '示例商品B', 12));
     return sb.toString();
   }
 
   static String _norm(String s) => s
       .replaceAll(RegExp(r'[\s_\-（）()]'), '')
       .toLowerCase();
+
+  /// 首列是不是「序号」（1,2,3… 一行不差地对下去）。
+  ///
+  /// ── 判据故意收得很窄 ────────────────────────────────────────
+  /// 条码和序号**都是纯数字**，光看"是不是数字"分不开；写得松一点
+  /// （比如"是数字且 ≤5 位"）就会把**店内自编码**（常见 4~5 位，如 1001、1002）
+  /// 当成序号跳过去 —— 那一下整张表错位，导入"成功"但全是错的，
+  /// 比直接报错难查得多。
+  /// 所以只认"严格等于行号 + 至少两行"：条码极少恰好排成 1,2,3…
+  static bool _hasSerialColumn(List<List<String>> rows) {
+    if (rows.length < 2) return false; // 单行说明不了规律，宁可不跳
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].isEmpty) return false;
+      if (rows[i][0].trim() != '${i + 1}') return false;
+    }
+    return true;
+  }
 
   /// 剥掉 Excel 的"文本公式"包裹：`="6921817824327"` → `6921817824327`。
   ///
@@ -294,11 +336,15 @@ class MasterCsv {
     }
     final hasHeader = known >= 2;
 
-    final dataRows = hasHeader ? rows.skip(1) : rows;
+    final dataList = (hasHeader ? rows.skip(1) : rows).toList(growable: false);
+
+    // 无表头时先判断首列是不是「序号」。判错会**整列错位**：
+    // 条码被当成商品名、导入"成功"但一条都对不上 —— 比报错更难发现。
+    final serialOffset = hasHeader ? 0 : (_hasSerialColumn(dataList) ? 1 : 0);
     final items = <Map<String, dynamic>>[];
     var skipped = 0;
 
-    for (final r in dataRows) {
+    for (final r in dataList) {
       final m = <String, String>{};
       if (hasHeader) {
         for (var i = 0; i < r.length && i < cols.length; i++) {
@@ -307,17 +353,11 @@ class MasterCsv {
           m[f] = _unwrap(r[i]);
         }
       } else {
-        // 无表头：按模板的列序 条码/品名/规格/单位/售价/账面数
-        const order = <String>[
-          'barcode',
-          'name',
-          'spec',
-          'unit',
-          'unit_price',
-          'account_qty',
-        ];
-        for (var i = 0; i < r.length && i < order.length; i++) {
-          m[order[i]] = _unwrap(r[i]);
+        // 无表头：按模板的列序（跳过序号列）
+        for (var i = serialOffset;
+            i < r.length && (i - serialOffset) < _noHeaderOrder.length;
+            i++) {
+          m[_noHeaderOrder[i - serialOffset]] = _unwrap(r[i]);
         }
       }
 
@@ -340,7 +380,7 @@ class MasterCsv {
     return MasterCsvResult(
       items: items,
       skipped: skipped,
-      total: hasHeader ? rows.length - 1 : rows.length,
+      total: dataList.length,
     );
   }
 

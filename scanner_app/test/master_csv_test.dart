@@ -84,6 +84,19 @@ void main() {
       expect(a['account_qty'], 48.0);
     });
 
+    test('4 列模板表头：序号列不参与解析', () {
+      final r = MasterCsv.parse(
+        '序号,条码,商品名字,数量\n'
+        '1,6921817824327,冰红茶,48\n'
+        '2,6901234567892,苹果,12\n',
+      );
+      expect(r.items.length, 2);
+      expect(r.items[0]['barcode'], '6921817824327');
+      expect(r.items[0]['name'], '冰红茶');
+      expect(r.items[0]['account_qty'], 48.0);
+      expect(r.items[1]['barcode'], '6901234567892');
+    });
+
     test('表头别名：商品条码 / 商品名称 / 零售价 / 库存', () {
       final r = MasterCsv.parse(
         '商品条码,商品名称,零售价,库存\n'
@@ -142,14 +155,47 @@ void main() {
       expect(r.items[0]['unit_price'], 3.5);
     });
 
-    test('没有表头时按模板列序读', () {
+    test('没有表头时按模板列序读（条码 / 商品名字 / 数量）', () {
       final r = MasterCsv.parse(
-        '6921817824327,冰红茶,500ml,瓶,3.5,48\n',
+        '6921817824327,冰红茶,48\n',
       );
       expect(r.items.length, 1);
+      expect(r.items[0]['barcode'], '6921817824327');
       expect(r.items[0]['name'], '冰红茶');
-      expect(r.items[0]['unit'], '瓶');
       expect(r.items[0]['account_qty'], 48.0);
+    });
+
+    test('没有表头、首列是 1,2,3… 时跳过序号列', () {
+      final r = MasterCsv.parse(
+        '1,6921817824327,冰红茶,48\n'
+        '2,6901234567892,苹果,12\n',
+      );
+      expect(r.items.length, 2);
+      // 判错的代价是整列错位（条码被当成商品名），这条就是钉住"没错位"
+      expect(r.items[0]['barcode'], '6921817824327');
+      expect(r.items[0]['name'], '冰红茶');
+      expect(r.items[1]['barcode'], '6901234567892');
+    });
+
+    test('🔴 店内自编码 1001,1002 不能被当成序号跳掉（判据收窄的反向测试）', () {
+      // 序号和条码都是纯数字。判据要是写成"≤5 位的数字就当序号"，
+      // 这种 4~5 位的店内码会被整列跳过 —— 导入"成功"但一条都对不上。
+      // 判据只认"严格等于行号"，所以这里必须**不跳**。
+      final r = MasterCsv.parse(
+        '1001,冰红茶,48\n'
+        '1002,苹果,12\n',
+      );
+      expect(r.items.length, 2);
+      expect(r.items[0]['barcode'], '1001');
+      expect(r.items[0]['name'], '冰红茶');
+      expect(r.items[1]['barcode'], '1002');
+    });
+
+    test('单行数据不猜序号（判据要求 ≥2 行，宁可不跳也别跳错）', () {
+      // 已知取舍：单行文件首列会当条码读。单行无表头本来就歧义，
+      // 真遇到的人极少；反过来放宽判据会误伤店内码，代价大得多。
+      final r = MasterCsv.parse('6921817824327,冰红茶,48\n');
+      expect(r.items[0]['barcode'], '6921817824327');
     });
 
     test('条码为空的行被跳过，并且计数报出来', () {
@@ -202,9 +248,20 @@ void main() {
       // 把内容钉死，改了模板就会红 —— 否则"给出去的模板"和"App 里生成的模板"
       // 会慢慢长成两份不同的东西，而员工拿到的可能是错的那份。
       expect(MasterCsv.template(), '\uFEFF'
-          '条码,品名,规格,单位,售价,账面数\n'
-          '6921817824327,示例商品A,500g,袋,12.5,30\n'
-          '6901234567892,示例商品B,1L,瓶,8.0,12\n');
+          '序号,条码,商品名字,数量\n'
+          '1,"=""6921817824327""",示例商品A,30\n'
+          '2,"=""6901234567892""",示例商品B,12\n');
+    });
+
+    test('模板里的条码带 Excel 文本保护（不然打开就是 6.92E+12）', () {
+      // 模板是拿 Excel 打开照着填的，13 位条码不写成 ="..." 就会变科学计数法。
+      final t = MasterCsv.template();
+      // 注意是**两层**：barcodeCsvCell 产出 ="6921817824327"，
+      // 再过 csvEsc（里面含引号）就变成 CSV 里的 "=""6921817824327"""。
+      // 少了任何一层，Excel 打开都会变 6.92E+12。
+      expect(t.contains('"=""6921817824327"""'), isTrue);
+      // 反过来：商品名不是数字，不该被包成公式
+      expect(t.contains('="示例商品A"'), isFalse);
     });
   });
 
