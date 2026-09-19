@@ -21,6 +21,7 @@ electron-builder 配置里没写 perMachine（默认 false），装出来就是
 NSIS 3.x（V2 用的也是它）：winget install -e --id NSIS.NSIS
 """
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -108,6 +109,66 @@ def find_makensis():
     )
 
 
+# ── VC++ 运行库随程序目录分发（app-local）──────────────────────────────
+# 【为什么必须带】
+#   Flutter 产物静态依赖 msvcp140.dll / vcruntime140.dll / vcruntime140_1.dll。
+#   这些**不是**每台机器都有（干净的 Win10、LTSC、刚重装的系统都可能没有），
+#   用户看到的就是「计算机中丢失 msvcp140.dll」这类报错。
+#   用户的要求是"在安装包上解决"，所以把它们随程序目录一起分发 —— 免 UAC、
+#   不用装 VC++ Redist、不触发重启（app-local 部署是微软官方支持的方式）。
+#
+# 【为什么只带这三个，不带 UCRT（api-ms-win-crt-*.dll）】
+#   UCRT 只有 Win7/8 才需要单独补；而 Win10 起 UCRT 本身就是操作系统组件。
+#   偏偏 Win7/8 又跑不了这个程序（原因见 NSI 模板里的「系统版本闸门」注释），
+#   所以带 UCRT 属于"给一个永远用不上的场景增加体积和加载风险"。
+#
+# 【版本必须和工具集对齐】
+#   本机工具集 14.44（实测 PE linker 版本），所以从 VS2022 的
+#   Redist\MSVC\14.44.*\x64\Microsoft.VC143.CRT 取 —— 这是微软明确允许再分发的目录。
+REDIST_DLLS = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+
+
+def _ver_key(path):
+    m = re.search(r'MSVC[\\/](\d+(?:\.\d+)+)', path)
+    return [int(x) for x in m.group(1).split('.')] if m else [0]
+
+
+def find_crt_redist():
+    """定位可再分发的 VC++ CRT 目录；多个版本时取版本号最高的。"""
+    pats = []
+    for base in (os.path.join('C:', os.sep, 'Program Files (x86)', 'Microsoft Visual Studio'),
+                 os.path.join('C:', os.sep, 'Program Files', 'Microsoft Visual Studio')):
+        pats.append(os.path.join(base, '2022', '*', 'VC', 'Redist', 'MSVC',
+                                 '*', 'x64', 'Microsoft.VC143.CRT'))
+    cands = []
+    for p in pats:
+        cands += [d for d in glob.glob(p) if os.path.isdir(d)]
+    override = os.environ.get('VCCRT_REDIST')
+    if override and os.path.isdir(override):
+        cands.insert(0, override)
+    return sorted(cands, key=_ver_key)[-1] if cands else None
+
+
+def stage_redist(dst):
+    """把所需的 VC++ 运行库拷到暂存目录，返回 (来源目录, 文件名列表)。"""
+    src = find_crt_redist()
+    if not src:
+        raise SystemExit(
+            '找不到可再分发的 VC++ 运行库目录 Microsoft.VC143.CRT。\n'
+            '  需要装 VS2022 的「使用 C++ 的桌面开发」工作负载，\n'
+            '  或设 VCCRT_REDIST 环境变量指向该目录（内含 vcruntime140.dll 等）。\n'
+            '  ⚠️ 不要"跳过算了" —— 少了它，干净的 Windows 上装完会报「丢失 msvcp140.dll」。')
+    if os.path.isdir(dst):
+        shutil.rmtree(dst)
+    os.makedirs(dst)
+    for name in REDIST_DLLS:
+        s = os.path.join(src, name)
+        if not os.path.isfile(s):
+            raise SystemExit('运行库缺文件：%s' % s)
+        shutil.copy2(s, os.path.join(dst, name))
+    return src, list(REDIST_DLLS)
+
+
 # 模板里 $ 是 NSIS 变量前缀，Python 不做格式化，全部用占位符替换，
 # 只有本文件自己控制的 twin $ 写成 $$ 会在下面统一还原成单个 $。
 NSI_TEMPLATE = r'''; 由 client/pack_win.py 自动生成 —— 手工改动会在下次打包时被覆盖
@@ -171,9 +232,7 @@ VIAddVersionKey "LegalCopyright" "Copyright © $${PUBLISHER}"
 
 Var InstSizeKB
 
-Function .onInit
-  Call __KILL_MAIN__
-FunctionEnd
+__OS_GATE__
 
 __KILL_FN__
 
@@ -183,6 +242,11 @@ Section "主程序" SEC_MAIN
 
   ; Flutter Windows 必须整体分发：exe + 各插件 dll + data/flutter_assets，缺一不可
   File /r "__SRC__\*.*"
+
+  ; VC++ 运行库随程序目录分发（app-local）—— 直接摊在 exe 同目录，
+  ; 不装 VC++ Redist、不提权、不重启。缺了它们，干净的 Windows 上会报
+  ; 「计算机中丢失 msvcp140.dll」。（为什么只带这三个、不带 UCRT：见 pack_win.py 注释）
+  File /r "__REDIST__\*.*"
 
   $${GetSize} "$INSTDIR" "/M=*.* /S=0K" $0 $1 $2
   IntFmt $InstSizeKB "0x%08X" $0
@@ -269,6 +333,73 @@ FunctionEnd
 '''
 
 
+# 判据函数：单独抽出来是为了**能被测试**（见 tools/verify_win7_gate.py）。
+# 安装脚本里的逻辑没法直接单测，所以把"版本号 → 是否不受支持"这一段做成
+# 只依赖 $R0 的纯函数，测试脚本用同一份常量编译出测试程序去跑 —— 测的就是生产逻辑本身。
+#
+# 输入 $R0 = HKLM\...\CurrentVersion（NT 版本号，不是营销版本号！）
+#   6.0=Vista  6.1=Win7  6.2=Win8  6.3=Win8.1  10.0=Win10/11
+# 输出 $OsIsOld = 1 表示"不支持，要拦"，0 表示放行。
+OS_CHECK_FN = r'''Var OsIsOld
+
+Function CheckWinOld
+  StrCpy $OsIsOld 0
+  StrCmp $R0 "5.0" oscheck_old      ; 2000
+  StrCmp $R0 "5.1" oscheck_old      ; XP
+  StrCmp $R0 "5.2" oscheck_old      ; 2003
+  StrCmp $R0 "6.0" oscheck_old      ; Vista
+  StrCmp $R0 "6.1" oscheck_old      ; 7
+  StrCmp $R0 "6.2" oscheck_old      ; 8
+  StrCmp $R0 "6.3" oscheck_old      ; 8.1
+  Goto oscheck_done
+  oscheck_old:
+    StrCpy $OsIsOld 1
+  oscheck_done:
+FunctionEnd
+'''
+
+# 安装前的「系统版本闸门」。**必须在 Python 侧注入**（写单 `$`）——
+# 模板字符串后面还会过一次 `$$`→`$` 的还原，直接写在模板里得把每个 $ 都双写，容易错。
+OS_GATE = r'''; ── 系统版本闸门：Win7/8 跑不了，而且**不是补 DLL 能解决的** ──────────
+; 【本机实测】pefile 解析 build\windows\x64\runner\Release 下所有 PE：
+;   静态导入 Windows 8+ 专属接口共 10 处，且**无一例外全是静态导入**
+;   （没有延迟导入 = 加载模块时就要解析符号 = 进程直接起不来）：
+;     flutter_windows.dll             -> ws2_32.dll!GetHostNameW          (Win8 新增导出)
+;     flutter_windows.dll             -> api-ms-win-core-synch-l1-2-0.dll
+;     flutter_webrtc_plugin.dll       -> api-ms-win-core-winrt-l1-1-0.dll!RoInitialize/RoUninitialize
+;     libwebrtc.dll                   -> api-ms-win-shcore-scaling-l1-1-1.dll!GetDpiForMonitor 等
+;     audioplayers_windows_plugin.dll -> api-ms-win-core-winrt-error-l1-1-1.dll 等
+;   Windows 7 的 ws2_32.dll 里**没有** GetHostNameW 这个符号，Win7/8 也没有
+;   WinRT 与 Shcore 这两个子系统。而这些符号属于**操作系统自身**，
+;   随程序目录放任何 DLL 都提供不了 → 补运行库救不了 Win7，换哪个安装包也一样。
+; 【官方旁证】Flutter 自 3.19（Dart 3.3）起正式终止 Windows 7/8 支持；本机 Flutter 3.47.2。
+;
+; 所以这里做「安装前拦截 + 把原因说清楚」，而不是让用户装完再看到
+; 「无法定位程序输入点 GetHostNameW」这种天书 —— 那才会变成"你们的软件是坏的"。
+; 静默安装**不弹窗**（弹窗会把批量部署/自动化挂死），直接放行，由部署方自己判断。
+__OS_CHECK_FN__
+Function .onInit
+  SetRegView 64
+  ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" CurrentVersion
+  SetRegView lastused
+  Call CheckWinOld
+  StrCmp $OsIsOld 0 oscheck_pass
+  IfSilent oscheck_pass
+  MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "检测到当前系统是 Windows 8.1 或更早的版本（最常见的是 Windows 7），本程序在它上面无法运行。$\r$\n$\r$\n【原因】小智 IM 桌面端基于 Flutter 构建，Flutter 自 3.19 起已正式停止支持 Windows 7/8。程序依赖 Windows 8 才有的系统接口（ws2_32.dll 的 GetHostNameW）以及 WinRT、Shcore 组件，Windows 7 上不存在这些东西。这不是缺少某个 DLL，随安装包补运行库也无法解决。$\r$\n$\r$\n【建议】$\r$\n  · 把这台电脑升级到 Windows 10 / 11（推荐）$\r$\n  · 或改用手机端（Android 安装包），功能一致$\r$\n$\r$\n点「确定」可以强行继续安装（装完很可能启动失败）；点「取消」退出安装。" IDOK oscheck_pass IDCANCEL oscheck_abort
+  oscheck_abort:
+    Abort
+  oscheck_pass:
+  Call __KILL_MAIN__
+FunctionEnd
+'''
+
+
+def os_gate_nsis():
+    return (OS_GATE
+            .replace('__OS_CHECK_FN__', OS_CHECK_FN)
+            .replace('__KILL_MAIN__', 'KillRunningApp'))
+
+
 def kill_functions():
     """生成安装版 + 卸载版的「请走旧实例」函数。
 
@@ -290,7 +421,7 @@ def vi_version(version):
     return '.'.join(parts[:4])
 
 
-def build_nsi(version, out_file, nsis_path, per_user=True):
+def build_nsi(version, out_file, nsis_path, redist_dir, per_user=True):
     icon = os.path.join(HERE, 'windows', 'runner', 'resources', 'app_icon.ico')
     if not os.path.isfile(icon):
         raise SystemExit('找不到安装向导图标: ' + icon)
@@ -306,6 +437,7 @@ def build_nsi(version, out_file, nsis_path, per_user=True):
         exec_level = 'admin'
 
     nsi = NSI_TEMPLATE
+    nsi = nsi.replace('__OS_GATE__', os_gate_nsis())
     nsi = nsi.replace('__KILL_FN__', kill_functions())
     nsi = nsi.replace('__KILL_MAIN__', 'KillRunningApp')
     nsi = nsi.replace('__APP_NAME__', APP_NAME)
@@ -317,6 +449,7 @@ def build_nsi(version, out_file, nsis_path, per_user=True):
     nsi = nsi.replace('__REG_ROOT__', reg_root)
     nsi = nsi.replace('__EXEC_LEVEL__', exec_level)
     nsi = nsi.replace('__SRC__', SRC)
+    nsi = nsi.replace('__REDIST__', redist_dir)
     nsi = nsi.replace('__ICON__', icon)
     nsi = nsi.replace('__OUT_FILE__', out_file)
     nsi = nsi.replace('$$', '$')  # 模板里写成双写，避免和 NSIS 语法混淆
@@ -366,8 +499,14 @@ def main():
     print('生成完整性清单（客户端启动时用它核对程序有没有被改过）…')
     write_integrity_stamp()
 
+    print('准备 VC++ 运行库（随程序目录分发，免得用户遇到「丢失 msvcp140.dll」）…')
+    redist_dir = os.path.join(tmp_root, 'redist_x64')
+    redist_src, redist_files = stage_redist(redist_dir)
+    print('  来源: %s' % redist_src)
+    print('  带入: %s' % '、'.join(redist_files))
+
     script = build_nsi(version, out_path, os.path.join(tmp_root, 'installer.nsi'),
-                       per_user=per_user)
+                       redist_dir, per_user=per_user)
     print('已生成安装脚本:', script)
 
     r = subprocess.run([makensis, '/V2', script], cwd=tmp_root,
