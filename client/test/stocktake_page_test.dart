@@ -9,17 +9,22 @@ import 'package:xiaozhi_im_client/screens/stocktake.dart';
 
 /// 扫码枪（采集页）的 widget 测试。
 ///
-/// ── 这个测试是为一次真实事故补的 ────────────────────────────────
-/// 采集页的「明细列表表头」和「底部导出栏」原先都挂在 `_rows.isNotEmpty` 上 ——
-/// 没扫过码就**整页看不到**。现场反馈是"这功能没做"，因为扫之前确实什么都看不见。
-/// **代码写了不等于用户看得见**，所以这里专门盯"空列表"这一帧。
+/// ── 这个测试是为两次真实反馈补的 ────────────────────────────────
+/// ① 2026-09-19 上午：「没有扫码列表和导出」——
+///    表头和导出栏原先挂在 `_rows.isNotEmpty` 上，没扫过码就**整页看不见**。
+///    现场反馈是"这功能没做"，因为扫之前确实什么都看不见。
+///    **代码写了不等于用户看得见**，所以专门盯"空列表"这一帧。
+/// ② 2026-09-19 下午：「数量栏不能改」「导出只能先存本地再发送」——
+///    前者是 `setQty()` 早就写好了、界面没接上；后者是导出后只给
+///    "打开 / 另存为"，没有直接把文件交给分享面板。两条都补了测试。
 ///
-/// 钉住的四条：
+/// 钉住的：
 ///   ① 标题是「扫码枪」，且页面里不再出现「盘点」（名字让给盘点模块）
 ///   ② 没有任何扫码记录时，四列表头仍然在（序号/条码/数量/商品名称）
 ///   ③ 没有任何扫码记录时，底部两个导出按钮仍然在（导出文档/导出表格）
-///   ④ 有数据时：重复扫同一个码**合并成一行、数量加 1**；商档查不到的码显示
-///      预留值「未知条码」；每行行尾都有删除按钮，点了只删这一行
+///   ④ 重复扫同一个码**合并成一行、数量加 1**；未知码用预留值；行尾能删
+///   ⑤ **数量可以点开改**（改大 / 改成 0 = 二次确认后删行 / 取消则不动）
+///   ⑥ 导出后弹层里有**一条"把文件发出去"的路**（手机=分享面板 / 桌面=文件夹）
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -39,16 +44,41 @@ void main() {
   ///    表现为"什么都找不到"，很容易被误判成界面写错了。
   ///
   /// 这里不用"固定睡 50ms"这种写法：机器快慢不同，睡少了就是随机失败。
-  /// 改成**循环到转圈消失**为止，并在没消失时报红（不静默通过）。
-  Future<void> settle(WidgetTester tester, {int tries = 40}) async {
+  /// 改成**轮询到条件成立**，并在等不到时报红（不静默通过）。
+  Future<void> pumpUntil(
+    WidgetTester tester,
+    bool Function() ok, {
+    int tries = 80,
+    required String why,
+  }) async {
     for (var i = 0; i < tries; i++) {
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pump();
-      if (find.byType(CircularProgressIndicator).evaluate().isEmpty) return;
+      if (ok()) return;
     }
-    fail('页面一直停在 loading：DB 初始化没有在预期次数内完成');
+    fail('等待超时：$why');
   }
+
+  /// 有界地推进动画。
+  ///
+  /// 🔴 **不要用裸 `pumpAndSettle()`**：它只在"没有待调度帧"时才返回，
+  ///    页面上只要有一个永不停歇的动画（转圈就是），它会一直等到 **10 分钟**
+  ///    默认超时才报错 —— 现象是"测试卡死"，而且看不出卡在哪一步。
+  ///    （这一版实测就卡在这儿：单独跑一个文件跑了 4 分钟没结束。）
+  ///    改成固定推 N 帧：跑得快，超了也是立刻继续，不会把整轮 CI 挂住。
+  Future<void> settleAnim(WidgetTester tester, {int frames = 12}) async {
+    for (var i = 0; i < frames; i++) {
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+  }
+
+  /// 等到页面不再转圈（DB 初始化完成）
+  Future<void> settle(WidgetTester tester) => pumpUntil(
+        tester,
+        () => find.byType(CircularProgressIndicator).evaluate().isEmpty,
+        why: '页面一直停在 loading：DB 初始化没有在预期次数内完成',
+      );
 
   Future<void> pumpPage(WidgetTester tester) async {
     await tester.pumpWidget(const MaterialApp(home: StocktakePage()));
@@ -80,6 +110,30 @@ void main() {
     await LocalDb.I.db();
   }
 
+  /// 点某一行数量胶囊 → 等「改数量」对话框弹出来
+  Future<void> openQtyDialog(WidgetTester tester, String barcode) async {
+    await tester.tap(find.byKey(ValueKey<String>('scan-qty-$barcode')));
+    await tester.pump();
+    await pumpUntil(tester, () => find.text('改数量').evaluate().isNotEmpty,
+        why: '点数量应该弹出「改数量」对话框');
+  }
+
+  /// 在对话框里输一个新数量并点保存。
+  ///
+  /// 输入框**没有** controller 归测试持有（见 `_QtyDialog` 的注释：
+  /// 控制器由对话框自己管理，提前 dispose 会炸），所以这里只能
+  /// 通过 `enterText` 驱动。
+  Future<void> typeQty(WidgetTester tester, String text) async {
+    await tester.enterText(find.byType(TextField).last, text);
+    await tester.pump();
+    await tester.tap(find.text('保存'));
+    await tester.pump();
+    // 等「改数量」真正退场（退场动画跑完路由才被移除）。
+    // 不先等它走，后面 find.text('取消') 会同时匹配到两个对话框上的按钮。
+    await pumpUntil(tester, () => find.text('改数量').evaluate().isEmpty,
+        why: '点了保存，「改数量」对话框应该关闭');
+  }
+
   // ── ①②③ 空列表：能力必须一眼可见 ─────────────────────────────
   testWidgets('空列表时：标题「扫码枪」、四列表头、两个导出按钮都在', (tester) async {
     await tester.runAsync(resetEmpty);
@@ -87,7 +141,7 @@ void main() {
 
     expect(find.text('扫码枪'), findsWidgets, reason: '标题应为「扫码枪」');
 
-    // 🔴 本条是这次回归的核心：一个扫码记录都没有时，列表结构也得画出来
+    // 🔴 本条是回归①的核心：一个扫码记录都没有时，列表结构也得画出来
     for (final h in ['序号', '条码', '数量', '商品名称']) {
       expect(find.text(h), findsOneWidget, reason: '空列表也必须显示列头「$h」');
     }
@@ -110,7 +164,6 @@ void main() {
     expect(find.byTooltip('删除本行'), findsNWidgets(2),
         reason: '每行最后面都要有一个删除按钮');
 
-    // A：名称来自商档；数量必须是 2（扫了两次并进一行）
     expect(find.text('A'), findsOneWidget, reason: '同一个码扫两次必须合并成一行');
     expect(find.text('矿泉水'), findsOneWidget);
     expect(
@@ -126,20 +179,137 @@ void main() {
     expect(find.text('未知条码'), findsOneWidget, reason: '商档查不到的名称要用预留值');
 
     // 删掉 ZZZ 那一行
-    await tester.runAsync(() async {
-      await tester.tap(find.descendant(
-        of: find.byKey(const ValueKey<String>('scan-row-ZZZ')),
-        matching: find.byTooltip('删除本行'),
-      ));
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    });
-    await tester.pump();
-    await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)));
-    await tester.pump();
+    await tester.tap(find.descendant(
+      of: find.byKey(const ValueKey<String>('scan-row-ZZZ')),
+      matching: find.byTooltip('删除本行'),
+    ));
+    await pumpUntil(tester, () => find.text('未知条码').evaluate().isEmpty,
+        why: '点了行尾删除，那一行应该消失');
 
-    expect(find.text('未知条码'), findsNothing, reason: '删除后该行应消失');
     expect(find.text('矿泉水'), findsOneWidget, reason: '别的行不能被误删');
     expect(find.byTooltip('删除本行'), findsOneWidget);
+  });
+
+  // ── ⑤ 数量可改（2026-09-19 下午反馈）─────────────────────────
+  group('数量栏可以改', () {
+    testWidgets('点数量 → 改大 → 列表和数据库都跟着变', (tester) async {
+      await tester.runAsync(seedScans);
+      await pumpPage(tester);
+
+      await openQtyDialog(tester, 'A');
+      await typeQty(tester, '12');
+
+      await pumpUntil(
+        tester,
+        () => find
+            .descendant(
+              of: find.byKey(const ValueKey<String>('scan-qty-A')),
+              matching: find.text('12'),
+            )
+            .evaluate()
+            .isNotEmpty,
+        why: '改成 12 之后列表里那一格应该显示 12',
+      );
+
+      // 不只界面变了，库里也得真变了 —— 否则重启 App 又变回去
+      final rows = await tester.runAsync(
+          () => StocktakeRepo().listWithMaster(sheet));
+      final a = rows!.firstWhere((r) => r['barcode'] == 'A');
+      expect((a['qty'] as num).toDouble(), 12,
+          reason: '改数量必须落到本地库，不能只是界面上好看');
+    });
+
+    testWidgets('改成 0 要二次确认，确认后才删行', (tester) async {
+      await tester.runAsync(seedScans);
+      await pumpPage(tester);
+
+      await openQtyDialog(tester, 'A');
+      await typeQty(tester, '0');
+      await settleAnim(tester);
+
+      // 手滑多按一个 0 就静默删行，是员工第二天才发现的那种错 → 必须再问一次
+      expect(find.text('改成 0 = 删掉这一行'), findsOneWidget,
+          reason: '改成 0 会删数据，必须先确认');
+
+      await tester.tap(find.text('删除'));
+      await pumpUntil(tester, () => find.text('矿泉水').evaluate().isEmpty,
+          why: '确认后 A 那一行应被删掉');
+
+      expect(find.text('未知条码'), findsOneWidget, reason: '别的行不能被连带删掉');
+    });
+
+    testWidgets('取消二次确认 → 什么都不改', (tester) async {
+      await tester.runAsync(seedScans);
+      await pumpPage(tester);
+
+      await openQtyDialog(tester, 'A');
+      await typeQty(tester, '0');
+      await settleAnim(tester);
+
+      expect(find.text('改成 0 = 删掉这一行'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await settleAnim(tester);
+
+      expect(find.text('矿泉水'), findsOneWidget, reason: '取消就不该删行');
+
+      final rows = await tester.runAsync(
+          () => StocktakeRepo().listWithMaster(sheet));
+      final a = rows!.firstWhere((r) => r['barcode'] == 'A');
+      expect((a['qty'] as num).toDouble(), 2, reason: '取消后数量必须还是原来的 2');
+    });
+  });
+
+  // ── ⑥ 导出后能直接发出去（2026-09-19 下午反馈）──────────────
+  testWidgets('导出后弹层里有"把文件发出去"那条路，且与当前平台匹配', (tester) async {
+    await tester.runAsync(seedScans);
+    await pumpPage(tester);
+
+    await tester.tap(find.text('导出文档'));
+
+    // 导出会真写文件（真实 IO），假时钟推不动，必须让出真实异步
+    await pumpUntil(
+      tester,
+      () => find.byKey(const Key('share-to-others')).evaluate().isNotEmpty,
+      why: '导出之后应弹出"发给同事 / 打开文件夹"的弹层',
+    );
+
+    // 🔴 这一条是独立判据，不复用 FileShare.channelFor —— 复用就成了
+    //    "实现自己验自己"。直接按平台写死期望值，写反分支必然报红。
+    final want = Platform.isWindows
+        ? '打开所在文件夹（拖进微信发送）'
+        : '发给同事（微信 / 企微 / 钉钉…）';
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('share-to-others')),
+        matching: find.text(want),
+      ),
+      findsOneWidget,
+      reason: '弹层第一条必须是这台设备真能走的那条路',
+    );
+
+    // 打开 / 另存为 仍然要在（发不出去时的兜底不能丢）
+    expect(find.text('打开（用 WPS / Excel / 记事本看）'), findsOneWidget);
+    expect(find.text('另存为 / 发到别处'), findsOneWidget);
+
+    // 点弹层外面关掉它。**不去点"先不用"**：选项一多它就落到屏幕外了，
+    // 那种 tap 会静默打偏（只留一句 warning），是最难查的假失败。
+    await tester.tapAt(const Offset(10, 10));
+    await settleAnim(tester);
+
+    // 🔴 文件检查必须放进 `runAsync`。
+    //    `File.exists()` / `readAsString()` 是**真实文件 IO**，而测试体跑在
+    //    假时钟里 —— 直接在测试体里 await 一个真实 IO，它**永远不会完成**，
+    //    表现为"整轮测试无声卡死"（实测卡了 4 分钟直到被外部 timeout 杀掉，
+    //    日志里连一句异常都没有，最难查的那种）。
+    //    造数据、读库、读写文件，凡是真的 IO 都要走 runAsync。
+    final content = await tester.runAsync(() async {
+      final f = File('$supportDir/downloads/扫码明细_$sheet.txt');
+      if (!await f.exists()) return null;
+      return f.readAsString();
+    });
+
+    expect(content, isNotNull,
+        reason: '导出的文件必须真的写出来：$supportDir/downloads/扫码明细_$sheet.txt');
+    expect(content, contains('矿泉水'), reason: '导出内容里应该真有扫到的商品');
   });
 }

@@ -1,8 +1,10 @@
 package com.example.xiaozhi_im_client
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -62,8 +64,71 @@ class MainActivity : FlutterActivity() {
                         }.start()
                     }
                 }
+
+                // 出站：把本地导出的账（.txt/.csv）直接甩给系统分享面板，
+                // 用户选微信/企微/钉钉/本 App 就能直接发给同事，
+                // 不用先"另存为"再自己找文件。
+                "shareFile" -> {
+                    val path = call.argument<String>("path")
+                    val mime = call.argument<String>("mime") ?: "*/*"
+                    val subject = call.argument<String>("subject") ?: ""
+                    if (path.isNullOrBlank()) {
+                        result.error("bad_args", "缺少 path", null)
+                    } else {
+                        // 拉分享面板是 UI 动作，必须在主线程
+                        runOnUiThread {
+                            result.success(shareFile(path, mime, subject))
+                        }
+                    }
+                }
+
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    /**
+     * 把本地文件经 FileProvider 转成 content:// 后拉系统分享面板。
+     *
+     * 返回值是**给用户看的失败原因**，成功返回空串 —— 与 Dart 侧
+     * FileIo.open() 的约定保持一致（空 = 成功），免得两套约定混用。
+     */
+    private fun shareFile(path: String, mime: String, subject: String): String {
+        val f = File(path)
+        if (!f.exists() || f.length() == 0L) return "文件不存在或为空"
+        return try {
+            val uri: Uri = FileProvider.getUriForFile(
+                this, "$packageName.sharefiles", f
+            )
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+                if (subject.isNotEmpty()) putExtra(Intent.EXTRA_SUBJECT, subject)
+                // 只授读权限：对方能读我们这一个文件，改不了、也拿不到别的
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            // ⚠️ 不少国产 App 不声明 text/csv 这类具体 mime，只认 */*。
+            //    直接拿 text/csv 去 chooser 会出现"分享面板是空的"，
+            //    现象很像"分享坏了"。所以先看有没有 App 认这个具体类型，
+            //    没有就退到 */*。resolveActivity 必须带 MATCH_DEFAULT_ONLY，
+            //    否则会把只有 intent-filter 没 DEFAULT 的条目也算进来。
+            val probes = Intent(Intent.ACTION_SEND).apply { type = mime }
+            val handled = packageManager.resolveActivity(
+                probes, PackageManager.MATCH_DEFAULT_ONLY
+            ) != null
+            if (!handled) send.type = "*/*"
+
+            val chooser = Intent.createChooser(send, "发给同事").apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(chooser)
+            ""
+        } catch (e: IllegalArgumentException) {
+            // FileProvider 没覆盖到这个路径时会抛这个 —— 是配置问题，得明说
+            "分享失败：文件不在可分享目录内（$e）"
+        } catch (e: Exception) {
+            "分享失败：$e"
         }
     }
 

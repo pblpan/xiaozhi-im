@@ -3,9 +3,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../core/file_io.dart';
+import '../core/file_share.dart';
 import '../core/stocktake_export.dart';
 import '../core/stocktake_repo.dart';
 import '../core/theme.dart';
+import '../core/win_shell.dart';
 
 /// 扫码枪出数：一张扫码单的盈亏表 + 导出。
 ///
@@ -104,46 +106,91 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
     }
   }
 
-  /// 导出后给两条路：**直接打开**（WPS/Excel 里再看、再发）和
-  /// **另存为**（Android 上走系统 SAF，可以直接存到微信/下载目录）。
+  /// 导出后给几条路。**第一优先是"直接发给同事"** ——
+  /// 导出的目的就是发出去，先落盘再让用户自己去文件管理器找回来发，
+  /// 中间那两步纯属白干。
+  ///
+  /// 平台差异见 [FileShare.canShareToOthers]：手机端是真分享面板，
+  /// 桌面端没有统一入口，就换成"打开所在文件夹"让他拖进微信 ——
+  /// 不做假按钮（点了没反应比没这个按钮更糟）。
   Future<void> _afterExport(File f, int rows) async {
+    final channel = FileShare.channel;
     final act = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: AppColors.bgElevated,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.check_circle_outline,
-                  color: AppColors.brand),
-              title: Text(
-                  '已生成 $rows 行：${f.path.split(Platform.pathSeparator).last}',
-                  style: const TextStyle(color: AppColors.text, fontSize: 13)),
-            ),
-            ListTile(
-              leading: const Icon(Icons.open_in_new, color: AppColors.brand),
-              title: const Text('打开（用 WPS / Excel 看）',
-                  style: TextStyle(color: AppColors.text)),
-              onTap: () => Navigator.pop(ctx, 'open'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.save_alt, color: AppColors.textSub),
-              title: const Text('另存为 / 发到别处',
-                  style: TextStyle(color: AppColors.text)),
-              onTap: () => Navigator.pop(ctx, 'save'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.close, color: AppColors.textWeak),
-              title: const Text('先不用',
-                  style: TextStyle(color: AppColors.textSub)),
-              onTap: () => Navigator.pop(ctx),
-            ),
-          ],
+        // 小屏 + 系统大字体下，弹层里最后一条会落在屏幕外**点不到**。给个滚动兜底。
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.check_circle_outline,
+                    color: AppColors.brand),
+                title: Text(
+                    '已生成 $rows 行：${f.path.split(Platform.pathSeparator).last}',
+                    style: const TextStyle(color: AppColors.text, fontSize: 13)),
+              ),
+              // 只给这台设备真能走的那一条 —— 见 FileShare.channelFor 的说明：
+              // 在桌面上摆一个"发给同事"就是假按钮（点了没反应）。
+              if (channel == ShareChannel.systemShare)
+                ListTile(
+                  key: const Key('share-to-others'),
+                  leading: const Icon(Icons.send, color: AppColors.brand),
+                  title: const Text('发给同事（微信 / 企微 / 钉钉…）',
+                      style: TextStyle(
+                          color: AppColors.text, fontWeight: FontWeight.w600)),
+                  onTap: () => Navigator.pop(ctx, 'share'),
+                )
+              else if (channel == ShareChannel.openFolder)
+                ListTile(
+                  key: const Key('share-to-others'),
+                  leading: const Icon(Icons.folder_open, color: AppColors.brand),
+                  title: const Text('打开所在文件夹（拖进微信发送）',
+                      style: TextStyle(
+                          color: AppColors.text, fontWeight: FontWeight.w600)),
+                  onTap: () => Navigator.pop(ctx, 'folder'),
+                ),
+              ListTile(
+                leading: const Icon(Icons.open_in_new, color: AppColors.textSub),
+                title: const Text('打开（用 WPS / Excel 看）',
+                    style: TextStyle(color: AppColors.text)),
+                onTap: () => Navigator.pop(ctx, 'open'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.save_alt, color: AppColors.textSub),
+                title: const Text('另存为 / 发到别处',
+                    style: TextStyle(color: AppColors.text)),
+                onTap: () => Navigator.pop(ctx, 'save'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.close, color: AppColors.textWeak),
+                title: const Text('先不用',
+                    style: TextStyle(color: AppColors.textSub)),
+                onTap: () => Navigator.pop(ctx),
+              ),
+            ],
+          ),
         ),
       ),
     );
     if (act == null || !mounted) return;
+
+    if (act == 'share') {
+      // 分享面板是系统的，拉起来就完事 —— 用户选谁发是他自己的事，
+      // 我们拿不到"发没发成功"的回执（Android 不给），所以这里只说"已打开"。
+      final err = await FileShare.toOthers(f,
+          subject: StocktakeExport.fileName(widget.sheetNo));
+      if (!mounted) return;
+      _snack(err.isEmpty ? '已打开分享面板，选同事发送即可' : err);
+      return;
+    }
+    if (act == 'folder') {
+      final ok = WinShell.revealInExplorer(f.path);
+      if (!mounted) return;
+      _snack(ok ? '已在资源管理器中定位到该文件' : '打开文件夹失败：${f.path}');
+      return;
+    }
     if (act == 'open') {
       final err = await FileIo.open(f);
       if (!mounted) return;

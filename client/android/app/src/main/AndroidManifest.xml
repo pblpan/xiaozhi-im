@@ -65,6 +65,26 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- 出站分享：把导出的账（.txt/.csv）直接交给系统分享面板（微信/企微/钉钉…）。
+             Android 7.0 起不允许把 file:// 交给外部 App（FileUriExposedException），
+             必须经 FileProvider 转成 content:// 并只授一次性读权限。
+
+             ⚠️ authority 用**独立后缀** `.sharefiles`，刻意不与 open_filex 的
+                `${applicationId}.fileProvider.com.crazecoder.openfile` 撞名。
+                两个 provider 同 authority 会在安装期就崩，而且报错很难读
+                （"Failed to find configured root" / "Couldn't find meta-data"）。
+             ⚠️ exported=false + grantUriPermissions=true 是标准组合：
+                别人拿不到我们没主动给出去的地址。 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.sharefiles"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/share_paths" />
+        </provider>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
@@ -75,6 +95,16 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- 出站分享时 MainActivity 会先探一下"有没有 App 认 text/csv 这个具体类型"，
+             不认就退到 */* 再拉分享面板。**Android 11+ 不声明可见性，这个探测
+             永远返回 null** —— 于是每次都静默走兜底分支：功能看着对，
+             但那段代码实际从没生效过（写错 mime 也不会被发现）。
+             这里声明 SEND + */* 就够了：intent 里的通配能匹配到任何具体类型，
+             一个 */* 覆盖全部能收分享的 App。 -->
+        <intent>
+            <action android:name="android.intent.action.SEND"/>
+            <data android:mimeType="*/*"/>
         </intent>
         <!-- 卡片消息的「查看详情」按钮要唤起浏览器（Android 11+ 必须显式声明可见性） -->
         <intent>
