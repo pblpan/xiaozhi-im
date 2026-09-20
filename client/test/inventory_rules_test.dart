@@ -348,4 +348,137 @@ void main() {
       expect(InventoryRules.mistakeCount(const [], const []), 0);
     });
   });
+
+  // ============================================================
+  group('复核清单（抽盘的行集）', () {
+    test('两遍数量不同 → 进清单', () {
+      final s = InventoryRules.reviewBarcodesOf(
+        {'6901': 10.0, '6902': 5.0},
+        {'6901': 10.0, '6902': 7.0},
+      );
+      expect(s, {'6902'});
+    });
+
+    test('初盘有、复盘没有 → 进清单（复盘漏盘）', () {
+      final s = InventoryRules.reviewBarcodesOf(
+        {'6901': 10.0},
+        <String, double>{},
+      );
+      expect(s, {'6901'}, reason: '复盘漏盘是最该复核的一类，不许漏');
+    });
+
+    test('复盘有、初盘没有 → 也进清单（没有参照一样是疑问项）', () {
+      final s = InventoryRules.reviewBarcodesOf(
+        <String, double>{},
+        {'6909': 3.0},
+      );
+      expect(s, {'6909'},
+          reason: '复盘新扫出来的商品在"复盘 vs 初盘"里判不出差异，'
+              '但它同样没被两遍共同确认过，必须列出来让人看');
+    });
+
+    // 🔴 反向用例：两遍全对得上时必须**空**。
+    //    恒不为空的判据是装饰品 —— 这条挂了才说明"清单只收有疑问的"成立。
+    test('两遍完全一致 → 清单为空（反向）', () {
+      final s = InventoryRules.reviewBarcodesOf(
+        {'6901': 10.0, '6902': 5.0},
+        {'6901': 10.0, '6902': 5.0},
+      );
+      expect(s, isEmpty);
+    });
+
+    test('两遍都空 → 清单为空', () {
+      expect(InventoryRules.reviewBarcodesOf(<String, double>{}, <String, double>{}),
+          isEmpty);
+    });
+
+    test('int/double 混着来不算差异（SQLite 的 REAL 有时回 int）', () {
+      final s = InventoryRules.reviewBarcodesOf(
+        {'6901': 10},
+        {'6901': 10.0},
+      );
+      expect(s, isEmpty, reason: '10 和 10.0 被判成差异，清单凭空多一项');
+    });
+  });
+
+  // ============================================================
+  group('复核结论', () {
+    test('四种状态各归各位', () {
+      expect(InventoryRules.reviewVerdict(curQty: 5.0, prevQty: 5.0),
+          InventoryRules.reviewAligned);
+      expect(InventoryRules.reviewVerdict(curQty: 6.0, prevQty: 5.0),
+          InventoryRules.reviewChanged);
+      expect(InventoryRules.reviewVerdict(curQty: 5.0, prevQty: null),
+          InventoryRules.reviewFilled);
+      expect(InventoryRules.reviewVerdict(curQty: null, prevQty: 5.0),
+          InventoryRules.reviewPending);
+      expect(InventoryRules.reviewVerdict(curQty: null, prevQty: null),
+          InventoryRules.reviewPending);
+    });
+
+    test('"上一遍没盘过"和"盘过但数不一样"不许并成一种', () {
+      // 责任完全不同：前者是复盘漏了，后者才可能是抽盘又改。
+      expect(InventoryRules.reviewVerdict(curQty: 5.0, prevQty: null),
+          isNot(InventoryRules.reviewVerdict(curQty: 6.0, prevQty: 5.0)));
+      expect(InventoryRules.reviewVerdictLabel(InventoryRules.reviewFilled),
+          isNot(InventoryRules.reviewVerdictLabel(InventoryRules.reviewChanged)));
+    });
+  });
+
+  // ============================================================
+  group('复核计数', () {
+    Map<String, dynamic> row(String review, {bool baseMissing = false}) =>
+        <String, dynamic>{
+          'barcode': '6901',
+          'review': review,
+          'base_missing': baseMissing,
+        };
+
+    test('按结论分桶', () {
+      final t = InventoryRules.tallyReview([
+        row(InventoryRules.reviewAligned),
+        row(InventoryRules.reviewAligned),
+        row(InventoryRules.reviewChanged),
+        row(InventoryRules.reviewFilled),
+        row(InventoryRules.reviewPending),
+      ]);
+      expect(t.total, 5);
+      expect(t.aligned, 2);
+      expect(t.changed, 1);
+      expect(t.filled, 1);
+      expect(t.pending, 1);
+      expect(t.reviewed, 4, reason: '已复核 = 对上 + 又改 + 补盘，未复核不算');
+    });
+
+    test('前两遍漏盘单独计数', () {
+      final t = InventoryRules.tallyReview([
+        row(InventoryRules.reviewAligned, baseMissing: true),
+        row(InventoryRules.reviewAligned),
+      ]);
+      expect(t.baseMissing, 1);
+    });
+
+    test('结论缺失/非法值 → 归"未复核"（宁可多提醒，不许当已复核）', () {
+      final t = InventoryRules.tallyReview([
+        <String, dynamic>{'barcode': '6901'},
+        <String, dynamic>{'barcode': '6902', 'review': '莫名其妙的值'},
+      ]);
+      expect(t.pending, 2);
+      expect(t.reviewed, 0);
+    });
+
+    test('alignedRatio：没有已复核的返回 null，不返回 0', () {
+      expect(InventoryRules.tallyReview(const []).alignedRatio, isNull,
+          reason: '"没有可复核的"和"复核了全不一致"是两件事，返回 0 会误报');
+      expect(
+          InventoryRules.tallyReview([row(InventoryRules.reviewPending)])
+              .alignedRatio,
+          isNull);
+      final half = InventoryRules.tallyReview([
+        row(InventoryRules.reviewAligned),
+        row(InventoryRules.reviewChanged),
+      ]).alignedRatio;
+      expect(half, 0.5);
+    });
+  });
 }

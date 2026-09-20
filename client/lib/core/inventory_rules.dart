@@ -318,7 +318,6 @@ class InventoryRules {
     return n;
   }
 
-  /// 把任意输入揉成 num?（SQLite 的 REAL 有时回 int，有时回 String，别硬转）。
   /// 把任意输入揉成 double?（SQLite 的 REAL 有时回 int，有时回 String，别硬转）。
   ///
   /// 名字叫 asNum 不叫 num：`num` 是 Dart 的类型名，用它当方法名会把类里的
@@ -327,5 +326,143 @@ class InventoryRules {
     if (v == null) return null;
     if (v is num) return v.toDouble();
     return double.tryParse(v.toString());
+  }
+
+  // ============================================================
+  // 复核清单（抽盘用）
+  // ============================================================
+
+  /// 复核清单的条码集合：**前两遍（初盘 vs 复盘）对不上**的那些商品。
+  ///
+  /// 🔴 为什么抽盘的差异表要用它，而不是"抽盘 − 复盘"：
+  ///    抽盘是"改完复核"，员工把数量改成跟复盘一致之后，`抽盘 − 复盘` 就成了 0 ——
+  ///    那一行会**直接从差异表里消失**。可主管最终核对要看的恰恰是
+  ///    "**前两遍就对不上的那批商品**"，改对了不等于该商品就没有疑问。
+  ///    用"抽盘 − 复盘"当行集，等于"越认真复核、表越短"，最后只剩没改完的，
+  ///    核对台账反而丢了。
+  ///
+  /// 这批集合和抽盘的**准入集合**是同一个东西（见 [InvPhase.requiresDiffSetOnly]），
+  /// 所以"只能扫这些"和"表上显示这些"天然自洽。
+  ///
+  /// 三个方向都要算，缺一个就漏商品：
+  ///   · 两遍都有、数量不同  → 数量对不上
+  ///   · 初盘有、复盘没有    → 复盘漏盘
+  ///   · 复盘有、初盘没有    → 复盘新扫出来的（没有参照，一样是疑问项）
+  static Set<String> reviewBarcodesOf(
+    Map<String, double> firstQty,
+    Map<String, double> secondQty,
+  ) {
+    final out = <String>{};
+    for (final e in firstQty.entries) {
+      final q2 = secondQty[e.key];
+      if (q2 == null || q2 != e.value) out.add(e.key);
+    }
+    for (final c in secondQty.keys) {
+      if (!firstQty.containsKey(c)) out.add(c);
+    }
+    return out;
+  }
+
+  /// 复核结论：本遍（抽盘）扫出来的数跟上一遍（复盘）比是什么结果。
+  ///
+  /// 四种状态，**别压缩成"对上/没对上"两种** —— "上一遍压根没盘过"和
+  /// "盘过但数不一样"的责任完全不同（前者是复盘漏了，后者才可能是抽盘又改）。
+  static const String reviewAligned = 'aligned'; // 本遍 = 上一遍
+  static const String reviewChanged = 'changed'; // 两边都有数，但不一致
+  static const String reviewFilled = 'filled'; // 上一遍没有、本遍补上了
+  static const String reviewPending = 'pending'; // 本遍还没扫
+
+  static String reviewVerdict({double? curQty, double? prevQty}) {
+    if (curQty == null) return reviewPending;
+    if (prevQty == null) return reviewFilled;
+    return curQty == prevQty ? reviewAligned : reviewChanged;
+  }
+
+  static String reviewVerdictLabel(String v) {
+    switch (v) {
+      case reviewAligned:
+        return '已对上';
+      case reviewChanged:
+        return '复核后又改';
+      case reviewFilled:
+        return '补盘（上一遍没这数）';
+      case reviewPending:
+        return '未复核';
+      default:
+        return v;
+    }
+  }
+
+  /// 复核清单的计数（界面统计条 / 导出抬头 / 测试判据共用一份，
+  /// 免得三处各算一套、数字对不上）。
+  static ReviewTally tallyReview(Iterable<Map<String, dynamic>> rows) {
+    var total = 0, aligned = 0, changed = 0, filled = 0, pending = 0, missed = 0;
+    for (final r in rows) {
+      total++;
+      switch ((r['review'] ?? '').toString()) {
+        case reviewAligned:
+          aligned++;
+          break;
+        case reviewChanged:
+          changed++;
+          break;
+        case reviewFilled:
+          filled++;
+          break;
+        default:
+          pending++;
+      }
+      // 前两遍的漏盘（初盘盘过、复盘没扫到）—— 复核清单里最该看的一类
+      if (r['base_missing'] == true) missed++;
+    }
+    return ReviewTally(
+      total: total,
+      aligned: aligned,
+      changed: changed,
+      filled: filled,
+      pending: pending,
+      baseMissing: missed,
+    );
+  }
+}
+
+/// 复核清单的计数结果。
+class ReviewTally {
+  const ReviewTally({
+    required this.total,
+    required this.aligned,
+    required this.changed,
+    required this.filled,
+    required this.pending,
+    required this.baseMissing,
+  });
+
+  /// 复核清单条数（= 前两遍对不上的商品数）。
+  final int total;
+
+  /// 复核结果与复盘一致。
+  final int aligned;
+
+  /// 两边都有数、但不一致。
+  final int changed;
+
+  /// 复盘没盘过、抽盘补上了。
+  final int filled;
+
+  /// 还没复核（抽盘这一遍没扫到）。
+  final int pending;
+
+  /// 前两遍的漏盘：初盘盘过、复盘没扫到。
+  final int baseMissing;
+
+  /// 已复核 = 三种"有结论"的合计。
+  int get reviewed => aligned + changed + filled;
+
+  /// 复核结果与复盘一致的比例（未复核的**不计入分母**；分母为 0 时返回 null，
+  /// **不要返回 0** —— "没有可复核的"和"复核了全不一致"是两件事）。
+  double? get alignedRatio {
+    final d = reviewed;
+    if (d == 0) return null;
+    return aligned / d;
   }
 }

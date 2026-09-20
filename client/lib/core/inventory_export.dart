@@ -1,4 +1,5 @@
 import 'csv_fmt.dart';
+import 'inventory_rules.dart';
 import 'qty_fmt.dart';
 
 /// 盘点导出的排版层（**纯函数**，一行 IO 都没有）。
@@ -187,6 +188,138 @@ class InventoryExport {
     return d * p;
   }
 
+  // ============================================================
+  // 抽盘复核清单（第三遍专用）
+  // ============================================================
+  //
+  // 🔴 抽盘的台账**不是**"抽盘 − 复盘"：复核改对之后那个差就是 0，
+  //    行会从表里消失，而主管最终核对要看的正是"前两遍就对不上的那批"。
+  //    所以这里导出的是复核清单：行集由**初盘 vs 复盘**决定，抽盘数只作为
+  //    "复核结果"的一列。见 InventoryRules.reviewBarcodesOf。
+
+  /// 复核清单的列。三遍数量并排，是给主管做最终核对用的。
+  static const List<String> reviewHeaders = <String>[
+    '条码',
+    '商品名称',
+    '规格',
+    '单位',
+    '初盘数量',
+    '复盘数量',
+    '抽盘数量',
+    '前两遍差异',
+    '复核结论',
+    '前两遍差异金额',
+    '账面数量',
+    '备注',
+  ];
+
+  /// 复核清单 → CSV（带 BOM）。
+  static String toReviewCsv(List<Map<String, dynamic>> rows) {
+    final b = StringBuffer('\uFEFF');
+    b.writeln(reviewHeaders.map(csvEsc).join(','));
+    for (final r in rows) {
+      final verdict = (r['review'] ?? '').toString();
+      final a = baseAmtOf(r);
+      b.writeln(<String>[
+        csvEsc(barcodeCsvCell(r['barcode'])),
+        csvEsc(nameOf(r)),
+        csvEsc(r['spec']),
+        csvEsc(r['unit']),
+        r['base_qty'] == null ? '' : csvEsc(fmtQty(r['base_qty'])),
+        r['prev_qty'] == null ? '' : csvEsc(fmtQty(r['prev_qty'])),
+        r['review_missing'] == true ? '' : csvEsc(fmtQty(r['qty'])),
+        r['base_diff'] == null ? '' : csvEsc(fmtQty(r['base_diff'])),
+        csvEsc(voteLabel(verdict)),
+        a == null ? '' : csvEsc(a.toStringAsFixed(2)),
+        r['account_qty'] == null ? '' : csvEsc(fmtQty(r['account_qty'])),
+        csvEsc(reviewNote(r)),
+      ].join(','));
+    }
+    return b.toString();
+  }
+
+  /// 复核清单 → 文本文档（主管在群里就能看）。
+  static String toReviewDoc(
+    List<Map<String, dynamic>> rows, {
+    required String zoneName,
+    required int mistakes,
+  }) {
+    final t = InventoryRules.tallyReview(rows);
+    var baseLoss = 0.0; // 前两遍的差异金额（亏）
+    var baseGain = 0.0;
+    for (final r in rows) {
+      final a = baseAmtOf(r);
+      if (a == null) continue;
+      if (a < 0) {
+        baseLoss += -a;
+      } else {
+        baseGain += a;
+      }
+    }
+
+    final b = StringBuffer()
+      ..writeln('抽盘复核清单')
+      ..writeln('盘点位：$zoneName')
+      ..writeln('导出时间：${_now()}')
+      ..writeln('─' * 30)
+      ..writeln('复核项（前两遍对不上的商品）：${t.total}')
+      ..writeln('  已复核：${t.reviewed}　'
+          '其中【已对上】${t.aligned}、【复核后又改】${t.changed}、【补盘】${t.filled}')
+      ..writeln('  未复核：${t.pending}')
+      ..writeln('前两遍漏盘（初盘盘过、复盘没扫到）：${t.baseMissing}')
+      ..writeln('前两遍差异金额：亏 ${baseLoss.toStringAsFixed(2)}　'
+          '盈 ${baseGain.toStringAsFixed(2)}')
+      ..writeln('盘点失误笔数：$mistakes')
+      ..writeln('─' * 30);
+
+    var i = 0;
+    for (final r in rows) {
+      i++;
+      final a1 = r['base_qty'];
+      final a2 = r['prev_qty'];
+      final a3 = r['review_missing'] == true ? null : r['qty'];
+      final note = reviewNote(r);
+      b.writeln('$i. ${nameOf(r)}　${r['barcode']}${note.isEmpty ? '' : '　【$note】'}');
+      b.writeln('   初盘 ${a1 == null ? '（没盘过）' : fmtQty(a1)}'
+          ' → 复盘 ${a2 == null ? '（没盘过）' : fmtQty(a2)}'
+          ' → 抽盘 ${a3 == null ? '（未复核）' : fmtQty(a3)}');
+      b.writeln('   前两遍差异 ${r['base_diff'] == null ? '—' : fmtQty(r['base_diff'])}'
+          '　复核结论：${voteLabel((r['review'] ?? '').toString())}');
+      final a = baseAmtOf(r);
+      if (a != null) b.writeln('   前两遍差异金额：${a.toStringAsFixed(2)}');
+    }
+    return b.toString();
+  }
+
+  /// 前两遍（初盘 vs 复盘）的差异金额。
+  ///
+  /// 🔴 复核清单里这个才是"要核对的账"：`amtOf` 用的是"抽盘 − 复盘"，
+  ///    复核改对之后它恒为 0 —— 拿它当金额列，主管看到的会是一堆 0。
+  static double? baseAmtOf(Map<String, dynamic> r) {
+    final d = _d(r['base_diff']);
+    final p = _d(r['unit_price']);
+    if (d == null || p == null) return null;
+    return d * p;
+  }
+
+  /// 复核结论的中文（界面与导出共用一份，免得两处说法不一致）。
+  static String voteLabel(String verdict) =>
+      InventoryRules.reviewVerdictLabel(verdict);
+
+  /// 复核清单的备注列：把"最该被看见的那件事"挑出来，其余留空。
+  ///
+  /// 顺序即优先级：未复核 > 复盘漏盘 > 复核后又改。
+  /// （未复核排第一，是因为它意味着这一项**还没人看过** —— 比"看过了但结果不理想"
+  ///   更需要立刻处理。）
+  static String reviewNote(Map<String, dynamic> r) {
+    if (r['review_missing'] == true) return '未复核';
+    if (r['base_missing'] == true) return '复盘漏盘';
+    if ((r['review'] ?? '').toString() == InventoryRules.reviewChanged) {
+      return '复核后又改';
+    }
+    return '';
+  }
+
   /// 表格里显示的商品名。商档里没有的条码用**预留值**而不是空字符串 ——
   /// 空名字在表格里就是一片空白，看着像"这行数据坏了"。
   static String nameOf(Map<String, dynamic> r) {
@@ -207,6 +340,16 @@ class InventoryExport {
       '盘点差异_${_safeZone(zoneCode)}_$phase.csv';
   static String diffDocName(String zoneCode, int phase) =>
       '盘点差异_${_safeZone(zoneCode)}_$phase.txt';
+
+  /// 抽盘复核清单的文件名。
+  ///
+  /// ⚠️ **不要**沿用 `盘点差异_..._3`：复核清单和"差异表"是两种台账，
+  ///    同名文件混在一个目录里，主管分不清手上那份是哪一份
+  ///    （而且它恰好也在第三遍产生，靠 `_3` 根本区分不出来）。
+  static String reviewName(String zoneCode) =>
+      '抽盘复核_${_safeZone(zoneCode)}.csv';
+  static String reviewDocName(String zoneCode) =>
+      '抽盘复核_${_safeZone(zoneCode)}.txt';
 
   /// 与 `InventoryRepo._sanitizeZone` 同一个口径：只留 `[A-Z0-9_]`。
   static String _safeZone(String zoneCode) {

@@ -741,4 +741,164 @@ void main() {
       expect((await repo.scan(no, '6901')).verdict, ScanVerdict.sheetLocked);
     });
   });
+
+  // ============================================================
+  // 抽盘的复核清单（第三遍）
+  //
+  // 🔴 这里钉的是**行集的来源**：必须是"初盘 vs 复盘"对不上的那批，
+  //    而不是"抽盘 − 复盘"。后者在主管把数量改对之后会变成 0，
+  //    那一行就当场从表上消失 —— 可"改对了"不等于"这个商品没疑问"。
+  // ============================================================
+  group('抽盘复核清单', () {
+    /// 初盘 [first] / 复盘 [second] 各扫一遍，返回 repo。
+    Future<InventoryRepo> seedTwoPasses(
+      Map<String, double> first,
+      Map<String, double> second,
+    ) async {
+      final repo = await seedZone(
+          barcodes: <String>{...first.keys, ...second.keys}.toList());
+      for (final e in first.entries) {
+        final s = await repo.openSheet(zoneCode: 'Z01', phase: 1);
+        await repo.scan(s['sheet_no'] as String, e.key, qty: e.value);
+      }
+      for (final e in second.entries) {
+        final s = await repo.openSheet(zoneCode: 'Z01', phase: 2);
+        await repo.scan(s['sheet_no'] as String, e.key, qty: e.value);
+      }
+      return repo;
+    }
+
+    List<String> codesOf(List<Map<String, dynamic>> rows) =>
+        rows.map((r) => r['barcode'] as String).toList()..sort();
+
+    test('清单 = 前两遍对不上的那批（对得上的不进）', () async {
+      final repo = await seedTwoPasses(
+        {'6901': 10, '6902': 5},
+        {'6901': 10, '6902': 7},
+      );
+      final rows = await repo.diffRows('Z01', InvPhase.third);
+      expect(codesOf(rows), ['6902']);
+      final r = rows.single;
+      expect(r['base_qty'], 5.0, reason: '初盘数量');
+      expect(r['prev_qty'], 7.0, reason: '复盘数量');
+      expect(r['base_diff'], 2.0, reason: '前两遍的差异（复盘 − 初盘）');
+      expect(r['review'], InventoryRules.reviewPending, reason: '抽盘还没扫');
+      expect((r['qty'] as num).toDouble(), 0.0);
+    });
+
+    // 🔴 这条是这次修复的核心反向用例：
+    //    主管把抽盘数量改成跟复盘一致（= 复核通过）之后，
+    //    那一行**必须还在清单里**，review 从 pending 变 aligned。
+    //    旧口径（行集 = 抽盘 − 复盘）在这条上会得到空表 —— 越认真复核表越短。
+    test('复核改对之后那一行仍在清单里，只是结论变成"已复核一致"', () async {
+      final repo = await seedTwoPasses(
+        {'6902': 5},
+        {'6902': 7},
+      );
+      final s3 = await repo.openSheet(zoneCode: 'Z01', phase: 3);
+      await repo.scan(s3['sheet_no'] as String, '6902', qty: 7);
+
+      final rows = await repo.diffRows('Z01', InvPhase.third);
+      expect(codesOf(rows), ['6902'],
+          reason: '复核改对后行从清单里消失了 —— 主管最终核对时就没有台账了');
+      final r = rows.single;
+      expect(r['review'], InventoryRules.reviewAligned);
+      expect(r['diff_qty'], 0.0, reason: '复核结果 = 抽盘 − 复盘 = 0（改对了）');
+      expect(r['base_diff'], 2.0, reason: '前两遍的差异不受复核影响，仍是 2');
+
+      final t = InventoryRules.tallyReview(rows);
+      expect(t.total, 1);
+      expect(t.aligned, 1);
+      expect(t.pending, 0);
+    });
+
+    test('复盘漏盘（初盘盘过、复盘没扫）也在清单里', () async {
+      final repo = await seedTwoPasses(
+        {'6901': 10, '6902': 5},
+        {'6901': 10},
+      );
+      final rows = await repo.diffRows('Z01', InvPhase.third);
+      expect(codesOf(rows), ['6902'],
+          reason: '"少一行"在明细里看不出来，最该复核的一类不许漏');
+      expect(rows.single['base_missing'], isTrue);
+      expect(rows.single['prev_qty'], isNull);
+      expect(rows.single['base_qty'], 5.0);
+    });
+
+    test('复盘新扫出来（初盘没有）也在清单里，而且**扫得进去**', () async {
+      final repo = await seedTwoPasses(
+        {'6901': 10},
+        {'6901': 10, '6902': 3},
+      );
+      final rows = await repo.diffRows('Z01', InvPhase.third);
+      expect(codesOf(rows), ['6902']);
+
+      // 准入集合必须和清单**同一个集合**：表上列着、枪上拒收，
+      // 员工就只能干瞪眼，最后靠"随手改个数量"绕过去。
+      final admit = await repo.reviewBarcodes('Z01');
+      expect(admit, {'6902'});
+      final s3 = await repo.openSheet(zoneCode: 'Z01', phase: 3);
+      final r = await repo.scan(s3['sheet_no'] as String, '6902', qty: 3);
+      expect(r.accepted, isTrue,
+          reason: '复核清单上有的商品，抽盘时却被当成"不在差异集"拒收');
+    });
+
+    test('两遍全对得上 → 清单为空（反向）', () async {
+      final repo = await seedTwoPasses(
+        {'6901': 10, '6902': 5},
+        {'6901': 10, '6902': 5},
+      );
+      expect(await repo.diffRows('Z01', InvPhase.third), isEmpty);
+      expect(await repo.reviewBarcodes('Z01'), isEmpty);
+      final rp = await repo.reviewProgress('Z01');
+      expect(rp['total'], 0);
+    });
+
+    test('抽盘扫了清单外的商品 → 拒收（准入仍然成立）', () async {
+      final repo = await seedTwoPasses(
+        {'6901': 10, '6902': 5},
+        {'6901': 10, '6902': 7},
+      );
+      final s3 = await repo.openSheet(zoneCode: 'Z01', phase: 3);
+      // 6901 前两遍对得上，不属于复核清单
+      final r = await repo.scan(s3['sheet_no'] as String, '6901', qty: 10);
+      expect(r.verdict, ScanVerdict.notInDiffSet);
+    });
+
+    test('阶段条：抽盘报的是"待复核数"，不是"抽盘 − 复盘"', () async {
+      final repo = await seedTwoPasses(
+        {'6901': 10, '6902': 5, '6903': 2},
+        {'6901': 10, '6902': 7, '6903': 4},
+      );
+      var p = (await repo.phaseProgress('Z01'))
+          .firstWhere((x) => (x['phase'] as num).toInt() == 3);
+      expect(p['diff'], 2, reason: '复核清单 2 种');
+      expect(p['pending_review'], 2);
+
+      // 把两条都复核成与复盘一致
+      final s3 = await repo.openSheet(zoneCode: 'Z01', phase: 3);
+      final no = s3['sheet_no'] as String;
+      await repo.scan(no, '6902', qty: 7);
+      await repo.scan(no, '6903', qty: 4);
+
+      p = (await repo.phaseProgress('Z01'))
+          .firstWhere((x) => (x['phase'] as num).toInt() == 3);
+      expect(p['pending_review'], 0, reason: '都复核过了');
+      expect(p['diff'], 2,
+          reason: '这里掉到 0 的话，阶段条会显示"没问题"，'
+              '而实际上是"刚认真复核完一遍" —— 两个意思正好相反');
+    });
+
+    test('清单外的条码不因为"反正扫不进去"被静默丢掉', () async {
+      // 拒收时库里不能留下这一行（否则汇总会多算品种）。
+      final repo = await seedTwoPasses(
+        {'6901': 10, '6902': 5},
+        {'6901': 10, '6902': 7},
+      );
+      final s3 = await repo.openSheet(zoneCode: 'Z01', phase: 3);
+      final no = s3['sheet_no'] as String;
+      await repo.scan(no, '6901', qty: 10);
+      expect(await repo.listRows(no), isEmpty);
+    });
+  });
 }

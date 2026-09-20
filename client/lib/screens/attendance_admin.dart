@@ -733,7 +733,7 @@ class _AttendanceAdminPageState extends State<AttendanceAdminPage> {
               const SizedBox(height: 10),
               Text(
                 kind == '补卡'
-                    ? '通过后服务端会**自动补写**当天那张打卡记录，那个人立刻从「缺卡」变正常。'
+                    ? '通过后服务端会自动补写当天那张打卡记录，那个人立刻从「缺卡」变正常。'
                     : '通过后当天按免考勤计入，不再算缺勤。',
                 style: TextStyle(fontSize: 11.5, height: 1.6, color: sem.muted),
               ),

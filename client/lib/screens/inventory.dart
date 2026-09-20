@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../api.dart';
 import '../core/inventory_repo.dart';
 import '../core/stock_master_repo.dart';
 import '../core/theme.dart';
+import 'inventory_approval.dart';
 import 'inventory_collect.dart';
+import 'inventory_grant.dart';
 
 /// 盘点：入口页（盘点位列表）。
 ///
@@ -31,10 +34,43 @@ class _InventoryPageState extends State<InventoryPage> {
   List<Map<String, dynamic>> _zones = const [];
   int _masterCount = 0;
 
+  /// 待我审批的条数。**纯锦上添花**：拿不到就是 0（不显示数字），
+  /// 绝不因为它连不上把这一页也拖成错误页 —— 盘点位列表是本地的，
+  /// 不能在没网的地方打不开。
+  int _pendingApprovals = 0;
+
   @override
   void initState() {
     super.initState();
     _reload();
+    _loadApprovalBadge();
+  }
+
+  Future<void> _loadApprovalBadge() async {
+    try {
+      final api = ImApi();
+      if (!api.hasToken) return;
+      final d = await api.pendingApprovals();
+      if (!mounted) return;
+      final items = d['items'];
+      setState(() {
+        _pendingApprovals = items is List ? items.length : 0;
+      });
+    } catch (_) {
+      // 静默：角标不是这一页的功能，断了就断了。
+    }
+  }
+
+  /// 审批中心（M2/P2）。回来顺手刷一下角标 —— 批完还挂着旧数字最像"没生效"。
+  Future<void> _openApprovals({int tab = 0}) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => InventoryApprovalScreen(initialTab: tab),
+      ),
+    );
+    if (!mounted) return;
+    await _loadApprovalBadge();
   }
 
   Future<void> _reload() async {
@@ -151,6 +187,20 @@ class _InventoryPageState extends State<InventoryPage> {
     }
   }
 
+  /// 抽盘授权（M2/P2）：谁能开这个点位的抽盘单。
+  /// 需要联网 —— 拿不到就是拿不到，不在这里做任何本地兜底判断。
+  Future<void> _openGrant(String zoneCode, String zoneName) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            InventoryGrantScreen(zoneCode: zoneCode, zoneName: zoneName),
+      ),
+    );
+    if (!mounted) return;
+    await _reload();
+  }
+
   /// 删除盘点位：不可逆，且会连带删掉该点位的库位、绑定、单据与明细。
   /// 二次确认里把**要删掉多少东西**说清楚 —— 只说"确定删除吗"没人看得懂代价。
   Future<void> _deleteZone(Map<String, dynamic> z) async {
@@ -198,7 +248,7 @@ class _InventoryPageState extends State<InventoryPage> {
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: const Text(
           '会删掉所有点位的盘点单与扫码明细。\n'
-          '盘点位、货架位、商品绑定这些**档案**会保留。\n\n'
+          '盘点位、货架位、商品绑定这些档案会保留。\n\n'
           '（只清本机数据，已经同步到服务端的不会被删。）',
           style: TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
@@ -283,6 +333,17 @@ class _InventoryPageState extends State<InventoryPage> {
         title: const Text('盘点',
             style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
+          IconButton(
+            tooltip: '审批中心',
+            icon: Badge(
+              isLabelVisible: _pendingApprovals > 0,
+              label: Text('$_pendingApprovals'),
+              backgroundColor: AppColors.danger,
+              child: const Icon(Icons.approval_outlined,
+                  color: AppColors.textSub),
+            ),
+            onPressed: () => _openApprovals(),
+          ),
           IconButton(
             tooltip: '同步商品档案',
             icon: const Icon(Icons.sync, color: AppColors.textSub),
@@ -433,11 +494,16 @@ class _InventoryPageState extends State<InventoryPage> {
                       color: AppColors.textWeak, size: 20),
                   onSelected: (v) {
                     if (v == 'lock') _toggleLock(z);
+                    if (v == 'grant') _openGrant(code, (z['zone_name'] ?? code).toString());
                     if (v == 'delete') _deleteZone(z);
                   },
                   itemBuilder: (_) => [
                     PopupMenuItem<String>(
                         value: 'lock', child: Text(locked ? '解除锁定' : '锁定盘点位')),
+                    // 抽盘授权放在这里，是给**管理干部**用的入口：
+                    // 他平时不进抽盘页，但需要随时开通/收回抽盘权。
+                    const PopupMenuItem<String>(
+                        value: 'grant', child: Text('抽盘授权')),
                     const PopupMenuItem<String>(
                         value: 'delete', child: Text('删除盘点位')),
                   ],

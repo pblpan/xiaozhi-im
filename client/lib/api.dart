@@ -13,7 +13,18 @@ class ApiException implements Exception {
   /// HTTP 状态码；null 表示底层网络/连接错误（SocketException / TimeoutException）
   final int? status;
   final String message;
-  const ApiException(this.message, {this.status});
+
+  /// 服务端业务码（回包 `{error, code}` 里的 `code`），如盘点上传的
+  /// `already_uploaded` / `not_in_diff_set` / `zone_not_found`。
+  ///
+  /// 🔴 为什么不靠状态码：三个业务分支全是 409/400，只认状态码就只能去
+  ///    匹配英文/中文文案 —— 文案一改，判定静默失效，表现是"重传变成了报错"。
+  final String? code;
+
+  /// 回包原文（仅错误分支可能有）。用于取 `barcodes` 这类附加清单。
+  final Map<String, dynamic>? data;
+
+  const ApiException(this.message, {this.status, this.code, this.data});
 
   bool get isUnauthorized => status == 401;
   bool get isForbidden => status == 403;
@@ -78,13 +89,21 @@ class ImApi {
       }
     }
     String msg;
+    String? code;
+    Map<String, dynamic>? data;
     try {
       final body = jsonDecode(r.body);
-      msg = body is Map ? (body['error']?.toString() ?? '请求失败') : '请求失败';
+      if (body is Map) {
+        msg = body['error']?.toString() ?? '请求失败';
+        code = body['code']?.toString();
+        data = Map<String, dynamic>.from(body);
+      } else {
+        msg = '请求失败';
+      }
     } catch (_) {
       msg = '请求失败 (HTTP ${r.statusCode})';
     }
-    throw ApiException(msg, status: r.statusCode);
+    throw ApiException(msg, status: r.statusCode, code: code, data: data);
   }
 
   Future<dynamic> _post(String p, Map<String, dynamic> b) async =>
@@ -541,6 +560,107 @@ class ImApi {
     final s = d is Map ? d['session'] : null;
     return s is Map ? Map<String, dynamic>.from(s) : null;
   }
+
+  // ---- 盘点：抽盘授权（M2/P2）----
+  //
+  // 🔴 这几条只用来**提前告诉用户**（进抽盘前问一句），
+  //    权限的最终裁决在服务端 —— 客户端不做任何"猜他有没有权限"的判断：
+  //    两边各判一套，必然在某个边界（刚授权/刚解除）上给出不同答案，
+  //    表现出来就是"界面说有权、一上传被拒"，最难查的那种。
+  //    所以这里拿不到结果时（断网）要**明说拿不到**，不能默认放行也不能默认拦。
+
+  /// 某点位的抽盘授权现状（含"我自己有没有" `mine`）。
+  Future<Map<String, dynamic>> stocktakeGrant(String zoneCode) async =>
+      await _get('/stocktake/zone/${Uri.encodeComponent(zoneCode)}/grant');
+
+  /// 我能在哪些点位抽盘。管理员返回 `{all: true, zone_codes: [...]}`。
+  Future<Map<String, dynamic>> myStocktakeGrants() async =>
+      await _get('/stocktake/grants/mine');
+
+  /// 授权某人抽盘（需管理员，或该点位当前持权的人）。
+  Future<Map<String, dynamic>> grantStocktake(String zoneCode, int userId) async =>
+      await _post('/stocktake/zone/${Uri.encodeComponent(zoneCode)}/grant',
+          {'user_id': userId});
+
+  /// 解除抽盘授权（不是删记录，服务端会置 `revoked_at` 留痕）。
+  Future<Map<String, dynamic>> revokeStocktake(String zoneCode, int userId) async =>
+      await _delete(
+          '/stocktake/zone/${Uri.encodeComponent(zoneCode)}/grant?user_id=$userId');
+
+  // ---- 盘点：单据回传（P1 尾巴）----
+  //
+  // 采集全程离线，只有这一步联网。**服务端上传即归档**（`status=2`），
+  // 归档之后默认不让覆盖 —— 允许默认覆盖等于"盘点结果可以事后修饰"。
+
+  /// 回传一张盘点单的明细。
+  ///
+  /// [rows] 每行 `{barcode, qty, account_qty?, loc_code?, scanned_at?}`；
+  /// [zone] 要带上（离线期间新建的点位服务端没有，缺了会 404 `zone_not_found`）。
+  ///
+  /// 🔴 **不上传 `force`。** 覆盖已归档的单是个需要留痕的例外动作，
+  ///    不该藏在手机上一个顺手可点的按钮里 —— 那是给"事后改数"开口子。
+  ///
+  /// 失败时抛的 [ApiException] 必须看 [ApiException.code]：
+  ///   - `already_uploaded`(409)：服务端**已经有**这张单，本地标记已上传即可
+  ///   - `not_in_diff_set`(400)：抽盘扫了不在复核清单里的商品，
+  ///     `data['barcodes']` 里是具体条码
+  ///   - `zone_not_found`(404)：点位没带上，或者服务端确实没有这个点位
+  Future<Map<String, dynamic>> uploadStocktakeSheet({
+    required String sheetNo,
+    required int phase,
+    required List<Map<String, dynamic>> rows,
+    Map<String, dynamic>? zone,
+    List<Map<String, dynamic>>? bindings,
+  }) async =>
+      await _post('/stocktake/sheet/${Uri.encodeComponent(sheetNo)}/upload',
+          <String, dynamic>{
+            'phase': phase,
+            'rows': rows,
+            if (zone != null) 'zone': zone,
+            if (bindings != null && bindings.isNotEmpty) 'bindings': bindings,
+          });
+
+  // ---- 审批中心（M2/P2）----
+
+  /// 提交审批。盘点单走 `kind: 'stocktake'`，`ref` 是盘点单号。
+  Future<Map<String, dynamic>> submitApproval({
+    required String kind,
+    String? ref,
+    String? title,
+    Object? payload,
+  }) async =>
+      await _post('/approval/submit', <String, dynamic>{
+        'kind': kind,
+        if (ref != null) 'ref': ref,
+        if (title != null) 'title': title,
+        if (payload != null) 'payload': payload,
+      });
+
+  /// 我提交的审批（status: pending / approved / rejected，不传=全部）。
+  Future<List<Map<String, dynamic>>> myApprovals({String? status}) async {
+    final d = await _get(
+        '/approval/mine${status == null ? '' : '?status=$status'}');
+    final items = d is Map ? d['items'] : null;
+    return items is List
+        ? items.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+        : const <Map<String, dynamic>>[];
+  }
+
+  /// 待审列表。`can_approve=false` 表示当前账号只能看、不能批
+  /// （界面据此**不显示**按钮，而不是显示了再让服务端 403）。
+  Future<Map<String, dynamic>> pendingApprovals() async =>
+      await _get('/approval/pending');
+
+  Future<Map<String, dynamic>> approveApproval(int id) async =>
+      await _post('/approval/$id/approve', const {});
+
+  /// 驳回。`reason` 必填（服务端也会拦，这里先拦一次省一个来回）。
+  Future<Map<String, dynamic>> rejectApproval(int id, String reason) async =>
+      await _post('/approval/$id/reject', {'reason': reason});
+
+  /// 撤回（提交人自己，且只在待审时）。
+  Future<Map<String, dynamic>> withdrawApproval(int id) async =>
+      await _post('/approval/$id/withdraw', const {});
 
   // ---- 文件 ----
   /// 上传文件。语音等临时录音文件没有规范扩展名时，用 filename 指定（如 voice.m4a）。

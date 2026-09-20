@@ -343,7 +343,12 @@ void main() {
 
     await waitSnackClear(tester);
     await tester.tap(find.byKey(const Key('inv-submit')));
-    await settleAnim(tester);
+    // 🔴 提交复盘时，页面会**先异步查一次"下一步要复核几项"**（决定弹窗里的
+    //    数字、以及要不要问"现在开始抽盘"），弹窗因此晚一拍才出现。
+    //    这里必须等**弹窗真的出来**，不能用固定帧数的 settleAnim 去赌 ——
+    //    赌输了报的是"找不到『提交』"，看着像按钮没了，其实是查库还没回来。
+    await pumpUntil(tester, () => find.text('提交').evaluate().isNotEmpty,
+        why: '提交确认弹窗没出来（等的是那一次异步查库）');
     await tester.tap(find.text('提交'));
     await pumpUntil(
       tester,
@@ -402,9 +407,21 @@ void main() {
       why: '提交之后按钮没变成「撤销提交」',
     );
 
+    // 提交之后主按钮变成「上传到服务端」，右侧留着「撤销提交」。
+    // 🔴 撤销提交**从主按钮位挪到了图标**：已提交之后最该点的是"上传"，
+    //    两者并排摆着在现场十次里有三次会点到撤销 —— 而撤销会让单据回到
+    //    可改、差异集重新定格，那不是手滑，是数据口径变了。
+    //    所以这里既钉"主按钮是上传"，也钉"撤销提交还在（没被藏掉）"。
+    expect(find.byKey(const Key('inv-upload')), findsOneWidget,
+        reason: '提交之后主按钮应当是「上传到服务端」');
+    final reopen =
+        tester.widget<IconButton>(find.byKey(const Key('inv-reopen')));
+    expect(reopen.tooltip, contains('撤销提交'),
+        reason: '撤销提交只是挪了位置，不能变成找不到的按钮');
+
     // 文案不能拼出"已已提交"（label 本身就带"已"）
-    expect(find.textContaining('已提交 · 撤销提交'), findsOneWidget);
     expect(find.textContaining('已已提交'), findsNothing);
+    expect(find.textContaining('已已上传'), findsNothing);
 
     // 提交后往往还会弹"现在开始复盘？"，先关掉再检查列表本身
     if (find.text('待会儿').evaluate().isNotEmpty) {
@@ -461,7 +478,9 @@ void main() {
     );
     await waitSnackClear(tester);
     await tester.tap(find.byKey(const Key('inv-submit')));
-    await settleAnim(tester);
+    // 同 ⑤：提交复盘前多了一次异步查库，弹窗晚一拍，等它真出来再点。
+    await pumpUntil(tester, () => find.text('提交').evaluate().isNotEmpty,
+        why: '提交确认弹窗没出来（等的是那一次异步查库）');
     await tester.tap(find.text('提交'));
     // 先等**状态真的变了**（提交成功会把按钮换成「撤销提交」），
     // 别拿提示语当提交成功的信号 —— SnackBar 是**排队**的，
@@ -544,5 +563,94 @@ void main() {
       () => qtyText('6901', '7').evaluate().isNotEmpty,
       why: '撤销提交后改的数量没生效',
     );
+  });
+
+  // 🔴 这条盯的是"抽盘复核"这个页面的**内容与行集**：
+  //    主管最终核对要看到"前两遍到底差在哪"，而不是"抽盘这一遍改没改"。
+  //    旧口径拿"抽盘 − 复盘"当行集，主管把数量改对之后那一行会**当场消失** ——
+  //    越认真复核、表越短，核对台账反而丢了。
+  testWidgets('⑨ 抽盘复核清单：三遍数量并排，复核改对后那一行不消失', (tester) async {
+    await pumpPage(tester);
+    // 初盘 1 件
+    await scan(tester, '6901');
+    await pumpUntil(
+      tester,
+      () => find.byKey(const Key('inv-row-6901')).evaluate().isNotEmpty,
+      why: '初盘那一行没出现',
+    );
+    await waitSnackClear(tester);
+    await tester.tap(find.byKey(const Key('inv-submit')));
+    await pumpUntil(tester, () => find.text('提交').evaluate().isNotEmpty,
+        why: '提交确认弹窗没出来');
+    await tester.tap(find.text('提交'));
+    await pumpUntil(
+      tester,
+      () => find.text('现在开始复盘？').evaluate().isNotEmpty,
+      why: '没问"现在开始复盘？"',
+    );
+    await tester.tap(find.text('开始复盘'));
+    await pumpUntil(
+      tester,
+      () => find.textContaining('复盘是这一片重新盘一遍').evaluate().isNotEmpty,
+      why: '复盘阶段没载进来',
+    );
+
+    // 复盘盘成 2 → 与初盘 1 对不上，构成"前两遍的差异"
+    await scan(tester, '6901');
+    await scan(tester, '6901');
+    await pumpUntil(
+      tester,
+      () => qtyText('6901', '2').evaluate().isNotEmpty,
+      why: '复盘没记成 2 件',
+    );
+    await waitSnackClear(tester);
+    await tester.tap(find.byKey(const Key('inv-submit')));
+    await pumpUntil(tester, () => find.text('提交').evaluate().isNotEmpty,
+        why: '提交确认弹窗没出来（等的是那一次异步查库）');
+    await tester.tap(find.text('提交'));
+    await pumpUntil(
+      tester,
+      () => find.text('现在开始抽盘？').evaluate().isNotEmpty,
+      why: '两遍对不上，却没问"现在开始抽盘？"',
+    );
+    await tester.tap(find.text('开始抽盘'));
+    await pumpUntil(
+      tester,
+      () => find.textContaining('共 1 种').evaluate().isNotEmpty,
+      why: '抽盘要复核的清单没载进来',
+    );
+
+    // 复核清单：三遍数量必须并排（少一遍主管没法判断是哪一遍错了）
+    await tester.tap(find.byKey(const Key('inv-diff-btn')));
+    await pumpUntil(tester, () => find.text('抽盘复核').evaluate().isNotEmpty,
+        why: '复核清单没打开');
+    expect(find.textContaining('初盘 1 → 复盘 2 → 抽盘（未复核）'), findsOneWidget,
+        reason: '"最终核对"要看的就是三遍并排；抽盘还没扫时该显示"未复核"，'
+            '不能填个 0 冒充"复核过、数是 0"');
+    expect(find.textContaining('前两遍差'), findsOneWidget,
+        reason: '清单得说清"这个商品为什么在这里"（前两遍的差异），'
+            '不然主管只会看到一串条码');
+    expect(find.text('未复核'), findsOneWidget);
+    // 关掉底部弹窗（点遮罩）
+    await tester.tapAt(const Offset(10, 10));
+    await settleAnim(tester);
+
+    // 复核：把抽盘改成跟复盘一致（2）—— 也就是"复核通过"
+    await scan(tester, '6901');
+    await pumpUntil(tester, () => qtyText('6901', '1').evaluate().isNotEmpty,
+        why: '抽盘那一枪没记上');
+    await scan(tester, '6901');
+    await pumpUntil(tester, () => qtyText('6901', '2').evaluate().isNotEmpty,
+        why: '抽盘没记成 2 件');
+
+    // 🔴 复核改对之后，那一行**必须还在清单里**
+    await tester.tap(find.byKey(const Key('inv-diff-btn')));
+    await pumpUntil(tester, () => find.text('抽盘复核').evaluate().isNotEmpty,
+        why: '复核清单没打开');
+    expect(find.textContaining('初盘 1 → 复盘 2 → 抽盘 2'), findsOneWidget,
+        reason: '复核改对后那一行从清单里消失了 —— 主管最终核对就没有台账了'
+            '（旧口径拿"抽盘 − 复盘"当行集，改对了 diff 归 0，整行被滤掉）');
+    expect(find.text('已对上'), findsOneWidget,
+        reason: '复核过了却没标"已对上"');
   });
 }
