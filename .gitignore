@@ -64,3 +64,5 @@ tools/keygen*
 
 # 授权凭证：每台机器各自生成，含机器码与授权码，属于运行时数据
 license.json
+_commit_*.txt
+_commitmsg*.txt
