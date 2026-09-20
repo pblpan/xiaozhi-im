@@ -413,7 +413,11 @@ router.post('/groups', (req, res) => {
       }
     }
     db.exec('COMMIT');
-    res.json({ id: g.lastInsertRowid });
+    // 🔴 群 id 和会话 id 是**两个号**（groups / conversations 两张表各自自增）。
+    // 以前只回 `id`（群 id），调用方十有八九会拿它去当会话 id 用 —— 空库上两者都从 1 开始，
+    // 于是"撞巧能过"，等库里有了历史数据号错开，就开始莫名其妙 403。
+    // 这里顺手把 conversationId 一起回出去，省掉一次回查，也少一个坑。
+    res.json({ id: g.lastInsertRowid, conversationId: convId });
   } catch (e) {
     db.exec('ROLLBACK');
     res.status(500).json({ error: e.message });

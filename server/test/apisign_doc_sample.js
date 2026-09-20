@@ -120,8 +120,19 @@ curl -sS -X POST "$BASE$PATH_URL" \\
   r = await api('POST', '/api/admin/groups', {
     headers: ADMIN, body: { name: '文档示例群', member_ids: [botId] },
   });
-  const convId = r.body?.id ?? r.body?.conversationId ?? r.body?.conversation_id;
-  ok('建群并把机器人拉进去', convId != null, JSON.stringify(r.body).slice(0, 200));
+  const groupId = r.body?.id;
+  //
+  // 🔴 群 id 和会话 id 是**两个号**：`id` 是群，`conversationId` 才是发消息要用的那个。
+  // 空库上两者都从 1 开始，拿错也能"撞巧通过"；等库里有了历史数据，
+  // 号一错开就变成一个很难查的 403。（这就是服务端顺手把 conversationId 一起回出来的原因。）
+  const convId = r.body?.conversationId;
+  ok('建群并把机器人拉进去（用的是**会话** id，不是群 id）',
+    convId != null && convId !== undefined, JSON.stringify({ groupId, convId }));
+  // 交叉验一次：群里查回来的 conversation_id 必须和接口回的一致
+  const gl = await api('GET', '/api/admin/groups?q=' + encodeURIComponent('文档示例群'), { headers: ADMIN });
+  const fromList = (gl.body?.items || []).find((g) => g.id === groupId)?.conversation_id;
+  ok('  与群列表里的 conversation_id 对得上（防"两个号搞混"）',
+    fromList === convId, JSON.stringify({ convId, fromList }));
 
   const convPath = '/api/open/conversations';
   r = await api('GET', convPath, {
