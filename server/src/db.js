@@ -793,6 +793,136 @@ CREATE TABLE IF NOT EXISTS api_nonce (
   at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_api_nonce_at ON api_nonce (at);
+
+-- ══════════════════════════════════════════════════════════════
+-- 培训中心（training）—— 课程 / 章节 / 课时 / 进度 / 考试
+-- ══════════════════════════════════════════════════════════════
+-- 几个一眼看不出、改之前必须知道的决定：
+--
+-- ① **考试机会在「开始」时就消耗，不是在「提交」时。**
+--    对齐真实培训的做法（PG：退出考试后将浪费本次考试机会）。
+--    如果只在提交时才算用掉，学员可以"点进去看一眼题目 → 退出 → 再点进去"，
+--    题目就漏光了，而且没有任何报错。所以 start 即落 sheet（submitted_at=0）。
+--
+-- ② **进度表主键是 (user_id, lesson_id)**，不是自增 id。
+--    弱网下客户端会重传，用 UPSERT 幂等；写成多行的话"看了多少"会来回跳。
+--
+-- ③ **课时文件引用 files 表的 id，不自己存路径。**
+--    路径是存储层的概念（files.path 已经是随机化文件名，防覆盖与路径穿越），
+--    再存一份就会有两套真相。播放接口按 file_id 查回路径。
+--
+-- ④ **题目选项的正确答案存在 option 上**，不在 question 上。
+--    多选题有多个正确项；把答案放 question 上就得再搞一个"多选答案数组"，
+--    两份数据会对不上。
+
+CREATE TABLE IF NOT EXISTS tr_course (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  intro TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT '',   -- 店长管理 / 生鲜陈列 / 加工管理 / 防损 / 前台收银 / 杂百运营…
+  cover_file_id INTEGER,               -- 封面图（可空）
+  required INTEGER NOT NULL DEFAULT 0, -- 必修：必修课不学完，年度培训进度就不满
+  published INTEGER NOT NULL DEFAULT 0,-- 未发布的课程学员侧看不见（草稿态）
+  created_by INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tr_course_pub ON tr_course (published);
+
+CREATE TABLE IF NOT EXISTS tr_chapter (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  course_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tr_chapter_course ON tr_chapter (course_id);
+
+CREATE TABLE IF NOT EXISTS tr_lesson (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chapter_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'video',  -- video / doc（doc 只记"看过"，不算时长）
+  file_id INTEGER,                     -- 关联 files.id；doc 也必须挂文件，否则学员点开是空的
+  duration_sec INTEGER NOT NULL DEFAULT 0,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tr_lesson_chapter ON tr_lesson (chapter_id);
+
+-- 「加入课程」。有这张表才有"公共课程 / 我的课程"的区分
+-- （不加的话，课程列表只能全量下发，学员没法把课收进自己的学习清单）。
+CREATE TABLE IF NOT EXISTS tr_enroll (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  course_id INTEGER NOT NULL,
+  joined_at INTEGER NOT NULL,
+  UNIQUE(user_id, course_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tr_enroll_user ON tr_enroll (user_id);
+
+CREATE TABLE IF NOT EXISTS tr_progress (
+  user_id INTEGER NOT NULL,
+  lesson_id INTEGER NOT NULL,
+  position_sec INTEGER NOT NULL DEFAULT 0,  -- 看到第几秒（下次接着播）
+  done INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, lesson_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tr_progress_user ON tr_progress (user_id);
+
+-- 章节考试：挂在**章节**上，不是课程上 —— 学完一章考一章，
+-- 才有"当前课程进度未达标，暂不能参加考试"这道门禁的落脚点。
+CREATE TABLE IF NOT EXISTS tr_exam (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chapter_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  pass_score INTEGER NOT NULL DEFAULT 60,
+  attempt_limit INTEGER NOT NULL DEFAULT 1, -- 1 = 一次机会（默认，也是真实培训的做法）
+  min_progress INTEGER NOT NULL DEFAULT 100,-- 门禁：本章进度低于此百分比不放行
+  question_count INTEGER NOT NULL DEFAULT 0,-- 抽题数量（0 = 全部）
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tr_exam_chapter ON tr_exam (chapter_id);
+
+CREATE TABLE IF NOT EXISTS tr_question (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  exam_id INTEGER NOT NULL,
+  type TEXT NOT NULL DEFAULT 'single', -- single / multi / judge
+  stem TEXT NOT NULL,
+  score INTEGER NOT NULL DEFAULT 10,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tr_question_exam ON tr_question (exam_id);
+
+CREATE TABLE IF NOT EXISTS tr_option (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  question_id INTEGER NOT NULL,
+  label TEXT NOT NULL,                -- A / B / C…
+  content TEXT NOT NULL,
+  correct INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tr_option_question ON tr_option (question_id);
+
+-- 答卷。started 但未 submitted 的 = **已消耗但没交**的机会（见上面 ①）。
+CREATE TABLE IF NOT EXISTS tr_sheet (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  exam_id INTEGER NOT NULL,
+  attempt_no INTEGER NOT NULL DEFAULT 1,
+  score INTEGER NOT NULL DEFAULT 0,
+  pass INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER NOT NULL,
+  submitted_at INTEGER NOT NULL DEFAULT 0  -- 0 = 还没交
+);
+-- 🔴 这个 UNIQUE 是"一次机会"的物理保证：靠应用层判断总会有并发缝隙，
+--    两次同时点开始就变成两张卷子。让数据库来拦，重复直接报错。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tr_sheet_once ON tr_sheet (user_id, exam_id, attempt_no);
+
+CREATE TABLE IF NOT EXISTS tr_answer (
+  sheet_id INTEGER NOT NULL,
+  question_id INTEGER NOT NULL,
+  chosen TEXT NOT NULL DEFAULT '',   -- 存选项 label 串（多选如 "AB"）
+  correct INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (sheet_id, question_id)
+);
 `);
 
 // 首次启动播种管理员账号，保证 /admin 开箱可用

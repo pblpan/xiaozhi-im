@@ -39,6 +39,7 @@ const ICONS = [
   'people', 'schedule', 'store', 'factory', 'restaurant', 'local_shipping',
   'attach_money', 'shopping_cart', 'warning', 'info', 'settings', 'dashboard',
   'campaign', 'task', 'engineering', 'handyman', 'receipt_long', 'barcode',
+  'school',
 ];
 
 /** 图表类型 */

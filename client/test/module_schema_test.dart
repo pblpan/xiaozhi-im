@@ -179,6 +179,9 @@ void main() {
       // `inventory` 才是盘点（盘点位 / 货架位 / 初盘-复盘-抽盘）。
       // 区别见 docs/盘点复刻与开放接口方案-v1.md §3.0。
       //
+      // 2026-09-20 补上 'training'（**培训中心**，M4）。名字必须叫「培训中心」——
+      // 是龙哥定的，不要改成"培训管理""学习中心"之类。
+      //
       // ⚠️ **以后每加一个内置应用，必须同时改三处**：① core/apps.dart 的
       // kBuiltinAppIds ② server/src/apps.js 的 BUILTIN_APPS ③ 下面这份期望值。
       // 漏任何一处，要么入口不显示，要么这条判据变红。**加完请立刻跑 flutter test。**
@@ -189,6 +192,7 @@ void main() {
         'att_admin',
         'stocktake',
         'inventory',
+        'training',
       });
     });
 

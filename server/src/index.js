@@ -74,6 +74,9 @@ app.use('/api/master', require('./routes/master'));
 // 通用审批中心：待审 / 通过 / 驳回（驳回理由必填）。
 // 盘点单审批走它（kind=stocktake, ref=sheet_no），后面别的业务直接挂上来。
 app.use('/api/approval', require('./routes/approval'));
+// 培训中心：课程 / 章节 / 课时（看视频记进度）/ 章节考试（判分留档）。
+// 客户端工作台入口 id 与显示名都是「培训中心」。
+app.use('/api/training', require('./routes/training'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.use((req, res) => res.status(404).json({ error: 'not found' }));

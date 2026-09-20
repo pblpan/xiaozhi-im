@@ -20,7 +20,9 @@
 // 所以只需往"北京凌晨"放样本；反向样本在数学上不存在，不要硬凑。
 //
 // 测试里把错误口径（UTC 窗口）会得到的条数**真的算出来**并断言它 ≠ 正确值，
-// 以此证明 msgsToday === 2 是一条有鉴别力的断言，而不是碰巧通过。
+// 以此证明 msgsToday === 3 是一条有鉴别力的断言，而不是碰巧通过；并额外用
+// 24 个整点做"全天候自检"，证明这条判据**在任何钟点跑都成立**（见下方注释）。
+// ⚠️ 早期版本把 naive 条数写死成 1，结果北京时间 00:00-08:00 跑必红（假失败）。
 
 const { spawn } = require('child_process');
 const path = require('path');
@@ -155,7 +157,9 @@ async function main() {
   const tEarly = cnAt(today, '00:30');       // 北京今天凌晨 → UTC 昨天 16:30（关键样本）
   const tLate = cnAt(yesterday, '23:30');    // 北京昨晚 → UTC 昨天 15:30
   const tNoon = cnAt(today, '12:00');        // 北京今天中午 → UTC 今天 04:00
+  const tNight = cnAt(today, '23:30');       // 北京今天深夜（与中午同侧，保证判据全天成立）
   const tLong = cnAt(longAgo, '10:00');      // 12 天前
+  const SAMPLES = [tEarly, tLate, tNoon, tNight, tLong];
 
   const cid = withDb((d) => {
     d.exec('BEGIN');
@@ -170,6 +174,7 @@ async function main() {
     ins.run(id, id1, 'text', 'TODAY_EARLY', null, tEarly);
     ins.run(id, id1, 'text', 'YESTERDAY_LATE', null, tLate);
     ins.run(id, id2, 'text', 'TODAY_NOON', null, tNoon);
+    ins.run(id, id2, 'text', 'TODAY_NIGHT', null, tNight);
     ins.run(id, id2, 'text', 'LONG_AGO', null, tLong);
 
     // 文件：今天 1 个 + 12 天前 1 个
@@ -181,21 +186,49 @@ async function main() {
   });
   console.log(`  北京时间今天 = ${today}，昨天 = ${yesterday}`);
 
-  /* 证明用例真的有鉴别力（而不是碰巧通过）。
-     北京时间恒等于 UTC-8h（中国无夏令时），所以「UTC 今天」= 北京 [今天08:00, 明天08:00)。
-     正确口径（北京 [今天00:00, 明天00:00)）命中 ①北京00:30 与 ③北京12:00 = 2 条；
-     错误口径（UTC 窗口）只会命中 ③ = 1 条 —— 差的那一条恰是"北京凌晨"样本。
-     下面把错误口径的结果**真的算出来**，确认它不等于正确值，
-     这样 msgsToday===2 才是一条有鉴别力的断言。 */
+  /* 证明用例真的有鉴别力（而不是碰巧通过）—— 而且**任何钟点跑都必须成立**。
+     北京时间恒等于 UTC-8h（中国无夏令时），UTC 窗口换算成北京时间是：
+       · 北京 <08:00：UTC 今天 = 北京昨天 → 窗口 = 北京[昨天08:00, 今天08:00)
+       · 北京 ≥08:00：UTC 今天 = 北京今天 → 窗口 = 北京[今天08:00, 明天08:00)
+     正确窗口恒为 北京[今天00:00, 明天00:00)。
+       正确口径命中 = {今天00:30, 今天12:00, 今天23:30} = 3 条；
+       UTC 口径：<08:00 命中 {昨天23:30, 今天00:30}；≥08:00 命中 {今天12:00, 今天23:30}
+       —— 两种情况下都是 **2 条，且命中集合与正确集合不同**。
+     下面把错误口径**真的算出来**并断言它俩不同，这样 msgsToday===3 才是有鉴别力的断言。
+     ⚠️ 2026-09-21 07:04 真踩到的坑：早期版本只放 00:30/12:00 两个"今天"样本、
+        并把 naive 条数写死成 1 —— 北京时间 00:00-08:00 跑的时候 naive 恰好也是 2，
+        判据必红（而产品断言 msgsToday===2 本身是对的）→ 纯假失败。
+     ⚠️ 也**不能只断言"两边条数不同"**：某些钟点两边条数会撞、只是**命中的行不同**，
+        所以下面同时比较命中集合。样本里放"今天23:30"就是为把两种口径的命中集合
+        在**全天任何时刻**都错开（它和"今天12:00"同侧，永远落在同一个窗口里）。 */
   const nowD = new Date();
   const utcStart = Date.UTC(nowD.getUTCFullYear(), nowD.getUTCMonth(), nowD.getUTCDate());
   const utcEnd = utcStart + 86400000;
-  const naiveUtcCount = [tEarly, tLate, tNoon, tLong]
-    .filter((t) => t >= utcStart && t < utcEnd).length;
+  const correctHit = SAMPLES.filter((t) => cnDay(new Date(t)) === today);
+  const naiveHit = SAMPLES.filter((t) => t >= utcStart && t < utcEnd);
   ok('[鉴别力] 北京今天00:30 在 UTC 口径下落在昨天（UTC 实现必然漏掉它）',
     utcDay(tEarly) === yesterday, `utc 看到的是 ${utcDay(tEarly)}`);
-  ok('[鉴别力] 按 UTC 窗口重算只得到 1 条，与正确值 2 不同',
-    naiveUtcCount === 1, `naive 算出来是 ${naiveUtcCount}`);
+  ok('[鉴别力] 正确口径命中 3 条（凌晨 / 中午 / 深夜）', correctHit.length === 3,
+    `实际 ${correctHit.length}`);
+  ok('[鉴别力] UTC 口径的命中集合 ≠ 正确集合（鉴别的对象不同，不是碰巧条数相同）',
+    naiveHit.length !== correctHit.length || naiveHit.join() !== correctHit.join(),
+    `correct ${correctHit.length} 条 / naive ${naiveHit.length} 条`);
+
+  /* 全天候自检：把 24 个整点依次当成"现在"，验证上面那条鉴别判据在**每一个钟点**
+     都真能揭出 UTC 实现。不做这一步的话，"当前钟点碰巧成立"和"全天成立"分辨不出来
+     —— 上一版就是只在白天成立。 */
+  let badHour = null;
+  for (let h = 0; h < 24; h++) {
+    const at = cnAt(today, String(h).padStart(2, '0') + ':00');
+    const d = new Date(at);
+    const us = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    const ue = us + 86400000;
+    const cHit = SAMPLES.filter((t) => cnDay(new Date(t)) === today).length;
+    const nHit = SAMPLES.filter((t) => t >= us && t < ue).length;
+    if (nHit === cHit) { badHour = `${h}:00 两个口径都是 ${cHit} 条（这一小时判据失效）`; break; }
+  }
+  ok('[鉴别力] 全天候自检：24 个整点里每一个 UTC 口径都与正确口径不同',
+    badHour === null, badHour || '24/24 都有鉴别力');
 
   console.log('\n== /stats 时间字段 ==');
   const r = await api('GET', '/api/admin/stats', { token });
@@ -205,11 +238,11 @@ async function main() {
   ok('返回 day 字段且为北京时间今天', s.day === today, `day=${s.day}（期望 ${today}）`);
   ok('返回 tz 字段', s.tz === TZ_NAME, `tz=${s.tz}`);
 
-  // 今天共 2 条（①北京00:30 + ③北京12:00）；②是昨天的、④是12天前的
-  ok('msgsToday = 2（北京时间口径）', s.msgsToday === 2, `实际 ${s.msgsToday}`);
-  // 若实现用 UTC 算今天，会拿到 ②（+③）而丢掉 ① → 数字不是 2
-  ok('msgsToday 未把「北京昨天23:30」算进来', s.msgsToday !== 3, `实际 ${s.msgsToday}`);
-  ok('msgsToday 未漏掉「北京今天00:30」', s.msgsToday !== 1, `实际 ${s.msgsToday}`);
+  // 今天共 3 条（①北京00:30 + ③北京12:00 + ⑤北京23:30）；②是昨天的、④是12天前的
+  ok('msgsToday = 3（北京时间口径：凌晨 + 中午 + 深夜）', s.msgsToday === 3, `实际 ${s.msgsToday}`);
+  // 丢掉"北京凌晨"样本 或 直接拿 UTC 口径算，都会得到 2 → 这条判据全天都有鉴别力
+  ok('msgsToday 未漏掉「北京今天00:30」凌晨样本（≠ 2）', s.msgsToday !== 2, `实际 ${s.msgsToday}`);
+  ok('msgsToday 未把「北京昨天23:30」算进来（≠ 4）', s.msgsToday !== 4, `实际 ${s.msgsToday}`);
 
   ok('filesToday = 1', s.filesToday === 1, `实际 ${s.filesToday}`);
   ok('activeUsers7d = 2（id1、id2 各一条在 7 天内）',
@@ -219,7 +252,7 @@ async function main() {
   // 增量必须与累计自洽：今日新增不可能超过总数
   ok('msgsToday <= messages（自洽）', s.msgsToday <= s.messages,
     `${s.msgsToday} vs ${s.messages}`);
-  ok('messages 累计 = 4', s.messages === 4, `实际 ${s.messages}`);
+  ok('messages 累计 = 5', s.messages === 5, `实际 ${s.messages}`);
 
   console.log('\n== 回归：原有字段不能少（仪表盘与上手向导都依赖）==');
   for (const k of ['users', 'groups', 'files', 'friendships', 'text', 'images', 'audios',

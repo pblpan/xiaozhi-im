@@ -662,6 +662,60 @@ class ImApi {
   Future<Map<String, dynamic>> withdrawApproval(int id) async =>
       await _post('/approval/$id/withdraw', const {});
 
+  // ---- 培训中心 ----
+  //
+  // 命名一律 `/training/...`，与服务端 routes/training.js 对齐。
+  // 两个刻意的设计（改之前先看服务端那边的注释）：
+  //   · 考试**开始**即消耗一次机会 —— 所以 startExam 失败要按 code 分开处理，
+  //     不能一律弹"加载失败"（progress_not_reached 要告诉学员"先把课看完"）。
+  //   · 题目里没有正确答案 —— 答案只在交卷后的回包里出现。
+
+  Future<Map<String, dynamic>> trainingCourses(
+      {String scope = 'public', String q = ''}) async {
+    final p = '/training/courses?scope=$scope' +
+        (q.isEmpty ? '' : '&q=${Uri.encodeQueryComponent(q)}');
+    return await _get(p);
+  }
+
+  Future<Map<String, dynamic>> trainingCourse(int id) async =>
+      await _get('/training/courses/$id');
+
+  Future<Map<String, dynamic>> joinCourse(int id) async =>
+      await _post('/training/courses/$id/join', const {});
+
+  Future<Map<String, dynamic>> quitCourse(int id) async =>
+      await _delete('/training/courses/$id/join');
+
+  /// 上报进度。弱网会重传，服务端按 (user, lesson) 覆盖，重复调用安全。
+  Future<Map<String, dynamic>> reportLessonProgress(int lessonId,
+      {int positionSec = 0, bool done = false}) async =>
+      await _post('/training/progress', <String, dynamic>{
+        'lessonId': lessonId,
+        'positionSec': positionSec,
+        'done': done,
+      });
+
+  Future<Map<String, dynamic>> startExam(int examId) async =>
+      await _post('/training/exams/$examId/start', const {});
+
+  Future<Map<String, dynamic>> submitSheet(int sheetId,
+          List<Map<String, dynamic>> answers) async =>
+      await _post('/training/sheets/$sheetId/submit', <String, dynamic>{
+        'answers': answers,
+      });
+
+  Future<Map<String, dynamic>> trainingSheet(int sheetId) async =>
+      await _get('/training/sheets/$sheetId');
+
+  /// 课件下载地址。**必须带 token**（课件接口要鉴权），
+  /// 直接用这个 URL 让浏览器打开是 401 —— 要走 FileIo 下载。
+  String lessonMediaUrl(int lessonId) =>
+      '${Config.baseUrl}/api/training/lessons/$lessonId/media';
+
+  /// 下载课件用的鉴权头
+  Map<String, String> get authHeaders =>
+      _token == null ? const {} : {'Authorization': 'Bearer $_token'};
+
   // ---- 文件 ----
   /// 上传文件。语音等临时录音文件没有规范扩展名时，用 filename 指定（如 voice.m4a）。
   Future<Map<String, dynamic>> upload(File f, {String? filename}) async {

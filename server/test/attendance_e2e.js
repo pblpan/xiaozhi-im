@@ -252,11 +252,21 @@ function stopServer() {
 
   r = await api('GET', '/api/attendance/today', { token: e1.token });
   ok('today 显示今日两张卡', !!r.body.cards.in && !!r.body.cards.out, JSON.stringify(r.body.cards));
-  // 今天还没到下班时间：只报"既成事实"（迟到），且**不能**判早退 ——
-  // 一个 10:41 打的下班卡相对 18:00 是"早退 439 分钟"，但下班时间根本还没到，
+  // 今天还没到下班时间：只报"既成事实"，且**不能**判早退 ——
+  // 一个 07:xx 打的下班卡相对 18:00 是"早退 6xx 分钟"，但下班时间根本还没到，
   // 判早退就是错的（这正是"上午打开 App 全公司缺卡"那类 bug 的同源问题）。
-  ok('  今日状态：未到点只报已确定的问题（pending 或 late）',
-    ['pending', 'late'].includes(r.body.today.status), JSON.stringify(r.body.today));
+  // ⚠️ 这条判据**跟跑的钟点有关**，不能写死 ['pending','late']：
+  //    09:00 之前打上班卡是"早到"不是"迟到" → lateMinutes 必须为 0、状态就该是 normal。
+  //    写死的话早上 9 点前跑必红（2026-09-21 07:04 真踩到）—— 假失败比真失败更危险。
+  //    下面按"现在几点"推出**唯一该有的状态**去比对，比原来"挨着 pending/late 之一就算过"更严。
+  const tStatusNow = Date.now();
+  const tStatusBeforeStart = tStatusNow < tsAt(TODAY, '09:00'); // 09:00 = 本用例复位后的上班时间
+  ok('  今日状态：与运行时点一致（上班前 normal / 上班后 late）',
+    r.body.today.status === (tStatusBeforeStart ? 'normal' : 'late'),
+    `现在 ${new Date(tStatusNow).toISOString()}，上班前=${tStatusBeforeStart}，实际 ${JSON.stringify(r.body.today)}`);
+  ok('  迟到分钟数：09:00 前打卡必须为 0（早到不是迟到）',
+    tStatusBeforeStart ? r.body.today.lateMinutes === 0 : r.body.today.lateMinutes > 0,
+    `上班前=${tStatusBeforeStart}，lateMinutes=${r.body.today.lateMinutes}`);
   ok('  今日不判早退（下班时间未到，早退不成立）', r.body.today.earlyMinutes === 0, JSON.stringify(r.body.today));
 
   // ---------------- 四：单日判定（用历史补卡构造既定事实） ----------------

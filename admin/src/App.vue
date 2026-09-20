@@ -57,6 +57,7 @@
         <el-menu-item index="modules">动态模块</el-menu-item>
         <el-menu-item index="upstreams">上游接口</el-menu-item>
         <el-menu-item index="master">商品档案</el-menu-item>
+        <el-menu-item index="training">培训中心</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
         <el-menu-item index="license">授权管理</el-menu-item>
         <el-menu-item index="help">系统帮助</el-menu-item>
@@ -3192,6 +3193,328 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           </div>
         </div>
 
+        <!-- ===== 培训中心 ===== -->
+        <!-- 名字就叫「培训中心」：与客户端应用台入口、服务端模块名三处一致 -->
+        <div v-else-if="tab === 'training'">
+          <el-tabs v-model="trTab">
+            <!-- ---------------- 课程 ---------------- -->
+            <el-tab-pane label="课程" name="courses">
+              <el-alert type="info" :closable="false" style="margin-bottom:12px">
+                <template #title>结构在这里维护，大视频走导入器（别用浏览器传）</template>
+                <template #default>
+                  200+ 视频课件在 <code class="mono">Y:\培训资料</code>，让导入器按目录层级自动建成课程：
+                  <code class="mono">node server/tools/import_training.js --dir "Y:\培训资料"</code>
+                  默认只预览不写库；加 <code class="mono">--apply --copy</code> 才真导入
+                  （<b>重复导入是幂等的</b>，不会建出第二份）。小文件（讲义 PDF）可以直接在下面「+ 课时」时上传。
+                </template>
+              </el-alert>
+
+              <div class="page-bar wrap">
+                <el-button type="primary" @click="openTrCourse(null)">新建课程</el-button>
+                <el-button @click="loadTrCourses()">刷新</el-button>
+                <span class="hint">
+                  未发布的课是<b>草稿</b>：管理端看得见、学员侧看不见。建好结构再点「发布」。
+                </span>
+              </div>
+
+              <el-table :data="tr.courses" v-loading="tr.loading" border stripe>
+                <el-table-column prop="id" label="ID" width="70" />
+                <el-table-column prop="title" label="课程名称" min-width="200" />
+                <el-table-column label="分类" width="120">
+                  <template #default="{ row }">{{ row.category || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="必修" width="70">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.required" type="danger" size="small">必修</el-tag>
+                    <span v-else class="hint">选修</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="90">
+                  <template #default="{ row }">
+                    <el-tag :type="row.published ? 'success' : 'info'" size="small">
+                      {{ row.published ? '已发布' : '草稿' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="章节 / 课时 / 考试" width="150">
+                  <template #default="{ row }">
+                    {{ row.chapter_count }} / {{ row.lesson_count }} / {{ row.exam_count }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="报名人数" width="90">
+                  <template #default="{ row }">{{ row.enroll_count }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="290">
+                  <template #default="{ row }">
+                    <el-button size="small" @click="openTrStruct(row)">结构</el-button>
+                    <el-button size="small" @click="openTrCourse(row)">改</el-button>
+                    <el-button size="small" :type="row.published ? 'warning' : 'success'"
+                      @click="toggleTrPublish(row)">{{ row.published ? '下线' : '发布' }}</el-button>
+                    <el-button size="small" type="danger" @click="delTrCourse(row)">删</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="!tr.loading && !tr.courses.length"
+                description="还没有课程。先「新建课程」，或用导入器把 Y:\培训资料 扫进来。" />
+            </el-tab-pane>
+
+            <!-- ---------------- 成绩 ---------------- -->
+            <el-tab-pane label="成绩" name="sheets">
+              <!--
+                这张表才是培训中心的意义所在：**谁学了、考了多少、过没过**。
+                没有它，前面做得再漂亮也只是个视频播放器。
+              -->
+              <div class="page-bar wrap">
+                <el-select v-model="tr.sheetCourse" placeholder="全部课程" clearable style="width:220px"
+                  @change="tr.sheetPage = 1; loadTrSheets()">
+                  <el-option v-for="c in tr.courses" :key="c.id" :label="c.title" :value="c.id" />
+                </el-select>
+                <el-checkbox v-model="tr.onlyPassed" @change="tr.sheetPage = 1; loadTrSheets()">只看及格</el-checkbox>
+                <el-button @click="loadTrSheets()">刷新</el-button>
+                <span class="hint">共 {{ tr.sheetTotal }} 条记录（<b>不限时间</b>，去年的成绩也查得到）</span>
+              </div>
+              <el-table :data="tr.sheets" v-loading="tr.sheetLoading" border stripe>
+                <el-table-column label="学员" width="150">
+                  <template #default="{ row }">
+                    {{ row.nickname || row.username || ('#' + row.user_id) }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="课程" min-width="170">
+                  <template #default="{ row }">{{ row.course_title || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="章节考试" min-width="150">
+                  <template #default="{ row }">{{ row.exam_title || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="第几次" width="80">
+                  <template #default="{ row }">{{ row.attempt_no }}</template>
+                </el-table-column>
+                <el-table-column label="分数" width="120">
+                  <template #default="{ row }">
+                    <span :style="{ color: row.pass ? '#67c23a' : '#f56c6c' }">{{ row.score }}</span>
+                    <span class="hint"> / 及格 {{ row.pass_score }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="结果" width="90">
+                  <template #default="{ row }">
+                    <el-tag v-if="!row.submitted_at" type="warning" size="small">未交卷</el-tag>
+                    <el-tag v-else :type="row.pass ? 'success' : 'danger'" size="small">
+                      {{ row.pass ? '及格' : '不及格' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="开始时间" width="170">
+                  <template #default="{ row }">{{ fmtTime(row.started_at) }}</template>
+                </el-table-column>
+                <el-table-column label="交卷时间" width="170">
+                  <template #default="{ row }">{{ row.submitted_at ? fmtTime(row.submitted_at) : '—' }}</template>
+                </el-table-column>
+              </el-table>
+              <div class="page-bar" style="margin-top:10px">
+                <el-button :disabled="tr.sheetPage <= 1" @click="tr.sheetPage--; loadTrSheets()">上一页</el-button>
+                <span class="hint">第 {{ tr.sheetPage }} 页</span>
+                <el-button :disabled="tr.sheets.length < tr.sheetSize" @click="tr.sheetPage++; loadTrSheets()">下一页</el-button>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+
+          <!-- 课程信息 -->
+          <el-dialog v-model="tr.courseDlg" :title="tr.courseForm.id ? '修改课程' : '新建课程'" width="520px">
+            <el-form label-width="90px">
+              <el-form-item label="课程名称">
+                <el-input v-model="tr.courseForm.title" maxlength="120" show-word-limit
+                  placeholder="如：生鲜陈列基础" />
+              </el-form-item>
+              <el-form-item label="分类">
+                <el-select v-model="tr.courseForm.category" filterable allow-create default-first-option
+                  placeholder="如 店长管理 / 生鲜陈列 / 防损 / 前台收银" style="width:100%">
+                  <el-option v-for="c in trCategories" :key="c" :label="c" :value="c" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="简介">
+                <el-input v-model="tr.courseForm.intro" type="textarea" :rows="3" maxlength="2000"
+                  placeholder="这门课讲什么、学完能干什么" />
+              </el-form-item>
+              <el-form-item label="必修">
+                <el-switch v-model="tr.courseForm.required" />
+                <span class="hint" style="margin-left:10px">必修课不学完，年度培训进度就不满</span>
+              </el-form-item>
+              <el-form-item label="发布">
+                <el-switch v-model="tr.courseForm.published" />
+                <span class="hint" style="margin-left:10px">关着 = 草稿，学员侧看不到</span>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="tr.courseDlg = false">取消</el-button>
+              <el-button type="primary" :loading="tr.saving" @click="saveTrCourse()">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 课程结构：章节 → 课时 / 考试 -->
+          <el-drawer v-model="tr.structDlg" size="66%" :title="tr.structTitle">
+            <div class="page-bar wrap">
+              <el-button type="primary" size="small" @click="addTrChapter()">+ 章节</el-button>
+              <el-button size="small" @click="reloadTrStruct()">刷新</el-button>
+              <span class="hint">结构改完不用重新发布 —— 学员下次打开课程就是新的</span>
+            </div>
+
+            <div v-for="(ch, ci) in tr.struct" :key="ch.id" class="tr-card">
+              <div class="tr-card-head">
+                <b>{{ ci + 1 }}. {{ ch.title }}</b>
+                <span style="flex:1"></span>
+                <el-button size="small" @click="addTrLesson(ch)">+ 课时</el-button>
+                <el-button size="small" @click="addTrExam(ch)">+ 考试</el-button>
+                <el-button size="small" type="danger" @click="delTrChapter(ch)">删章节</el-button>
+              </div>
+
+              <el-table :data="ch.lessons" size="small" border>
+                <el-table-column prop="id" label="ID" width="60" />
+                <el-table-column prop="title" label="课时" min-width="160" />
+                <el-table-column label="类型" width="80">
+                  <template #default="{ row }">{{ row.kind === 'doc' ? '文档' : '视频' }}</template>
+                </el-table-column>
+                <el-table-column label="时长" width="90">
+                  <template #default="{ row }">
+                    {{ row.duration_sec ? Math.round(row.duration_sec / 60) + ' 分' : '—' }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="课件" min-width="170">
+                  <template #default="{ row }">
+                    <span v-if="row.file_id" class="hint">已挂 file#{{ row.file_id }}</span>
+                    <span v-else style="color:#e6a23c;font-size:12px">未挂课件（学员点开是空的）</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="80">
+                  <template #default="{ row }">
+                    <el-button size="small" type="danger" @click="delTrLesson(row)">删</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <div v-if="!ch.lessons.length" class="hint" style="margin:6px 0 0 2px">本章还没有课时</div>
+
+              <div v-for="e in ch.exams" :key="'e' + e.id" class="tr-exam">
+                <div class="tr-card-head">
+                  <b>考试：{{ e.title }}</b>
+                  <span class="hint">
+                    及格 {{ e.pass_score }} 分 · {{ e.attempt_limit }} 次机会 ·
+                    本章进度达 {{ e.min_progress }}% 才放行 · {{ e.questions.length }} 题
+                  </span>
+                  <span style="flex:1"></span>
+                  <el-button size="small" type="danger" @click="delTrExam(e)">删考试</el-button>
+                </div>
+                <el-table :data="e.questions" size="small" border>
+                  <el-table-column prop="id" label="ID" width="60" />
+                  <el-table-column label="题型" width="80">
+                    <template #default="{ row }">{{ trTypeName(row.type) }}</template>
+                  </el-table-column>
+                  <el-table-column prop="stem" label="题干" min-width="200" />
+                  <el-table-column prop="score" label="分值" width="70" />
+                  <el-table-column label="选项（✓ = 正确答案；这份只在管理端显示，学员侧不下发）" min-width="260">
+                    <template #default="{ row }">
+                      <div v-for="o in row.options" :key="o.id">
+                        <span :style="{ color: o.correct ? '#67c23a' : '#606266' }">
+                          {{ o.correct ? '✓' : '　' }} {{ o.label }}. {{ o.content }}
+                        </span>
+                      </div>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+            </div>
+            <el-empty v-if="!tr.struct.length" description="还没有章节。先「+ 章节」，再往里加课时。" />
+          </el-drawer>
+
+          <!-- 加课时 -->
+          <el-dialog v-model="tr.lessonDlg" title="添加课时" width="560px">
+            <el-form label-width="90px">
+              <el-form-item label="课时名称">
+                <el-input v-model="tr.lessonForm.title" maxlength="120" placeholder="如：01 陈列三原则" />
+              </el-form-item>
+              <el-form-item label="类型">
+                <el-radio-group v-model="tr.lessonForm.kind">
+                  <el-radio value="video">视频</el-radio>
+                  <el-radio value="doc">文档（只记"看过"，不计时长）</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label="时长(秒)">
+                <el-input-number v-model="tr.lessonForm.durationSec" :min="0" :max="86400" />
+                <span class="hint" style="margin-left:10px">视频填真实时长，进度百分比才算得准</span>
+              </el-form-item>
+              <el-form-item label="课件文件">
+                <div>
+                  <input ref="trFileEl" type="file" style="display:none" @change="onTrFile" />
+                  <el-button size="small" :loading="tr.uploading" @click="trFileEl?.click()">上传课件</el-button>
+                  <span v-if="tr.lessonForm.fileId" class="hint" style="margin-left:10px">
+                    已挂 file#{{ tr.lessonForm.fileId }}
+                  </span>
+                  <div class="hint" style="margin-top:4px">
+                    上传适合讲义这类小文件；<b>大视频用导入器</b>（浏览器传几百兆会超时且不报错）。
+                  </div>
+                </div>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="tr.lessonDlg = false">取消</el-button>
+              <el-button type="primary" :loading="tr.saving" @click="saveTrLesson()">添加</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 建考试（题目一次建好：分开建会出现"没有题的考试"） -->
+          <el-dialog v-model="tr.examDlg" title="新建章节考试" width="760px" top="6vh">
+            <el-form label-width="100px">
+              <el-form-item label="考试名称">
+                <el-input v-model="tr.examForm.title" maxlength="120" placeholder="如：第一章测验" />
+              </el-form-item>
+              <el-form-item label="及格分">
+                <el-input-number v-model="tr.examForm.passScore" :min="0" :max="1000" />
+                <span class="hint" style="margin-left:14px">机会</span>
+                <el-input-number v-model="tr.examForm.attemptLimit" :min="1" :max="99" style="margin-left:6px" />
+                <span class="hint" style="margin-left:4px">次（默认 1 次，且<b>点开始就消耗</b>）</span>
+              </el-form-item>
+              <el-form-item label="进度门禁">
+                <el-input-number v-model="tr.examForm.minProgress" :min="0" :max="100" />
+                <span class="hint" style="margin-left:10px">
+                  %：本章进度低于这个百分比不放行考试（100 = 必须看完本章）
+                </span>
+              </el-form-item>
+            </el-form>
+
+            <div class="tr-card-head" style="margin-bottom:6px">
+              <b>题目（{{ tr.examForm.questions.length }} 题，共
+                {{ tr.examForm.questions.reduce((n, q) => n + (Number(q.score) || 0), 0) }} 分）</b>
+              <span style="flex:1"></span>
+              <el-button size="small" @click="addTrQuestion()">+ 加题</el-button>
+            </div>
+
+            <div v-for="(q, qi) in tr.examForm.questions" :key="qi" class="tr-q">
+              <div class="tr-card-head">
+                <b>第 {{ qi + 1 }} 题</b>
+                <el-select v-model="q.type" size="small" style="width:110px">
+                  <el-option label="单选" value="single" />
+                  <el-option label="多选" value="multi" />
+                  <el-option label="判断" value="judge" />
+                </el-select>
+                <span class="hint">分值</span>
+                <el-input-number v-model="q.score" size="small" :min="1" :max="100" style="width:100px" />
+                <span style="flex:1"></span>
+                <el-button size="small" type="danger" @click="tr.examForm.questions.splice(qi, 1)">删</el-button>
+              </div>
+              <el-input v-model="q.stem" size="small" placeholder="题干" style="margin:6px 0" />
+              <div v-for="(o, oi) in q.options" :key="oi" style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                <el-checkbox v-model="o.correct">正确</el-checkbox>
+                <el-input v-model="o.content" size="small" :placeholder="'选项 ' + trLabel(oi)" />
+                <el-button size="small" text type="danger"
+                  :disabled="q.options.length <= 2" @click="q.options.splice(oi, 1)">×</el-button>
+              </div>
+              <el-button size="small" text @click="q.options.push({ content: '', correct: false })">+ 选项</el-button>
+            </div>
+
+            <template #footer>
+              <el-button @click="tr.examDlg = false">取消</el-button>
+              <el-button type="primary" :loading="tr.saving" @click="saveTrExam()">建考试</el-button>
+            </template>
+          </el-dialog>
+        </div>
+
         <div v-else-if="tab === 'settings'">
           <el-card style="margin-bottom:16px">
             <template #header>公司与好友模式（对全服务器生效，客户端登录页/扫描结果即时可见）</template>
@@ -4401,6 +4724,7 @@ async function loadTab() {
   else if (tab.value === 'modules') { await loadMm(); await loadAppCatalog(); await loadUserOptions(); }
   else if (tab.value === 'upstreams') await loadUs();
   else if (tab.value === 'master') await loadMaster();
+  else if (tab.value === 'training') { await loadTrCourses(); await loadTrSheets(); }
   else if (tab.value === 'license') await loadLicense();
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
 }
@@ -5269,6 +5593,294 @@ async function clearMaster() {
     ElMessage.error('清空失败：' + (e.response?.data?.error || e.message));
   }
 }
+
+/* ====== 培训中心 ====== */
+/*
+  这一页只回答两个问题：①这门课现在是什么结构 ②谁学了、考了多少。
+  视频本体不走这里（200+ 个大文件，浏览器上传会超时且不报错）—— 用
+  `server/tools/import_training.js` 扫目录自动建课，这里只维护结构。
+  小讲义走「+ 课时」里的上传（file#），大视频走导入器。
+
+  🔴 学员侧那条线在这里看不见：**草稿课（published=0）学员看不到**、
+  考试**点开始就消耗机会**、**进度不达标不放行**。这三条判据都在服务端，
+  界面只把它们写出来（写出来才不会被当成 bug 反复问）。
+*/
+const trCategories = ['店长管理', '生鲜陈列', '加工管理', '防损', '前台收银', '杂百运营'];
+const trTab = ref('courses');
+const tr = ref({
+  loading: false, saving: false, uploading: false,
+  courses: [],
+  sheets: [], sheetLoading: false, sheetTotal: 0,
+  sheetPage: 1, sheetSize: 50, sheetCourse: null, onlyPassed: false,
+  courseDlg: false,
+  courseForm: { id: null, title: '', category: '', intro: '', required: false, published: false },
+  structDlg: false, structCourse: null, structTitle: '', struct: [],
+  lessonDlg: false, lessonChapter: null,
+  lessonForm: { title: '', kind: 'video', durationSec: 0, fileId: null },
+  examDlg: false, examChapter: null,
+  examForm: { title: '', passScore: 60, attemptLimit: 1, minProgress: 100, questions: [] },
+});
+const trFileEl = ref(null);
+
+function trErr(e, what) {
+  ElMessage.error(what + '：' + (e.response?.data?.error || e.message));
+}
+const trLabel = (i) => String.fromCharCode(65 + i);
+function trTypeName(t) {
+  return t === 'multi' ? '多选' : (t === 'judge' ? '判断' : '单选');
+}
+
+async function loadTrCourses() {
+  tr.value.loading = true;
+  try {
+    const { data } = await api.get('/training/admin/courses');
+    tr.value.courses = data.items || [];
+  } catch (e) { trErr(e, '读取课程失败'); }
+  finally { tr.value.loading = false; }
+}
+
+/**
+ * 成绩列表。
+ * 🔴 **不传 from/to**：服务端只有在显式传时间时才按时间过滤，
+ *    这样去年的成绩也查得到。前端千万别"顺手"带上 30 天参数 ——
+ *    那会让历史成绩静默消失（列表短了，界面上看不出来）。
+ */
+async function loadTrSheets() {
+  tr.value.sheetLoading = true;
+  try {
+    const p = new URLSearchParams({
+      page: String(tr.value.sheetPage), pageSize: String(tr.value.sheetSize),
+    });
+    if (tr.value.sheetCourse) p.set('courseId', String(tr.value.sheetCourse));
+    if (tr.value.onlyPassed) p.set('passed', '1');
+    const { data } = await api.get('/training/admin/sheets?' + p.toString());
+    tr.value.sheets = data.items || [];
+    tr.value.sheetTotal = data.total || 0;
+  } catch (e) { trErr(e, '读取成绩失败'); }
+  finally { tr.value.sheetLoading = false; }
+}
+
+// ---- 课程 ----
+function openTrCourse(row) {
+  tr.value.courseForm = row
+    ? {
+      id: row.id, title: row.title, category: row.category || '', intro: row.intro || '',
+      required: !!row.required, published: !!row.published,
+    }
+    : { id: null, title: '', category: '', intro: '', required: false, published: false };
+  tr.value.courseDlg = true;
+}
+
+async function saveTrCourse() {
+  const f = tr.value.courseForm;
+  if (!f.title.trim()) { ElMessage.warning('请填课程名称'); return; }
+  tr.value.saving = true;
+  try {
+    if (f.id) await api.patch(`/training/admin/courses/${f.id}`, f);
+    else await api.post('/training/admin/courses', f);
+    ElMessage.success(f.id ? '已保存' : '课程已建（默认是草稿，结构建好后记得点「发布」）');
+    tr.value.courseDlg = false;
+    await loadTrCourses();
+  } catch (e) { trErr(e, '保存失败'); }
+  finally { tr.value.saving = false; }
+}
+
+async function toggleTrPublish(row) {
+  try {
+    await api.patch(`/training/admin/courses/${row.id}`, { published: !row.published });
+    ElMessage.success(row.published ? '已下线（学员侧不再显示，老成绩还留着）' : '已发布');
+    await loadTrCourses();
+  } catch (e) { trErr(e, '操作失败'); }
+}
+
+async function delTrCourse(row) {
+  try {
+    await ElMessageBox.confirm(
+      `删除「${row.title}」会连同 ${row.chapter_count} 个章节、${row.lesson_count} 个课时、`
+      + `${row.exam_count} 场考试以及全部历史成绩一起删掉，不能恢复。\n\n`
+      + '如果只是不想让人看到，用「下线」更好 —— 成绩还留着。',
+      '删除课程', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' });
+  } catch { return; }
+  try {
+    await api.delete(`/training/admin/courses/${row.id}`);
+    ElMessage.success('已删除');
+    await loadTrCourses();
+  } catch (e) { trErr(e, '删除失败'); }
+}
+
+// ---- 课程结构（章节 / 课时 / 考试）----
+async function openTrStruct(row, keepOpen) {
+  tr.value.structCourse = row;
+  tr.value.structTitle = `课程结构：${row.title}（#${row.id}）`;
+  if (!keepOpen) tr.value.structDlg = true;
+  await reloadTrStruct();
+}
+
+async function reloadTrStruct() {
+  const c = tr.value.structCourse;
+  if (!c) return;
+  try {
+    const { data } = await api.get(`/training/admin/courses/${c.id}`);
+    tr.value.struct = data.chapters || [];
+  } catch (e) { trErr(e, '读取课程结构失败'); }
+}
+
+async function addTrChapter() {
+  const c = tr.value.structCourse;
+  if (!c) return;
+  let title;
+  try {
+    ({ value: title } = await ElMessageBox.prompt('章节名称（如：第一章 陈列基础）', '添加章节',
+      { inputPattern: /\S/, inputErrorMessage: '名称不能为空' }));
+  } catch { return; }
+  try {
+    await api.post('/training/admin/chapters', { courseId: c.id, title, sort: tr.value.struct.length });
+    await reloadTrStruct();
+    ElMessage.success('章节已加');
+  } catch (e) { trErr(e, '添加章节失败'); }
+}
+
+async function delTrChapter(ch) {
+  try {
+    await ElMessageBox.confirm(
+      `删除「${ch.title}」会把它下面的课时、考试和历史成绩一起删掉，不能恢复。`,
+      '删除章节', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/training/admin/chapters/${ch.id}`);
+    await reloadTrStruct();
+    ElMessage.success('已删除');
+  } catch (e) { trErr(e, '删除失败'); }
+}
+
+function addTrLesson(ch) {
+  tr.value.lessonChapter = ch;
+  tr.value.lessonForm = { title: '', kind: 'video', durationSec: 0, fileId: null };
+  tr.value.lessonDlg = true;
+}
+
+async function saveTrLesson() {
+  const f = tr.value.lessonForm;
+  if (!f.title.trim()) { ElMessage.warning('请填课时名称'); return; }
+  tr.value.saving = true;
+  try {
+    await api.post('/training/admin/lessons', {
+      chapterId: tr.value.lessonChapter.id,
+      title: f.title,
+      kind: f.kind,
+      durationSec: f.durationSec,
+      fileId: f.fileId,
+      sort: (tr.value.lessonChapter.lessons || []).length,
+    });
+    tr.value.lessonDlg = false;
+    await reloadTrStruct();
+    ElMessage.success('课时已加');
+  } catch (e) { trErr(e, '添加课时失败'); }
+  finally { tr.value.saving = false; }
+}
+
+async function delTrLesson(row) {
+  try {
+    await api.delete(`/training/admin/lessons/${row.id}`);
+    await reloadTrStruct();
+    ElMessage.success('已删除');
+  } catch (e) { trErr(e, '删除失败'); }
+}
+
+/** 小文件（讲义 PDF 之类）直接传；返回 files.id 挂到课时上 */
+async function onTrFile(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+  tr.value.uploading = true;
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const { data } = await api.post('/files/upload', fd);
+    tr.value.lessonForm.fileId = data.id;
+    // 名称还没填就用文件名兜一下，省一次手打（扩展名去掉）
+    if (!tr.value.lessonForm.title.trim()) {
+      tr.value.lessonForm.title = String(data.name || '').replace(/\.[^.]+$/, '');
+    }
+    ElMessage.success(`已上传：${data.name}（file#${data.id}）`);
+  } catch (err) { trErr(err, '上传失败'); }
+  finally { tr.value.uploading = false; }
+}
+
+// ---- 考试 ----
+function addTrQuestion() {
+  tr.value.examForm.questions.push({
+    type: 'single',
+    stem: '',
+    score: 10,
+    options: [{ content: '', correct: false }, { content: '', correct: false }],
+  });
+}
+
+function addTrExam(ch) {
+  tr.value.examChapter = ch;
+  tr.value.examForm = {
+    title: `${ch.title} 测验`, passScore: 60, attemptLimit: 1, minProgress: 100, questions: [],
+  };
+  addTrQuestion();
+  tr.value.examDlg = true;
+}
+
+/**
+ * 建考试。题目和考试**一次提交**建好 —— 分开建会出现"没有题的考试"：
+ * 学员点进去拿不到题，直接判 0 分，而界面上什么都看不出来。
+ * 所以在提交前把三道硬校验做掉（有题干 / 至少两个选项 / 标了正确答案）。
+ */
+async function saveTrExam() {
+  const f = tr.value.examForm;
+  if (!f.title.trim()) { ElMessage.warning('请填考试名称'); return; }
+  const qs = f.questions.filter((q) => String(q.stem || '').trim());
+  if (!qs.length) { ElMessage.warning('至少要有一道填了题干的题'); return; }
+  for (let i = 0; i < qs.length; i++) {
+    const opts = qs[i].options.filter((o) => String(o.content || '').trim());
+    if (opts.length < 2) { ElMessage.warning(`第 ${i + 1} 题至少要有两个选项`); return; }
+    if (!opts.some((o) => o.correct)) { ElMessage.warning(`第 ${i + 1} 题还没标正确答案`); return; }
+    if (qs[i].type === 'single' && opts.filter((o) => o.correct).length > 1) {
+      ElMessage.warning(`第 ${i + 1} 题是单选，只能标一个正确答案（要多个请改成多选）`);
+      return;
+    }
+  }
+  tr.value.saving = true;
+  try {
+    await api.post('/training/admin/exams', {
+      chapterId: tr.value.examChapter.id,
+      title: f.title,
+      passScore: f.passScore,
+      attemptLimit: f.attemptLimit,
+      minProgress: f.minProgress,
+      questions: qs.map((q, i) => ({
+        type: q.type,
+        stem: q.stem,
+        score: q.score,
+        sort: i,
+        options: q.options.filter((o) => String(o.content || '').trim()),
+      })),
+    });
+    tr.value.examDlg = false;
+    await reloadTrStruct();
+    ElMessage.success('考试已建 —— 学员要先把本章看完才放行');
+  } catch (e) { trErr(e, '建考试失败'); }
+  finally { tr.value.saving = false; }
+}
+
+async function delTrExam(e) {
+  try {
+    await ElMessageBox.confirm(
+      `删除考试「${e.title}」会连它的题目和所有人的历史成绩一起删掉，不能恢复。`,
+      '删除考试', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/training/admin/exams/${e.id}`);
+    await reloadTrStruct();
+    ElMessage.success('已删除');
+  } catch (err) { trErr(err, '删除失败'); }
+}
+
 
 // 监听 tab 切换
 watch(tab, loadTab);

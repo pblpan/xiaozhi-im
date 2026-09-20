@@ -31,6 +31,7 @@ import '../screens/attendance_request.dart';
 import '../screens/inventory.dart';
 import '../screens/org_screen.dart';
 import '../screens/stocktake.dart';
+import '../screens/training.dart';
 
 /// 内置应用 id 清单（与服务端 apps.js 的 BUILTIN_APPS 一一对应）
 ///
@@ -48,6 +49,7 @@ const kBuiltinAppIds = {
   'att_admin',
   'stocktake',
   'inventory',
+  'training',
 };
 
 /// 该 id 是否是本客户端认识的内置应用。
@@ -69,6 +71,8 @@ Widget? builtinAppPage(String id) {
       return const StocktakePage();
     case 'inventory':
       return const InventoryPage();
+    case 'training':
+      return const TrainingPage();
     default:
       return null;
   }

@@ -16,8 +16,16 @@ import 'package:xiaozhi_im_client/core/win_shell.dart';
 class FileIo {
   static Directory? _dir;
 
+  /// 测试注入的落盘目录。
+  ///
+  /// `getApplicationSupportDirectory()` 走的是插件通道，widget 测试里没有真插件，
+  /// 一调就抛 MissingPluginException —— 表现是"点了没反应"，
+  /// 报错还看不出跟目录有关。所以留一个注入口，测试指向临时目录即可。
+  static Directory? dirOverride;
+
   /// 落盘目录
   static Future<Directory> dir() async {
+    if (dirOverride != null) return dirOverride!;
     if (_dir != null) return _dir!;
     final base = await getApplicationSupportDirectory();
     final d = Directory('${base.path}${Platform.pathSeparator}downloads');
@@ -49,6 +57,7 @@ class FileIo {
     required String url,
     required int fileId,
     required String name,
+    Map<String, String>? headers,
     void Function(double p)? onProgress,
   }) async {
     final f = await localPath(fileId, name);
@@ -56,16 +65,21 @@ class FileIo {
       onProgress?.call(1);
       return f;
     }
-    return download(url, f, onProgress: onProgress);
+    return download(url, f, headers: headers, onProgress: onProgress);
   }
 
+  /// [headers] 是为了培训课件这类**要鉴权**的下载：原来的消息附件走免鉴权直链，
+  /// 课件接口带的是 `Authorization: Bearer`，不带就是 401。
+  /// 默认 null 保持原行为，老调用方不受影响。
   static Future<File> download(String url, File dest,
-      {void Function(double p)? onProgress}) async {
+      {Map<String, String>? headers, void Function(double p)? onProgress}) async {
     final uri = Uri.tryParse(url);
     if (uri == null) throw Exception('下载地址不正确');
     final client = http.Client();
     try {
-      final res = await client.send(http.Request('GET', uri));
+      final req = http.Request('GET', uri);
+      if (headers != null) req.headers.addAll(headers);
+      final res = await client.send(req);
       if (res.statusCode < 200 || res.statusCode >= 300) {
         throw Exception('下载失败 HTTP ${res.statusCode}');
       }
