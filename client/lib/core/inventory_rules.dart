@@ -19,10 +19,10 @@ class InvPhase {
   /// 初盘：全量扫。
   static const int first = 1;
 
-  /// 复盘：**只允许扫上一阶段的差异集**。
+  /// 复盘：这一片**重新全盘一遍**，不限制差异集。
   static const int second = 2;
 
-  /// 抽盘：主管抽查，扫完出"抽盘差异数据"。
+  /// 抽盘：主管抽查，**只扫上一阶段数量对不上的**（含漏盘）。
   static const int third = 3;
 
   static const List<int> all = <int>[first, second, third];
@@ -59,9 +59,13 @@ class InvPhase {
   }
 
   /// 该阶段是否要求"只能扫上一阶段的差异集"。
-  /// 只有复盘要。抽盘是主管随机抽查，可能抽到没差异的商品（那正是目的），
-  /// 所以抽盘**不能**沿用复盘的差异集限制 —— 只是抽盘要另行校权（M2 的 P2）。
-  static bool requiresDiffSetOnly(int phase) => phase == second;
+  ///
+  /// 🔴 只**抽盘**要，复盘不要：
+  ///    · 复盘是"把这一片重新扫一遍"，它的价值就在于不知道哪里会错；
+  ///      先按差异集限制它，等于默认初盘是对的，复盘就成了走过场。
+  ///    · 抽盘才是"只复核有问题的那些" —— 数量对不上、或者上一轮根本没扫到的
+  ///      （漏盘，见 [InventoryRules.missingVsPrev]），主管盯这些就够了。
+  static bool requiresDiffSetOnly(int phase) => phase == third;
 }
 
 /// 盘点单状态。
@@ -199,28 +203,89 @@ class InventoryRules {
     return ScanDecision.ok;
   }
 
-  /// 一行是不是差异（实盘 - 账面 != 0）。
+  /// 给汇总行补上"上一阶段数量"和"差异"，返回新的行列表。
   ///
-  /// 🔴 **账面缺失（未知条码）必须算差异** —— 货就在货架上、账上却没这个商品，
-  ///     这是最严重的一类差异，绝不能被当成"没差异"跳过。
-  ///     SQL 里写 `where qty - account_qty != 0` 会**静默丢掉这批行**
-  ///     （NULL 参与比较的结果是 NULL，不是 TRUE），所以这条判定放在 Dart 里做。
+  /// 🔴 差异 = `本阶段 qty - 上一阶段 qty`（两边都按条码汇总过），**不比账面**：
+  ///    门店系统里没有可用的库存账面（泰格库所有库存表都是空表），比账面会
+  ///    得到"差异集 = 全部商品"，三遍制退化成把同一个货架扫三遍。
+  ///    这也正是比优特 PG 的口径：初盘 / 复盘 / 抽盘三个**平行数量**互相比。
+  ///
+  /// [prev] 为空（初盘没有上一阶段）时 `prev_qty` 是 null ——
+  /// 意思是"没有可比的对象"，**不等于有差异**。
+  static List<Map<String, dynamic>> attachPrevDiff(
+    List<Map<String, dynamic>> rows,
+    Map<String, double> prev,
+  ) {
+    return rows.map((r) {
+      final code = (r['barcode'] ?? '').toString().trim();
+      final q = asNum(r['qty']);
+      final p = prev[code];
+      final out = <String, dynamic>{...r};
+      out['prev_qty'] = p;
+      out['diff_qty'] = (q == null || p == null) ? null : q - p;
+      return out;
+    }).toList();
+  }
+
+  /// 一行是不是差异（**和上一阶段比对**，数量变了）。
+  ///
+  /// 🔴 没有上一阶段可比时（`prev_qty == null`）**不算差异** —— 初盘这一轮
+  ///    本来就没有参照。原来判的是"实盘 ≠ 账面"（账面缺失也算差异），
+  ///    换了基准之后，"没有参照"必须从差异集里剔除，否则初盘自己就是一个
+  ///    等于全部商品的差异集，后面的复盘 / 抽盘全被它带偏。
+  ///
+  /// 注意这是**逐行**谓词：真正的"漏盘"（上一轮有、这一轮没扫）在本阶段
+  /// 连行都没有，判断不出来 —— 那种要靠把上一阶段的行喂给
+  /// [diffBarcodesOf]（它会并上 [missingVsPrev]）。
   static bool isDiffRow(Map<String, dynamic> row) {
-    final diff = _num(row['diff_qty']);
-    if (diff == null) return true;
+    final prev = asNum(row['prev_qty']);
+    if (prev == null) return false;
+    final diff = asNum(row['diff_qty']);
+    if (diff == null) return true; // 兜底：只给了参照值没给差值的构造行，按"对不上"处理
     return diff != 0;
   }
 
-  /// 从带 `diff_qty` 的行集里取出差异集条码。
-  static Set<String> diffBarcodesOf(Iterable<Map<String, dynamic>> rows) {
+  /// 从补过 [attachPrevDiff] 的行集里取出差异集条码。
+  ///
+  /// 🔴 必须把**漏盘**并进来（靠 [prevRows]）：一条上一轮盘过、这一轮根本没扫到的
+  ///    条码，在本阶段的行集里**没有对应的行** —— 只在 `rows` 里挑是永远挑不出来的。
+  ///    曾经这里收了 `prevRows` 却没并 [missingVsPrev]，结果差异集少算漏盘；
+  ///    而"少一行"在明细里根本看不出来，不合格的货架就这么被绕过去了。
+  static Set<String> diffBarcodesOf(
+    Iterable<Map<String, dynamic>> rows, {
+    Iterable<Map<String, dynamic>> prevRows = const <Map<String, dynamic>>[],
+  }) {
     final out = <String>{};
     for (final r in rows) {
       final code = (r['barcode'] ?? '').toString().trim();
       if (code.isEmpty) continue;
       if (isDiffRow(r)) out.add(code);
     }
+    out.addAll(missingVsPrev(prevRows, rows));
     return out;
   }
+
+  /// 上一轮盘过、这一轮**没扫到**的条码（漏盘）。
+  ///
+  /// 抽盘必须把它们一并放进来：员工最容易干的活就是绕开不好盘的货架，
+  /// 而"少一行"在明细里**看不出来** —— 不像数量错了那么显眼。
+  static Set<String> missingVsPrev(
+    Iterable<Map<String, dynamic>> prevRows,
+    Iterable<Map<String, dynamic>> curRows,
+  ) {
+    final cur = <String>{};
+    for (final r in curRows) {
+      final c = (r['barcode'] ?? '').toString().trim();
+      if (c.isNotEmpty) cur.add(c);
+    }
+    final out = <String>{};
+    for (final r in prevRows) {
+      final c = (r['barcode'] ?? '').toString().trim();
+      if (c.isNotEmpty && !cur.contains(c)) out.add(c);
+    }
+    return out;
+  }
+
 
   /// 失误笔数：上一阶段扫过、本阶段被改成**不同数量**的条码数。
   ///
@@ -236,7 +301,7 @@ class InventoryRules {
     final prev = <String, double>{};
     for (final r in prevRows) {
       final c = (r['barcode'] ?? '').toString().trim();
-      final q = _num(r['qty']);
+      final q = asNum(r['qty']);
       if (c.isEmpty || q == null) continue;
       prev[c] = q;
     }
@@ -244,7 +309,7 @@ class InventoryRules {
     var n = 0;
     for (final r in curRows) {
       final c = (r['barcode'] ?? '').toString().trim();
-      final q = _num(r['qty']);
+      final q = asNum(r['qty']);
       if (c.isEmpty || q == null) continue;
       final p = prev[c];
       if (p == null) continue; // 本阶段新扫出来的，不算"失误"
@@ -254,7 +319,11 @@ class InventoryRules {
   }
 
   /// 把任意输入揉成 num?（SQLite 的 REAL 有时回 int，有时回 String，别硬转）。
-  static double? _num(Object? v) {
+  /// 把任意输入揉成 double?（SQLite 的 REAL 有时回 int，有时回 String，别硬转）。
+  ///
+  /// 名字叫 asNum 不叫 num：`num` 是 Dart 的类型名，用它当方法名会把类里的
+  /// 类型标注搞得没法读。
+  static double? asNum(Object? v) {
     if (v == null) return null;
     if (v is num) return v.toDouble();
     return double.tryParse(v.toString());

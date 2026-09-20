@@ -1,6 +1,6 @@
 // 需要 ConflictAlgorithm（幂等绑定）和 Transaction（事务里复用清理逻辑）。
 // sqflite 是**直接依赖**（见 pubspec 的离线地基那段），不是蹭进来的传递依赖。
-import 'package:sqflite/sqflite.dart' show ConflictAlgorithm, Transaction;
+import 'package:sqflite/sqflite.dart' show ConflictAlgorithm, Database, Transaction;
 
 import 'inventory_rules.dart';
 import 'local_db.dart';
@@ -594,9 +594,16 @@ class InventoryRepo {
 
   /// 某张单的明细，左连商品档案（**必须 LEFT JOIN**：商档里没有的条码
   /// 也要显示出来，否则员工看不到自己扫过的东西会再扫一遍）。
+  ///
+  /// 🔴 明细里带 `prev_qty` / `diff_qty`（**比上一阶段**，不是比账面）：
+  ///    界面要当场告诉员工"上一遍这里盘的是多少"，不然复盘就是闷头重扫，
+  ///    盘完还是不知道自己改了什么。账面数 `account_qty` 仍然带出来，
+  ///    只当参考列显示，不参与差异判定。
   Future<List<Map<String, dynamic>>> listRows(String sheetNo) async {
     final db = await LocalDb.I.db();
-    return db.rawQuery('''
+    final no = sheetNo.trim();
+
+    final rows = await db.rawQuery('''
       select s.id            as id,
              s.barcode       as barcode,
              s.qty           as qty,
@@ -608,13 +615,33 @@ class InventoryRepo {
              m.spec          as spec,
              m.unit          as unit,
              m.unit_price    as unit_price,
-             m.account_qty   as account_qty,
-             (s.qty - m.account_qty) as diff_qty
+             m.account_qty   as account_qty
         from scan_record s
         left join stock_master m on m.barcode = s.barcode
        where s.sheet_no = ?
        order by s.scanned_at desc, s.id desc
-    ''', <Object?>[sheetNo.trim()]);
+    ''', <Object?>[no]);
+
+    final phaseRow = await db.rawQuery(
+        'select phase, zone_code from stocktake_sheet where sheet_no = ?',
+        <Object?>[no]);
+    if (phaseRow.isEmpty) return rows;
+    final phase = InventoryRules.asNum(phaseRow.first['phase'])?.toInt();
+    final zone = (phaseRow.first['zone_code'] ?? '').toString().trim();
+    final prev = InvPhase.prev(phase ?? 0);
+    if (prev == null || zone.isEmpty) return rows;
+
+    final prevMap = await _prevSummary(db, zone, prev);
+    final cur = <String, double>{};
+    for (final r in rows) {
+      final c = (r['barcode'] ?? '').toString().trim();
+      final q = InventoryRules.asNum(r['qty']);
+      if (c.isNotEmpty && q != null) cur[c] = (cur[c] ?? 0) + q;
+    }
+    // 同一张单里同一条码可能扫多次，先在本单内汇总，再和上一阶段比
+    return InventoryRules.attachPrevDiff(rows, <String, double>{
+      for (final e in cur.entries) e.key: prevMap[e.key] ?? 0,
+    });
   }
 
   /// 某张单的小结：品种数 / 总数量 / 未知条码数 / 未回传条数。
@@ -644,11 +671,18 @@ class InventoryRepo {
 
   /// 某点位某阶段**按条码汇总**的行（跨该阶段的所有单）。
   ///
-  /// 汇总而不是逐笔，是因为差异集要按商品看：同一商品可能在初盘扫了两次
-  /// （两张单），账面比的是合计数量。
+  /// 汇总而不是逐笔，是因为差异要按商品看：同一商品可能在初盘扫了两次
+  /// （两张单），比的是合计数量。
+  ///
+  /// 🔴 `diff_qty` 是**和上一阶段比的**（`qty - 上一阶段 qty`），不是比账面：
+  ///    门店的系统里根本没有可用的库存账面（泰格库里所有库存表都是空的），
+  ///    拿"账面"当基准会得到一个恒等于全部商品的差异集，三遍制退化成"扫三遍"。
+  ///    比优特 PG 的真实口径就是三遍平行数量互比，这里照它来。
+  ///    账面数（account_qty）仍然带出来，只是**参考列**，不参与差异判定。
   Future<List<Map<String, dynamic>>> phaseRows(String zoneCode, int phase) async {
     final db = await LocalDb.I.db();
-    return db.rawQuery('''
+    final zc = zoneCode.trim();
+    final rows = await db.rawQuery('''
       select s.barcode       as barcode,
              sum(s.qty)      as qty,
              max(s.scanned_at) as scanned_at,
@@ -656,20 +690,123 @@ class InventoryRepo {
              m.spec          as spec,
              m.unit          as unit,
              m.unit_price    as unit_price,
-             m.account_qty   as account_qty,
-             (sum(s.qty) - m.account_qty) as diff_qty
+             m.account_qty   as account_qty
         from scan_record s
         join stocktake_sheet sh on sh.sheet_no = s.sheet_no
         left join stock_master m on m.barcode = s.barcode
        where sh.zone_code = ? and s.phase = ?
        group by s.barcode
        order by s.barcode asc
-    ''', <Object?>[zoneCode.trim(), phase]);
+    ''', <Object?>[zc, phase]);
+
+    return InventoryRules.attachPrevDiff(
+        rows, await _prevSummary(db, zc, InvPhase.prev(phase)));
   }
 
-  /// 差异集条码（实盘 ≠ 账面，含"账上没有"的未知条码）。
+  /// 上一阶段每个条码的合计数量（初盘没有上一阶段 → 空表）。
+  Future<Map<String, double>> _prevSummary(
+      Database db, String zoneCode, int? prevPhase) async {
+    if (prevPhase == null) return const <String, double>{};
+    final rows = await db.rawQuery('''
+      select s.barcode as barcode, sum(s.qty) as qty
+        from scan_record s
+        join stocktake_sheet sh on sh.sheet_no = s.sheet_no
+       where sh.zone_code = ? and s.phase = ?
+       group by s.barcode
+    ''', <Object?>[zoneCode, prevPhase]);
+    final out = <String, double>{};
+    for (final r in rows) {
+      final c = (r['barcode'] ?? '').toString().trim();
+      final q = InventoryRules.asNum(r['qty']);
+      if (c.isNotEmpty && q != null) out[c] = q;
+    }
+    return out;
+  }
+
+  /// 差异集条码：**和上一阶段数量对不上**的，外加**上一轮盘过这一轮没扫到的（漏盘）**。
   Future<Set<String>> diffBarcodes(String zoneCode, int phase) async {
-    return InventoryRules.diffBarcodesOf(await phaseRows(zoneCode, phase));
+    final rows = await phaseRows(zoneCode, phase);
+    final prev = InvPhase.prev(phase);
+    if (prev == null) return const <String>{};
+    return InventoryRules.diffBarcodesOf(rows,
+        prevRows: await phaseRows(zoneCode, prev));
+  }
+
+  /// 某点位某阶段的**差异行**：数量对不上的 + **上一轮盘过这一轮没扫到的（漏盘）**。
+  ///
+  /// 🔴 漏盘必须**补成一行**（`qty: 0`、`diff_qty: -上一轮`、`missing: true`）：
+  ///    它在本阶段压根没有扫码记录，[phaseRows] 里根本没有这一行，
+  ///    拿 `rows.where(isDiffRow)` 是永远挑不出来的 —— 差异表、导出、
+  ///    抽盘的复核清单会一起漏掉最严重的一类（数量错了至少还显眼，
+  ///    "少一行"在明细里看不出来）。服务端 `diffRowsOf` 是同一口径。
+  Future<List<Map<String, dynamic>>> diffRows(String zoneCode, int phase) async {
+    final zc = zoneCode.trim();
+    final prev = InvPhase.prev(phase);
+    if (prev == null) return const <Map<String, dynamic>>[]; // 初盘没有参照
+
+    final db = await LocalDb.I.db();
+    final rows = await phaseRows(zc, phase);
+    final out = <Map<String, dynamic>>[
+      for (final r in rows)
+        if (InventoryRules.isDiffRow(r)) r,
+    ];
+
+    final cur = <String>{};
+    for (final r in rows) {
+      final c = (r['barcode'] ?? '').toString().trim();
+      if (c.isNotEmpty) cur.add(c);
+    }
+    final prevMap = await _prevSummary(db, zc, prev);
+    final missed = <String>[
+      for (final c in prevMap.keys)
+        if (!cur.contains(c)) c,
+    ]..sort();
+    if (missed.isEmpty) return out;
+
+    // 补出来的行也要有商品名 —— 差异表上只有一串条码，主管没法认。
+    final info = await _masterInfo(db, missed);
+    for (final c in missed) {
+      final m = info[c] ?? const <String, Object?>{};
+      final p = prevMap[c];
+      out.add(<String, dynamic>{
+        'barcode': c,
+        'qty': 0.0,
+        'scanned_at': null,
+        'name': m['name'],
+        'spec': m['spec'],
+        'unit': m['unit'],
+        'unit_price': m['unit_price'],
+        'account_qty': m['account_qty'],
+        'prev_qty': p,
+        'diff_qty': p == null ? null : -p,
+        'missing': true,
+      });
+    }
+    return out;
+  }
+
+  /// 一次查若干条码的商品档案（给补出来的漏盘行配名字）。
+  ///
+  /// **分批**查：SQLite 的绑定变量个数有上限（默认 999），一个货架的漏盘
+  /// 一次性 `in (...)` 塞进去会报 "too many SQL variables"，
+  /// 现场表现成"差异表打不开"。
+  Future<Map<String, Map<String, Object?>>> _masterInfo(
+      Database db, List<String> codes) async {
+    final out = <String, Map<String, Object?>>{};
+    const chunk = 500;
+    for (var i = 0; i < codes.length; i += chunk) {
+      final end = i + chunk < codes.length ? i + chunk : codes.length;
+      final part = codes.sublist(i, end);
+      final ph = List.filled(part.length, '?').join(',');
+      final rows = await db.rawQuery(
+          'select barcode, name, spec, unit, unit_price, account_qty '
+          'from stock_master where barcode in ($ph)',
+          part);
+      for (final r in rows) {
+        out[(r['barcode'] ?? '').toString()] = r;
+      }
+    }
+    return out;
   }
 
   /// 上一阶段 → 本阶段的失误笔数。没有上一阶段返回 0。
@@ -687,7 +824,10 @@ class InventoryRepo {
     final out = <Map<String, dynamic>>[];
     for (final p in InvPhase.all) {
       final rows = await phaseRows(zc, p);
-      final diff = InventoryRules.diffBarcodesOf(rows);
+      final prev = InvPhase.prev(p);
+      final diff = InventoryRules.diffBarcodesOf(rows,
+          prevRows:
+              prev == null ? const <Map<String, dynamic>>[] : await phaseRows(zc, prev));
       final sheet = await _latestSheetOf(zc, p);
       out.add(<String, dynamic>{
         'phase': p,
@@ -776,20 +916,34 @@ class InventoryRepo {
         .toSet();
   }
 
+  /// 扫码入库那一刻用的差异集（决定"这一笔让不让扫"）。
+  ///
+  /// 🔴 和 [phaseRows] 走同一套口径（**比上一阶段**，不是比账面），
+  ///    校准不对齐的话会出现"明细页显示有差异、但扫第二遍时被拒"这种鬼故事。
   Future<Set<String>> _diffBarcodesTxn(
       Transaction txn, String zoneCode, int phase) async {
-    final rows = await txn.rawQuery('''
-      select s.barcode       as barcode,
-             sum(s.qty)      as qty,
-             m.account_qty   as account_qty,
-             (sum(s.qty) - m.account_qty) as diff_qty
+    final prevPhase = InvPhase.prev(phase);
+    if (prevPhase == null) return const <String>{};
+    Future<List<Map<String, Object?>>> q(int p) => txn.rawQuery('''
+      select s.barcode as barcode, sum(s.qty) as qty
         from scan_record s
         join stocktake_sheet sh on sh.sheet_no = s.sheet_no
-        left join stock_master m on m.barcode = s.barcode
        where sh.zone_code = ? and s.phase = ?
        group by s.barcode
-    ''', <Object?>[zoneCode, phase]);
-    return InventoryRules.diffBarcodesOf(rows);
+    ''', <Object?>[zoneCode, p]);
+
+    final rows = await q(phase);
+    final prevRows = await q(prevPhase);
+    final prev = <String, double>{};
+    for (final r in prevRows) {
+      final c = (r['barcode'] ?? '').toString().trim();
+      final v = InventoryRules.asNum(r['qty']);
+      if (c.isNotEmpty && v != null) prev[c] = v;
+    }
+    // prevRows 一并传进去，漏盘（上一轮有、这一轮没扫）才算得进差异集
+    return InventoryRules.diffBarcodesOf(
+        InventoryRules.attachPrevDiff(rows, prev),
+        prevRows: prevRows);
   }
 
   static String _req(String v, String field) {

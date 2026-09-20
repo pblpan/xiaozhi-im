@@ -86,7 +86,8 @@ class _StocktakePageState extends State<StocktakePage> {
       // 不筛的话这里会把盘点单当成"上次没扫完的扫码单"接着扫。
       final sheets = await _repo.listSheets(prefix: StocktakeRepo.sheetPrefix);
       final no = sheets.isEmpty ? StocktakeRepo.newSheetNo() : sheets.first['sheet_no'] as String;
-      final masterCount = await StockMasterRepo().countLocal();
+      // 🔴 数全表：服务端同步下来的商档 source 是 server，countLocal 默认只数 tiger
+      final masterCount = await StockMasterRepo().countAll();
       if (!mounted) return;
       _sheetNo = no;
       _masterCount = masterCount;
@@ -162,10 +163,16 @@ class _StocktakePageState extends State<StocktakePage> {
     await _reload(refocus: false);
   }
 
+  /// 同步商档。
+  ///
+  /// 🔴 现在从**自家服务端**拉（/api/master），不再走泰格上游钩子：
+  ///    那台机器一关机、IP 一漂就是 fetch failed，接着商档同步永远失败，
+  ///    扫码枪扫什么都是"未知条码"。商档是门店自己的底表，放自家服务端
+  ///    才靠得住 —— 管理台导入一次，所有手机拉同一份。
   Future<void> _syncMaster() async {
     setState(() => _syncing = true);
     try {
-      final n = await StockMasterRepo().sync();
+      final n = await StockMasterRepo.syncFromServer();
       if (!mounted) return;
       setState(() {
         _masterCount = n;

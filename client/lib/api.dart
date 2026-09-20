@@ -322,6 +322,19 @@ class ImApi {
     return _get(p);
   }
 
+  // ---- 商品档案（商档）----
+  //
+  // 商档现在存在自家服务端（/api/master）：管理台导入一次，所有手机拉同一份。
+  // 不再依赖泰格上游桥接那台会关机、IP 会漂的机器 —— 它一断，盘点就没有账单数，
+  // 初盘每一行都变成"账上无此商品"，差异集等于全部商品。
+
+  /// 服务端商档总数与最后更新时间（先问这个，才知道要不要拉、拉多少）。
+  Future<Map<String, dynamic>> masterCount() async => await _get('/master/count');
+
+  /// 分页拉商档。12 万行一次拉会把手机内存打满、HTTP 也会超时。
+  Future<Map<String, dynamic>> masterPage(int page, int pageSize) async =>
+      await _get('/master/?page=$page&pageSize=$pageSize');
+
   // ---- 应用中心（工作台）----
 
   /// 工作台应用清单：内置应用（考勤打卡 / 我的申请 / 组织通讯录）+ 动态模块。

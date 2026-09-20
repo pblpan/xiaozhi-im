@@ -165,14 +165,17 @@ function uploadBody(zone, phase, rows, extra = {}) {
   ];
   r = await api('POST', `/api/stocktake/sheet/${S1}/upload`, { token: staff, body: uploadBody('Z01', 1, rows1, { device_id: 'pda-01' }) });
   ok('上传 3 行全部接收', r.status === 200 && r.body.accepted === 3, JSON.stringify(r.body));
-  ok('  差异 2 条（12≠10 与"账上没有"）', r.body?.summary?.diff === 2, JSON.stringify(r.body?.summary));
+  // 🔴 差异的基准是**上一阶段的实盘数**，不是账面（门店系统没有可用库存账面，
+  //    比账面会得到"差异集=全部商品"）。所以初盘这一轮**没有可比对象**，
+  //    差异必须是 0 —— 不是"全都是差异"。
+  ok('  🔴 初盘差异 = 0（没有上一阶段可比，不是"全是差异"）',
+    r.body?.summary?.diff === 0, JSON.stringify(r.body?.summary));
   ok('  上传即归档：status=2', r.body?.sheet?.status === 2, JSON.stringify(r.body?.sheet));
 
   r = await api('GET', `/api/stocktake/sheet/${S1}`, { token: staff });
   ok('单据详情：明细 3 行', r.status === 200 && r.body.rows.length === 3, JSON.stringify(r.body?.summary));
-  ok('  差异集 2 行', r.body?.diff_rows?.length === 2, JSON.stringify(r.body?.diff_rows));
-  ok('  🔴 "账上没有"的条码在差异集里（SQL 的 NULL 陷阱）',
-    (r.body?.diff_rows || []).some((x) => x.barcode === '6903333333333'), JSON.stringify(r.body?.diff_rows));
+  ok('  🔴 初盘 diff_rows 为空（没有可比对象）',
+    (r.body?.diff_rows || []).length === 0, JSON.stringify(r.body?.diff_rows));
   ok('  summary.unknown 计到 1 条', r.body?.summary?.unknown === 1, JSON.stringify(r.body?.summary));
   ok('  未绑货架位的行计到 1 条', r.body?.summary?.unbound === 1, JSON.stringify(r.body?.summary));
 
@@ -212,25 +215,37 @@ function uploadBody(zone, phase, rows, extra = {}) {
   ok('上传缺 zone_code → 400', r.status === 400, String(r.status));
 
   // ============================================================
-  console.log('\n【五】复盘的服务端差异集校验（点位 Z20）');
+  console.log('\n【五】阶段准入：复盘放开、抽盘只复核差异（点位 Z20）');
+  // 口径说明：差异 = **相邻两阶段的实盘数互比**（不比账面）。
+  //   复盘 = 把这一片重新扫一遍，所以**不限**它扫什么；
+  //   抽盘 = 只复核"两遍对不上"或"上一轮漏盘"的，所以**限**。
   await api('POST', '/api/stocktake/sheet/INV-Z20-1-20260919100000/upload', {
     token: staff,
     body: uploadBody('Z20', 1, [
-      { barcode: '6901111111111', qty: 12, account_qty: 10 },  // 12≠10 → 差异
-      { barcode: '6902222222222', qty: 10, account_qty: 10 },  // 10=10 → 无差异
+      { barcode: '6901111111111', qty: 12 },   // 初盘 12
+      { barcode: '6902222222222', qty: 10 },   // 初盘 10
     ]),
   });
+  // 复盘只盘了 6902，数量与初盘一致 → 6901 属于"上一轮有、这一轮没盘"（漏盘）
   r = await api('POST', '/api/stocktake/sheet/INV-Z20-2-20260919130000/upload', {
-    token: staff, body: uploadBody('Z20', 2, [{ barcode: '6902222222222', qty: 9 }]),
+    token: staff, body: uploadBody('Z20', 2, [{ barcode: '6902222222222', qty: 10 }]),
   });
-  ok('🔴 复盘上报"非差异商品" → 400 not_in_diff_set',
+  ok('🔴 复盘不受差异集限制（复盘就是重扫一遍，限它等于默认初盘是对的）',
+    r.status === 200 && r.body.accepted === 1, JSON.stringify(r.body));
+
+  // 抽盘：6902 初盘 10、复盘 10 → 两遍对得上 → 不在差异集 → 必须拒
+  r = await api('POST', '/api/stocktake/sheet/INV-Z20-3-20260919140000/upload', {
+    token: staff, body: uploadBody('Z20', 3, [{ barcode: '6902222222222', qty: 10 }]),
+  });
+  ok('🔴 抽盘上报"两遍都对得上"的商品 → 400 not_in_diff_set',
     r.status === 400 && r.body.code === 'not_in_diff_set', JSON.stringify(r.body));
   ok('  回包里点名是哪个条码', (r.body?.barcodes || []).includes('6902222222222'), JSON.stringify(r.body?.barcodes));
 
-  r = await api('POST', '/api/stocktake/sheet/INV-Z20-2-20260919130000/upload', {
-    token: staff, body: uploadBody('Z20', 2, [{ barcode: '6901111111111', qty: 15 }]),
+  // 抽盘：6901 初盘有、复盘没盘 → 漏盘 → 属于差异集 → 收
+  r = await api('POST', '/api/stocktake/sheet/INV-Z20-3-20260919150000/upload', {
+    token: staff, body: uploadBody('Z20', 3, [{ barcode: '6901111111111', qty: 12 }]),
   });
-  ok('复盘上报差异商品 → 通过，且标 diff_checked:true',
+  ok('🔴 抽盘复核"上一轮漏盘的"商品 → 通过，且标 diff_checked:true',
     r.status === 200 && r.body.diff_checked === true, JSON.stringify(r.body));
 
   // 边界：服务端还没有初盘数据的点位 → 不硬校
@@ -253,7 +268,8 @@ function uploadBody(zone, phase, rows, extra = {}) {
   r = await api('GET', '/api/stocktake/zone/Z10', { token: staff });
   let p1 = r.body.phases.find((x) => x.phase === 1);
   ok('点位详情返回三个阶段', r.status === 200 && r.body.phases.length === 3, JSON.stringify(r.body?.phases));
-  ok('初盘：3 个品种、差异 2、失误 0', p1.kinds === 3 && p1.diff === 2 && p1.mistakes === 0, JSON.stringify(p1));
+  ok('初盘：3 个品种、差异 0（没有上一阶段可比）、失误 0',
+    p1.kinds === 3 && p1.diff === 0 && p1.mistakes === 0, JSON.stringify(p1));
 
   await api('POST', '/api/stocktake/sheet/INV-Z10-2-20260919130000/upload', {
     token: staff, body: uploadBody('Z10', 2, [{ barcode: '6901111111111', qty: 15 }]),
@@ -262,7 +278,11 @@ function uploadBody(zone, phase, rows, extra = {}) {
   p1 = r.body.phases.find((x) => x.phase === 1);
   const p2 = r.body.phases.find((x) => x.phase === 2);
   const p3 = r.body.phases.find((x) => x.phase === 3);
-  ok('复盘：1 个品种、差异 1', p2.kinds === 1 && p2.diff === 1, JSON.stringify(p2));
+  // 差异 3 = 6901（初盘 12 → 复盘 15，数量对不上）+ 6902、6903（初盘有、复盘压根没扫，漏盘）
+  // 🔴 漏盘必须算进来：它在本阶段没有行，只从本阶段的行里 filter 是挑不出来的，
+  //    而"少一行"在明细里根本看不出来 —— 不合格的货架会被这么绕过去
+  ok('复盘：1 个品种、差异 3（6901 对不上 + 6902/6903 漏盘）',
+    p2.kinds === 1 && p2.diff === 3, JSON.stringify(p2));
   ok('🔴 复盘失误笔数 = 1（6901 初盘 12 → 复盘 15；没复核的两条不算）',
     p2.mistakes === 1, JSON.stringify(p2));
   ok('初盘失误 0（没有上一阶段）', p1.mistakes === 0, String(p1.mistakes));
@@ -278,7 +298,9 @@ function uploadBody(zone, phase, rows, extra = {}) {
   });
   r = await api('GET', '/api/stocktake/zone/Z10', { token: staff });
   const p3b = r.body.phases.find((x) => x.phase === 3);
-  ok('抽盘可上报非差异商品（抽盘不限差异集）', p3b.kinds === 2, JSON.stringify(p3b));
+  // 抽盘这两条都进得去：6901 是"初盘 12 → 复盘 15"（数量对不上），
+  // 6902 是"初盘有、复盘没盘"（漏盘）—— 两者都是该复核的疑问项。
+  ok('抽盘收下两条疑问项（数量对不上 + 漏盘）', p3b.kinds === 2, JSON.stringify(p3b));
   ok('🔴 抽盘复核没改数 → 失误 0（"复核过"不等于"失误"）',
     p3b.mistakes === 0, JSON.stringify(p3b));
 

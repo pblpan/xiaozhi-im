@@ -28,13 +28,14 @@ void main() {
       expect(InvPhase.next(3), isNull);
     });
 
-    test('只有复盘要求"只能扫上一阶段差异集"', () {
+    test('只有抽盘要求"只能扫上一阶段差异集"', () {
       expect(InvPhase.requiresDiffSetOnly(1), isFalse, reason: '初盘是全量扫');
-      expect(InvPhase.requiresDiffSetOnly(2), isTrue);
-      // 抽盘是主管随机抽查，抽到"没差异的商品"恰恰是它的目的之一。
-      // 如果抽盘也只在差异集里扫，它就退化成"复盘第二遍"，白干。
-      expect(InvPhase.requiresDiffSetOnly(3), isFalse,
-          reason: '抽盘若限定在差异集内，就失去了抽查的意义');
+      // 🔴 复盘**不**限差异集：复盘的价值就在于不知道哪里会错，
+      //    先按差异集限制它，等于默认初盘是对的，复盘就成了走过场。
+      expect(InvPhase.requiresDiffSetOnly(2), isFalse,
+          reason: '复盘限定在差异集内 = 默认初盘是对的，复盘就没意义了');
+      // 抽盘才是"只复核有问题的那些"：数量对不上、或者上一轮根本没扫到的。
+      expect(InvPhase.requiresDiffSetOnly(3), isTrue);
     });
   });
 
@@ -128,9 +129,25 @@ void main() {
       expect(d.verdict, ScanVerdict.ok);
     });
 
-    test('复盘：不在差异集里的商品被拒', () {
+    test('复盘：不在差异集里的商品**照样放行**（复盘就是重扫一遍）', () {
       final d = call(
         phase: 2,
+        barcode: '6901',
+        diffBarcodes: const <String>{'6902', '6903'},
+      );
+      expect(d.verdict, ScanVerdict.ok,
+          reason: '复盘限差异集 = 默认初盘是对的，复盘就成了走过场');
+      expect(d.accepted, isTrue);
+    });
+
+    test('复盘：在差异集里的商品放行', () {
+      final d = call(phase: 2, barcode: '6902', diffBarcodes: const <String>{'6902'});
+      expect(d.verdict, ScanVerdict.ok);
+    });
+
+    test('抽盘：不在差异集里的商品被拒', () {
+      final d = call(
+        phase: 3,
         barcode: '6901',
         diffBarcodes: const <String>{'6902', '6903'},
       );
@@ -139,15 +156,9 @@ void main() {
       expect(d.message, contains('差异'));
     });
 
-    test('复盘：在差异集里的商品放行', () {
-      final d = call(phase: 2, barcode: '6902', diffBarcodes: const <String>{'6902'});
+    test('抽盘：在差异集里的商品放行', () {
+      final d = call(phase: 3, barcode: '6902', diffBarcodes: const <String>{'6902'});
       expect(d.verdict, ScanVerdict.ok);
-    });
-
-    test('抽盘不要求差异集（差异集为空也必须能扫）', () {
-      final d = call(phase: 3, barcode: '6901', diffBarcodes: const <String>{});
-      expect(d.verdict, ScanVerdict.ok,
-          reason: '抽盘被差异集卡住的话，抽盘等于复盘，主管没法抽查"看起来正常的商品"');
     });
 
     test('未知条码（商档里没有）在初盘放行 —— 它必须进差异集', () {
@@ -159,7 +170,7 @@ void main() {
       final rejected = <ScanDecision>[
         call(sheetEditable: false),
         call(currentRows: 500),
-        call(phase: 2, diffBarcodes: const <String>{}),
+        call(phase: 3, diffBarcodes: const <String>{}),   // 抽盘才限差异集
         call(boundZones: const <String>{'Z99'}),
       ];
       for (final d in rejected) {
@@ -170,30 +181,98 @@ void main() {
   });
 
   // ============================================================
-  group('差异判定', () {
-    test('实盘 != 账面 才是差异', () {
-      expect(InventoryRules.isDiffRow({'diff_qty': 3.0}), isTrue);
-      expect(InventoryRules.isDiffRow({'diff_qty': -2.0}), isTrue);
-      expect(InventoryRules.isDiffRow({'diff_qty': 0.0}), isFalse);
-      expect(InventoryRules.isDiffRow({'diff_qty': 0}), isFalse,
+  group('差异判定（比上一阶段，不比账面）', () {
+    // 🔴 基准换过一次（2026-09-19）：门店系统里根本没有可用的库存账面
+    //    （泰格库所有库存表都是空表），比账面会得到"差异集 = 全部商品"，
+    //    三遍制退化成把同一个货架扫三遍。现在比的是**相邻两阶段的实盘数**。
+    test('和上一阶段数量对不上才是差异', () {
+      expect(InventoryRules.isDiffRow({'prev_qty': 10.0, 'diff_qty': 3.0}), isTrue);
+      expect(InventoryRules.isDiffRow({'prev_qty': 10.0, 'diff_qty': -2.0}), isTrue);
+      expect(InventoryRules.isDiffRow({'prev_qty': 10.0, 'diff_qty': 0.0}), isFalse);
+      expect(InventoryRules.isDiffRow({'prev_qty': 10.0, 'diff_qty': 0}), isFalse,
           reason: 'SQLite 的 0 有时回 int，不能只认 double');
     });
 
-    test('🔴 账面缺失（diff_qty 为 null）必须算差异，不能当成"没差异"', () {
-      // 货就在货架上、账上却没这个商品 —— 这是最严重的一类差异。
-      // SQL 里写 `where qty - account_qty != 0` 会静默丢掉这批行（NULL 参与
-      // 比较的结果是 NULL 而不是 TRUE），所以这条判定必须在 Dart 里做。
-      expect(InventoryRules.isDiffRow({'diff_qty': null}), isTrue);
-      expect(InventoryRules.isDiffRow(<String, dynamic>{}), isTrue);
+    test('🔴 没有上一阶段可比（prev_qty 为 null）→ 不算差异', () {
+      // 这条写反了后果很严重：初盘自己就会变成一个等于全部商品的差异集，
+      // 后面的复盘/抽盘被它一起带偏，三遍制当场失效。
+      expect(InventoryRules.isDiffRow({'prev_qty': null, 'diff_qty': null}), isFalse);
+      expect(InventoryRules.isDiffRow(<String, dynamic>{}), isFalse);
+    });
+
+    test('🔴 漏盘（上一轮有、这一轮没扫）必须并进差异集', () {
+      // 关键：漏盘的条码在**本阶段的行集里根本不存在**，只靠逐行谓词
+      // （isDiffRow）是永远挑不出来的 —— 一定要把上一阶段的行喂进来。
+      // 曾经 diffBarcodesOf 收了 prevRows 却没并 missingVsPrev，
+      // 结果差异集少算漏盘：数量错了至少还显眼，"少一行"是看不出来的。
+      final rows = InventoryRules.attachPrevDiff(
+        [
+          {'barcode': '6901', 'qty': 12.0}, // 与上一轮一致
+          {'barcode': '6902', 'qty': 9.0}, // 8 → 9，对不上
+        ],
+        const <String, double>{'6901': 12.0, '6902': 8.0, '6903': 5.0},
+      );
+      expect(InventoryRules.diffBarcodesOf(rows), <String>{'6902'},
+          reason: '只给本阶段的行时，6903 这种漏盘看不见（这是逐行谓词的天花板）');
+
+      final withPrev = InventoryRules.diffBarcodesOf(
+        rows,
+        prevRows: const <Map<String, dynamic>>[
+          {'barcode': '6901', 'qty': 12.0},
+          {'barcode': '6902', 'qty': 8.0},
+          {'barcode': '6903', 'qty': 5.0},
+        ],
+      );
+      expect(withPrev, <String>{'6902', '6903'},
+          reason: '喂了上一阶段的行，漏盘 6903 才算得进来');
+    });
+
+    test('isDiffRow 是逐行谓词：没有参照值一律不算差异', () {
+      expect(InventoryRules.isDiffRow(<String, dynamic>{}), isFalse);
+      expect(InventoryRules.isDiffRow({'prev_qty': null, 'diff_qty': null}), isFalse);
+      // 只给了参照值没给差值（手工构造行）→ 按"对不上"处理
+      expect(InventoryRules.isDiffRow({'prev_qty': 10.0}), isTrue);
+    });
+
+    test('attachPrevDiff 补出来的 diff_qty 是本阶段减上一阶段', () {
+      final rows = InventoryRules.attachPrevDiff(
+        [
+          {'barcode': '6901', 'qty': 15.0},
+          {'barcode': '6902', 'qty': 10.0},
+          {'barcode': '6903', 'qty': 7.0},   // 上一轮没盘过
+        ],
+        const <String, double>{'6901': 12.0, '6902': 10.0},
+      );
+      expect(rows[0]['diff_qty'], 3.0);
+      expect(rows[1]['diff_qty'], 0.0);
+      expect(rows[2]['prev_qty'], isNull);   // 没有上一阶段可比
+      expect(rows[2]['diff_qty'], isNull);
+    });
+
+    test('missingVsPrev 能捞出上一轮盘过、这一轮没扫的（漏盘）', () {
+      final miss = InventoryRules.missingVsPrev(
+        [
+          {'barcode': '6901', 'qty': 12.0},
+          {'barcode': '6902', 'qty': 10.0},
+        ],
+        [
+          {'barcode': '6901', 'qty': 12.0},
+        ],
+      );
+      expect(miss, <String>{'6902'},
+          reason: '漏盘在明细里根本看不出来，抽盘必须把它捞出来');
     });
 
     test('diffBarcodesOf 跳过空条码，不把空串塞进差异集', () {
-      final set = InventoryRules.diffBarcodesOf([
-        {'barcode': '6901', 'diff_qty': 1.0},
-        {'barcode': '', 'diff_qty': 5.0},
-        {'barcode': '   ', 'diff_qty': 5.0},
-        {'barcode': '6902', 'diff_qty': 0.0},
-      ]);
+      final set = InventoryRules.diffBarcodesOf(InventoryRules.attachPrevDiff(
+        [
+          {'barcode': '6901', 'qty': 11.0},
+          {'barcode': '', 'qty': 5.0},
+          {'barcode': '   ', 'qty': 5.0},
+          {'barcode': '6902', 'qty': 10.0},
+        ],
+        const <String, double>{'6901': 10.0, '6902': 10.0},
+      ));
       expect(set, <String>{'6901'});
     });
   });

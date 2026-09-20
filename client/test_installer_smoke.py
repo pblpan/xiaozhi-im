@@ -44,6 +44,16 @@ INSTALL_DIR = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', APP_N
 USER_DATA = os.path.join(os.environ.get('APPDATA', ''), 'com.example', 'xiaozhi_im_client')
 UNINST_KEY = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\%s' % APP_NAME
 
+# 🔴 打包时会**故意**多带这几个文件，核对"有没有意外文件"时必须豁免掉。
+#    以前这里是硬编码的 {'uninst.exe'}，于是每次冒烟都稳定报
+#    "多出 msvcp140.dll / vcruntime140.dll / vcruntime140_1.dll" ——
+#    一条**永远红**的断言，看久了就没人当真了，等于把这条判据废掉。
+#    现在直接引用 pack_win.py 的清单：打包带什么，测试就豁免什么，两边不可能漂移。
+sys.path.insert(0, HERE)
+from pack_win import REDIST_DLLS  # noqa: E402
+
+INSTALLER_ADDED = {'uninst.exe'} | set(REDIST_DLLS)
+
 _k32 = ctypes.windll.kernel32
 _adv = ctypes.windll.advapi32
 _PQLI = 0x1000          # PROCESS_QUERY_LIMITED_INFORMATION：跨权限级别也能查
@@ -276,14 +286,17 @@ def main():
     print('\n[2] 逐文件核对：安装结果 vs build 产物')
     want = tree(RELEASE)
     got = tree(INSTALL_DIR)
-    extra = sorted(set(got) - set(want) - {'uninst.exe'})   # uninst.exe 由安装器自己写
+    # 🔴 豁免项来自 pack_win.py 自己：uninst.exe 由安装器写，
+    #    VC++ 运行库是打包时**故意**随包分发的（见 INSTALLER_ADDED 的注释）。
+    extra = sorted(set(got) - set(want) - INSTALLER_ADDED)
     missing = sorted(set(want) - set(got))
     diff = sorted(k for k in (set(want) & set(got)) if want[k] != got[k])
     check(not missing, '没有缺文件（共 %d 个）' % len(want),
           '缺 %d 个: %s' % (len(missing), missing[:5]) if missing else '')
     check(not diff, '没有大小不一致的文件',
           '不一致 %d 个: %s' % (len(diff), diff[:5]) if diff else '')
-    check(not extra, '没有多出意外文件', '多出: %s' % extra[:5] if extra else '')
+    check(not extra, '没有多出意外文件（已豁免 %s）' % '/'.join(sorted(INSTALLER_ADDED)),
+          '多出: %s' % extra[:5] if extra else '')
     check('data/flutter_assets/assets/tray.ico' in got, '托盘图标在安装结果里')
 
     # ---------- 3. 快捷方式 / 注册表 ----------

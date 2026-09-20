@@ -311,12 +311,13 @@ void main() {
 
     test('阶段与货架位真的落库了（不是只在参数里过了一遍）', () async {
       final repo = await seedZone(barcodes: <String>['6901']);
-      final s = await repo.openSheet(zoneCode: 'Z01', phase: 3);
+      final s = await repo.openSheet(zoneCode: 'Z01', phase: 2);
       final no = s['sheet_no'] as String;
       await repo.scan(no, '6901', locCode: 'Z01-A01');
 
       final rows = await repo.listRows(no);
-      expect(rows.first['phase'], 3);
+      expect(rows.first['phase'], 2,
+          reason: '阶段没落库的话，三遍制的差异汇总会把初盘/复盘/抽盘混成一锅');
       expect(rows.first['loc_code'], 'Z01-A01');
     });
 
@@ -445,11 +446,11 @@ void main() {
 
   // ============================================================
   group('阶段差异与失误笔数', () {
-    test('初盘差异集 = 实盘 ≠ 账面，且含"账上没有"的条码', () async {
+    test('初盘没有上一阶段 → 差异集必空（账面数不参与判定）', () async {
       final repo = await seedZone(barcodes: <String>['6901', '6902', '6903']);
-      await seedMaster('6901', '对的', 10); // 实盘 10 → 无差异
-      await seedMaster('6902', '少了', 10); // 实盘 8  → 差异
-      // 6903 商档里没有 → 账面缺失，必须算差异
+      await seedMaster('6901', '对的', 10); // 实盘 10
+      await seedMaster('6902', '少了', 10); // 实盘 8
+      // 6903 商档里没有
 
       final s = await repo.openSheet(zoneCode: 'Z01', phase: 1);
       final no = s['sheet_no'] as String;
@@ -457,69 +458,110 @@ void main() {
       await repo.scan(no, '6902', qty: 8);
       await repo.scan(no, '6903', qty: 1);
 
-      final diff = await repo.diffBarcodes('Z01', 1);
-      expect(diff, <String>{'6902', '6903'},
-          reason: '账面缺失的条码被漏掉 = 最严重的一类差异没人看');
+      expect(await repo.diffBarcodes('Z01', 1), isEmpty,
+          reason: '初盘拿账面当基准的话这里会冒出 {6902,6903} —— 差异集恒等于全部商品，'
+              '三遍制就退化成把同一个货架扫三遍（门店的泰格库里根本没有可用账面数）');
+
+      // 账面数不参与判定 ≠ 不用显示：明细里仍要带出来当参考列
+      final rows = await repo.phaseRows('Z01', 1);
+      final r2 = rows.firstWhere((r) => r['barcode'] == '6902');
+      expect((r2['account_qty'] as num).toDouble(), 10.0);
+      expect(r2['prev_qty'], isNull);
+      expect(r2['diff_qty'], isNull);
     });
 
-    test('复盘只放差异集里的商品，非差异被拒且不入账', () async {
-      final repo = await seedZone(barcodes: <String>['6901', '6902']);
-      await seedMaster('6901', '对的', 10);
-      await seedMaster('6902', '少了', 10);
-
+    test('复盘与初盘数量对不上就是差异（含上一轮有这一轮没了）', () async {
+      final repo = await seedZone(barcodes: <String>['6901', '6902', '6903']);
       final s1 = await repo.openSheet(zoneCode: 'Z01', phase: 1);
-      await repo.scan(s1['sheet_no'] as String, '6901', qty: 10); // 无差异
-      await repo.scan(s1['sheet_no'] as String, '6902', qty: 8); // 有差异
+      await repo.scan(s1['sheet_no'] as String, '6901', qty: 10);
+      await repo.scan(s1['sheet_no'] as String, '6902', qty: 8);
+      await repo.scan(s1['sheet_no'] as String, '6903', qty: 1);
       await repo.submitSheet(s1['sheet_no'] as String);
 
       final s2 = await repo.openSheet(zoneCode: 'Z01', phase: 2);
       final no2 = s2['sheet_no'] as String;
+      await repo.scan(no2, '6901', qty: 10); // 一致 → 不是差异
+      await repo.scan(no2, '6902', qty: 9); // 8 → 9 → 差异
+      // 6903 第二遍没扫到 → 漏盘，也是差异
 
-      final bad = await repo.scan(no2, '6901');
-      expect(bad.verdict, ScanVerdict.notInDiffSet);
-      expect(await repo.listRows(no2), isEmpty);
-
-      final ok = await repo.scan(no2, '6902', qty: 10);
-      expect(ok.accepted, isTrue);
-      expect(await repo.listRows(no2), hasLength(1));
+      expect(await repo.diffBarcodes('Z01', 2), <String>{'6902', '6903'},
+          reason: '漏盘的条码被漏掉 = 最严重的一类差异没人看（明细里"少一行"看不出来）');
     });
 
-    test('抽盘不受差异集限制', () async {
-      final repo = await seedZone(barcodes: <String>['6901']);
-      await seedMaster('6901', '对的', 10);
+    test('抽盘只放"和上一阶段对不上"的商品，一致的被拒且不入账', () async {
+      final repo = await seedZone(barcodes: <String>['6901', '6902']);
+
       final s1 = await repo.openSheet(zoneCode: 'Z01', phase: 1);
       await repo.scan(s1['sheet_no'] as String, '6901', qty: 10);
+      await repo.scan(s1['sheet_no'] as String, '6902', qty: 8);
       await repo.submitSheet(s1['sheet_no'] as String);
 
+      final s2 = await repo.openSheet(zoneCode: 'Z01', phase: 2);
+      await repo.scan(s2['sheet_no'] as String, '6901', qty: 10); // 与初盘一致
+      await repo.scan(s2['sheet_no'] as String, '6902', qty: 12); // 与初盘不一致
+      await repo.submitSheet(s2['sheet_no'] as String);
+      expect(await repo.diffBarcodes('Z01', 2), <String>{'6902'});
+
       final s3 = await repo.openSheet(zoneCode: 'Z01', phase: 3);
-      final r = await repo.scan(s3['sheet_no'] as String, '6901', qty: 9);
-      expect(r.accepted, isTrue, reason: '抽盘被差异集卡住 = 主管没法抽查"看着正常"的商品');
+      final no3 = s3['sheet_no'] as String;
+
+      final bad = await repo.scan(no3, '6901');
+      expect(bad.verdict, ScanVerdict.notInDiffSet);
+      expect(await repo.listRows(no3), isEmpty,
+          reason: '判定了但照写 —— 等于没判，主管的抽盘单会被"看着正常"的商品淹掉');
+
+      final ok = await repo.scan(no3, '6902', qty: 11);
+      expect(ok.accepted, isTrue);
+      expect(await repo.listRows(no3), hasLength(1));
     });
 
-    test('失误笔数：初盘 12、复盘 15 → 1 笔；复盘没复核的不算失误', () async {
+    test('复盘不受差异集限制：这一片要能重新全盘一遍', () async {
+      final repo = await seedZone(barcodes: <String>['6901', '6902']);
+      final s1 = await repo.openSheet(zoneCode: 'Z01', phase: 1);
+      await repo.scan(s1['sheet_no'] as String, '6901', qty: 10);
+      await repo.scan(s1['sheet_no'] as String, '6902', qty: 10);
+      await repo.submitSheet(s1['sheet_no'] as String);
+      expect(await repo.diffBarcodes('Z01', 1), isEmpty);
+
+      final s2 = await repo.openSheet(zoneCode: 'Z01', phase: 2);
+      final no2 = s2['sheet_no'] as String;
+      expect((await repo.scan(no2, '6901', qty: 10)).accepted, isTrue);
+      expect((await repo.scan(no2, '6902', qty: 9)).accepted, isTrue,
+          reason: '复盘先按差异集卡住 = 默认初盘是对的，复盘就变成走过场，'
+              '初盘漏扫的货永远没人补');
+    });
+
+    test('失误笔数：初盘 12 → 复盘 15 算 1 笔；复盘没复核的不算失误', () async {
       final repo = await seedZone(barcodes: <String>['6901', '6902', '6903']);
       await seedMaster('6901', 'A', 10);
       await seedMaster('6902', 'B', 10);
       await seedMaster('6903', 'C', 10);
 
-      // 初盘：6901/6902 都盘出差异（12、15），6903 正好 10 无差异
+      // 初盘：6901=12、6902=15、6903=10
       final s1 = await repo.openSheet(zoneCode: 'Z01', phase: 1);
       final no1 = s1['sheet_no'] as String;
       await repo.scan(no1, '6901', qty: 12);
       await repo.scan(no1, '6902', qty: 15);
       await repo.scan(no1, '6903', qty: 10);
       await repo.submitSheet(no1);
-      expect(await repo.diffBarcodes('Z01', 1), <String>{'6901', '6902'});
+      expect(await repo.diffBarcodes('Z01', 1), isEmpty,
+          reason: '初盘没有上一阶段，不产生差异集');
       expect(await repo.mistakeCount('Z01', 1), 0, reason: '初盘没有上一阶段');
 
-      // 复盘只允许扫差异集：6901 改成 15（失误 1 笔），6902 不复核（不算失误）
+      // 复盘：6901 改成 15（≠12 → 1 笔失误）；6902 不复核（不算失误）；6903 照抄
       final s2 = await repo.openSheet(zoneCode: 'Z01', phase: 2);
       final no2 = s2['sheet_no'] as String;
       await repo.scan(no2, '6901', qty: 15);
-      expect(await repo.listRows(no2), hasLength(1),
-          reason: '6903 无差异却进了复盘的差异集，说明差异集算错了');
+      await repo.scan(no2, '6903', qty: 10);
+      expect(await repo.listRows(no2), hasLength(2));
 
-      expect(await repo.mistakeCount('Z01', 2), 1);
+      expect(await repo.diffBarcodes('Z01', 2), <String>{'6901', '6902'},
+          reason: '6901 数量对不上；6902 初盘有、复盘根本没扫 = 漏盘，也必须进差异集 '
+              '（差异集是"抽盘要去看的清单"，不是"员工犯错的清单"）');
+      expect(await repo.mistakeCount('Z01', 2), 1,
+          reason: '6902 上一轮 15、这一轮没扫，是"差异未复核"，不算失误 —— '
+              '混进失误笔数会让这个数虚高，主管没法拿它考核。'
+              '差异集 ⊇ 失误，两者本来就不是一个东西');
       expect(await repo.mistakeCount('Z01', 3), 0, reason: '抽盘还没扫，不该有失误数');
     });
 
@@ -534,10 +576,56 @@ void main() {
       expect(prog[0]['phase'], 1);
       expect(prog[0]['label'], '初盘');
       expect(prog[0]['kinds'], 1);
-      expect(prog[0]['diff'], 1);
+      expect(prog[0]['diff'], 0,
+          reason: '初盘没有上一阶段 → 差异数只能是 0（拿账面 10 当基准的话这里会变成 1）');
+      expect(prog[0]['mistakes'], 0);
       expect(prog[0]['status'], InvSheetStatus.open);
       expect(prog[1]['status'], -1, reason: '还没开的阶段要用 -1 表示"没有单"');
       expect(prog[2]['status'], -1);
+
+      // 复盘扫成 9 → 相对初盘的 7 差 2
+      final s2 = await repo.openSheet(zoneCode: 'Z01', phase: 2);
+      await repo.scan(s2['sheet_no'] as String, '6901', qty: 9);
+      final prog2 = await repo.phaseProgress('Z01');
+      expect(prog2[0]['diff'], 0, reason: '初盘的差异数不该被后来的复盘改写');
+      expect(prog2[1]['diff'], 1);
+      expect(prog2[1]['mistakes'], 1, reason: '初盘 7 → 复盘 9，是 1 笔失误');
+    });
+
+    test('🔴 diffRows 把漏盘补成一行（含商品名），差异表才看得见', () async {
+      final repo = await seedZone(barcodes: <String>['6901', '6902']);
+      await seedMaster('6902', '方便面', 10);
+
+      final s1 = await repo.openSheet(zoneCode: 'Z01', phase: 1);
+      await repo.scan(s1['sheet_no'] as String, '6901', qty: 10);
+      await repo.scan(s1['sheet_no'] as String, '6902', qty: 4);
+      await repo.submitSheet(s1['sheet_no'] as String);
+
+      final s2 = await repo.openSheet(zoneCode: 'Z01', phase: 2);
+      await repo.scan(s2['sheet_no'] as String, '6901', qty: 7); // 10 → 7
+      // 6902 这一遍没扫 → 漏盘
+
+      final rows = await repo.diffRows('Z01', 2);
+      expect(rows, hasLength(2), reason: '只挑本阶段的行会漏掉 6902 这一条漏盘');
+
+      final a = rows.firstWhere((r) => r['barcode'] == '6901');
+      expect(a['missing'], isNot(true), reason: '数量对不上，不是漏盘');
+      expect((a['diff_qty'] as num).toDouble(), -3.0);
+
+      final b = rows.firstWhere((r) => r['barcode'] == '6902');
+      expect(b['missing'], isTrue);
+      expect((b['qty'] as num).toDouble(), 0.0);
+      expect((b['prev_qty'] as num).toDouble(), 4.0);
+      expect((b['diff_qty'] as num).toDouble(), -4.0);
+      expect(b['name'], '方便面',
+          reason: '差异表上只有一串条码的话，主管不知道该去货架上找什么');
+    });
+
+    test('diffRows 在初盘没有参照 → 空表（不是"全部商品都是差异"）', () async {
+      final repo = await seedZone(barcodes: <String>['6901']);
+      final s = await repo.openSheet(zoneCode: 'Z01', phase: 1);
+      await repo.scan(s['sheet_no'] as String, '6901', qty: 3);
+      expect(await repo.diffRows('Z01', 1), isEmpty);
     });
 
     test('phaseRows 跨该阶段的多张单做汇总（不是只看最后一张）', () async {
@@ -551,7 +639,17 @@ void main() {
       final rows = await repo.phaseRows('Z01', 1);
       expect(rows, hasLength(1), reason: '按条码汇总了，不该是两行');
       expect((rows.first['qty'] as num).toDouble(), 7.0);
-      expect((rows.first['diff_qty'] as num).toDouble(), -3.0);
+      expect(rows.first['prev_qty'], isNull, reason: '初盘没有上一阶段');
+      expect(rows.first['diff_qty'], isNull);
+      expect((rows.first['account_qty'] as num).toDouble(), 10.0,
+          reason: '账面数仍要带出来当参考列，只是不参与差异判定');
+
+      // 复盘扫 5 → 相对初盘 7 是 -2
+      final c = await repo.openSheet(zoneCode: 'Z01', phase: 2);
+      await repo.scan(c['sheet_no'] as String, '6901', qty: 5);
+      final r2 = await repo.phaseRows('Z01', 2);
+      expect((r2.first['prev_qty'] as num).toDouble(), 7.0);
+      expect((r2.first['diff_qty'] as num).toDouble(), -2.0);
     });
   });
 

@@ -30,6 +30,13 @@ class StockMasterRepo {
   /// 靠它隔离，互不覆盖。
   static const String sourceTag = 'tiger';
 
+  /// 从自家服务端 `/api/master` 拉下来的商档（现在的正路）。
+  static const String sourceServer = 'server';
+
+  /// 服务端同步期间的**暂存表**：全部拉完才整表搬进 stock_master，
+  /// 中途失败就把整张表丢掉（正式底表一行不动）。
+  static const String stagingTable = 'stock_master_staging';
+
   final UpstreamCall _call;
   final String path;
 
@@ -100,6 +107,7 @@ class StockMasterRepo {
   static Future<int> upsertAll(
     Database db,
     List<Map<String, dynamic>> items, {
+    String table = 'stock_master',
     String source = sourceTag,
     bool purgeMissing = true,
   }) async {
@@ -109,7 +117,7 @@ class StockMasterRepo {
       final batch = txn.batch();
       for (final it in items) {
         batch.insert(
-          'stock_master',
+          table,
           <String, dynamic>{
             ...it,
             'source': source,
@@ -124,7 +132,7 @@ class StockMasterRepo {
         final keep = items.map((e) => e['barcode'].toString()).toList();
         final placeholders = List<String>.filled(keep.length, '?').join(',');
         batch.delete(
-          'stock_master',
+          table,
           where: 'source = ? AND barcode NOT IN ($placeholders)',
           whereArgs: <Object?>[source, ...keep],
         );
@@ -152,13 +160,127 @@ class StockMasterRepo {
     return upsertAll(db, items);
   }
 
-  /// 本地已有多少条商档（UI 显示"已同步 N 个商品"用）。
+  /// 从**自家服务端**拉商档（现在的正路）。
+  ///
+  /// 为什么不再只靠泰格上游：那个桥接跑在一台会关机、IP 会漂的机器上，
+  /// 一断就是"初盘每一行都没有账面数" → 差异集 = 全部商品 → 三遍制白盘。
+  /// 商档是门店自己的底表，放自家服务端最合适：管理台导入一次，全员同一份。
+  ///
+  /// 🔴 为什么要先写进 `staging` 再转正：
+  /// 🔴 暂存必须用**另一张表**，不能靠 source 字段区分：
+  ///    `stock_master` 的主键就是 `barcode`（不是 barcode+source），
+  ///    所以往同一张表里写"暂存的 69001"会把正式的 69001 直接替换掉 ——
+  ///    拉到一半失败时再把暂存一删，等于把上一次那份完整底表也一起删了。
+  ///    这个坑比"拉到一半"本身更狠：手机上会变成**一个商品都没有**。
+  ///    独立暂存表 + 最后一次性搬家，失败就丢掉整张暂存表，正式表一行不动。
+  static Future<int> syncFromServer({
+    void Function(int done, int total)? onProgress,
+    int pageSize = 2000,
+    // 只为测试可注入假实现；生产不传，走 ImApi 的真实接口。
+    Future<Map<String, dynamic>> Function()? countCall,
+    Future<Map<String, dynamic>> Function(int page, int pageSize)? pageCall,
+  }) async {
+    final api = ImApi();
+    final head = await (countCall ?? api.masterCount)();
+    final total = head['total'] is int
+        ? head['total'] as int
+        : int.tryParse('${head['total']}') ?? 0;
+    if (total <= 0) {
+      throw const StateException(
+          '服务端还没有商品档案。请让管理员在管理台「商品档案」里导入一次 CSV，'
+          '手机再来同步。');
+    }
+
+    final db = await LocalDb.I.db();
+    await db.execute('DROP TABLE IF EXISTS $stagingTable');
+    await db.execute('''
+      CREATE TABLE $stagingTable (
+        barcode TEXT PRIMARY KEY,
+        name TEXT,
+        spec TEXT,
+        unit TEXT,
+        unit_price REAL,
+        account_qty REAL,
+        source TEXT,
+        updated_at INTEGER
+      )
+    ''');
+
+    int done = 0;
+    try {
+      for (int page = 1;; page++) {
+        final envelope = await (pageCall ?? api.masterPage)(page, pageSize);
+        final raw = envelope['items'];
+        final items = raw is List ? raw : const <dynamic>[];
+        if (items.isEmpty) break;
+
+        final rows = <Map<String, dynamic>>[];
+        for (final e in items) {
+          if (e is! Map) continue;
+          final bc = (e['barcode'] ?? '').toString().trim();
+          if (bc.isEmpty) continue;
+          rows.add(<String, dynamic>{
+            'barcode': bc,
+            'name': e['name'],
+            'spec': e['spec'],
+            'unit': e['unit'],
+            'unit_price': e['unit_price'],
+            'account_qty': e['account_qty'],
+          });
+        }
+        if (rows.isEmpty) break;
+
+        // 分块写入期间**不清理**（purgeMissing=false）：
+        // 一清理就把前几页刚写进去的行当成"清单里没有"删掉了。
+        await upsertAll(db, rows,
+            table: stagingTable, source: sourceServer, purgeMissing: false);
+        done += rows.length;
+        onProgress?.call(done, total);
+        if (envelope['has_more'] != true) break;
+      }
+    } catch (e) {
+      // 拉一半失败：整张暂存表丢掉，正式底表一行不动
+      await db.execute('DROP TABLE IF EXISTS $stagingTable');
+      rethrow;
+    }
+
+    // 搬家：整表替换。商档就是"全量对齐"语义，没有"合并"这一说 ——
+    // 下架的商品不该还留着账面数，否则盘点时会凭空多出一行。
+    await db.transaction((txn) async {
+      await txn.delete('stock_master');
+      await txn.rawInsert(
+        'INSERT INTO stock_master '
+        '(barcode, name, spec, unit, unit_price, account_qty, source, updated_at) '
+        'SELECT barcode, name, spec, unit, unit_price, account_qty, source, updated_at '
+        'FROM $stagingTable',
+      );
+    });
+    await db.execute('DROP TABLE IF EXISTS $stagingTable');
+    return done;
+  }
+
+  /// 本地已有多少条商档（默认只数 [sourceTag] 那一份）。
+  ///
+  /// 不同来源可以**按条码共存**（69001 来自泰格、69002 是手工补的），
+  /// 所以"本来源有多少"是个有意义的数，别默认数全表。
   Future<int> countLocal({String source = sourceTag}) async {
     final db = await LocalDb.I.db();
     final rows = await db.rawQuery(
       'SELECT COUNT(*) AS n FROM stock_master WHERE source = ?',
       [source],
     );
+    final n = rows.first['n'];
+    return n is int ? n : int.parse(n.toString());
+  }
+
+  /// 本地商档总数（**不分来源**）。
+  ///
+  /// 🔴 界面上"已同步 N 个商品"必须用它，不能用 [countLocal]：
+  ///    从服务端同步下来的商档 source 是 `server`，而 countLocal 默认数 tiger，
+  ///    同步完了界面还显示"0 个商品"，人会以为同步白做了。
+  Future<int> countAll() async {
+    final db = await LocalDb.I.db();
+    final rows = await db.rawQuery('SELECT COUNT(*) AS n FROM stock_master');
     final n = rows.first['n'];
     return n is int ? n : int.parse(n.toString());
   }

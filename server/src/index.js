@@ -68,6 +68,9 @@ app.use('/api/hooks', require('./routes/hooks'));
 app.use('/api/stocktake', require('./routes/inventory'));
 // 商品 ↔ 货架位：查商品在哪个货架位 / 属于哪个盘点位，以及绑定解绑
 app.use('/api/location', require('./routes/inventory').location);
+// 商品档案（商档）：盘点算差异要的账面数存在这里，手机一键拉，
+// 不再依赖会关机、IP 会漂的泰格上游桥接。
+app.use('/api/master', require('./routes/master'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.use((req, res) => res.status(404).json({ error: 'not found' }));

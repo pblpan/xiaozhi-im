@@ -5,8 +5,9 @@ import 'qty_fmt.dart';
 ///
 /// 导出的东西有两份，用途完全不同，别混：
 ///   · 采集明细 —— 这一张单扫了什么，用来核对"我到底扫了没扫"
-///   · 阶段差异 —— 该点位某阶段"实盘 vs 账面"的差异集 + 失误笔数，
-///     这才是要发给主管/老板的那份
+///   · 阶段差异 —— 该点位某阶段"和**上一次盘的数量**对不上"的差异集
+///     （含上一遍盘过、这一遍没扫到的"漏盘"）+ 失误笔数，
+///     这才是要发给主管/老板的那份。
 ///
 /// 文件名前缀一律 `盘点_`，和扫码枪（`扫码_`）区分开 ——
 /// 两个模块共用本地流水表，导出文件再同名的话，收到的同事根本分不清哪份是哪份。
@@ -25,16 +26,24 @@ class InventoryExport {
     '货架位',
   ];
 
-  /// 阶段差异表的列（多了差异金额 —— 主管要看金额，不看件数）
+  /// 阶段差异表的列。
+  ///
+  /// 🔴 差异是**跟上一次盘的数量比**算出来的，不是跟账面比 ——
+  ///    所以必有一列是"上一阶段"。账面数只作参考列（门店的系统里
+  ///    没有可用的库存账面，拿它当基准会得到一个等于全部商品的差异集）。
+  ///    `备注` 列专门标"漏盘"：上一遍盘过、这一遍没扫到，
+  ///    这种行数量是 0、看着像"盘得挺准"，不标出来就等于没有。
   static const List<String> diffHeaders = <String>[
     '条码',
     '商品名称',
     '规格',
     '单位',
     '实盘数量',
-    '账面数量',
+    '上一阶段数量',
     '差异数量',
     '差异金额',
+    '账面数量',
+    '备注',
   ];
 
   /// 采集明细 → CSV（带 UTF-8 BOM）。
@@ -102,9 +111,11 @@ class InventoryExport {
         csvEsc(r['spec']),
         csvEsc(r['unit']),
         csvEsc(fmtQty(r['qty'])),
-        r['account_qty'] == null ? '' : csvEsc(fmtQty(r['account_qty'])),
+        r['prev_qty'] == null ? '' : csvEsc(fmtQty(r['prev_qty'])),
         r['diff_qty'] == null ? '' : csvEsc(fmtQty(r['diff_qty'])),
         amtOf(r) == null ? '' : csvEsc(amtOf(r)!.toStringAsFixed(2)),
+        r['account_qty'] == null ? '' : csvEsc(fmtQty(r['account_qty'])),
+        csvEsc(r['missing'] == true ? '漏盘' : ''),
       ].join(','));
     }
     return b.toString();
@@ -117,13 +128,14 @@ class InventoryExport {
     required String phaseLabel,
     required int mistakes,
   }) {
-    var loss = 0.0;   // 盘亏（实盘 < 账面）
+    var loss = 0.0;   // 盘亏（这一遍比上一遍少）
     var gain = 0.0;   // 盘盈
-    var noAccount = 0; // 账上没这个商品
+    var noAccount = 0; // 账上没有这个商品
+    var missed = 0;    // 漏盘：上一遍盘过、这一遍没扫到
     for (final r in rows) {
+      if (r['missing'] == true) missed++;
       if (r['account_qty'] == null) {
         noAccount++;
-        continue;
       }
       final a = amtOf(r);
       if (a == null) continue;
@@ -140,6 +152,7 @@ class InventoryExport {
       ..writeln('导出时间：${_now()}')
       ..writeln('─' * 30)
       ..writeln('差异品种：${rows.length}')
+      ..writeln('其中漏盘（上一遍有、这一遍没扫到）：$missed')
       ..writeln('盘亏金额：${loss.toStringAsFixed(2)}')
       ..writeln('盘盈金额：${gain.toStringAsFixed(2)}')
       ..writeln('账面缺失（账上没有这商品）：$noAccount')
@@ -150,18 +163,23 @@ class InventoryExport {
     for (final r in rows) {
       i++;
       final acc = r['account_qty'];
-      b.writeln('$i. ${nameOf(r)}　${r['barcode']}');
+      final p = r['prev_qty'];
+      final miss = r['missing'] == true;
+      b.writeln('$i. ${nameOf(r)}　${r['barcode']}${miss ? '　【漏盘】' : ''}');
       b.writeln('   实盘 ${fmtQty(r['qty'])}${_unit(r)}'
-          '　账面 ${acc == null ? '（账上没有）' : fmtQty(acc)}'
+          '　上一遍 ${p == null ? '（没盘过）' : fmtQty(p)}'
           '　差异 ${r['diff_qty'] == null ? '—' : fmtQty(r['diff_qty'])}');
+      b.writeln('   账面 ${acc == null ? '（账上没有）' : fmtQty(acc)}');
       final a = amtOf(r);
       if (a != null) b.writeln('   差异金额：${a.toStringAsFixed(2)}');
     }
     return b.toString();
   }
 
-  /// 差异金额 = 差异数量 × 单价。缺单价或账面时返回 null（不是 0 ——
+  /// 差异金额 = 差异数量 × 单价。缺单价或差异时返回 null（不是 0 ——
   /// "不知道差多少钱"和"差 0 元"是两回事，写 0 会让合计看着很安心）。
+  /// 差异数量是**比上一阶段**算的，所以这个金额是"这一遍和上一遍差的钱"，
+  /// 不是"和账面差的钱"（门店没有可用的账面数）。
   static double? amtOf(Map<String, dynamic> r) {
     final d = _d(r['diff_qty']);
     final p = _d(r['unit_price']);

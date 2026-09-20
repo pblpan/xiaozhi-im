@@ -1,0 +1,41 @@
+M1 盘点内核：差异口径改「三遍实盘互比」+ 修漏盘静默丢失
+
+差异不再跟账面数比（泰格库里没有可用库存，账面数只能给 0/空，
+「比账面」等于没有口径），改成 PG 的平行数量互比口径：
+  初盘 差异恒 0
+  复盘 = 本遍 − 初盘（不限商品，这一片重新盘一遍）
+  抽盘 = 本遍 − 复盘（只收上一轮对不上的，扫别的不会被记上）
+
+🔴 顺带修掉一个真 bug（客户端与服务端各有一份）：
+   漏盘（上一遍有、这一遍没扫到的商品）在本遍**一行都没有**，而差异集是
+   「遍历本遍的行、逐行判断」算出来的 —— 永远找不到它。原代码里那句
+   `diff_qty==null ⇒ 漏盘` 是死代码。后果：少的商品既不进差异表、也不进
+   失误笔数，静默消失；发给主管的差异表同样少这几行。
+   修法：diffBarcodesOf(rows, prevRows:) 用 missingVsPrev 把漏盘并进差异集；
+   服务端新增 diffRowsOf() 做同样的事。差异表 / CSV / Word 都补上
+   「漏盘」计数与 `【漏盘】` 标记 + 「上一阶段数量」列。
+
+其它改动：
+- 复盘不再受差异集限制（原来按差异表扫复盘 = 默认初盘是对的 = 走过场）
+- 抽盘空差异集的死胡同 → 改成「前两遍都对得上」+「返回点位」
+- 同步商品档案：进度条对话框，**故意不给取消按钮**（残缺商档比慢更糟）
+- 修 countLocal()→countAll()：同步下来的商档 source=server，
+  只数 tiger 会显示「0 个商品」
+- 安装器加固：不再用 InstallDirRegKey（会被注册表里陈旧的 InstallLocation
+  劫持到 D:\Program Files (x86)\小智 IM），改成「那个目录里确实有我们的 exe
+  才就地升级」，判据落在"程序在不在"而不是"键在不在"
+- 新增 client/tools/probe_aot_strings.py：在产物里验字串（APK 三 ABI 的
+  libapp.so + Win 的 data/app.so，UTF-16LE/UTF-8 双编码，先拿已知串校准，
+  双向变异自检过 —— 校准不过直接判 INVALID）
+- 新增 client/tools/recycle.py：清理用户机器上的东西一律送回收站，支持 --dry-run
+- 修 test_installer_smoke.py 一条**恒红**断言：把打包时故意随包分发的 3 个
+  VC++ 运行库当成了「意外文件」，改成 import pack_win.REDIST_DLLS，
+  打包带什么测试就豁免什么，两边不可能再漂移；反向自检 evil.dll 仍会被抓到
+
+验证证据：
+  客户端 flutter test --no-pub        429 / 429
+  服务端 inventory_e2e              71 / 71
+  服务端 master_e2e                 26 / 26
+  线上冒烟 _m1_smoke.py              18 / 18（含抽盘拒清单外 / 放行漏盘等反向用例）
+  真机安装冒烟 test_installer_smoke   20 / 20
+  双产物拆包验字串（APK + Setup 内的 app.so）  PASS

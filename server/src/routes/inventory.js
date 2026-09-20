@@ -101,48 +101,153 @@ function upsertZone(zc, zn, store) {
   return zoneOf(zc);
 }
 
-/** 该单据的全部明细（含 diff_qty，供界面直接显示）。 */
+/** 该单据的全部明细（含 prev_qty / diff_qty，供界面直接显示）。 */
 function scansOf(no) {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT id, sheet_no, zone_code, phase, barcode, qty, account_qty, loc_code,
-           scanned_at, uploaded_at, (qty - account_qty) AS diff_qty
+           scanned_at, uploaded_at
       FROM inv_scans
      WHERE sheet_no = ?
      ORDER BY scanned_at ASC, id ASC
   `).all(no);
+  if (!rows.length) return rows;
+
+  // 同一张单里同一条码可能扫多次 → 先在本单内汇总，再和上一阶段比
+  const zc = rows[0].zone_code;
+  const phase = rows[0].phase;
+  const prevPhase = PHASES[PHASES.indexOf(phase) - 1];
+  if (!prevPhase) return rows.map((r) => ({ ...r, prev_qty: null, diff_qty: null }));
+
+  const prev = zonePhaseQtyMap(zc, prevPhase);
+  return rows.map((r) => {
+    const p = prev.get(r.barcode);
+    return {
+      ...r,
+      prev_qty: p === undefined ? null : p,
+      diff_qty: p === undefined ? null : Number(r.qty) - p,
+    };
+  });
 }
 
 /**
- * 一行是不是差异。
+ * 一行是不是差异 —— **比上一阶段的数量**，不比账面。
  *
- * 🔴 绝不能在 SQL 里写 `WHERE qty - account_qty != 0`：
- *    account_qty 为 NULL 时整个表达式求值为 **NULL 而不是 TRUE**，
- *    "账上没有这个商品"这批行会被**静默丢掉** ——
- *    而那恰恰是最严重的一类差异（货在架上、账上没这东西）。
- *    所以判定放在 JS 里做，和客户端 InventoryRules.isDiffRow 同一口径。
+ * 🔴 为什么换了基准（2026-09-19）：
+ *    门店的系统里根本没有可用的库存账面（泰格库所有库存表都是空表），
+ *    `account_qty` 全是 0/NULL，于是差异集恒等于"全部商品"，
+ *    复盘被迫把所有东西重扫一遍 —— 三遍制退化成"同一个货架扫三遍"。
+ *    比优特 PG 的真实口径就是三遍平行数量互比（初盘/复盘/抽盘），这里照它来。
+ *    账面数仍然保留在行里，只作参考列显示，不再参与差异判定。
+ *
+ * 🔴 初盘没有上一阶段可比 → `prev_qty` 为 null → **不算差异**。
+ *    这条很容易写错成"没参照就是有差异"，那样初盘自己就变成一个等于全部商品
+ *    的差异集，后面的复盘/抽盘会被它一起带偏。
  */
 function isDiff(row) {
-  if (row.account_qty === null || row.account_qty === undefined) return true;
-  return Number(row.qty) !== Number(row.account_qty);
+  if (row.prev_qty === null || row.prev_qty === undefined) return false;
+  // 注意："漏盘"（上一轮有、这一轮没扫）**不会**走到这里 ——
+  // 那种条码在本阶段压根没有行，行集里挑不出来，必须靠 [diffRowsOf] 补。
+  return Number(row.diff_qty) !== 0;
 }
 
-/** 某点位某阶段的行（按条码汇总，跨该阶段的所有单）。 */
+/**
+ * 该点位某阶段的差异行 = 数量对不上的 + **上一轮盘过这一轮没扫到的（漏盘）**。
+ *
+ * 🔴 为什么不能直接 `rows.filter(isDiff)`：
+ *    漏盘的特征恰恰是**本阶段没有这一行** —— 从一个只含本阶段行的集合里
+ *    永远挑不出"少了的那一行"。曾经 `isDiff` 里写了一句
+ *    "diff_qty 为 null ⇒ 漏盘"，那是走不到的死代码（prev_qty 为 null 时
+ *    先一步 return false 了），于是差异数少算、`diff_rows` 里缺漏盘项。
+ *    数量错了至少还显眼，少一行是看不出来的 —— 这一类必须单独补出来。
+ */
+function diffRowsOf(zc, phase) {
+  const prevPhase = PHASES[PHASES.indexOf(phase) - 1];
+  if (!prevPhase) return []; // 初盘没有参照，不产生差异
+  const rows = zonePhaseRows(zc, phase);
+  const cur = new Set(rows.map((r) => r.barcode));
+  const missed = [];
+  for (const [code, q] of zonePhaseQtyMap(zc, prevPhase)) {
+    if (cur.has(code)) continue;
+    missed.push({
+      barcode: code,
+      qty: 0,
+      account_qty: null,
+      loc_code: null,
+      prev_qty: q,
+      diff_qty: -q, // 上一轮 q、这一轮 0
+      missing: true,
+    });
+  }
+  return [...rows.filter(isDiff), ...missed];
+}
+
+/** 某点位某阶段**按条码汇总**的数量表（barcode → qty）。 */
+function zonePhaseQtyMap(zc, phase) {
+  const m = new Map();
+  for (const r of db.prepare(`
+    SELECT barcode, SUM(qty) AS qty
+      FROM inv_scans
+     WHERE zone_code = ? AND phase = ?
+     GROUP BY barcode
+  `).all(zc, phase)) {
+    m.set(r.barcode, Number(r.qty));
+  }
+  return m;
+}
+
+/** 给汇总行补上"上一阶段数量"和"差异"（和客户端 attachPrevDiff 同一口径）。 */
+function attachPrevDiff(rows, prev) {
+  return rows.map((r) => {
+    const p = prev.get(r.barcode);
+    return {
+      ...r,
+      prev_qty: p === undefined ? null : p,
+      diff_qty: p === undefined ? null : Number(r.qty) - p,
+    };
+  });
+}
+
+/** 某点位某阶段的行（按条码汇总，跨该阶段的所有单；已补 prev_qty / diff_qty）。 */
 function zonePhaseRows(zc, phase) {
-  return db.prepare(`
+  const prevPhase = PHASES[PHASES.indexOf(phase) - 1];
+  const rows = db.prepare(`
     SELECT barcode,
-           SUM(qty)                          AS qty,
-           MAX(account_qty)                  AS account_qty,
-           (SUM(qty) - MAX(account_qty))     AS diff_qty
+           SUM(qty)              AS qty,
+           MAX(account_qty)      AS account_qty,
+           MAX(loc_code)         AS loc_code
       FROM inv_scans
      WHERE zone_code = ? AND phase = ?
      GROUP BY barcode
      ORDER BY barcode ASC
   `).all(zc, phase);
+  return attachPrevDiff(rows, prevPhase ? zonePhaseQtyMap(zc, prevPhase) : new Map());
+}
+
+/**
+ * 抽盘要复核的集合：数量对不上的 + **上一轮盘过这一轮没扫到的（漏盘）**。
+ *
+ * 🔴 漏盘必须进来：员工最容易干的事就是绕开不好盘的货架，
+ *    而"少一行"在明细里根本看不出来 —— 不像数量错了那么显眼。
+ */
+function diffSetForNextPhase(zc, phaseA, phaseB) {
+  const a = zonePhaseQtyMap(zc, phaseA);
+  const b = zonePhaseQtyMap(zc, phaseB);
+  const out = new Set();
+  // 上一轮有、这一轮没扫（漏盘）或数量对不上
+  for (const [code, qa] of a) {
+    const qb = b.get(code);
+    if (qb === undefined || qb !== qa) out.add(code);
+  }
+  // 这一轮多扫出来的（上一轮压根没盘到）—— 一样是疑问项，抽盘要看
+  for (const [code] of b) {
+    if (!a.has(code)) out.add(code);
+  }
+  return out;
 }
 
 function phaseSummary(zc, phase) {
   const rows = zonePhaseRows(zc, phase);
-  const diff = rows.filter(isDiff);
+  const diff = diffRowsOf(zc, phase);
   return {
     phase,
     label: PHASE_LABEL[phase],
@@ -517,6 +622,9 @@ router.get('/sheet/:no', (req, res) => {
   if (!s) return res.status(404).json({ error: '盘点单不存在' });
 
   const rows = scansOf(no);
+  // 单据级差异是**行级**的（这张单上扫到的、和上一阶段对不上的），
+  // 不含"漏盘"：漏盘要按**阶段**看才有意义（同阶段可能有好几张单，
+  // 这一张没有不代表那一张也没有）。阶段口径见下面的 phases[].diff。
   const diff = rows.filter(isDiff);
   const unbound = rows.filter((r) => !r.loc_code);
   res.json({
@@ -585,19 +693,28 @@ router.post('/sheet/:no/upload', (req, res) => {
     z = upsertZone(zc, name(body.zone.zone_name, zc), body.zone.store_code ? code(body.zone.store_code) : null);
   }
 
-  // ── 复盘服务端校验：只允许上报上一轮的差异商品 ──
-  // 🔴 但**只有服务端已经有初盘数据时才校**。整场盘点断网跑完、最后一次性上传，
-  //    这时服务端还没有初盘数据，硬校会把整批数据拒掉（现场表现为"传不上去"）。
-  //    这时跳过并在回包里明确标 diff_checked:false，让调用方知道"这次没校"。
+  // ── 阶段准入校验 ──
+  //
+  // 🔴 只有**抽盘**限差异集（初盘 vs 复盘 对不上的那些），复盘不限：
+  //    复盘的价值就在于不知道哪里会错，先按差异集限制它等于默认初盘是对的。
+  //    这和客户端 InventoryRules.requiresDiffSetOnly 必须一致 ——
+  //    两边口径不齐，手机让扫、服务端拒收，现场只会得到"传不上去"。
+  //
+  // 🔴 但**只有服务端已经有前两阶段数据时才校**。整场盘点断网跑完、最后
+  //    一次性上传，这时服务端还没有初盘数据，硬校会把整批数据拒掉
+  //    （现场表现为"传不上去"）。这时跳过并在回包里明确标 diff_checked:false，
+  //    让调用方知道"这次没校"。
   let diffChecked = false;
-  if (phase === 2) {
-    const prevRows = zonePhaseRows(zc, 1);
-    if (prevRows.length > 0) {
-      const allowed = new Set(prevRows.filter(isDiff).map((r) => r.barcode));
-      const bad = [...new Set(rows.map((r) => code(r && r.barcode)).filter((b) => b && !allowed.has(b)))];
+  if (phase === 3) {
+    const has1 = zonePhaseQtyMap(zc, 1).size > 0;
+    const has2 = zonePhaseQtyMap(zc, 2).size > 0;
+    if (has1 && has2) {
+      const allowed = diffSetForNextPhase(zc, 1, 2);
+      const bad = [...new Set(rows.map((r) => code(r && r.barcode))
+        .filter((b) => b && !allowed.has(b)))];
       if (bad.length) {
         return res.status(400).json({
-          error: '复盘阶段只允许上报上一轮的差异商品',
+          error: '抽盘阶段只复核初盘与复盘对不上的商品',
           code: 'not_in_diff_set',
           barcodes: bad.slice(0, 100),
           total_bad: bad.length,
@@ -687,6 +804,7 @@ router.post('/sheet/:no/upload', (req, res) => {
       summary: {
         kinds: all.length,
         total_qty: all.reduce((a, r) => a + Number(r.qty), 0),
+        // 同样是行级口径（本次上传的这张单），漏盘/阶段差异看 /zone/:code
         diff: all.filter(isDiff).length,
       },
     });

@@ -56,6 +56,7 @@
         <el-menu-item index="clientconfig">客户端配置</el-menu-item>
         <el-menu-item index="modules">动态模块</el-menu-item>
         <el-menu-item index="upstreams">上游接口</el-menu-item>
+        <el-menu-item index="master">商品档案</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
         <el-menu-item index="license">授权管理</el-menu-item>
         <el-menu-item index="help">系统帮助</el-menu-item>
@@ -3050,6 +3051,87 @@ docker compose up -d --force-recreate xiaozhi-im</div>
 
         </div>
 
+        <div v-else-if="tab === 'master'">
+          <el-alert type="success" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              商品档案（商档）是<b>盘点的底表</b>：手机在盘点页点「同步商品档案」，
+              就把这里的条码 / 名称 / 规格 / 单价整份拉到手机上，断网也能盘 ——
+              扫出来的每一行靠它显示成人看得懂的名字，差异表靠它算金额。
+              以前这份数据只能从泰格上游拉 —— 那台机器一关机、IP 一漂就断。
+              现在存在自家服务端：<b>一次导入，全员拉同一份</b>。
+              <br />
+              <b>注意：盘点差异不是拿实盘数和「账面数」比</b>。门店的系统里没有可用的
+              库存账面（泰格库所有库存表都是空的），拿它当基准会得到"差异集 = 全部商品"，
+              三遍制就退化成把同一个货架扫三遍。实际口径是<b>三遍平行互比</b>：
+              复盘比初盘、抽盘比复盘，对不上的才进差异集（含上一遍盘过、这一遍没扫到的"漏盘"）。
+              下面的「账面数」只作参考列。
+            </template>
+          </el-alert>
+
+          <div class="page-bar">
+            <el-button type="primary" :loading="masterImport.running" @click="pickMasterFile">导入 CSV</el-button>
+            <el-button :disabled="!master.total || masterImport.running" @click="clearMaster">清空</el-button>
+            <span class="hint">
+              格式：<code class="mono">序号,条码,商品名字,数量</code> —— 和扫码枪同一份模板，
+              可不带表头；<b>数量列落到「账面数」，只作参考</b>（差异是拿三遍实盘互比算的，
+              不是拿它比）。
+              <code class="mono">.txt</code> 用 Tab 分隔也能读，GBK / UTF-8 都行。
+            </span>
+            <input ref="masterFileEl" type="file" accept=".csv,.txt,.tsv" style="display:none" @change="onMasterFile" />
+          </div>
+
+          <div v-if="masterImport.running" style="margin:12px 0">
+            <el-progress :percentage="masterImport.total
+              ? Math.floor(masterImport.done / masterImport.total * 100) : 0" />
+            <div class="hint">
+              已传 {{ masterImport.done }} / {{ masterImport.total }} 行
+              <span v-if="masterImport.rejected">（跳过 {{ masterImport.rejected }} 行不合法条码）</span>
+              —— <b>全部传完才会替换旧档案</b>，中途关掉页面旧数据不受影响。
+            </div>
+          </div>
+
+          <el-descriptions border :column="3" style="margin-bottom:14px">
+            <el-descriptions-item label="商品总数">{{ master.total }}</el-descriptions-item>
+            <el-descriptions-item label="最后更新">
+              {{ master.updated_at ? fmtTime(master.updated_at) : '—' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="手机同步方式">
+              盘点页右上角 <code class="mono">同步商品档案</code>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <el-table :data="master.list" border stripe>
+            <el-table-column label="条码" width="180">
+              <template #default="{ row }"><code class="mono">{{ row.barcode }}</code></template>
+            </el-table-column>
+            <el-table-column label="商品名" min-width="220">
+              <template #default="{ row }">{{ row.name || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="规格" width="120">
+              <template #default="{ row }">{{ row.spec || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="单位" width="80">
+              <template #default="{ row }">{{ row.unit || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="单价" width="100">
+              <template #default="{ row }">{{ row.unit_price == null ? '—' : row.unit_price }}</template>
+            </el-table-column>
+            <el-table-column label="账面数（参考）" width="120">
+              <template #default="{ row }">
+                <b>{{ row.account_qty == null ? '—' : row.account_qty }}</b>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-if="!master.list.length && !masterImport.running"
+            description="还没有商品档案。点「导入 CSV」把门店的商品表导进来，手机盘点才认得出商品名、差异表才算得出金额" />
+          <div v-if="master.list.length" class="page-bar" style="margin-top:10px">
+            <el-button size="small" :disabled="master.page <= 1" @click="loadMasterPage(master.page - 1)">上一页</el-button>
+            <span class="hint">第 {{ master.page }} 页</span>
+            <el-button size="small" :disabled="master.list.length < master.pageSize"
+              @click="loadMasterPage(master.page + 1)">下一页</el-button>
+          </div>
+        </div>
+
         <div v-else-if="tab === 'settings'">
           <el-card style="margin-bottom:16px">
             <template #header>公司与好友模式（对全服务器生效，客户端登录页/扫描结果即时可见）</template>
@@ -4191,6 +4273,7 @@ async function loadTab() {
   else if (tab.value === 'clientconfig') { await loadCc(); await loadCcApplied(); }
   else if (tab.value === 'modules') { await loadMm(); await loadAppCatalog(); await loadUserOptions(); }
   else if (tab.value === 'upstreams') await loadUs();
+  else if (tab.value === 'master') await loadMaster();
   else if (tab.value === 'license') await loadLicense();
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
 }
@@ -4894,6 +4977,170 @@ async function runUsTest() {
     // 排障时才能一眼知道该改哪儿
     usTestErr.value = e.response?.data?.error || e.message;
   } finally { usTestBusy.value = false; }
+}
+
+/* ====== 商品档案（商档）======
+   盘点的底表：手机扫出来的每一行靠它显示成人看得懂的名字，差异表靠它算金额。
+   这份底表原先进不了服务端（只能从泰格上游拉），所以 /api/master 把它收进来：
+   管理台导入一次，手机拉同一份。
+
+   ⚠️ 它**不是差异的基准**：门店系统里没有可用的库存账面（泰格库的库存表全是空的），
+   拿账面比会得到"差异集 = 全部商品"。实际口径是三遍平行互比（复盘比初盘、
+   抽盘比复盘），`account_qty` 只作参考列。
+
+   🔴 分块写 + commit 的两步语义必须在界面上说清楚：
+   12 万行要传 60 多块，传到一半网断了 —— 这时候旧档案必须是**完好的**，
+   否则店里会拿着一份缺一半的底表去盘，而界面上什么都看不出来。
+   所以写块只管 UPSERT，全部传完才调 commit 换掉旧数据。
+   中断时那句提示要明说"旧数据不受影响"，不然管理员会因为怕丢数据而不敢重导。 */
+const master = ref({ total: 0, updated_at: 0, list: [], page: 1, pageSize: 20 });
+const masterImport = ref({ running: false, done: 0, total: 0, rejected: 0 });
+const masterFileEl = ref(null);
+
+async function loadMaster() {
+  try {
+    const { data } = await api.get('/master/count');
+    master.value.total = data.total || 0;
+    master.value.updated_at = data.updated_at || 0;
+    await loadMasterPage(1);
+  } catch (e) {
+    ElMessage.error('读取商品档案失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+async function loadMasterPage(page) {
+  try {
+    const { data } = await api.get(`/master/?page=${page}&pageSize=${master.value.pageSize}`);
+    master.value.list = data.items || [];
+    master.value.page = page;
+  } catch (e) {
+    ElMessage.error('读取商品档案失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+/** 门店导出的 txt/csv 多是 GBK：先按 GBK 解，替换字符多就退回 UTF-8。 */
+function readFileText(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('文件读取失败'));
+    fr.onload = () => {
+      const buf = fr.result;
+      let s = '';
+      try { s = new TextDecoder('gbk').decode(buf); } catch { s = ''; }
+      const bad = (s.match(/\uFFFD/g) || []).length;
+      if (!s || bad > Math.max(3, s.length * 0.001)) s = new TextDecoder('utf-8').decode(buf);
+      resolve(s);
+    };
+    fr.readAsArrayBuffer(file);
+  });
+}
+
+/**
+ * 解析成 {barcode, name, account_qty}。
+ * 认两种形状：带表头（按列名找）/ 不带表头（序号,条码,名字,数量）。
+ * 🔴 序号列的判定要**严格**：门店编码常常就是 1001、1002 这种四位数，
+ *    宽松判定会把"第一列是编码"误认成序号，于是整表的条码列错位一格 ——
+ *    导入完看着"有 12 万行"，实际条码全是门店编码，盘点时一个都对不上。
+ */
+function parseMasterCsv(text) {
+  const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return [];
+  const probe = lines[0];
+  const delim = probe.includes('\t') ? '\t' : (probe.includes(',') ? ',' : (probe.includes(';') ? ';' : '\t'));
+  const cells = lines.map((l) => l.split(delim).map((c) => c.trim().replace(/^"|"$/g, '')));
+
+  const head = cells[0].map((c) => c.toLowerCase());
+  const find = (keys) => {
+    for (const k of keys) { const i = head.findIndex((h) => h.includes(k)); if (i >= 0) return i; }
+    return -1;
+  };
+  const hb = find(['条码', 'barcode', '商品编码', '国际条码']);
+  let start = 0;
+  let idx;
+  if (hb >= 0) {
+    start = 1;
+    idx = { barcode: hb, name: find(['商品名字', '商品名称', '品名', '名称', 'name']), qty: find(['数量', '账面', '库存', 'qty']) };
+  } else {
+    // 没有表头：只有当"第一列严格等于行号"时才认它是序号列
+    const sample = cells.slice(0, Math.min(cells.length, 5));
+    const hasSerial = cells.length >= 2 && sample.every((c, i) => c[0] === String(i + 1));
+    idx = hasSerial
+      ? { barcode: 1, name: 2, qty: 3 }
+      : { barcode: 0, name: 1, qty: 2 };
+  }
+
+  const out = [];
+  for (let i = start; i < cells.length; i++) {
+    const c = cells[i];
+    const barcode = (c[idx.barcode] || '').trim();
+    if (!barcode) continue;
+    const rawQty = idx.qty >= 0 ? String(c[idx.qty] ?? '').replace(/[^0-9.\-]/g, '') : '';
+    out.push({
+      barcode,
+      name: idx.name >= 0 ? (c[idx.name] || '') : '',
+      account_qty: rawQty === '' ? null : Number(rawQty),
+    });
+  }
+  return out;
+}
+
+function pickMasterFile() { masterFileEl.value?.click(); }
+
+async function onMasterFile(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';            // 清掉，否则再选同一个文件不触发 change
+  if (!file) return;
+  let rows;
+  try {
+    rows = parseMasterCsv(await readFileText(file));
+  } catch (err) {
+    ElMessage.error('读文件失败：' + err.message);
+    return;
+  }
+  if (!rows.length) {
+    ElMessage.error('没解析出任何行。至少要能找到「条码」这一列。');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `从「${file.name}」解析到 ${rows.length} 行。导入完成后将替换现有的 ${master.value.total} 行商品档案。`,
+      '导入商品档案', { type: 'warning', confirmButtonText: '开始导入', cancelButtonText: '取消' });
+  } catch { return; }
+
+  const batch = 'B' + Date.now();
+  masterImport.value = { running: true, done: 0, total: rows.length, rejected: 0 };
+  try {
+    for (let i = 0; i < rows.length; i += 2000) {
+      const { data } = await api.post('/master/upload', { batch, rows: rows.slice(i, i + 2000) });
+      masterImport.value.done += data.accepted || 0;
+      masterImport.value.rejected += data.rejected_total || 0;
+      await new Promise((r) => setTimeout(r, 0));   // 让出主线程，进度条才动得了
+    }
+    await api.post('/master/commit', { batch });
+    ElMessage.success(`导入完成：${masterImport.value.done} 行`
+      + (masterImport.value.rejected ? `（跳过 ${masterImport.value.rejected} 行不合法条码）` : ''));
+    await loadMaster();
+  } catch (err) {
+    ElMessage.error('导入中断：' + (err.response?.data?.error || err.message)
+      + ' —— 旧档案未受影响，可以重来。');
+  } finally {
+    masterImport.value.running = false;
+  }
+}
+
+async function clearMaster() {
+  try {
+    await ElMessageBox.confirm(
+      `将清空全部 ${master.value.total} 行商品档案。清空后手机盘点出来的行会显示成「未知条码」，差异金额也算不出来（差异本身是三遍实盘互比，不受影响）。`,
+      '清空商品档案', { type: 'warning', confirmButtonText: '确认清空', cancelButtonText: '取消' });
+  } catch { return; }
+  try {
+    const { data } = await api.delete('/master/');
+    ElMessage.success(`已清空 ${data.deleted} 行`);
+    await loadMaster();
+  } catch (e) {
+    ElMessage.error('清空失败：' + (e.response?.data?.error || e.message));
+  }
 }
 
 // 监听 tab 切换

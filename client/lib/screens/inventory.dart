@@ -40,7 +40,9 @@ class _InventoryPageState extends State<InventoryPage> {
   Future<void> _reload() async {
     try {
       final zones = await _repo.listZones();
-      final master = await StockMasterRepo().countLocal();
+      // 🔴 必须数全表（countAll），不能数默认来源：服务端同步下来的商档
+      //    source 是 server，countLocal 默认只数 tiger，同步完会显示"0 个商品"。
+      final master = await StockMasterRepo().countAll();
       if (!mounted) return;
       setState(() {
         _zones = zones;
@@ -221,13 +223,54 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   Future<void> _syncMaster() async {
-    _snack('正在同步商品档案…');
+    final progress = ValueNotifier<String>('正在连接服务端…');
+    final frac = ValueNotifier<double?>(null);
+
+    // 🔴 进度框**不给取消按钮**：12 万行分几十页拉，中途取消会让手机上
+    //    留一份残缺的商档（代码里虽然会把暂存清掉，但用户不知道自己拿到的
+    //    是上一次那份还是这次这份）。要停就等它拉完。
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('同步商品档案'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('从服务端拉取条码 / 名称 / 规格 / 单价。\n'
+                '扫出来的每一行靠它显示成人看得懂的名字，差异表靠它算金额。\n'
+                '差异本身是三遍实盘互比（复盘比初盘、抽盘比复盘），不靠账面数。'),
+            const SizedBox(height: 14),
+            ValueListenableBuilder<double?>(
+              valueListenable: frac,
+              builder: (_, v, __) => LinearProgressIndicator(value: v),
+            ),
+            const SizedBox(height: 8),
+            ValueListenableBuilder<String>(
+              valueListenable: progress,
+              builder: (_, v, __) => Text(v,
+                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            ),
+          ],
+        ),
+      ),
+    );
+
     try {
-      final n = await StockMasterRepo().sync();
+      final n = await StockMasterRepo.syncFromServer(onProgress: (done, total) {
+        frac.value = total <= 0 ? null : done / total;
+        progress.value = '$done / $total';
+      });
+      if (mounted) Navigator.of(context).pop();
       await _reload();
       _snack('已同步 $n 个商品');
     } catch (e) {
+      if (mounted) Navigator.of(context).pop();
       _snack('同步失败：$e');
+    } finally {
+      progress.dispose();
+      frac.dispose();
     }
   }
 

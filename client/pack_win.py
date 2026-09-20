@@ -191,7 +191,11 @@ SetDatablockOptimize on
 Name "$${APP_NAME} $${VERSION}"
 OutFile "__OUT_FILE__"
 InstallDir "__DEFAULT_DIR__"
-InstallDirRegKey __REG_ROOT__ "$${UNINST_KEY}" "InstallLocation"
+; ⚠️ 这里**故意不用** InstallDirRegKey —— 它会把注册表里记的旧 InstallLocation
+;    无条件当成安装目录。本机就真踩到过：HKCU 里躺着一条历史遗留的
+;    `D:\Program Files (x86)\小智 IM`（早期 --machine 装法留下的），
+;    结果新的**用户级**安装包被它劫持到那个目录去，"装到哪了"和预期完全不符。
+;    现在改成在 .onInit 里带条件采纳 —— 见 INSTDIR_GUARD。
 RequestExecutionLevel __EXEC_LEVEL__
 ShowInstDetails show
 ShowUnInstDetails show
@@ -389,14 +393,42 @@ Function .onInit
   oscheck_abort:
     Abort
   oscheck_pass:
+  __INSTDIR_GUARD__
   Call __KILL_MAIN__
 FunctionEnd
 '''
+
+# 安装位置守卫：**有条件**地采纳注册表里记的旧安装位置。
+#
+# 为什么要带条件：NSIS 的 InstallDirRegKey 是无条件采纳的 —— 只要那条
+# InstallLocation 还在，安装就往那儿走，哪怕它指向的是上一个装法留下的、
+# 跟本次安装范围（用户级 / 机器级）根本不搭的地方。实测踩坑：
+#   HKCU\...\Uninstall\小智 IM 里记着 D:\Program Files (x86)\小智 IM
+#   （早期 --machine 的产物），于是用户级的 Setup 静默装到了 Program Files 下，
+#   冒烟脚本按预期目录去核对，直接 30 个文件"全缺"。
+#
+# 现在的口径：**只有那个目录里确实躺着我们的主程序**，才认为这是"就地升级"；
+# 否则一律回落到 InstallDir 的默认位置。这样既保住了"装在自定义目录里也能原地
+# 升级"，又不会被一条陈旧残留牵着走 —— 判据落在"程序在不在"，而不是"键在不在"。
+INSTDIR_GUARD = r'''  ; 有条件的就地升级：注册表里的旧位置必须**真的有我们的 exe** 才采纳
+  ReadRegStr $R1 __REG_ROOT__ "${UNINST_KEY}" "InstallLocation"
+  StrCmp $R1 "" instdir_use_default
+  IfFileExists "$R1\${EXE_NAME}" 0 instdir_use_default
+    StrCpy $INSTDIR $R1
+  instdir_use_default:'''
+
+
+def instdir_guard_nsis():
+    # ⚠️ 里面的 __REG_ROOT__ 故意**不在这里**替换：write_nsi 里是先插 OS_GATE
+    #    （第 468 行）再统一替换 __REG_ROOT__（第 477 行）。在这里硬编成 HKCU，
+    #    --machine 装法就会去读用户级的卸载项，等于给个永远匹配不上的位置。
+    return INSTDIR_GUARD
 
 
 def os_gate_nsis():
     return (OS_GATE
             .replace('__OS_CHECK_FN__', OS_CHECK_FN)
+            .replace('__INSTDIR_GUARD__', instdir_guard_nsis())
             .replace('__KILL_MAIN__', 'KillRunningApp'))
 
 

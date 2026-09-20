@@ -13,10 +13,12 @@ import 'package:xiaozhi_im_client/screens/inventory_collect.dart';
 /// ② 扫码枪敲回车能把条码记进去（现场唯一的主路径）
 /// ③ **数量格可以点开改**（上一轮扫码枪就是因为界面没接上，被反馈"不能改"）
 /// ④ 改成 0 要先二次确认，取消则一行不动（手滑多按一个 0 就静默删行最阴）
-/// ⑤ **复盘只收差异集**：不在上一轮差异里的商品扫了必须被拒，
-///    而且要当场说明原因（不是"什么都没发生"）
+/// ⑤ **抽盘只收"上一轮对不上"的清单**：清单外的商品扫了必须被拒，
+///    而且要当场说明原因（不是"什么都没发生"）。复盘反过来**不设限** ——
+///    它要是也按清单卡，就等于默认初盘是对的，初盘漏扫的货永远没人补。
 /// ⑥ 提交后**本地就锁死**：数量格点不动了
-/// ⑦ 初盘零差异时，复盘不能是死胡同（否则员工卡在"提交"是灰的那一步）
+/// ⑦ 两遍都对得上时，抽盘不能是死胡同（否则主管卡在"提交"是灰的那一步）；
+///    以及初盘提交后**一定要问**"现在开始复盘？"
 /// ⑧ 撤销提交之后**真的能改**（那个锁不是画上去的）
 ///
 /// ── 两个测试基建的坑（都吃过）─────────────────────────────────
@@ -294,9 +296,9 @@ void main() {
     expect((rows.first['qty'] as num).toDouble() >= 0, isTrue);
   });
 
-  testWidgets('⑤ 复盘只收差异集：不在差异里的商品扫了必须被拒且说明原因', (tester) async {
+  testWidgets('⑤ 抽盘只收上一轮对不上的商品：清单外的扫了必须被拒且说明原因', (tester) async {
     await pumpPage(tester);
-    // 初盘扫 6901（账面 10、实盘 1）→ 6901 进差异集；6902 没扫 → 不在差异集
+    // 初盘扫 6901（实盘 1）
     await scan(tester, '6901');
     await pumpUntil(
       tester,
@@ -304,25 +306,58 @@ void main() {
       why: '初盘那一行没出现',
     );
 
-    // 切阶段要二次确认
-    await tester.tap(find.byKey(const Key('inv-phase-2')));
+    // 提交初盘 → 接着复盘
+    await waitSnackClear(tester);
+    await tester.tap(find.byKey(const Key('inv-submit')));
     await settleAnim(tester);
-    expect(find.text('切到复盘？'), findsOneWidget, reason: '切阶段没有二次确认，串阶段查不出来');
-    await tester.tap(find.text('切到复盘'));
-    // ⚠️ 等**这一阶段的数据真的读完**，不能用"提醒语出现"当信号 ——
-    //    提醒语在 `_phase` 一变就有了，那时候列表里还是**上一个阶段的行**。
-    //    "（1 种）"这个数字只有查完差异集才会对，拿它当锚点才可靠。
+    await tester.tap(find.text('提交'));
     await pumpUntil(
       tester,
-      () => find.textContaining('复盘只盘上一轮的差异商品（1 种）').evaluate().isNotEmpty,
-      why: '复盘阶段的差异集没载进来',
+      () => find.text('现在开始复盘？').evaluate().isNotEmpty,
+      why: '初盘提交后没问"现在开始复盘？"',
+    );
+    await tester.tap(find.text('开始复盘'));
+
+    // ⚠️ 等**这一阶段的数据真的读完**，不能用"提醒语出现"当信号 ——
+    //    提醒语在 `_phase` 一变就有了，那时候列表里还是**上一个阶段的行**。
+    await pumpUntil(
+      tester,
+      () => find.textContaining('复盘是这一片重新盘一遍').evaluate().isNotEmpty,
+      why: '复盘阶段的提示没载进来',
     );
     // 顺带钉住"串台"这件事：切过去的那一刻不能还显示初盘的商品
     expect(find.byKey(const Key('inv-row-6901')), findsNothing,
         reason: '复盘单里混进了初盘的行：新阶段的标题 + 旧阶段的数据，'
             '员工瞥一眼就会以为"复盘已经有这些了"');
 
-    // 反向：6902 不在差异集里 → 必须被拒，而且**要说清原因**
+    // 复盘把它盘成 2（初盘是 1）→ 6901 成为"上一轮对不上"的疑问项。
+    // 🔴 复盘**不设限制**，所以这两枪必须都能进去。
+    await scan(tester, '6901');
+    await scan(tester, '6901');
+    await pumpUntil(
+      tester,
+      () => qtyText('6901', '2').evaluate().isNotEmpty,
+      why: '复盘把商品挡住了 —— 复盘的价值就在于不知道哪里会错，'
+          '先按差异集卡住等于默认初盘是对的，初盘漏扫的货永远没人补',
+    );
+
+    await waitSnackClear(tester);
+    await tester.tap(find.byKey(const Key('inv-submit')));
+    await settleAnim(tester);
+    await tester.tap(find.text('提交'));
+    await pumpUntil(
+      tester,
+      () => find.text('现在开始抽盘？').evaluate().isNotEmpty,
+      why: '两遍对不上，提交复盘后却没问"现在开始抽盘？"',
+    );
+    await tester.tap(find.text('开始抽盘'));
+    await pumpUntil(
+      tester,
+      () => find.textContaining('共 1 种').evaluate().isNotEmpty,
+      why: '抽盘要复核的清单没载进来（上一轮对不上的只有 6901 一条）',
+    );
+
+    // 反向：6902 不在要复核的清单里 → 必须被拒，而且**要说清原因**
     await scan(tester, '6902');
     await pumpUntil(
       tester,
@@ -330,14 +365,14 @@ void main() {
       why: '拒了但没说原因 —— 现场只会看到"扫了没反应"，那是最难查的一种反馈',
     );
     expect(find.byKey(const Key('inv-row-6902')), findsNothing,
-        reason: '不在差异集里的商品被放进复盘了：差异集会被污染，账越盘越乱');
+        reason: '复核清单外的商品被放进抽盘了：主管的抽盘单会被"看着正常"的商品淹掉');
 
-    // 正向：6901 在差异集里 → 能进（否则就是把复盘整个堵死了）
+    // 正向：6901 在清单里 → 能进（否则就是把抽盘整个堵死了）
     await scan(tester, '6901');
     await pumpUntil(
       tester,
       () => find.byKey(const Key('inv-row-6901')).evaluate().isNotEmpty,
-      why: '差异集里的商品反而扫不进去',
+      why: '要复核的商品反而扫不进去',
     );
   });
 
@@ -389,62 +424,75 @@ void main() {
     expect(rows, isEmpty, reason: '已提交的单还在往里写数据');
   });
 
-  testWidgets('⑦ 初盘零差异时，复盘不能是死胡同（要给「直接去抽盘」）', (tester) async {
+  testWidgets('⑦ 两遍都对得上时，抽盘不能是死胡同（要给「返回点位」）', (tester) async {
     await pumpPage(tester);
     await scan(tester, '6901');
     await pumpUntil(
       tester,
-      () => find.byKey(const Key('inv-qty-6901')).evaluate().isNotEmpty,
-      why: '数量格没出现',
+      () => find.byKey(const Key('inv-row-6901')).evaluate().isNotEmpty,
+      why: '初盘那一行没出现',
     );
 
-    // 把实盘改成与账面一致（10）→ 零差异
-    await tester.tap(find.byKey(const Key('inv-qty-6901')));
-    await settleAnim(tester);
-    await tester.enterText(
-      find.descendant(
-          of: find.byType(AlertDialog), matching: find.byType(TextField)),
-      '10',
-    );
-    await tester.tap(find.text('保存'));
-    await pumpUntil(
-      tester,
-      () => qtyText('6901', '10').evaluate().isNotEmpty,
-      why: '数量没改成 10',
-    );
-
-    // 提交初盘（零差异 → 不会弹"现在开始复盘？"）
+    // 提交初盘 → **一定要问**"现在开始复盘？"
+    // 🔴 旧写法拿"本单差异数 > 0"当门槛；差异基准换成"比上一阶段"以后，
+    //    初盘的差异恒为 0，这一问就再也不会弹 —— 三遍制的第一遍当场断在这。
+    await waitSnackClear(tester);
     await tester.tap(find.byKey(const Key('inv-submit')));
     await settleAnim(tester);
     await tester.tap(find.text('提交'));
     await pumpUntil(
       tester,
-      () => find.byKey(const Key('inv-reopen')).evaluate().isNotEmpty,
-      why: '初盘提交失败',
+      () => find.text('现在开始复盘？').evaluate().isNotEmpty,
+      why: '初盘提交后没问"现在开始复盘？"（拿本单差异数当门槛就会漏掉这一问）',
     );
-
-    // 手动切复盘
-    await tester.tap(find.byKey(const Key('inv-phase-2')));
-    await settleAnim(tester);
-    if (find.text('切到复盘').evaluate().isNotEmpty) {
-      await tester.tap(find.text('切到复盘'));
-    }
+    await tester.tap(find.text('开始复盘'));
     await pumpUntil(
       tester,
-      () => find.text('上一轮没有差异').evaluate().isNotEmpty,
-      why: '零差异时复盘页没给出路 —— 提交按钮因为"一条都没扫"灰着，'
-          '员工就卡死在复盘阶段出不去（盘得很准反而是常态）',
+      () => find.textContaining('复盘是这一片重新盘一遍').evaluate().isNotEmpty,
+      why: '点了"开始复盘"没切到复盘',
     );
-    expect(find.byKey(const Key('inv-skip-to-third')), findsOneWidget);
 
-    // 提示压在按钮上方那几秒点不动，先等它散掉（真机同样如此）
+    // 复盘盘成同样的 1 件 → 两遍对得上
+    await scan(tester, '6901');
+    await pumpUntil(
+      tester,
+      () => qtyText('6901', '1').evaluate().isNotEmpty,
+      why: '复盘那一行没出现',
+    );
     await waitSnackClear(tester);
-    await tester.tap(find.byKey(const Key('inv-skip-to-third')));
+    await tester.tap(find.byKey(const Key('inv-submit')));
+    await settleAnim(tester);
+    await tester.tap(find.text('提交'));
+    // 先等**状态真的变了**（提交成功会把按钮换成「撤销提交」），
+    // 别拿提示语当提交成功的信号 —— SnackBar 是**排队**的，
+    // 上一条"复盘已提交"还没走完，下一条要等 4 秒才轮得到。
     await pumpUntil(
       tester,
-      () => find.textContaining('抽盘是主管抽查').evaluate().isNotEmpty,
-      why: '「直接去抽盘」点了没跳到抽盘',
+      () => find.byKey(const Key('inv-reopen')).evaluate().isNotEmpty,
+      why: '复盘提交失败（没等到「撤销提交」）',
     );
+    await pumpUntil(
+      tester,
+      () => find.textContaining('都对得上').evaluate().isNotEmpty,
+      tries: 300,
+      why: '两遍对得上时没给出"没有要复核的商品"的反馈',
+    );
+    expect(find.text('现在开始抽盘？'), findsNothing,
+        reason: '两遍全对得上还把人拉进抽盘 —— 那个阶段扫什么都进不去，'
+            '进去了就是个死胡同');
+
+    // 手动切抽盘：切阶段要二次确认（串阶段在货架中间解释不清）
+    await tester.tap(find.byKey(const Key('inv-phase-3')));
+    await settleAnim(tester);
+    expect(find.text('切到抽盘？'), findsOneWidget, reason: '切阶段没有二次确认，串阶段查不出来');
+    await tester.tap(find.text('切到抽盘'));
+    await pumpUntil(
+      tester,
+      () => find.text('前两遍都对得上').evaluate().isNotEmpty,
+      why: '没有要复核的商品时抽盘页没给出路 —— 提交按钮因为"一条都没扫"灰着，'
+          '主管就卡在抽盘阶段出不去（两遍都对得上反而是常态，不是异常）',
+    );
+    expect(find.byKey(const Key('inv-back-to-zone')), findsOneWidget);
   });
 
   testWidgets('⑧ 撤销提交之后又能改了（锁是真的锁，不是画上去的）', (tester) async {

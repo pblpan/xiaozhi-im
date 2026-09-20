@@ -660,6 +660,35 @@ CREATE INDEX IF NOT EXISTS idx_inv_scans_sheet ON inv_scans (sheet_no);
 CREATE INDEX IF NOT EXISTS idx_inv_scans_zone_phase ON inv_scans (zone_code, phase);
 `);
 
+// ---- 商品档案（商档）----
+//
+// 🔴 为什么要把商档搬到服务端：
+//    盘点算差异必须有账面数（account_qty），原来唯一通路是泰格上游钩子
+//    `/api/hooks/up/tiger/master/items`，而那个桥接跑在一台会关机、IP 会漂的
+//    机器上（2026-09-19 实测 fetch failed）。链路一断，初盘每一行都是
+//    "账上无此商品"，差异集 = 全部商品，三遍制等于白盘。
+//    商档是**门店自己的底表**，放在自家服务端最合适：一次导入，全员拉同一份，
+//    不再依赖任何外部机器。
+//
+// 🔴 为什么要有 batch 列：
+//    12 万行不可能一次请求传完（要分块），但"分块写到一半"绝不能让店里
+//    看到一份残缺的商档。做法是：分块写入都带同一个 batch 号，
+//    全部传完再调 commit —— commit 时才删掉非本次 batch 的旧数据。
+//    传一半就放弃的话，旧商档完好无损。
+db.exec(`
+CREATE TABLE IF NOT EXISTS product_master (
+  barcode TEXT PRIMARY KEY,
+  name TEXT,
+  spec TEXT,
+  unit TEXT,
+  unit_price REAL,
+  account_qty REAL,             -- 账面数（库存）；NULL = 账上没有，盘点时算差异
+  batch TEXT,                   -- 本次导入批次号，commit 时用它区分新旧
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_product_master_updated ON product_master (updated_at);
+`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

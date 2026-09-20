@@ -22,8 +22,8 @@ import 'inventory_scan.dart';
 /// 少了货架位，差异出来以后没人知道该去哪个货架找。
 ///
 /// ── 阶段切换为什么要二次确认 ────────────────────────────────────
-/// 不是怕误触，是怕**串阶段**：员工以为还在初盘、其实已经切到复盘，
-/// 一枪扫下去，这笔就记进了复盘单 —— 而复盘只收差异商品，
+/// 不是怕误触，是怕**串阶段**：员工以为还在初盘、其实已经切到抽盘，
+/// 一枪扫下去，这笔就记进了抽盘单 —— 而抽盘只收上一轮对不上的商品，
 /// 于是"扫了没反应"。那种困惑在货架中间是解释不清的。
 ///
 /// ── 离线 ──────────────────────────────────────────────────────
@@ -184,8 +184,11 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
     final sum =
         no.isEmpty ? const <String, dynamic>{} : await _repo.summary(no);
     final progress = await _repo.phaseProgress(widget.zoneCode);
+    // `_diffSet` = **本阶段要复核的清单**，只有限差异集的阶段（抽盘）才有意义。
+    // 🔴 别无条件去算：复盘不限差异集，算了也只会得到一个恒为空的集合，
+    //    然后被空状态当成"上一轮没差异"（每次都弹那屏"没什么可盘的"）。
     final prev = InvPhase.prev(_phase);
-    final diff = prev == null
+    final diff = (prev == null || !InvPhase.requiresDiffSetOnly(_phase))
         ? const <String>{}
         : await _repo.diffBarcodes(widget.zoneCode, prev);
     if (!mounted) return;
@@ -320,7 +323,9 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
           '本单 $no\n'
           '品种 $kinds 种，其中差异 $diff 种。\n\n'
           '提交后这张单**不能再改**（要改得先「撤销提交」）。\n'
-          '${nextP == null ? '' : '差异集同时定格，${InvPhase.label(nextP)}就按它来盘。'}',
+          '${nextP == null ? '' : (InvPhase.requiresDiffSetOnly(nextP) ? '差异集同时定格，'
+              '${InvPhase.label(nextP)}就按它来复核。' : '接下来是${InvPhase.label(nextP)}：'
+              '这一片要重新扫一遍，不限商品。')}',
           style: const TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
         actions: [
@@ -342,8 +347,16 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       await _refreshAll();
       if (!mounted) return;
       _snack('$label已提交（$kinds 种，差异 $diff 种）');
-      if (nextP != null && diff > 0) {
-        await _askNextPhase(nextP, diff);
+      if (nextP != null) {
+        // 初盘 → 复盘：这一片要重新扫一遍，**永远有活干**，直接问。
+        // 复盘 → 抽盘：只有真有疑问项才值得问；两遍全对得上就别把人
+        // 拉进一个扫什么都进不去的阶段（上一版拿"本轮差异数"当门槛，
+        // 换了基准以后初盘的差异恒为 0，这个问句就再也不会弹了）。
+        if (!InvPhase.requiresDiffSetOnly(nextP) || diff > 0) {
+          await _askNextPhase(nextP, diff);
+        } else {
+          _snack('初盘和复盘都对得上，没有要复核的商品');
+        }
       }
     } catch (e) {
       if (!mounted) return;
@@ -364,8 +377,11 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
         title: Text('现在开始$label？',
             style: const TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
-          '这一轮有 $diff 个差异商品。\n'
-          '$label只收这些差异商品 —— 其他商品扫了不会被记上。',
+          InvPhase.requiresDiffSetOnly(next)
+              ? '上一轮有 $diff 个对不上的商品（含漏盘的）。\n'
+                  '$label只收这些 —— 其他商品扫了不会被记上。'
+              : '接下来是$label：这一片要重新扫一遍。\n'
+                  '不限商品，初盘扫过的、没扫到的都算。',
           style: const TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
         actions: [
@@ -694,9 +710,11 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
 
   Future<void> _showDiffSheet() async {
     final phase = _phase;
-    final rows = await _repo.phaseRows(widget.zoneCode, phase);
-    final diffs = rows.where(InventoryRules.isDiffRow).toList();
+    // 🔴 用 diffRows 而不是 phaseRows：漏盘（上一轮盘过、这一轮没扫到）
+    //    在本阶段没有扫码记录，phaseRows 里根本没有那一行。
+    final diffs = await _repo.diffRows(widget.zoneCode, phase);
     final mistakes = await _repo.mistakeCount(widget.zoneCode, phase);
+    final missed = diffs.where((r) => r['missing'] == true).length;
     if (!mounted) return;
 
     var loss = 0.0;
@@ -755,6 +773,8 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                         color: AppColors.danger),
                     _statChip('盘盈', gain.toStringAsFixed(2),
                         color: AppColors.brand),
+                    _statChip('漏盘', '$missed',
+                        color: missed > 0 ? AppColors.warn : null),
                     _statChip('账面缺失', '$noAccount',
                         color: noAccount > 0 ? AppColors.warn : null),
                     _statChip('失误笔数', '$mistakes',
@@ -771,7 +791,8 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                           padding: EdgeInsets.all(28),
                           child: Text(
                             '这个阶段没有差异。\n\n'
-                            '（差异 = 实盘跟账面不一致。一条都没有，说明盘得很准；'
+                            '（差异 = 这一遍的数量跟**上一遍**对不上，含上一遍盘过、'
+                            '这一遍没扫到的"漏盘"。一条都没有，说明两遍完全一致；'
                             '也可能是这一阶段还没扫。）',
                             textAlign: TextAlign.center,
                             style: TextStyle(
@@ -825,6 +846,8 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
 
   Widget _diffTile(Map<String, dynamic> r, int idx) {
     final acc = r['account_qty'];
+    final prev = r['prev_qty'];
+    final missing = r['missing'] == true;
     final d = (r['diff_qty'] as num?)?.toDouble();
     final amt = InventoryExport.amtOf(r);
     // 盘亏红、盘盈绿？（这个项目里"涨红跌绿"是中国习惯，
@@ -854,10 +877,13 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                 const SizedBox(height: 3),
                 Text(
                   '${r['barcode']}'
+                  '${missing ? '　【漏盘】' : ''}'
                   '　实盘 ${fmtQty(r['qty'])}'
+                  '　上一遍 ${prev == null ? '（没盘过）' : fmtQty(prev)}'
                   '　账面 ${acc == null ? '（账上没这商品）' : fmtQty(acc)}',
-                  style: const TextStyle(
-                      color: AppColors.textWeak, fontSize: 11),
+                  style: TextStyle(
+                      color: missing ? AppColors.warn : AppColors.textWeak,
+                      fontSize: 11),
                 ),
               ],
             ),
@@ -881,8 +907,8 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
 
   Future<void> _exportDiff(int phase, {required bool asDoc}) async {
     try {
-      final rows = await _repo.phaseRows(widget.zoneCode, phase);
-      final diffs = rows.where(InventoryRules.isDiffRow).toList();
+      // 同 _showDiffSheet：漏盘要一起导出去，否则发给主管的那份少一类
+      final diffs = await _repo.diffRows(widget.zoneCode, phase);
       if (diffs.isEmpty) {
         _snack('${InvPhase.label(phase)}没有差异，不用导出');
         return;
@@ -1323,12 +1349,13 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
     String? text;
     Color c = pc;
     if (_phase == InvPhase.second) {
-      text = '复盘只盘上一轮的差异商品（${_diffSet.length} 种）。'
-          '扫其他商品不会被记上。';
-      c = AppColors.warn;
-    } else if (_phase == InvPhase.third) {
-      text = '抽盘是主管抽查：可以扫任意商品，不受差异集限制。扫完看「差异表」出抽盘差异。';
+      text = '复盘是这一片重新盘一遍（不限商品）。'
+          '不用照着差异表来 —— 谁都可能看漏。';
       c = AppColors.brand2;
+    } else if (_phase == InvPhase.third) {
+      text = '抽盘是主管复核：只收上一轮对不上的商品（含漏盘的，'
+          '共 ${_diffSet.length} 种）。扫其他商品不会被记上。';
+      c = AppColors.warn;
     }
     if (text == null) return const SizedBox.shrink();
     return _banner(text, c);
@@ -1389,10 +1416,10 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       );
 
   Widget _empty(Color pc) {
-    // 复盘阶段 + 上一轮零差异 = 这一遍**没东西可盘**。
-    // 必须给一条出路：否则按钮因为"一条都没扫"而灰着，员工卡在这儿
-    // 出不去（门店盘得很准时这是常态，不是异常）。
-    if (_phase == InvPhase.second && _diffSet.isEmpty) {
+    // 抽盘阶段 + 上一轮零差异 = 这一遍**没东西可复核**。
+    // 必须给一条出路：否则按钮因为"一条都没扫"而灰着，主管卡在这儿
+    // 出不去（初盘和复盘全对得上，在门店是常态，不是异常）。
+    if (_phase == InvPhase.third && _diffSet.isEmpty) {
       return _emptyShell(
         Padding(
           // 底部留 96：浮动的 SnackBar 就飘在这块区域上方，
@@ -1403,22 +1430,22 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
             children: [
               const Icon(Icons.task_alt, size: 44, color: AppColors.brand),
               const SizedBox(height: 14),
-              const Text('上一轮没有差异',
+              const Text('前两遍都对得上',
                   style: TextStyle(color: AppColors.text, fontSize: 15)),
               const SizedBox(height: 10),
               const Text(
-                '初盘盘得很准，这一遍没什么可盘的了。\n'
-                '可以直接去抽盘，让主管抽查一遍。',
+                '初盘和复盘没盘出差异，这一遍没有要复核的商品。\n'
+                '回点位看一眼差异表就行。',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     color: AppColors.textWeak, fontSize: 13, height: 1.7),
               ),
               const SizedBox(height: 16),
               FilledButton.tonalIcon(
-                key: const Key('inv-skip-to-third'),
-                onPressed: () => _enterPhase(InvPhase.third),
-                icon: const Icon(Icons.skip_next, size: 18),
-                label: const Text('直接去抽盘'),
+                key: const Key('inv-back-to-zone'),
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.arrow_back, size: 18),
+                label: const Text('返回点位'),
               ),
             ],
           ),
@@ -1438,10 +1465,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                 style: const TextStyle(color: AppColors.text, fontSize: 15)),
             const SizedBox(height: 10),
             Text(
-              _phase == InvPhase.second
-                  ? '这一遍只盘上一轮的差异商品。\n差异表里那 ${_diffSet.length} 个商品扫一遍就行。'
-                  : '对着货架上的条码一路扫。\n'
-                      '扫错了或者要改数量，点右边那个数量格。',
+              _emptyHint(),
               textAlign: TextAlign.center,
               style: const TextStyle(
                   color: AppColors.textWeak, fontSize: 13, height: 1.7),
@@ -1450,6 +1474,20 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
         ),
       ),
     );
+  }
+
+  String _emptyHint() {
+    switch (_phase) {
+      case InvPhase.second:
+        return '这一遍把这整片重新扫一遍。\n'
+            '初盘扫过的、没扫到的都算，不用照着差异表来。';
+      case InvPhase.third:
+        return '这一遍只复核上一轮对不上的商品。\n'
+            '差异表里那 ${_diffSet.length} 个商品扫一遍就行。';
+      default:
+        return '对着货架上的条码一路扫。\n'
+            '扫错了或者要改数量，点右边那个数量格。';
+    }
   }
 
   Widget _rowTile(Map<String, dynamic> r, int idx) {

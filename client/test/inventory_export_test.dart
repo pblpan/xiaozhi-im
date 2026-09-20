@@ -50,19 +50,27 @@ void main() {
     double qty = 8,
     double? accountQty = 10,
     double? unitPrice = 5,
-  }) =>
-      <String, dynamic>{
-        'barcode': barcode,
-        'name': name,
-        'spec': '550ml',
-        'unit': '瓶',
-        'qty': qty,
-        'account_qty': accountQty,
-        'unit_price': unitPrice,
-        // 与服务端/仓库层同一个口径：diff = qty - account_qty，
-        // 账面缺失时是 null（不是 0）。
-        'diff_qty': accountQty == null ? null : qty - accountQty,
-      };
+    double? prevQty,
+    bool missing = false,
+  }) {
+    // 与服务端/仓库层同一个口径：**差异 = qty − 上一阶段数量**，不是比账面
+    //（门店的泰格库里所有库存表都是空的，拿账面当基准会得到一个等于
+    //  全部商品的差异集）。不关心这条差异的用例可以只给 accountQty，
+    // 那两列会取同一个值，数字照样自洽。
+    final prev = prevQty ?? accountQty;
+    return <String, dynamic>{
+      'barcode': barcode,
+      'name': name,
+      'spec': '550ml',
+      'unit': '瓶',
+      'qty': qty,
+      'account_qty': accountQty,
+      'unit_price': unitPrice,
+      'prev_qty': prev,
+      'diff_qty': prev == null ? null : qty - prev,
+      if (missing) 'missing': true,
+    };
+  }
 
   group('采集明细 CSV', () {
     test('带 UTF-8 BOM，否则 Excel/WPS 按 GBK 打开全是乱码', () {
@@ -135,15 +143,34 @@ void main() {
           reason: '"不知道差多少钱"和"差 0 元"是两回事：写 0 会让合计看着很安心');
     });
 
-    test('差异表 CSV 最后一列是差异金额，缺单价留空', () {
+    test('差异表 CSV：有「上一阶段」列、有「差异金额」列，漏盘在备注里点名', () {
       final csv = InventoryExport.toDiffCsv(<Map<String, dynamic>>[
-        row(qty: 8, accountQty: 10, unitPrice: 5),
+        row(qty: 8, prevQty: 10, accountQty: 10, unitPrice: 5),
         row(barcode: 'B', unitPrice: null),
+        row(barcode: 'C', qty: 0, prevQty: 4, accountQty: 4, unitPrice: 5,
+            missing: true),
       ]);
-      final lines = csv.replaceFirst('\uFEFF', '').split('\n');
-      expect(lines[0].endsWith('差异金额'), isTrue);
-      expect(lines[1].endsWith('-10.00'), isTrue);
-      expect(lines[2].endsWith(','), isTrue);
+      final lines = csv.replaceFirst('\uFEFF', '').trimRight().split('\n');
+      expect(lines[0].endsWith('账面数量,备注'), isTrue);
+      expect(lines[0].contains('上一阶段数量'), isTrue,
+          reason: '差异是跟"上一次盘的数量"比出来的，表里必须有一列写清参照是什么，'
+              '只给一个"账面数量"会让人以为那是差异的基准');
+
+      final c1 = _splitCsv(lines[1]);
+      expect(c1[5], '10', reason: '上一阶段数量');
+      expect(c1[6], '-2', reason: '差异数量 = 8 − 10');
+      expect(c1[7], '-10.00', reason: '差异金额 = 差异数量 × 单价');
+      expect(c1[9], '');
+
+      // 缺单价 → 金额留空（不是 0）
+      expect(_splitCsv(lines[2])[7], '');
+
+      // 漏盘：数量是 0，看着像"盘得很准"，必须在备注里点名
+      final c3 = _splitCsv(lines[3]);
+      expect(c3[5], '4');
+      expect(c3[6], '-4', reason: '上一遍 4、这一遍没扫到 → 差异 −4');
+      expect(c3[9], '漏盘',
+          reason: '漏盘行不标出来 = 最严重的一类差异没人看得见（明细里"少一行"看不出来）');
     });
   });
 
@@ -165,6 +192,27 @@ void main() {
       expect(doc.contains('盘盈金额：6.00'), isTrue);
       expect(doc.contains('账面缺失（账上没有这商品）：1'), isTrue);
       expect(doc.contains('本阶段失误笔数：3'), isTrue);
+    });
+
+    test('🔴 漏盘要单独计数 + 那一行要点名 —— 否则数量 0 看着像"盘得挺准"', () {
+      final doc = InventoryExport.toDiffDoc(
+        <Map<String, dynamic>>[
+          row(qty: 8, prevQty: 10, accountQty: 10, unitPrice: 5), // 差 -2
+          row(barcode: 'C', qty: 0, prevQty: 4, accountQty: 4, unitPrice: 5,
+              missing: true), // 漏盘
+        ],
+        zoneName: '生鲜区',
+        phaseLabel: '复盘',
+        mistakes: 0,
+      );
+      expect(doc.contains('差异品种：2'), isTrue);
+      expect(doc.contains('其中漏盘（上一遍有、这一遍没扫到）：1'), isTrue,
+          reason: '漏盘数不单独列出来，主管在总数里根本看不出有几条是"没扫到"');
+      expect(doc.contains('【漏盘】'), isTrue,
+          reason: '漏盘那一行不点名：数量 0 混在差异表里，看着像"这件盘得很准"');
+      expect(doc.contains('上一遍 4'), isTrue,
+          reason: '要说清它是"上一遍盘过 4 件、这一遍一件没扫到"，'
+              '不然主管不知道该去货架上找什么');
     });
 
     test('盘盈盘亏不能算反（差 -2 是亏不是盈）', () {

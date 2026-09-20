@@ -251,4 +251,135 @@ void main() {
       expect(rows.first['source'], 'manual');
     });
   });
+
+  // ============================================================
+  group('syncFromServer：从自家服务端拉商档', () {
+    /// 造一个假的服务端：整份清单按 pageSize 分页应答。
+    (Future<Map<String, dynamic>> Function(), Future<Map<String, dynamic>> Function(int, int))
+        fakeServer(List<Map<String, dynamic>> all, int pageSize,
+            {int failAtPage = -1}) {
+      Future<Map<String, dynamic>> count() async =>
+          <String, dynamic>{'total': all.length, 'updated_at': 1, 'server_time': 2};
+
+      Future<Map<String, dynamic>> page(int p, int ps) async {
+        if (p == failAtPage) throw Exception('网断了');
+        final start = (p - 1) * ps;
+        if (start >= all.length) return <String, dynamic>{'items': <dynamic>[], 'has_more': false};
+        final slice = all.sublist(start, (start + ps).clamp(0, all.length));
+        return <String, dynamic>{
+          'items': slice,
+          'total': all.length,
+          'page': p,
+          'pageSize': ps,
+          'has_more': start + slice.length < all.length,
+        };
+      }
+      return (count, page);
+    }
+
+    test('分页拉完，整份落库且来源是 server', () async {
+      final all = List<Map<String, dynamic>>.generate(
+          5, (i) => <String, dynamic>{'barcode': '6900$i', 'name': '商品$i', 'account_qty': i});
+      final (count, page) = fakeServer(all, 2);
+
+      final n = await StockMasterRepo.syncFromServer(countCall: count, pageCall: page);
+      expect(n, 5);
+
+      final db = await LocalDb.I.db();
+      final rows = await db.query('stock_master', orderBy: 'barcode');
+      expect(rows, hasLength(5));
+      expect(rows.every((r) => r['source'] == 'server'), isTrue);
+      expect(await StockMasterRepo().countAll(), 5);
+    });
+
+    test('进度回调会报 done/total（12 万行要有得看）', () async {
+      final all = List<Map<String, dynamic>>.generate(
+          7, (i) => <String, dynamic>{'barcode': 'B$i', 'account_qty': 1});
+      final (count, page) = fakeServer(all, 3);
+      final seen = <String>[];
+      // 🔴 pageSize **必须显式传小**：不传的话默认 2000，7 条一页就拉完了，
+      //    这个用例就变成了"一页也能跑通"—— 分页逻辑压根没被走到，
+      //    而它恰恰是 12 万行能不能拉下来的关键。
+      await StockMasterRepo.syncFromServer(
+        pageSize: 3,
+        countCall: count,
+        pageCall: page,
+        onProgress: (done, total) => seen.add('$done/$total'),
+      );
+      expect(seen, <String>['3/7', '6/7', '7/7']);
+    });
+
+    test('🔴 拉到一半断网：正式底表必须还是上一次那份完整的', () async {
+      // 先同步一份完整的（3 条），再模拟"换新商档拉到第 2 页断网"
+      final first = List<Map<String, dynamic>>.generate(
+          3, (i) => <String, dynamic>{'barcode': 'OLD$i', 'name': '旧$i', 'account_qty': 10});
+      var (c1, p1) = fakeServer(first, 2);
+      await StockMasterRepo.syncFromServer(pageSize: 2, countCall: c1, pageCall: p1);
+
+      final second = List<Map<String, dynamic>>.generate(
+          6, (i) => <String, dynamic>{'barcode': 'NEW$i', 'name': '新$i', 'account_qty': 1});
+      final (c2, p2) = fakeServer(second, 2, failAtPage: 2);
+
+      await expectLater(
+        // pageSize 必须显式传 2：默认 2000 的话一页就拉完了，"第 2 页断网"
+        // 这个场景根本不会发生，测试会假通过。
+        StockMasterRepo.syncFromServer(pageSize: 2, countCall: c2, pageCall: p2),
+        throwsA(isA<Exception>()),
+      );
+
+      final db = await LocalDb.I.db();
+      final rows = await db.query('stock_master', orderBy: 'barcode');
+      // 🔴 这条是整个测试里最要命的断言：拉一半失败后手机上一个商品都不能少。
+      //    少一条就意味着员工会拿着残缺底表盘出一批假的"账上无此商品"。
+      expect(rows, hasLength(3), reason: '拉一半失败把上一次的底表弄丢了');
+      expect(rows.map((r) => r['barcode']).toList(), <String>['OLD0', 'OLD1', 'OLD2']);
+      // 暂存表必须已经清掉，不能留在库里污染下次同步
+      final leftover = await db.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+          <Object?>[StockMasterRepo.stagingTable]);
+      expect(leftover, isEmpty);
+    });
+
+    test('服务端一份都没有 → 抛异常，且不碰本地底表', () async {
+      final db = await LocalDb.I.db();
+      await StockMasterRepo.upsertAll(db, <Map<String, dynamic>>[
+        <String, dynamic>{'barcode': 'KEEP1', 'name': '留着', 'account_qty': 5},
+      ]);
+
+      Future<Map<String, dynamic>> count() async =>
+          <String, dynamic>{'total': 0, 'updated_at': 0};
+      Future<Map<String, dynamic>> page(int p, int ps) async =>
+          <String, dynamic>{'items': <dynamic>[], 'has_more': false};
+
+      await expectLater(
+        StockMasterRepo.syncFromServer(countCall: count, pageCall: page),
+        throwsA(isA<StateException>()),
+      );
+      final rows = await db.query('stock_master');
+      expect(rows, hasLength(1));
+      expect(rows.first['barcode'], 'KEEP1');
+    });
+
+    test('再同步一次：下架的商品不该还留着账面数（全量替换语义）', () async {
+      final first = <Map<String, dynamic>>[
+        <String, dynamic>{'barcode': 'A1', 'account_qty': 3},
+        <String, dynamic>{'barcode': 'A2', 'account_qty': 4},
+      ];
+      var (c1, p1) = fakeServer(first, 10);
+      await StockMasterRepo.syncFromServer(countCall: c1, pageCall: p1);
+
+      final second = <Map<String, dynamic>>[
+        <String, dynamic>{'barcode': 'A1', 'account_qty': 9},   // 改了数
+        // A2 下架了，这次清单里没有
+      ];
+      final (c2, p2) = fakeServer(second, 10);
+      await StockMasterRepo.syncFromServer(countCall: c2, pageCall: p2);
+
+      final db = await LocalDb.I.db();
+      final rows = await db.query('stock_master', orderBy: 'barcode');
+      expect(rows, hasLength(1));
+      expect(rows.first['barcode'], 'A1');
+      expect(rows.first['account_qty'], 9);
+    });
+  });
 }
