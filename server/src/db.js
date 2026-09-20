@@ -760,6 +760,41 @@ CREATE TABLE IF NOT EXISTS product_master (
 CREATE INDEX IF NOT EXISTS idx_product_master_updated ON product_master (updated_at);
 `);
 
+// ── 开放 API 的「签名通道」（对接方用 app_id + app_secret 调，见 apisign.js）──
+//
+// 为什么还要在长期令牌之外再开一条：Bearer token 一旦泄露 = 可无限重放，
+// 而且**看不出是谁在调**。签名通道要求每次请求现算 HMAC，带时间戳和一次性
+// nonce，泄露的只是一串没法倒推 secret 的签名。
+db.exec(`
+CREATE TABLE IF NOT EXISTS api_clients (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_id TEXT NOT NULL UNIQUE,
+  app_secret_enc TEXT NOT NULL,   -- AES-256-GCM 密文（明文只在"发密钥"那一刻回一次）
+  -- 轮换宽限期：旧密钥先挪到这两列，宽限期内两个都认，过期即失效。
+  -- 没有宽限期的话"点一下轮换" = 当场把对接方踢下线，于事没人敢轮换。
+  app_secret_prev_enc TEXT,
+  prev_valid_until INTEGER NOT NULL DEFAULT 0,
+  name TEXT NOT NULL,
+  scopes TEXT NOT NULL DEFAULT '',
+  user_id INTEGER NOT NULL,       -- 以谁的身份行事（机器人或真人）
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL DEFAULT 0,
+  rotated_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_api_clients_enabled ON api_clients (enabled);
+
+-- 一次性随机串。防重放：同一个 nonce 在时间窗内只能用一次。
+-- 🔴 这张表**必须定期清**（见 apisign.purgeExpiredNonces），否则它会一路涨下去。
+CREATE TABLE IF NOT EXISTS api_nonce (
+  nonce TEXT PRIMARY KEY,
+  app_id TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_api_nonce_at ON api_nonce (at);
+`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

@@ -1303,6 +1303,66 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               </el-table>
             </el-tab-pane>
 
+            <!-- ===== 签名客户端（app_id / app_secret） ===== -->
+            <el-tab-pane label="签名客户端" name="clients">
+              <div class="page-bar">
+                <el-button type="primary" @click="openClientDialog()">发放凭据</el-button>
+                <span class="hint">
+                  每次请求都要带 <code class="mono">X-App-Id / X-Timestamp / X-Nonce / X-Sign</code>
+                  四个头 —— 令牌泄露了能重放到天荒地老，签名只在 ±5 分钟里有效，且用一次作废。
+                </span>
+              </div>
+              <el-table :data="clients" border stripe>
+                <el-table-column prop="id" label="ID" width="70" />
+                <el-table-column prop="name" label="用途" width="150" />
+                <el-table-column label="app_id" width="200">
+                  <template #default="{ row }">
+                    <code class="mono">{{ row.appId }}</code>
+                    <el-button size="small" text type="primary" @click="copy(row.appId)">复制</el-button>
+                  </template>
+                </el-table-column>
+                <el-table-column label="身份" width="130">
+                  <template #default="{ row }">{{ row.userId ? ('#' + row.userId) : '—' }}</template>
+                </el-table-column>
+                <el-table-column label="权限" min-width="200">
+                  <template #default="{ row }">
+                    <el-tag v-for="s in row.scopes" :key="s" size="small" style="margin:1px 3px 1px 0">{{ s }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="最近使用" width="160">
+                  <template #default="{ row }">{{ row.lastUsedAt ? fmtTime(row.lastUsedAt) : '未使用' }}</template>
+                </el-table-column>
+                <el-table-column label="状态" width="120">
+                  <template #default="{ row }">
+                    <el-tag v-if="!row.enabled" size="small" type="danger">已停用</el-tag>
+                    <el-tag v-else-if="row.prevValidUntil && row.prevValidUntil > Date.now()" size="small" type="warning" effect="plain">轮换宽限中</el-tag>
+                    <el-tag v-else size="small" type="success">正常</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="240">
+                  <template #default="{ row }">
+                    <el-button size="small" @click="toggleClient(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
+                    <el-button size="small" @click="rotateClient(row)">轮换密钥</el-button>
+                    <el-button size="small" type="danger" @click="delClient(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="!clients.length" description="还没有签名客户端，点「发放凭据」开始对接" />
+              <el-collapse style="margin-top:10px">
+                <el-collapse-item title="对接方怎么算签名（点开看示例）">
+                  <div class="hint" style="margin-bottom:6px">
+                    待签串用换行拼：<code class="mono">method \n path \n query \n timestamp \n nonce \n sha256_hex(原始请求体)</code>；
+                    密钥是 app_secret，算法 HMAC-SHA256，结果取 hex。timestamp 是 unix <b>秒</b>，与服务端相差不得超过 ±300 秒。
+                  </div>
+                  <pre class="mono" style="margin:0;padding:10px;background:var(--el-fill-color-light);border-radius:6px;overflow:auto">{{ signSample }}</pre>
+                  <div class="hint" style="margin-top:6px">
+                    🔴 请求体必须按<b>原始字节</b>算哈希 —— 用 JSON 重新序列化会因为键序/空格不同而永远签不过。
+                    上传文件（multipart）这类请求体不算进签名，只有请求头受保护。
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
+            </el-tab-pane>
+
             <!-- ===== 入站 Webhook ===== -->
             <el-tab-pane label="入站推送（外部 → 群）" name="incoming">
               <div class="page-bar">
@@ -3533,6 +3593,73 @@ docker compose up -d --force-recreate xiaozhi-im</div>
       </template>
     </el-dialog>
 
+    <!-- 签名客户端：发放凭据（2 步 + 只显示一次的 secret） -->
+    <el-dialog v-model="clientDlg" title="发放签名凭据" width="640px" @close="clientStep=0">
+      <el-steps :active="clientStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="基本信息" />
+        <el-step title="权限" />
+        <el-step title="完成" />
+      </el-steps>
+      <div v-show="clientStep === 0">
+        <el-form :model="clientForm" label-width="100px">
+          <el-form-item label="用途">
+            <el-input v-model="clientForm.name" placeholder="如：门店盘点回传、工厂V2 告警" maxlength="64" />
+          </el-form-item>
+          <el-form-item label="身份">
+            <el-select v-model="clientForm.userId" filterable placeholder="以谁的身份行事" style="width:100%">
+              <el-option v-for="u in identityOptions" :key="u.id"
+                         :label="`${u.is_bot ? '🤖 ' : ''}${u.nickname || u.username}（${u.username}）`" :value="u.id" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="clientStep === 1">
+        <el-form :model="clientForm" label-width="100px">
+          <el-form-item label="权限">
+            <el-checkbox-group v-model="clientForm.scopes">
+              <el-checkbox v-for="s in intMeta.scopes" :key="s.name" :value="s.name" style="display:block;margin:2px 0">
+                <code class="mono">{{ s.name }}</code> — {{ s.desc }}
+              </el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+        </el-form>
+      </div>
+      <div v-show="clientStep === 2" v-if="newClient">
+        <el-result icon="success" title="凭据已生成">
+          <template #sub-title>
+            <div style="text-align:left;margin-top:6px">
+              <p><b>app_secret 只显示这一次</b>，关掉就再也找不回来（库里只存密文），请立刻复制保存：</p>
+              <p>app_id：<code class="mono" style="word-break:break-all">{{ newClient.appId }}</code></p>
+              <p>app_secret：<code class="mono" style="word-break:break-all">{{ newClient.secret }}</code></p>
+              <el-button size="small" type="primary" @click="copy(`app_id: ${newClient.appId}\napp_secret: ${newClient.secret}`)">复制这一对</el-button>
+            </div>
+          </template>
+        </el-result>
+      </div>
+      <template #footer>
+        <el-button v-if="clientStep === 1" @click="clientStep--">上一步</el-button>
+        <el-button v-if="clientStep === 0" type="primary" @click="clientStep++">下一步</el-button>
+        <el-button v-if="clientStep === 1" type="primary" :loading="busy" @click="saveClient">生成凭据</el-button>
+        <el-button v-if="clientStep === 2" type="primary" @click="clientDlg = false">完成</el-button>
+        <el-button v-if="clientStep === 0" @click="clientDlg = false">取消</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 签名客户端：轮换后的新密钥（同样只显示一次） -->
+    <el-dialog v-model="rotateDlg" title="新的 app_secret" width="560px">
+      <el-alert type="warning" :closable="false" style="margin-bottom:12px">
+        <template #title>
+          旧密钥还有 <b>24 小时</b>宽限期，之后自动失效 —— 照这个时间给对接方改配置。
+        </template>
+      </el-alert>
+      <p>app_id：<code class="mono">{{ rotatedSecret.appId }}</code></p>
+      <p>app_secret：<code class="mono" style="word-break:break-all">{{ rotatedSecret.secret }}</code></p>
+      <template #footer>
+        <el-button @click="rotateDlg = false">关闭</el-button>
+        <el-button type="primary" @click="copy(rotatedSecret.secret)">复制</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 入站推送向导：2 步（用途 / 目标） -->
     <el-dialog v-model="incomingDlg" title="新建推送地址" width="560px" @close="incomingStep=0">
       <el-steps :active="incomingStep" finish-status="success" simple style="margin-bottom:18px">
@@ -5336,6 +5463,12 @@ const botConvDlg = ref(false);
 const botConvForm = ref({ id: null, name: '', conversationId: null });
 const tokenDlg = ref(false);
 const tokenForm = ref({ name: '', userId: null, scopes: [], days: 0 });
+const clients = ref([]);
+const clientDlg = ref(false);
+const clientForm = ref({ name: '', userId: null, scopes: [] });
+const newClient = ref(null);
+const rotateDlg = ref(false);
+const rotatedSecret = ref({ appId: '', secret: '' });
 const incomingDlg = ref(false);
 const incomingForm = ref({ name: '', botId: null, conversationId: null, signed: false });
 const outgoingDlg = ref(false);
@@ -5350,6 +5483,7 @@ const pubkeyTestForm = ref({ id: null, name: '', algorithm: '', body: '', signat
 const botStep = ref(0);
 const botConvStep = ref(0);
 const tokenStep = ref(0);
+const clientStep = ref(0);
 const incomingStep = ref(0);
 const outgoingStep = ref(0);
 
@@ -5386,7 +5520,8 @@ async function loadDeliveries() {
 
 async function loadIntegrations() {
   try {
-    await Promise.all([loadMeta(), loadBots(), loadTokens(), loadIncoming(), loadOutgoing(), loadDeliveries(), loadPubkeys()]);
+    await Promise.all([loadMeta(), loadBots(), loadTokens(), loadClients(),
+      loadIncoming(), loadOutgoing(), loadDeliveries(), loadPubkeys()]);
   } catch (e) {
     ElMessage.error('加载集成配置失败：' + (e.response?.data?.error || e.message));
   }
@@ -5397,6 +5532,7 @@ async function loadIntTab() {
   try {
     if (intTab.value === 'bots') await loadBots();
     else if (intTab.value === 'tokens') await loadTokens();
+    else if (intTab.value === 'clients') await loadClients();
     else if (intTab.value === 'incoming') { await Promise.all([loadMeta(), loadBots()]); await loadIncoming(); }
     else if (intTab.value === 'outgoing') { await loadMeta(); await loadOutgoing(); }
     else if (intTab.value === 'deliveries') await loadDeliveries();
@@ -5407,6 +5543,7 @@ async function loadIntTab() {
 }
 
 async function loadPubkeys() { pubkeys.value = (await api.get('/admin/integrations/publickeys')).data; }
+async function loadClients() { clients.value = (await api.get('/admin/integrations/clients')).data; }
 
 function openBotDialog() {
   botForm.value = { name: '', conversationId: null };
@@ -5493,6 +5630,78 @@ async function delToken(row) {
     await api.delete(`/admin/integrations/tokens/${row.id}`);
     ElMessage.success('已删除');
     await loadTokens();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '删除失败'); }
+}
+
+/* ====== 签名客户端（app_id / app_secret） ====== */
+
+/** 给对接方照抄的签名示例。写死在前端而不是从服务端取，避免"文档和实际校验不是同一份"。 */
+const signSample = `待签串 = [
+  "POST",
+  "/api/open/conversations/12/messages",
+  "",                 // query（没有就空串，但不能少这一行）
+  "1758000000",       // X-Timestamp，unix **秒**
+  "8f3c1a2b...",      // X-Nonce，每次随机
+  "e3b0c442..."       // sha256_hex(原始请求体字节)
+].join("\\n")
+
+X-Sign = hex(HMAC_SHA256(app_secret, 待签串))
+
+curl -X POST 'http://<服务端地址>/api/open/conversations/12/messages' \\
+  -H 'Content-Type: application/json' \\
+  -H "X-App-Id:     $APP_ID" \\
+  -H "X-Timestamp:  $(date +%s)" \\
+  -H "X-Nonce:      $(openssl rand -hex 12)" \\
+  -H "X-Sign:       $SIGN" \\
+  -d '{"text":"来自门店系统的告警"}'`;
+
+function openClientDialog() {
+  newClient.value = null;
+  clientForm.value = { name: '', userId: bots.value[0]?.id || null, scopes: ['message:send'] };
+  clientDlg.value = true;
+}
+async function saveClient() {
+  const f = clientForm.value;
+  if (!f.name.trim()) return ElMessage.warning('请填用途');
+  if (!f.userId) return ElMessage.warning('请选择身份');
+  if (!f.scopes.length) return ElMessage.warning('至少勾一个权限');
+  busy.value = true;
+  try {
+    const { data } = await api.post('/admin/integrations/clients', {
+      name: f.name, userId: f.userId, scopes: f.scopes,
+    });
+    newClient.value = { appId: data.client.appId, secret: data.secret };
+    clientStep.value = 2;
+    await loadClients();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '生成失败');
+  } finally { busy.value = false; }
+}
+async function toggleClient(row) {
+  try {
+    await api.post(`/admin/integrations/clients/${row.id}/enable`, { enabled: !row.enabled });
+    ElMessage.success(row.enabled ? '已停用' : '已启用');
+    await loadClients();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '操作失败'); }
+}
+async function rotateClient(row) {
+  try { await ElMessageBox.confirm(
+    `轮换「${row.name}」的密钥？旧密钥还有 24 小时可用，新密钥只显示这一次。`, '确认轮换', { type: 'warning' }); }
+  catch { return; }
+  try {
+    const { data } = await api.post(`/admin/integrations/clients/${row.id}/rotate`, {});
+    rotatedSecret.value = { appId: data.client.appId, secret: data.secret };
+    rotateDlg.value = true;
+    await loadClients();
+  } catch (e) { ElMessage.error(e.response?.data?.error || '轮换失败'); }
+}
+async function delClient(row) {
+  try { await ElMessageBox.confirm(`删除凭据「${row.name}」？用它的程序会立刻失效。`, '确认删除', { type: 'warning' }); }
+  catch { return; }
+  try {
+    await api.delete(`/admin/integrations/clients/${row.id}`);
+    ElMessage.success('已删除');
+    await loadClients();
   } catch (e) { ElMessage.error(e.response?.data?.error || '删除失败'); }
 }
 

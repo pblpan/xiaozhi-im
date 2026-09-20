@@ -3,10 +3,15 @@
 // 设计目标：让「任何软件」都能对接小智 IM，而不需要改 IM 的代码。
 //   1. 机器人（bot）—— 特殊用户，能被拉进群、能发言，但不能登录
 //   2. API 令牌 —— 外部系统的长期凭证，带 scope 白名单，可随时吊销
-//   3. 统一鉴权 —— 客户端 JWT 与外部 Token 走同一个入口，路由层无感
+//   3. 应用签名 —— app_id + app_secret 的 HMAC 签名（见 apisign.js）
+//   4. 统一鉴权 —— 上面三种 + 客户端 JWT 走同一个入口，路由层无感
+//
+// ⚠️ apisign 是**更低一层**的模块（只依赖 db/config），这里 require 它不会出现
+//    循环依赖：apisign 不认识 SCOPES，scope 的解析在本文件做。
 const crypto = require('crypto');
 const db = require('./db');
 const { verifyToken } = require('./auth');
+const apisign = require('./apisign');
 
 /** API 令牌前缀：一眼能认出这是集成令牌，也便于鉴权分流 */
 const TOKEN_PREFIX = 'xz_';
@@ -233,10 +238,23 @@ function authByApiToken(raw) {
 }
 
 /**
- * 统一鉴权入口：同时接受客户端 JWT 和外部 API 令牌。
+ * 统一鉴权入口：接受三种凭据，按请求头分流，**互不干扰**：
+ *   · 带 `X-App-Id`        → 签名通道（app_id + app_secret + HMAC，见 apisign.js）
+ *   · `Bearer xz_...`      → 外部 API 长期令牌
+ *   · `Bearer <jwt>`        → App 自身的登录态
+ *
  * 返回 { ok:true, userId, scopes, ... } 或 { ok:false, code, error }。
  */
 function authenticate(req) {
+  // 🔴 签名通道**优先判断且不回退**：带了 X-App-Id 就只走签名，
+  //    签名不过绝不能"试试看有没有 Authorization"。
+  //    回退会让攻击者挑那条更松的通道过，等于加固白做。
+  if (apisign.looksSigned(req)) {
+    const a = apisign.verifySignedRequest(req);
+    if (!a.ok) return { ok: false, code: a.code, error: a.error, detail: a.detail };
+    return { ...a, scopes: parseScopes(a.scopesRaw) };
+  }
+
   const raw = String(req.headers?.authorization || '')
     .replace(/^Bearer\s+/i, '').trim();
   if (!raw) return { ok: false, code: 401, error: 'missing credentials' };
@@ -260,7 +278,15 @@ function authenticate(req) {
 /** 写响应并返回 null 的便捷函数，风格与既有路由的 uidOf 保持一致 */
 function requireAuth(req, res) {
   const auth = authenticate(req);
-  if (!auth.ok) { res.status(auth.code || 401).json({ error: auth.error }); return null; }
+  if (!auth.ok) {
+    // `detail` 是签名通道的业务码（sign_missing / timestamp_out_of_window /
+    // bad_sign / nonce_replayed…）。带上它，对接方才能知道"到底哪一环不对"，
+    // 不然只能看到一句"invalid"，调试签名全靠猜。
+    // 令牌通道没有 detail（那里一律不解释，避免泄露吊销/过期原因）。
+    res.status(auth.code || 401)
+      .json({ error: auth.error, ...(auth.detail ? { code: auth.detail } : {}) });
+    return null;
+  }
   return auth;
 }
 

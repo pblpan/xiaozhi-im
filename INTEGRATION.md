@@ -14,7 +14,7 @@
 | 方式 | 方向 | 鉴权 | 适用场景 |
 |---|---|---|---|
 | **入站 Webhook** | 外部 → 群 | URL 里的 token（可选 HMAC 签名） | 最常用。库存预警、销售日报、审批通知，一个 POST 搞定 |
-| **开放 API** | 双向 | `Authorization: Bearer xz_xxx` | 需要读会话/成员、发消息、传文件的程序 |
+| **开放 API** | 双向 | `Authorization: Bearer xz_xxx` 或 **HMAC 签名**（生产建议用签名，见 3.4） | 需要读会话/成员、发消息、传文件的程序 |
 | **出站 Webhook** | 群 → 外部 | 服务端主动回调，带 HMAC 签名 | 想在自己系统里响应群消息、做机器人应答 |
 | **WebSocket** | 双向实时 | JWT | 客户端专用（普通对接不建议） |
 
@@ -207,6 +207,100 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 ```
 
 权限不足返回 403，令牌错误/吊销/过期统一返回 401。
+
+### 3.4 签名通道（生产建议）
+
+Bearer 令牌的问题是：**一旦泄露，谁都能一直用，而且看不出是谁在用。**
+签名通道给每个对接方发一对 `app_id` / `app_secret`，每次请求现算一个签名：
+
+- 密钥**不上网**，只有签名结果上网 —— 抓包拿不到密钥
+- 时间戳 ±300 秒有效 —— 录下来的请求过一会儿就作废
+- `nonce` 一次一用 —— 同一个请求重发第二次就被拒
+- 请求头里带 `app_id` —— 日志里看得出是哪个对接方在调
+
+管理后台 → 集成对接 → **签名客户端** → 发放凭据。
+`app_secret` **只显示这一次**（库里只存密文），请立刻保存。
+
+#### 请求头
+
+| 头 | 说明 |
+|---|---|
+| `X-App-Id` | 应用标识，形如 `ak_xxxxxxxx` |
+| `X-Timestamp` | unix **秒**（不是毫秒）。与服务端相差超过 ±300 秒即拒 |
+| `X-Nonce` | 随机串，每次请求都要不一样（建议 `openssl rand -hex 12`） |
+| `X-Sign` | `hex(HMAC_SHA256(app_secret, 待签串))` |
+
+#### 待签串
+
+六段用**换行**拼起来，顺序即协议（改了就是破坏性变更）：
+
+```
+method \n path \n query \n timestamp \n nonce \n sha256_hex(原始请求体)
+```
+
+- `method` 大写，如 `POST`
+- `path` 是 `/api/open/...`（不含 host）
+- `query` 是 `?` 后面那串；**没有就留空串，但这一行不能少**
+- `timestamp` / `nonce` 必须与请求头里发的**一模一样**
+- 最后一段是**原始请求体字节**的 sha256 hex；GET 等无体请求用空串的 sha256：
+  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+
+🔴 **必须按原始字节算**，不能用 `JSON.stringify(body)` 重新序列化 ——
+键序、空格稍有不同，哈希就对不上，会表现为"签名永远不对"且极难排查。
+
+#### 示例（bash）
+
+```bash
+APP_ID=ak_xxxxxxxxxxxxxxxx
+APP_SECRET=你的app_secret
+BASE=http://192.168.31.44:3602
+PATH=/api/open/conversations/1/messages
+QUERY=""
+BODY='{"text":"来自门店系统的告警"}'
+
+TS=$(date +%s)
+NONCE=$(openssl rand -hex 12)
+BODY_HASH=$(printf '%s' "$BODY" | openssl dgst -sha256 -hex | awk '{print $NF}')
+
+# 六段用换行拼
+CANON=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+  "POST" "$PATH" "$QUERY" "$TS" "$NONCE" "$BODY_HASH")
+SIGN=$(printf '%s' "$CANON" | openssl dgst -sha256 -hmac "$APP_SECRET" -hex | awk '{print $NF}')
+
+curl -sS -X POST "$BASE$PATH" \
+  -H 'Content-Type: application/json' \
+  -H "X-App-Id: $APP_ID" \
+  -H "X-Timestamp: $TS" \
+  -H "X-Nonce: $NONCE" \
+  -H "X-Sign: $SIGN" \
+  -d "$BODY"
+```
+
+> `printf` 不要用 `echo`：有些 shell 的 `echo` 会多吐一个换行，哈希就错了。
+
+#### 错误码
+
+| HTTP | code | 含义 / 怎么处理 |
+|---|---|---|
+| 401 | `sign_missing` | 四个头没带全 |
+| 401 | `app_invalid` | app_id 不存在、**或已被停用**（两者同一个码，不给枚举工具）；也可能是密钥解密失败 |
+| 401 | `bad_timestamp` | `X-Timestamp` 不是整数秒 |
+| 401 | `timestamp_out_of_window` | 时钟偏差超过 ±300 秒 → 去对一下对接机器的时间（NTP） |
+| 401 | `bad_nonce` | nonce 超过 128 字符 |
+| 401 | `bad_sign` | 签名对不上 → 九成是待签串拼错（顺序/换行/query 空行/body 哈希） |
+| 409 | `nonce_replayed` | 这个 nonce 用过了 → 每次请求必须换新的 |
+
+排查第一步：先看 `/api/open/me` 返回的 `via` 是不是 `sign`，以及 `appId` 对不对。
+
+#### 密钥轮换
+
+管理后台点「轮换密钥」：新密钥**立刻生效**，旧密钥还有 **24 小时**宽限期 ——
+不然"点一下轮换"就等于把对接方当场踢下线，那个按钮就没人敢按了。改完配置记得再点一次确认。
+
+#### 与 Bearer 的关系
+
+两条通道并存、互不干扰：**带了 `X-App-Id` 就走签名，不再回退到 Bearer**（这是故意的，
+否则"签名不对但令牌对"就能过，等于签名白加）；不带就照旧走令牌。
 
 ---
 

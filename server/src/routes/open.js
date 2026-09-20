@@ -57,7 +57,12 @@ router.get('/me', (req, res) => {
   const u = db.prepare('SELECT id, username, nickname, is_bot FROM users WHERE id = ?').get(auth.userId);
   res.json({
     ok: true,
+    // 走签名通道时这里是 app_id / 应用名 —— 对接方启动时探一下就知道
+    // "服务端认的是哪一对凭据"，排查"签名老是不对"时第一步就看它。
     tokenName: auth.tokenName || null,
+    via: auth.via || null,
+    appId: auth.appId || null,
+    clientName: auth.clientName || null,
     identity: {
       id: u.id,
       username: u.username,

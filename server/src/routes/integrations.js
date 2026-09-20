@@ -6,10 +6,11 @@ const express = require('express');
 const db = require('../db');
 const { verifyToken } = require('../auth');
 const {
-  SCOPES, createBot, listBots, getBot, deleteBot, ensureBotInConversation,
+  SCOPES, sanitizeScopes, createBot, listBots, getBot, deleteBot, ensureBotInConversation,
   createApiToken, listApiTokens, revokeApiToken, deleteApiToken,
   newHookToken, newSecret,
 } = require('../integration');
+const apisign = require('../apisign');
 const { EVENTS } = require('../events');
 const dispatcher = require('../dispatcher');
 
@@ -111,6 +112,53 @@ router.post('/tokens/:id/revoke', (req, res) => {
 router.delete('/tokens/:id', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
   try { res.json(deleteApiToken(req.params.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+/* ==================== 应用签名凭据（app_id / app_secret）==================== */
+//
+// 和「API 令牌」的区别：令牌是**能直接抄走的长期密码**，泄露了谁都能用、
+// 也看不出是谁；签名凭据每次请求现算 HMAC，带时间戳和一次性 nonce，
+// 泄露出去的只是一串没法倒推 secret 的签名。
+//
+// 🔴 app_secret 的明文**只在创建/轮换那一次**的响应里出现。以后列不出来、
+//    也找不回来 —— 找不回来最多是重发一对，找得回来就多一条泄露路径。
+
+router.get('/clients', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json(apisign.listApiClients());
+});
+
+router.post('/clients', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const { name, userId, scopes } = req.body || {};
+  try {
+    res.json(apisign.createApiClient({
+      name,
+      userId: userId || uid,
+      scopesCsv: sanitizeScopes(scopes).join(','),
+      createdBy: uid,
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post('/clients/:id/enable', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  try {
+    res.json(apisign.setApiClientEnabled(req.params.id, (req.body || {}).enabled !== false));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post('/clients/:id/rotate', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const out = apisign.rotateApiClientSecret(req.params.id);
+  if (!out) return res.status(404).json({ error: '凭据不存在' });
+  res.json(out);
+});
+
+router.delete('/clients/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  try { res.json(apisign.deleteApiClient(req.params.id)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
