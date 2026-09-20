@@ -62,6 +62,9 @@ async function api(method, p, { token, body } = {}) {
 
 let serverProc = null;
 let serverLog = '';
+// 供 grantStaff 用的模块级引用（它在 IIFE 之前声明，靠这两个拿 token/id）
+let adminToken = null;
+let staffId = null;
 
 async function startServer() {
   serverProc = spawn(process.execPath, [path.join(SERVER_DIR, 'src', 'index.js')], {
@@ -87,16 +90,32 @@ function uploadBody(zone, phase, rows, extra = {}) {
   return { zone: { zone_code: zone, zone_name: zone + '区' }, phase, rows, ...extra };
 }
 
+/**
+ * 给盘点员授该点位的抽盘权。
+ *
+ * M2 之后**抽盘的开单与上传都要持权**，所以下面那些"专测差异口径"的用例
+ * 必须先授权 —— 它们要验的是差异集算法，不是权限。权限本身单独在【十二】测。
+ * 不先授权的话，这些用例会以 403 失败，而失败原因看着像"差异算法坏了"。
+ */
+async function grantStaff(zone) {
+  return api('POST', `/api/stocktake/zone/${zone}/grant`, {
+    token: adminToken,
+    body: { user_id: staffId },
+  });
+}
+
 (async () => {
   await startServer();
   console.log('[inventory E2E] 服务端已就绪 ' + BASE + '\n');
 
-  let r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'TestAdmin_123' } });
+  let   r = await api('POST', '/api/auth/login', { body: { username: 'admin', password: 'TestAdmin_123' } });
   const admin = r.body?.token;
+  adminToken = admin;
   ok('管理员登录', !!admin, JSON.stringify(r.body));
 
   r = await api('POST', '/api/auth/register', { body: { username: 'pda001', password: 'pda001', nickname: '盘点员小张' } });
   const staff = r.body?.token;
+  staffId = r.body?.user?.id;
   ok('普通员工注册（盘点员）', !!staff, JSON.stringify(r.body));
 
   // ============================================================
@@ -233,6 +252,10 @@ function uploadBody(zone, phase, rows, extra = {}) {
   ok('🔴 复盘不受差异集限制（复盘就是重扫一遍，限它等于默认初盘是对的）',
     r.status === 200 && r.body.accepted === 1, JSON.stringify(r.body));
 
+  // 抽盘要持权（M2）——本组验的是差异口径，先授权
+  r = await grantStaff('Z20');
+  ok('  （前置）给盘点员授 Z20 抽盘权', r.status === 200, JSON.stringify(r.body));
+
   // 抽盘：6902 初盘 10、复盘 10 → 两遍对得上 → 不在差异集 → 必须拒
   r = await api('POST', '/api/stocktake/sheet/INV-Z20-3-20260919140000/upload', {
     token: staff, body: uploadBody('Z20', 3, [{ barcode: '6902222222222', qty: 10 }]),
@@ -274,6 +297,8 @@ function uploadBody(zone, phase, rows, extra = {}) {
   await api('POST', '/api/stocktake/sheet/INV-Z10-2-20260919130000/upload', {
     token: staff, body: uploadBody('Z10', 2, [{ barcode: '6901111111111', qty: 15 }]),
   });
+  // 抽盘要持权（M2）
+  await grantStaff('Z10');
   r = await api('GET', '/api/stocktake/zone/Z10', { token: staff });
   p1 = r.body.phases.find((x) => x.phase === 1);
   const p2 = r.body.phases.find((x) => x.phase === 2);
@@ -385,6 +410,243 @@ function uploadBody(zone, phase, rows, extra = {}) {
 
   r = await api('DELETE', '/api/stocktake/zone/Z20', { token: admin });
   ok('删点位带库位/绑定/单据/明细的级联计数', r.status === 200 && r.body.deleted.sheet >= 2, JSON.stringify(r.body));
+
+  // ============================================================
+  // 抽盘的复核清单（点位 Z21）
+  //
+  // 🔴 这里钉的是**行集的来源**：必须是"初盘 vs 复盘"对不上的那批，
+  //    而不是"抽盘 − 复盘"。后者在主管把数量改对之后会变成 0，
+  //    那一行就当场从表上消失 —— 可"改对了"不等于"这个商品没疑问"，
+  //    主管最终核对要看的恰恰是"前两遍就对不上的那批"。
+  //    拿它当行集等于"复核得越认真、表越短"，核对台账反而丢了。
+  //
+  // 造数据（四类情形都覆盖，缺一类都会有商品被静默漏掉）：
+  //   初盘 6901=10 / 6902=5 / 6903=2 / 6905=8
+  //   复盘 6901=10（两遍一致 → 不进清单）
+  //        6902=7 （数量对不上 → 进）
+  //        6903 不扫（复盘漏盘 → 进）
+  //        6904=3 （复盘新扫、初盘没有 → 进）
+  //        6905 不扫（复盘漏盘 → 进）
+  // ============================================================
+  console.log('\n【十一】抽盘复核清单（点位 Z21）');
+  await api('POST', '/api/stocktake/sheet/INV-Z21-1-20260919160000/upload', {
+    token: staff,
+    body: uploadBody('Z21', 1, [
+      { barcode: '6901000000001', qty: 10 },
+      { barcode: '6901000000002', qty: 5 },
+      { barcode: '6901000000003', qty: 2 },
+      { barcode: '6901000000005', qty: 8 },
+    ]),
+  });
+  await api('POST', '/api/stocktake/sheet/INV-Z21-2-20260919161000/upload', {
+    token: staff,
+    body: uploadBody('Z21', 2, [
+      { barcode: '6901000000001', qty: 10 },
+      { barcode: '6901000000002', qty: 7 },
+      { barcode: '6901000000004', qty: 3 },
+    ]),
+  });
+
+  // 抽盘要持权（M2）——本组验的是清单口径，先把权限给上。
+  // ⚠️ 必须在**点位已经存在之后**再授：授权接口对不存在的点位是 404
+  //    （授一个不存在的点位属于搞错了对象，静默建一个空点位更糟）。
+  r = await grantStaff('Z21');
+  ok('  （前置）给盘点员授 Z21 抽盘权', r.status === 200, JSON.stringify(r.body));
+
+  r = await api('GET', '/api/stocktake/zone/Z21/review', { token: staff });
+  ok('复核清单端点可读', r.status === 200 && Array.isArray(r.body.rows), JSON.stringify(r.body));
+  let codes = r.body.rows.map((x) => x.barcode).sort();
+  ok('清单 = 前两遍对不上的那批（两遍一致的 6901 不进）',
+    JSON.stringify(codes) ===
+      JSON.stringify(['6901000000002', '6901000000003', '6901000000004', '6901000000005']),
+    JSON.stringify(codes));
+  ok('  tally.total = 4、pending = 4（抽盘还没扫）',
+    r.body.tally.total === 4 && r.body.tally.pending === 4, JSON.stringify(r.body.tally));
+  ok('  单条 base_diff 给的是"为什么进清单"（6902：复盘 7 − 初盘 5 = 2）',
+    r.body.rows.find((x) => x.barcode === '6901000000002').base_diff === 2,
+    JSON.stringify(r.body.rows.find((x) => x.barcode === '6901000000002')));
+  ok('  复盘漏盘那两条标了 base_missing（6903 / 6905）',
+    r.body.rows.filter((x) => x.base_missing === true).map((x) => x.barcode).sort()
+      .join(',') === '6901000000003,6901000000005',
+    JSON.stringify(r.body.rows.map((x) => [x.barcode, x.base_missing])));
+  ok('  复盘新扫的那条 prev_qty 有值、初盘为空（6904：base_qty=null）',
+    r.body.rows.find((x) => x.barcode === '6901000000004').base_qty === null,
+    JSON.stringify(r.body.rows.find((x) => x.barcode === '6901000000004')));
+
+  // 抽盘：把 6902 复核成与复盘一致（7）、6903 补盘（2）、6904 维持一致（3）
+  r = await api('POST', '/api/stocktake/sheet/INV-Z21-3-20260919162000/upload', {
+    token: staff,
+    body: uploadBody('Z21', 3, [
+      { barcode: '6901000000002', qty: 7 },
+      { barcode: '6901000000003', qty: 2 },
+      { barcode: '6901000000004', qty: 3 },
+    ]),
+  });
+  ok('抽盘上传三条复核项 → 通过', r.status === 200, JSON.stringify(r.body));
+
+  r = await api('GET', '/api/stocktake/zone/Z21/review', { token: staff });
+  codes = r.body.rows.map((x) => x.barcode).sort();
+  // 🔴 反向核心：复核改对（6902 抽盘 7 = 复盘 7，diff_qty 归 0）之后，
+  //    那一行**必须还在清单里**。旧口径（行集 = 抽盘 − 复盘）这里会剩 3 条，
+  //    6902 被"改对了就消失" —— 主管最终核对时就没有这份台账了。
+  ok('🔴 复核改对之后清单**一条都不少**（6902 仍在，不是 3 条）',
+    JSON.stringify(codes) ===
+      JSON.stringify(['6901000000002', '6901000000003', '6901000000004', '6901000000005']),
+    JSON.stringify(codes));
+  const row692 = r.body.rows.find((x) => x.barcode === '6901000000002');
+  ok('  6902 结论变成 aligned，且 diff_qty（复核结果）归 0',
+    row692.review === 'aligned' && row692.diff_qty === 0,
+    JSON.stringify(row692));
+  ok('  6902 的 base_diff 仍是 2（前两遍的差异不受复核影响）',
+    row692.base_diff === 2, String(row692.base_diff));
+  ok('  6903（复盘漏盘）复核后结论是 filled（本遍补上了）',
+    r.body.rows.find((x) => x.barcode === '6901000000003').review === 'filled',
+    JSON.stringify(r.body.rows.find((x) => x.barcode === '6901000000003')));
+  ok('  6905 还是 pending（抽盘没扫到 → 未复核，不是"没问题"）',
+    r.body.rows.find((x) => x.barcode === '6901000000005').review === 'pending',
+    JSON.stringify(r.body.rows.find((x) => x.barcode === '6901000000005')));
+  ok('  tally：total 4、reviewed 3、pending 1、aligned 2、filled 1',
+    r.body.tally.total === 4 && r.body.tally.reviewed === 3 &&
+      r.body.tally.pending === 1 && r.body.tally.aligned === 2 &&
+      r.body.tally.filled === 1,
+    JSON.stringify(r.body.tally));
+
+  // 阶段条：抽盘报的是"待复核数"，不是"抽盘 − 复盘"的差异数
+  r = await api('GET', '/api/stocktake/zone/Z21', { token: staff });
+  const q3 = r.body.phases.find((x) => x.phase === 3);
+  ok('🔴 抽盘阶段条：diff = 4（复核清单），pending_review = 1（还剩一项没看）',
+    q3.diff === 4 && q3.pending_review === 1, JSON.stringify(q3));
+  ok('  这里 diff 掉到 0 就错了 —— 那是"刚认真复核完一遍"，不是"没问题"',
+    q3.diff !== 0, String(q3.diff));
+
+  // 准入与清单必须同一个集合：清单上没有的商品扫了要拒
+  r = await api('POST', '/api/stocktake/sheet/INV-Z21-3-20260919163000/upload', {
+    token: staff, body: uploadBody('Z21', 3, [{ barcode: '6901000000001', qty: 10 }]),
+  });
+  ok('抽盘上传"前两遍对得上"的商品 → 400 not_in_diff_set（准入仍然成立）',
+    r.status === 400 && r.body.code === 'not_in_diff_set', JSON.stringify(r.body));
+
+  // 边界：还没开抽盘的清单条数（同一份数据换一个点位看"没数据时不炸"）
+  r = await api('GET', '/api/stocktake/zone/Z99/review', { token: staff });
+  ok('点位不存在 → 404（不是空清单假成功）', r.status === 404, String(r.status));
+
+  // ============================================================
+  // 抽盘授权（M2/P2 · 点位 Z22）
+  //
+  // 🔴 这条的**验收判据**是"无授权账号抽盘被后端拒"，而且是**实测被拒**
+  //    （403 + code），不是"界面上按钮藏起来了"。
+  //    前端隐藏只挡得住老实人：抽盘单在客户端的离线库里能直接造出来，
+  //    只有服务端在这里校，才能保证没权限的人写不进抽盘结果。
+  //
+  // 每个断言都要问一句"什么坏情况能让它失败"：
+  //   · 只校了开单没校上传 → "上传被拒"那条会红；
+  //   · 授了一个人变成人人有权 → "另一个账号仍被拒"那条会红；
+  //   · 解除只是删行 → "留痕"那条会红；
+  //   · 续授覆盖原 granted_at → "幂等"那条会红。
+  // ============================================================
+  console.log('\n【十二】抽盘授权（点位 Z22）');
+  r = await api('POST', '/api/auth/register', { body: { username: 'pda002', password: 'pda002', nickname: '盘点员小李' } });
+  const other = r.body?.token;
+  ok('  注册第二个盘点员（对照用）', !!other, JSON.stringify(r.body));
+
+  // 造点位的三个阶段数据（上传会自动建点位）
+  await api('POST', '/api/stocktake/sheet/INV-Z22-1-20260919170000/upload', {
+    token: staff, body: uploadBody('Z22', 1, [{ barcode: '6901000000001', qty: 10 }]),
+  });
+  await api('POST', '/api/stocktake/sheet/INV-Z22-2-20260919171000/upload', {
+    token: staff, body: uploadBody('Z22', 2, [{ barcode: '6901000000001', qty: 12 }]),
+  });
+
+  r = await api('GET', '/api/stocktake/zone/Z22/grant', { token: staff });
+  ok('未授权时 mine=false / can_manage=false',
+    r.status === 200 && r.body.mine === false && r.body.can_manage === false, JSON.stringify(r.body));
+
+  r = await api('POST', '/api/stocktake/sheet', { token: staff, body: { zone_code: 'Z22', phase: 3 } });
+  ok('🔴 无授权开抽盘单 → 403 no_stocktake_grant（实测被拒，不是藏按钮）',
+    r.status === 403 && r.body.code === 'no_stocktake_grant', JSON.stringify(r.body));
+  ok('  错误文案就是给现场看的那句（要能照着念给主管听）',
+    /没有抽盘授权权限/.test(r.body?.error || ''), JSON.stringify(r.body?.error));
+
+  r = await api('POST', '/api/stocktake/sheet/INV-Z22-3-20260919172000/upload', {
+    token: staff, body: uploadBody('Z22', 3, [{ barcode: '6901000000001', qty: 12 }]),
+  });
+  ok('🔴 无授权**上传抽盘数据** → 403（数据真正落地的那道门也拦住了）',
+    r.status === 403 && r.body.code === 'no_stocktake_grant', JSON.stringify(r.body));
+
+  r = await api('GET', '/api/stocktake/sheets?zone=Z22&phase=3&allTime=1', { token: staff });
+  ok('  被拒的上传没有偷偷落库（第 3 阶段仍无单据）',
+    r.status === 200 && r.body.total === 0, JSON.stringify({ total: r.body?.total }));
+
+  r = await api('POST', '/api/stocktake/zone/Z22/grant', { token: staff, body: { user_id: staffId } });
+  ok('无权限的人不能给自己授权 → 403', r.status === 403, JSON.stringify(r.body));
+
+  r = await api('POST', '/api/stocktake/zone/Z22/grant', { token: admin, body: { user_id: staffId } });
+  ok('管理员授权 → ok', r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+
+  r = await api('GET', '/api/stocktake/zone/Z22/grant', { token: staff });
+  ok('授权后 mine=true，且生效名单里有他',
+    r.body.mine === true && r.body.live_user_ids.includes(staffId),
+    JSON.stringify({ mine: r.body?.mine, live: r.body?.live_user_ids, me: staffId }));
+
+  r = await api('POST', '/api/stocktake/sheet', { token: staff, body: { zone_code: 'Z22', phase: 3 } });
+  ok('授权后能开抽盘单了', r.status === 200 && !!r.body.sheet, JSON.stringify(r.body));
+  const Z22S3 = r.body.sheet.sheet_no;
+
+  r = await api('POST', `/api/stocktake/sheet/${Z22S3}/upload`, {
+    token: staff, body: uploadBody('Z22', 3, [{ barcode: '6901000000001', qty: 12 }]),
+  });
+  ok('授权后抽盘上传 → 200', r.status === 200 && r.body.accepted === 1, JSON.stringify(r.body));
+
+  // 反向：只授了他一个人，别人不该跟着有权
+  r = await api('GET', '/api/stocktake/zone/Z22/grant', { token: other });
+  ok('🔴 另一个盘点员 mine=false（授一个人 ≠ 人人有权）',
+    r.status === 200 && r.body.mine === false, JSON.stringify(r.body));
+  r = await api('POST', '/api/stocktake/sheet', { token: other, body: { zone_code: 'Z22', phase: 3 } });
+  ok('🔴 另一个盘点员开抽盘单 → 403', r.status === 403 && r.body.code === 'no_stocktake_grant', JSON.stringify(r.body));
+
+  // 幂等：已生效的再授一次，不改原 granted_at
+  const firstGrants = (await api('GET', '/api/stocktake/zone/Z22/grant', { token: admin })).body.grants;
+  const firstAt = firstGrants.find((g) => g.user_id === staffId).granted_at;
+  await sleep(20);
+  r = await api('POST', '/api/stocktake/zone/Z22/grant', { token: admin, body: { user_id: staffId } });
+  ok('重复授权幂等（already=true）', r.status === 200 && r.body.already === true, JSON.stringify(r.body));
+  const againAt = (await api('GET', '/api/stocktake/zone/Z22/grant', { token: admin }))
+    .body.grants.find((g) => g.user_id === staffId).granted_at;
+  ok('🔴 重复授权不刷新原 granted_at（授权时间是要留痕的）',
+    againAt === firstAt, JSON.stringify({ before: firstAt, after: againAt }));
+
+  // 解除
+  r = await api('DELETE', `/api/stocktake/zone/Z22/grant?user_id=${staffId}`, { token: admin });
+  ok('管理员解除授权 → revoked=1', r.status === 200 && r.body.revoked === 1, JSON.stringify(r.body));
+
+  r = await api('GET', '/api/stocktake/zone/Z22/grant', { token: staff });
+  ok('解除后 mine 立刻变 false', r.body.mine === false, JSON.stringify(r.body));
+  ok('🔴 解除是"置 revoked_at"不是删行（那一行是"当时授没授过"的证据）',
+    r.body.grants.some((g) => g.user_id === staffId && g.revoked_at !== null),
+    JSON.stringify(r.body.grants));
+
+  r = await api('POST', `/api/stocktake/sheet/${Z22S3}/upload`, {
+    token: staff, body: uploadBody('Z22', 3, [{ barcode: '6901000000001', qty: 12 }], { force: 1 }),
+  });
+  ok('🔴 解除后再上传 → 403（收回权限立刻生效，不是"下次盘点才管用"）',
+    r.status === 403 && r.body.code === 'no_stocktake_grant', JSON.stringify(r.body));
+
+  // 自己解除自己：授回来，让他自己撤
+  await api('POST', '/api/stocktake/zone/Z22/grant', { token: admin, body: { user_id: staffId } });
+  r = await api('DELETE', `/api/stocktake/zone/Z22/grant?user_id=${staffId}`, { token: staff });
+  ok('持权人可以自己解除自己（授错了当场能收回）', r.status === 200 && r.body.revoked === 1, JSON.stringify(r.body));
+
+  r = await api('GET', '/api/stocktake/grants/mine', { token: staff });
+  ok('grants/mine：普通员工拿到的是"我能抽盘的点位"',
+    r.status === 200 && r.body.all === false && Array.isArray(r.body.zone_codes), JSON.stringify(r.body));
+  ok('  已解除的 Z22 不在名单里（且 Z21 还在 —— 不是空集合假通过）',
+    !r.body.zone_codes.includes('Z22') && r.body.zone_codes.includes('Z21'),
+    JSON.stringify(r.body.zone_codes));
+  r = await api('GET', '/api/stocktake/grants/mine', { token: admin });
+  ok('grants/mine：管理员天然持权（all=true）', r.body.all === true, JSON.stringify(r.body));
+
+  r = await api('GET', '/api/stocktake/zone/Z99/grant', { token: admin });
+  ok('点位不存在 → 404（不是空授权表假成功）', r.status === 404, String(r.status));
 
   // ============================================================
   console.log(`\n[inventory E2E] 通过 ${passed} / 失败 ${failed}`);

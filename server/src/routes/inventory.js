@@ -228,35 +228,137 @@ function zonePhaseRows(zc, phase) {
  *
  * 🔴 漏盘必须进来：员工最容易干的事就是绕开不好盘的货架，
  *    而"少一行"在明细里根本看不出来 —— 不像数量错了那么显眼。
+ *
+ * 🔴 这一套也是抽盘的**准入集合**（`/upload` 里校的就是它），
+ *    必须和 [reviewRowsOf] 的复核清单**同一个集合**：
+ *    不齐的话会出现"复核清单上列着、上传时却被拒"，
+ *    现场就变成"这几件怎么都传不上去"。
  */
-function diffSetForNextPhase(zc, phaseA, phaseB) {
-  const a = zonePhaseQtyMap(zc, phaseA);
-  const b = zonePhaseQtyMap(zc, phaseB);
+function reviewSetOf(a, b) {
   const out = new Set();
-  // 上一轮有、这一轮没扫（漏盘）或数量对不上
+  // 初盘有、复盘没扫（漏盘）或数量对不上
   for (const [code, qa] of a) {
     const qb = b.get(code);
     if (qb === undefined || qb !== qa) out.add(code);
   }
-  // 这一轮多扫出来的（上一轮压根没盘到）—— 一样是疑问项，抽盘要看
+  // 复盘新扫出来的（初盘压根没盘到）—— 一样是疑问项，抽盘要看
   for (const [code] of b) {
     if (!a.has(code)) out.add(code);
   }
   return out;
 }
 
+function diffSetForNextPhase(zc, phaseA, phaseB) {
+  return reviewSetOf(zonePhaseQtyMap(zc, phaseA), zonePhaseQtyMap(zc, phaseB));
+}
+
+/** 复核结论（和客户端 InventoryRules.reviewVerdict 同一套取值）。 */
+const REVIEW_ALIGNED = 'aligned'; // 本遍 = 上一遍
+const REVIEW_CHANGED = 'changed'; // 两边都有数，但不一致
+const REVIEW_FILLED = 'filled';   // 上一遍没有、本遍补上了
+const REVIEW_PENDING = 'pending'; // 本遍还没扫
+
+function reviewVerdict(curQty, prevQty) {
+  if (curQty === undefined) return REVIEW_PENDING;
+  if (prevQty === undefined) return REVIEW_FILLED;
+  return curQty === prevQty ? REVIEW_ALIGNED : REVIEW_CHANGED;
+}
+
+/** 复核清单的计数（一处算，界面/导出/测试共用，免得数字对不上）。 */
+function tallyReview(rows) {
+  let aligned = 0, changed = 0, filled = 0, pending = 0, baseMissing = 0;
+  for (const r of rows) {
+    switch (r.review) {
+      case REVIEW_ALIGNED: aligned++; break;
+      case REVIEW_CHANGED: changed++; break;
+      case REVIEW_FILLED: filled++; break;
+      default: pending++;
+    }
+    if (r.base_missing) baseMissing++;
+  }
+  return {
+    total: rows.length,
+    aligned, changed, filled, pending, base_missing: baseMissing,
+    reviewed: aligned + changed + filled,
+  };
+}
+
+/**
+ * 抽盘的**复核清单**：前两遍（初盘 vs 复盘）对不上的商品，逐行带三遍数量。
+ *
+ * 🔴 抽盘的差异表**不是**"抽盘 − 复盘"。主管把数量改成跟复盘一致之后，
+ *    后者会变成 0，那一行会当场从表上消失 —— 可"改对了"不等于
+ *    "这个商品没疑问"，主管要最终核对的恰恰是"前两遍对不上的那批"。
+ *    拿它当行集等于"复核得越认真、表越短"，核对台账反而丢了。
+ *
+ * 每行同时给两件事，别混：
+ *   · `base_diff` = 复盘 − 初盘 —— **为什么这个商品进清单**（前两遍的差异）
+ *   · `diff_qty`  = 抽盘 − 复盘 —— **复核的结果**（改成一致就是 0）
+ *
+ * 行集只由前两遍决定，抽盘怎么改都不会让行消失 —— 这就是"最终核对"。
+ */
+function reviewRowsOf(zc) {
+  const q1 = zonePhaseQtyMap(zc, 1);
+  const q2 = zonePhaseQtyMap(zc, 2);
+  const q3 = zonePhaseQtyMap(zc, 3);
+  const out = [];
+  for (const barcode of reviewSetOf(q1, q2)) {
+    const a = q1.get(barcode);
+    const b = q2.get(barcode);
+    const t = q3.get(barcode);
+    const baseMissing = a !== undefined && b === undefined;
+    out.push({
+      barcode,
+      qty: t === undefined ? 0 : t, // 本遍（抽盘）实际复核到的数
+      account_qty: null,
+      loc_code: null,
+      base_qty: a === undefined ? null : a, // 初盘
+      prev_qty: b === undefined ? null : b, // 上一遍（复盘）
+      diff_qty: (t === undefined || b === undefined) ? null : t - b, // 复核结果
+      base_diff: (a === undefined || b === undefined) ? null : b - a, // 前两遍的差异
+      base_missing: baseMissing,
+      // 旧字段名的兼容位：复核清单里的「漏盘」指的是"初盘盘过、复盘没扫到"
+      // （抽盘自己没扫到是"未复核"，由 review=pending 表达，两者别混）。
+      missing: baseMissing,
+      review: reviewVerdict(t, b),
+      review_missing: t === undefined,
+    });
+  }
+  out.sort((x, y) => (x.barcode < y.barcode ? -1 : x.barcode > y.barcode ? 1 : 0));
+  return out;
+}
+
 function phaseSummary(zc, phase) {
   const rows = zonePhaseRows(zc, phase);
-  const diff = diffRowsOf(zc, phase);
-  return {
+  const base = {
     phase,
     label: PHASE_LABEL[phase],
     kinds: rows.length,
     total_qty: rows.reduce((s, r) => s + Number(r.qty), 0),
-    diff: diff.length,
-    diff_rows: diff,
     mistakes: mistakesOf(zc, phase),
   };
+
+  // 🔴 抽盘（第三遍）的头条数字是**待复核数**，不是"本遍 − 上一遍"的差异数：
+  //    抽盘的差异表已经是复核清单（行集由前两遍定死），
+  //    再报"抽盘 − 复盘"的条数，复核改对之后这个数会掉到 0 ——
+  //    看上去像"盘完了没问题"，其实是"刚认真复核完一遍"。
+  //    主管在阶段条上要的是"还剩几项没看"。
+  if (phase === 3) {
+    const review = reviewRowsOf(zc);
+    const t = tallyReview(review);
+    return {
+      ...base,
+      diff: t.total,           // 复核清单条数（前两遍对不上的）
+      pending_review: t.pending,
+      reviewed: t.reviewed,
+      review_total: t.total,
+      review_tally: t,
+      diff_rows: review,
+    };
+  }
+
+  const diff = diffRowsOf(zc, phase);
+  return { ...base, diff: diff.length, diff_rows: diff };
 }
 
 /**
@@ -300,8 +402,179 @@ function publicSheet(s) {
     started_at: s.started_at,
     submitted_at: s.submitted_at,
     uploaded_at: s.uploaded_at,
+    // 审批状态（0未提审 1待审 2通过 3驳回）——和 status 是两回事，见 db.js 的注释。
+    // 用 `?? 0` 兜底：老库刚迁移完这一步可能还没跑到，别把 NULL 当"已通过"。
+    approval_status: s.approval_status == null ? 0 : s.approval_status,
+    reject_reason: s.reject_reason == null ? null : s.reject_reason,
   };
 }
+
+// ============================================================
+// 抽盘授权（M2/P2）
+//
+// 🔴 这是**后端**拦的，不是前端把按钮藏起来。前端隐藏只挡得住老实人：
+//    客户端的离线库里抽盘单是能直接造出来的，上传时若服务端不校，
+//    没权限的人照样能把抽盘结果写进来 —— 而抽盘恰恰是"主管定案"那一步，
+//    被绕过等于盘点结论可以被盘点员自己改。
+//    PG 的文案"请联系有权限的管理干部"说明它也是后端拦的。
+// ============================================================
+
+/**
+ * 某人现在有没有该盘点位的抽盘权。
+ *
+ * 🔴 管理员**天然持权**。不是"admin 最大"这种想当然，是因为授权这个动作
+ *    本身得有人能做：如果连管理员都要先给自己授一次权，新点位建出来
+ *    当天就没人开得了抽盘单。
+ *
+ * 🔴 判据**只看 `revoked_at IS NULL`**。全系统"有没有权"只此一处，
+ *    别在别的路由里另写一套 —— 两套判据必然在某个边界（刚解除、刚续授）
+ *    给出不同答案，表现出来就是"界面说有权、一提交被拒"，最难查的一种。
+ */
+function hasGrant(user, zc) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  return !!db.prepare(
+    'SELECT 1 FROM inv_grants WHERE zone_code = ? AND user_id = ? AND revoked_at IS NULL'
+  ).get(zc, user.id);
+}
+
+/**
+ * 抽盘门槛的唯一出口：过不了就**把响应写完**并返回 false。
+ *
+ * 做成"写完响应"而不是"返回布尔让调用方自己回"，是为了让每个调用点
+ * 只剩 `if (!requireGrant(...)) return;` 一行 —— 调用点越短，
+ * 越不会有人"忘了 return"从而让判断变成装饰品。
+ */
+function requireGrant(req, res, user, zc) {
+  if (hasGrant(user, zc)) return true;
+  res.status(403).json({
+    error: '您没有抽盘授权权限，请联系有权限的管理干部',
+    code: 'no_stocktake_grant',
+    zone_code: zc,
+  });
+  return false;
+}
+
+/** 能授权/解除的人：管理员，或者**该点位当前持权的人**（管理干部授权下属）。 */
+function canManageGrant(user, zc) {
+  return hasGrant(user, zc);
+}
+
+/** 抽盘授权现状：谁有（含已解除的留痕）、**我自己有没有**。 */
+router.get('/zone/:zcode/grant', (req, res) => {
+  const u = auth(req, res); if (!u) return;
+  const zc = code(req.params.zcode);
+  if (!zc) return res.status(400).json({ error: 'zone_code 不合法' });
+  if (!zoneOf(zc)) return res.status(404).json({ error: '盘点位不存在' });
+
+  const rows = db.prepare(`
+    SELECT g.user_id, g.granted_by, g.granted_at, g.revoked_at,
+           u.username, u.nickname
+      FROM inv_grants g
+      LEFT JOIN users u ON u.id = g.user_id
+     WHERE g.zone_code = ?
+     ORDER BY (g.revoked_at IS NULL) DESC, g.granted_at DESC
+  `).all(zc);
+
+  res.json({
+    zone_code: zc,
+    mine: hasGrant(u, zc),          // 客户端据此决定能不能进抽盘
+    is_admin: u.role === 'admin',
+    can_manage: canManageGrant(u, zc),
+    // 生效中的用户 id（界面用来做"这人现在能抽盘吗"的即时判断）
+    live_user_ids: rows.filter((r) => r.revoked_at === null).map((r) => r.user_id),
+    grants: rows.map((r) => ({ ...r, live: r.revoked_at === null })),
+  });
+});
+
+/** 我能在哪些点位抽盘（客户端进抽盘前先问一句，免得白扫一批再被拒）。 */
+router.get('/grants/mine', (req, res) => {
+  const u = auth(req, res); if (!u) return;
+  if (u.role === 'admin') {
+    // 管理员天然持权 → 返回全部点位，客户端不必再逐个问
+    const zones = db.prepare('SELECT zone_code FROM inv_zones ORDER BY zone_code ASC').all();
+    return res.json({ all: true, zone_codes: zones.map((z) => z.zone_code) });
+  }
+  const rows = db.prepare(`
+    SELECT zone_code, granted_at FROM inv_grants
+     WHERE user_id = ? AND revoked_at IS NULL
+     ORDER BY granted_at DESC
+  `).all(u.id);
+  res.json({ all: false, zone_codes: rows.map((r) => r.zone_code), grants: rows });
+});
+
+/**
+ * 授权某个用户抽盘（幂等：已生效的再授一次不改原 granted_at）。
+ *
+ * 🔴 **续授不覆盖原 granted_at** —— 授权时间是要留痕的，
+ *    反复点一下就把"什么时候给的"刷新掉，事后追责时这行记录就没意义了。
+ *    真正要重新计时，得先解除再授（两步都留痕）。
+ */
+router.post('/zone/:zcode/grant', (req, res) => {
+  const u = auth(req, res); if (!u) return;
+  const zc = code(req.params.zcode);
+  if (!zc) return res.status(400).json({ error: 'zone_code 不合法' });
+  if (!zoneOf(zc)) return res.status(404).json({ error: '盘点位不存在' });
+  if (!canManageGrant(u, zc)) {
+    return res.status(403).json({ error: '您没有该盘点位的抽盘授权权限，无法授权他人', code: 'no_stocktake_grant' });
+  }
+
+  const b = req.body || {};
+  let target = null;
+  if (b.user_id !== undefined && b.user_id !== null) {
+    target = db.prepare('SELECT id,username,nickname,role FROM users WHERE id = ?').get(Number(b.user_id));
+  } else if (b.username) {
+    target = db.prepare('SELECT id,username,nickname,role FROM users WHERE username = ?').get(String(b.username).trim());
+  }
+  if (!target) return res.status(404).json({ error: '用户不存在（user_id 或 username 二选一）' });
+
+  const now = Date.now();
+  const live = db.prepare(
+    'SELECT 1 FROM inv_grants WHERE zone_code = ? AND user_id = ? AND revoked_at IS NULL'
+  ).get(zc, target.id);
+  if (!live) {
+    // 已解除过的老行要复用（PRIMARY KEY 是 zone_code+user_id）
+    db.prepare(`
+      INSERT INTO inv_grants (zone_code, user_id, granted_by, granted_at, revoked_at)
+      VALUES (?,?,?,?,NULL)
+      ON CONFLICT(zone_code, user_id) DO UPDATE SET
+        granted_by = excluded.granted_by,
+        granted_at = excluded.granted_at,
+        revoked_at = NULL
+    `).run(zc, target.id, u.id, now);
+  }
+  res.json({
+    ok: true,
+    already: !!live,
+    zone_code: zc,
+    user: { id: target.id, username: target.username, nickname: target.nickname },
+  });
+});
+
+/** 解除抽盘授权（置 revoked_at，**不删行** —— 这行是"当时授没授过"的证据）。 */
+router.delete('/zone/:zcode/grant', (req, res) => {
+  const u = auth(req, res); if (!u) return;
+  const zc = code(req.params.zcode);
+  if (!zc) return res.status(400).json({ error: 'zone_code 不合法' });
+  if (!zoneOf(zc)) return res.status(404).json({ error: '盘点位不存在' });
+
+  const b = req.body || {};
+  const raw = b.user_id !== undefined && b.user_id !== null
+    ? b.user_id
+    : (req.query.user_id !== undefined ? req.query.user_id : null);
+  const uid = Number(raw);
+  if (!Number.isInteger(uid) || uid <= 0) return res.status(400).json({ error: 'user_id 必须是正整数' });
+
+  // 自己解除自己：允许（离职前收回、授错了立刻收回，都该自己能做）
+  if (!canManageGrant(u, zc) && uid !== u.id) {
+    return res.status(403).json({ error: '您没有该盘点位的抽盘授权权限，无法解除他人授权', code: 'no_stocktake_grant' });
+  }
+
+  const info = db.prepare(
+    'UPDATE inv_grants SET revoked_at = ? WHERE zone_code = ? AND user_id = ? AND revoked_at IS NULL'
+  ).run(Date.now(), zc, uid);
+  res.json({ ok: true, revoked: info.changes, zone_code: zc, user_id: uid });
+});
 
 // ============================================================
 // 盘点位
@@ -343,14 +616,46 @@ router.get('/zone/:zcode', (req, res) => {
     locations: db.prepare('SELECT loc_code, loc_name, zone_code, sort_no FROM inv_locations WHERE zone_code = ? ORDER BY sort_no ASC, loc_code ASC').all(zc),
     phases: PHASES.map((p) => {
       const s = phaseSummary(zc, p);
-      const sheet = db.prepare('SELECT sheet_no, status, started_at FROM inv_sheets WHERE zone_code = ? AND phase = ? ORDER BY started_at DESC LIMIT 1').get(zc, p) || null;
-      return { ...s, diff_rows: undefined, sheet_no: sheet ? sheet.sheet_no : null, status: sheet ? sheet.status : -1 };
+      const sheet = db.prepare('SELECT sheet_no, status, started_at, approval_status, reject_reason FROM inv_sheets WHERE zone_code = ? AND phase = ? ORDER BY started_at DESC LIMIT 1').get(zc, p) || null;
+      return {
+        ...s,
+        diff_rows: undefined,
+        sheet_no: sheet ? sheet.sheet_no : null,
+        status: sheet ? sheet.status : -1,
+        approval_status: sheet && sheet.approval_status != null ? sheet.approval_status : 0,
+        reject_reason: sheet ? (sheet.reject_reason || null) : null,
+      };
     }),
   });
 });
 
-/** 锁 / 解锁点位 */
-router.post('/zone/:zcode/lock', (req, res) => {
+/**
+ * 抽盘的**复核清单**：前两遍（初盘 vs 复盘）对不上的商品，逐行带三遍数量。
+ *
+ * 为什么单独开一个端点，而不是塞进 `/zone/:zcode`：
+ * 那份响应每次都要把三个阶段一起算完、还要顺带查单据状态，是**给界面画
+ * 阶段条**用的；复核清单要带商品名和金额列，行多、字段多，混在一起会让
+ * 每次刷阶段条都白算一遍。审批（M2）和管理台要看的就是这一份台账。
+ *
+ * 行集只由**前两遍**决定，抽盘怎么改都不会让行消失 —— 见 [reviewRowsOf]。
+ */
+router.get('/zone/:zcode/review', (req, res) => {
+  const u = auth(req, res); if (!u) return;
+  const zc = code(req.params.zcode);
+  if (!zc) return res.status(400).json({ error: 'zone_code 不合法' });
+  if (!zoneOf(zc)) return res.status(404).json({ error: '盘点位不存在' });
+  const rows = reviewRowsOf(zc);
+  const tally = tallyReview(rows);
+  res.json({
+    zone_code: zc,
+    rows,
+    tally,
+    diff: tally.total,           // 复核清单条数（前两遍对不上的）
+    pending_review: tally.pending,
+  });
+});
+
+/** 锁 / 解锁点位 */router.post('/zone/:zcode/lock', (req, res) => {
   const u = auth(req, res); if (!u) return;
   const zc = code(req.params.zcode);
   if (!zc) return res.status(400).json({ error: 'zone_code 不合法' });
@@ -360,7 +665,7 @@ router.post('/zone/:zcode/lock', (req, res) => {
   res.json({ zone: publicZone(zoneOf(zc)) });
 });
 
-/** 删点位：级联删库位、绑定、单据、明细。危险操作 → 只允许管理员。 */
+/** 删点位：级联删库位、绑定、单据、明细、抽盘授权。危险操作 → 只允许管理员。 */
 router.delete('/zone/:zcode', (req, res) => {
   const u = auth(req, res, { needAdmin: true }); if (!u) return;
   const zc = code(req.params.zcode);
@@ -379,9 +684,14 @@ router.delete('/zone/:zcode', (req, res) => {
     const locs = db.prepare('DELETE FROM inv_locations WHERE zone_code = ?').run(zc).changes;
     const scans = db.prepare('DELETE FROM inv_scans WHERE zone_code = ?').run(zc).changes;
     const sheets = db.prepare('DELETE FROM inv_sheets WHERE zone_code = ?').run(zc).changes;
+    // 抽盘授权要跟着点位一起删：点位都没了，那条授权指向的对象就不存在了。
+    // 这里**是**硬删（和"解除授权"不同）—— 解除要留痕是因为点位还在、
+    // 还要回答"当时授没授过"；点位都删了，那个问题的答案已经没有意义，
+    // 留着只会变成一堆查询里要额外过滤的孤儿行。
+    const grants = db.prepare('DELETE FROM inv_grants WHERE zone_code = ?').run(zc).changes;
     db.prepare('DELETE FROM inv_zones WHERE zone_code = ?').run(zc);
     db.exec('COMMIT');
-    res.json({ ok: true, deleted: { zone: 1, location: locs, barcode_location: bound, sheet: sheets, scan: scans } });
+    res.json({ ok: true, deleted: { zone: 1, location: locs, barcode_location: bound, sheet: sheets, scan: scans, grant: grants } });
   } catch (e) {
     db.exec('ROLLBACK');
     res.status(500).json({ error: '删除失败：' + e.message });
@@ -527,6 +837,11 @@ router.post('/sheet', (req, res) => {
   if (!z) return res.status(404).json({ error: '盘点位不存在，请先建盘点位' });
   if (z.locked) return res.status(409).json({ error: `盘点位「${z.zone_name || zc}」已锁定，请先解除锁定`, code: 'zone_locked' });
 
+  // 🔴 抽盘必须持权（M2/P2）。放在"锁定"检查之后、开单之前：
+  //    开单是抽盘的入口，不在这里拦，没权限的人能一路扫完再在上传时被拒 ——
+  //    那一整批活白干，而且他到那时才知道自己没权限，比进门就被拦住差得多。
+  if (phase === 3 && !requireGrant(req, res, u, zc)) return;
+
   const want = String(body.sheet_no || '').trim();
 
   // 指定了单号：走上面第 2/3 条路，不去猜"有没有别的未完成单"
@@ -597,6 +912,17 @@ router.get('/sheets', (req, res) => {
     const sv = Number(status);
     if (!Number.isFinite(sv)) return res.status(400).json({ error: 'status 必须是数字' });
     where.push('status = ?'); params.push(sv);
+  }
+  // 按审批状态筛（0未提审 1待审 2通过 3驳回）——"根据审批状态获取审批单据"。
+  // 参数名用 approval 而不是复用 status：这两个是不同的轴，
+  // 共用一个名字的话，前端想"待审的单"就只能筛出一个意思来，另一个永远筛不了。
+  const approval = req.query.approval;
+  if (approval !== undefined && approval !== '' && approval !== null) {
+    const av = Number(approval);
+    if (![0, 1, 2, 3].includes(av)) {
+      return res.status(400).json({ error: 'approval 只能是 0未提审 / 1待审 / 2通过 / 3驳回' });
+    }
+    where.push('approval_status = ?'); params.push(av);
   }
   where.push(...timeWhere(list, params, 'started_at'));
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
@@ -692,6 +1018,13 @@ router.post('/sheet/:no/upload', (req, res) => {
   } else if (body.zone && body.zone.zone_code) {
     z = upsertZone(zc, name(body.zone.zone_name, zc), body.zone.store_code ? code(body.zone.store_code) : null);
   }
+
+  // 🔴 抽盘必须持权（M2/P2）。这是**数据真正落地的那道门**：
+  //    客户端的按钮可以藏、开单也可以拦，但离线库里的抽盘单是能直接造的，
+  //    只有在这里校，才能保证"没权限的人写不进抽盘结果"。
+  //    放在差异集校验**之前** —— 没权限的人不该通过探测错误信息
+  //    （"不在差异集内" vs "没权限"）反推出这个点位有哪些商品是差异项。
+  if (phase === 3 && !requireGrant(req, res, u, zc)) return;
 
   // ── 阶段准入校验 ──
   //

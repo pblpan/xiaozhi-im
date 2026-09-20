@@ -660,6 +660,77 @@ CREATE INDEX IF NOT EXISTS idx_inv_scans_sheet ON inv_scans (sheet_no);
 CREATE INDEX IF NOT EXISTS idx_inv_scans_zone_phase ON inv_scans (zone_code, phase);
 `);
 
+// ---- 抽盘授权（M2/P2）----
+//
+// 🔴 为什么要落表，而不是给 users 加一个 can_stocktake 布尔：
+//    抽盘权限是**按盘点位给的**，而且是**临时的**。同一个主管今天抽 A 区、
+//    明天 B 区；离职/调岗要能立刻收回且**留痕**。一个布尔字段表达不了
+//    "谁、在哪个点位、谁给的、什么时候给的、什么时候收回的"这五件事，
+//    而这五件事恰恰是事后追责时唯一能拿出来的东西。
+//
+// 🔴 撤销用 revoked_at 置时间戳，**不是 DELETE 掉那一行**：
+//    删了就没法回答"当时到底授没授权给他"——被拒的人一定会来问这句。
+//    判"有没有权"统一走 `revoked_at IS NULL`，别在别处另写一套。
+//
+// 🔴 管理员**天然持权**（见 inventory.js 的 hasGrant）：
+//    每个盘点位都先给管理员授一次权，第一天就没人能开工。
+db.exec(`
+CREATE TABLE IF NOT EXISTS inv_grants (
+  zone_code TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  granted_by INTEGER,
+  granted_at INTEGER NOT NULL,
+  revoked_at INTEGER,                    -- NULL = 生效中；非空 = 已解除（留痕，不删行）
+  PRIMARY KEY (zone_code, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_inv_grants_user ON inv_grants (user_id, zone_code);
+CREATE INDEX IF NOT EXISTS idx_inv_grants_live ON inv_grants (zone_code, revoked_at);
+`);
+
+// ---- 通用审批中心（M2/P2）----
+//
+// 🔴 为什么不做成"盘点专用审批表"：
+//    审批这件事全系统只有一套语义（待审 / 通过 / 驳回 + 理由），
+//    做成通用的，后面请假、调价、报废都能直接挂上来，
+//    不必每加一类业务就复制一遍"待审批/已审批/驳回"三态和它的边界。
+//    `kind` + `ref` 两个字段把"这是什么业务、对应哪条记录"表达清楚就够了。
+//
+// 🔴 `reject_reason` 在**驳回时必填**（不是可选）：
+//    驳回而不说理由，提交人只能反复猜、反复提，审批就退化成了刁难。
+//    PG 的文案"请输入驳回理由"说明它也是硬拦的。
+//
+// 🔴 `payload` 存 JSON 快照，**不是外键**：
+//    审批要看的是"当时提交的是什么"。关联记录事后被改（或删），
+//    审批意见就成了对不上的空话；快照让这份意见永远有据可依。
+db.exec(`
+CREATE TABLE IF NOT EXISTS approvals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,                     -- 'stocktake' / 以后别的业务
+  title TEXT,
+  ref TEXT,                               -- 关联对象（盘点就是 sheet_no）
+  payload TEXT,                           -- JSON 快照
+  status TEXT NOT NULL DEFAULT 'pending', -- pending / approved / rejected
+  submitter_id INTEGER NOT NULL,
+  submitter_name TEXT,
+  decided_by INTEGER,
+  decided_by_name TEXT,
+  decided_at INTEGER,
+  reject_reason TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_approvals_submitter ON approvals (submitter_id, status, created_at DESC);
+`);
+
+// 盘点单的审批状态：0 未提审 / 1 待审批 / 2 已通过 / 3 已驳回。
+// 🔴 和 `status`（0进行中/1已提交/2已上传）是**两回事**，别合并：
+//    status 说的是"这张单的技术状态"（还能不能写），
+//    审批说的是"主管认不认这批数"。合并之后，"已上传但没批"就没法表达，
+//    而现场最常见的就是这种单 —— 传上去了、主管还没看。
+ensureColumn('inv_sheets', 'approval_status', 'approval_status INTEGER NOT NULL DEFAULT 0');
+// 驳回理由（批准时为空）。驳回必填，见 routes/approval.js。
+ensureColumn('inv_sheets', 'reject_reason', 'reject_reason TEXT');
+
 // ---- 商品档案（商档）----
 //
 // 🔴 为什么要把商档搬到服务端：

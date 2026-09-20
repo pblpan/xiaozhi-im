@@ -71,6 +71,9 @@ app.use('/api/location', require('./routes/inventory').location);
 // 商品档案（商档）：盘点算差异要的账面数存在这里，手机一键拉，
 // 不再依赖会关机、IP 会漂的泰格上游桥接。
 app.use('/api/master', require('./routes/master'));
+// 通用审批中心：待审 / 通过 / 驳回（驳回理由必填）。
+// 盘点单审批走它（kind=stocktake, ref=sheet_no），后面别的业务直接挂上来。
+app.use('/api/approval', require('./routes/approval'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
