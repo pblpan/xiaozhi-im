@@ -4,6 +4,7 @@ import '../api.dart';
 import '../core/inventory_repo.dart';
 import '../core/stock_master_repo.dart';
 import '../core/theme.dart';
+import 'deduct.dart';
 import 'inventory_approval.dart';
 import 'inventory_collect.dart';
 import 'inventory_grant.dart';
@@ -348,6 +349,19 @@ class _InventoryPageState extends State<InventoryPage> {
             tooltip: '同步商品档案',
             icon: const Icon(Icons.sync, color: AppColors.textSub),
             onPressed: _syncMaster,
+          ),
+          // 库房减货：和盘点同属"库存作业"，共用单据/明细两张表，
+          // 所以入口放在这里而不是让工作台再多一个应用图标
+          // （多一个内置应用要同时改客户端、服务端、两份测试的四处登记）。
+          IconButton(
+            key: const Key('open-deduct'),
+            tooltip: '库房减货',
+            icon: const Icon(Icons.remove_shopping_cart_outlined,
+                color: AppColors.textSub),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(builder: (_) => const DeductPage()),
+            ),
           ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: AppColors.textSub),

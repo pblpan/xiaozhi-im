@@ -99,6 +99,43 @@ class InvSheetStatus {
   static bool editable(int s) => s == open;
 }
 
+/// 单据类型（落在 `stocktake_sheet.sheet_type`，v3 迁移加的列）。
+///
+/// 🔴 为什么要一个"类型"而不是给减货另建一套表：
+///    盘点单和减货单在**结构**上是同一件事 —— 单号、条码、数量、
+///    状态（进行中/已提交/已上传）。差别只在**规则**：
+///      · [stocktake] 分点位、分三阶段（见 [InvPhase]），复盘/抽盘还有差异集限制；
+///      · [deduct]    不分点位、不分阶段，同一条码一张单里只允许一行。
+///    另建一套表就要把"建单/提交/上传/导出/本地单号"四条链路各抄一遍，
+///    抄完两边就开始漂移（一边修了 bug 另一边没修，是最常见的那种漂移）。
+///
+/// 🔴 取值一旦发布**不可改名**：老客户端读库里已有的行会认不出来。
+///    新增类型只在末尾追加，且要同时想清楚"老版本读到新类型时怎么办"。
+class InvSheetType {
+  InvSheetType._();
+
+  /// 盘点：点位 × 阶段（初盘/复盘/抽盘）。
+  static const String stocktake = 'stocktake';
+
+  /// 库房减货：扫码 → 减货数量 → 确定减货，同码不许重复。
+  static const String deduct = 'deduct';
+
+  static const List<String> all = <String>[stocktake, deduct];
+
+  static bool isValid(String t) => all.contains(t);
+
+  static String label(String t) {
+    switch (t) {
+      case stocktake:
+        return '盘点';
+      case deduct:
+        return '减货';
+      default:
+        return '未知单据';
+    }
+  }
+}
+
 /// 一笔扫码的判定结果。
 enum ScanVerdict {
   /// 正常入账。

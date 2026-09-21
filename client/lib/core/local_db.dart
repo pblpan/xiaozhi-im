@@ -40,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 2;
+  static const int schemaVersion = 3;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -156,6 +156,27 @@ class LocalDb {
       // 按 (单号, 阶段) 取流水是最热的查询：界面每扫一次都要重算。
       await db.execute(
           'CREATE INDEX idx_scan_record_sheet_phase ON scan_record(sheet_no, phase)');
+    },
+
+    // v3：单据加"类型"列，把**库房减货单**挂到同一套单据/流水上。
+    //
+    // 🔴 为什么是加一列而不是建一套新表：
+    //    减货单和盘点单在结构上是同一件事 —— "某单、某条码、某数量、
+    //    某个状态（进行中/已提交/已上传）"。差别只在**规则**（减货不看点位、
+    //    不看阶段、同码不许出现两次）。另建一套表就要把提交/上传/导出/
+    //    本地序号这四条链路各抄一遍，抄完两边就会开始漂移。
+    //
+    // 🔴 默认值 'stocktake' 是关键：盘点的存量单**一行都不用改**，
+    //    读出来的语义就是"这是一张盘点单"。老版本 App 读新库时看不到这一列，
+    //    也照样能用（它只 select 自己认识的列）。
+    //
+    // 补货单等做的时候再追加 sub_kind（生鲜/杂百）—— 现在不加，
+    // 一个没人读的列比没有这一列更糟（下一个人会以为已经支持了）。
+    (Database db) async {
+      await db.execute(
+          "ALTER TABLE stocktake_sheet ADD COLUMN sheet_type TEXT NOT NULL DEFAULT 'stocktake'");
+      await db.execute(
+          'CREATE INDEX idx_sheet_type_status ON stocktake_sheet(sheet_type, status)');
     },
   ];
 

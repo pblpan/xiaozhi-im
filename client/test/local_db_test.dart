@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
+import 'package:xiaozhi_im_client/core/inventory_rules.dart';
 import 'package:xiaozhi_im_client/core/local_db.dart';
 
 /// 本地 SQLite 引擎（离线地基）的单元测试。
@@ -317,7 +318,12 @@ void main() {
       // 升级后再关再开一次：v2 的东西不能是"只在本次连接里才存在"
       await LocalDb.I.close();
       final db2 = await LocalDb.I.db();
-      expect((await db2.rawQuery('PRAGMA user_version')).first.values.first, 2);
+      // 🔴 这里**不写死数字**：写死 2 的话，下次把 schemaVersion 提到 3 时
+      //    这条会红，而红得毫无信息量（"我改版本号了"不是缺陷）。
+      //    要断的是"打开后的版本 = 当前 schemaVersion"，以及"再打开不回落"。
+      expect((await db2.rawQuery('PRAGMA user_version')).first.values.first,
+          LocalDb.schemaVersion,
+          reason: '重开后版本回落，说明迁移没落盘或被重复执行');
       expect(await db2.query('stocktake_zone'), hasLength(1),
           reason: '重开后 v2 的表没了，说明迁移没落盘/被重复执行');
     });
@@ -363,6 +369,148 @@ void main() {
               {'barcode': '6901', 'loc_code': 'A01', 'bound_at': now}),
           throwsA(isA<DatabaseException>()));
       expect(await db.query('barcode_location'), hasLength(2));
+    });
+  });
+
+  // ============================================================
+  //
+  // v2 → v3：单据加 sheet_type 列（v3 起「减货单」挂在同一套单据/流水上）。
+  //
+  // 这一组比 v1→v2 更要紧：v3 是**给已经装满盘点数据的库加列**，
+  // 一旦 DEFAULT 没生效，线上所有存量盘点单的 sheet_type 会是空字符串 ——
+  // 那种单既不算盘点也不算减货，界面上直接看不见（数据还在，但没人找得到）。
+  group('v2 → v3 迁移', () {
+    /// 用真身迁移建一个 v2 库（等价于"上次装的那一版"留下的文件）。
+    Future<Database> openLegacyV2() async {
+      sqfliteFfiInit();
+      final path = await LocalDb.I.dbPathForTest();
+      return databaseFactoryFfi.openDatabase(
+        path,
+        options: OpenDatabaseOptions(
+          version: 2,
+          onCreate: (db, v) async {
+            for (var i = 1; i <= v; i++) {
+              await LocalDb.migrationsForTest[i - 1](db);
+            }
+          },
+        ),
+      );
+    }
+
+    test('老 v2 库升到 v3：存量盘点单不被弄丢，且被认成「盘点」', () async {
+      final old = await openLegacyV2();
+
+      // 前置条件自检：此刻必须真的是 v2，且还没有 sheet_type 这一列。
+      // 不检查的话，"加列不丢数据"可能测的是空气（库本来就是 v3）。
+      final ver = (await old.rawQuery('PRAGMA user_version')).first.values.first;
+      expect(ver, 2, reason: '老库没建成 v2，onUpgrade 不会触发，这轮测的是空气');
+      final v2Cols = (await old.rawQuery('PRAGMA table_info(stocktake_sheet)'))
+          .map((r) => r['name'])
+          .toList();
+      expect(v2Cols, isNot(contains('sheet_type')),
+          reason: '老库里居然已经有 sheet_type 了');
+
+      // 造一张"老版本盘出来的单"，带一笔流水（phase=2 复盘，好验证值没被改）
+      await old.insert('stocktake_sheet', {
+        'sheet_no': 'INV-Z01-2-20260920150000',
+        'zone_code': 'Z01',
+        'phase': 2,
+        'status': 2, // 已上传 —— 升级绝不能把它退回未上传
+        'operator': 'pblpa',
+        'started_at': 1700000000000,
+        'submitted_at': 1700000001000,
+        'uploaded_at': 1700000002000,
+      });
+      await old.insert('scan_record', {
+        'sheet_no': 'INV-Z01-2-20260920150000',
+        'barcode': '6901234599999',
+        'qty': 3.0,
+        'scanned_at': 1700000000500,
+        'note': '老流水',
+        'uploaded': 1,
+        'phase': 2,
+      });
+      await old.close();
+
+      // ── 生产入口打开：跑 onUpgrade(2 → 3) ──
+      final db = await LocalDb.I.db();
+      expect((await db.rawQuery('PRAGMA user_version')).first.values.first,
+          LocalDb.schemaVersion);
+
+      final sh = await db.query('stocktake_sheet',
+          where: 'sheet_no = ?', whereArgs: ['INV-Z01-2-20260920150000']);
+      expect(sh, hasLength(1), reason: '升级把老的盘点单弄丢了');
+
+      // 🔴 最关键的一条：存量单必须落成 'stocktake'。
+      //    DEFAULT 没生效的话这里是 ''（或 null）→ 那张单在新版本里
+      //    "既不显示盘点也不显示减货"，数据还在却谁也找不到。
+      expect(sh.first['sheet_type'], InvSheetType.stocktake,
+          reason: 'ALTER 的 DEFAULT 没生效，存量盘点单变成了"未知单据"');
+      // 其它字段一个都不能被升级顺手改掉
+      expect(sh.first['phase'], 2, reason: '升级把阶段改了，差异口径会整体错位');
+      expect(sh.first['status'], 2, reason: '升级把"已上传"退回未上传，会重复上传一遍');
+      expect(sh.first['zone_code'], 'Z01');
+      expect(sh.first['uploaded_at'], 1700000002000);
+
+      final s = await db.query('scan_record',
+          where: 'sheet_no = ?', whereArgs: ['INV-Z01-2-20260920150000']);
+      expect(s, hasLength(1), reason: '升级把老流水弄丢了');
+      expect(s.first['qty'], 3.0);
+      expect(s.first['phase'], 2);
+
+      // 新列真的能用：插一张减货单
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await db.insert('stocktake_sheet', {
+        'sheet_no': 'JH20260921090000',
+        'zone_code': null,
+        'phase': 1,
+        'status': 0,
+        'operator': 'pblpa',
+        'started_at': now,
+        'sheet_type': InvSheetType.deduct,
+      });
+      final jh = await db.query('stocktake_sheet',
+          where: 'sheet_type = ?', whereArgs: [InvSheetType.deduct]);
+      expect(jh, hasLength(1));
+      expect(jh.first['sheet_no'], 'JH20260921090000');
+
+      // 索引也在（按类型+状态翻单据列表是减货页最热的查询）
+      final idx =
+          (await db.rawQuery("SELECT name FROM sqlite_master WHERE type = 'index'"))
+              .map((r) => r['name'])
+              .toList();
+      expect(idx, contains('idx_sheet_type_status'),
+          reason: 'v3 的索引没建，单据列表会全表扫');
+
+      // 关再开：v3 的列不能只活在本次连接里
+      await LocalDb.I.close();
+      final db2 = await LocalDb.I.db();
+      expect((await db2.rawQuery('PRAGMA user_version')).first.values.first,
+          LocalDb.schemaVersion);
+      final again = await db2.query('stocktake_sheet',
+          where: 'sheet_no = ?', whereArgs: ['INV-Z01-2-20260920150000']);
+      expect(again, hasLength(1));
+      expect(again.first['sheet_type'], InvSheetType.stocktake,
+          reason: '重开后存量单的类型变了，说明迁移被重复执行/没落盘');
+    });
+
+    test('新装直接到 v3：sheet_type 列与索引都在，默认值是 stocktake', () async {
+      final db = await LocalDb.I.db();
+      final cols = (await db.rawQuery('PRAGMA table_info(stocktake_sheet)'))
+          .map((r) => r['name'])
+          .toList();
+      expect(cols, contains('sheet_type'));
+
+      // 默认值要在**新装**路径上也生效（onCreate 与 onUpgrade 走的是同一段 SQL，
+      // 但这里仍然验一遍 —— 建表语句被谁改坏时两边表现会不一样）
+      await db.insert('stocktake_sheet', {
+        'sheet_no': 'NO-TYPE',
+        'status': 0,
+        'started_at': DateTime.now().millisecondsSinceEpoch,
+      });
+      final r = await db.query('stocktake_sheet',
+          where: 'sheet_no = ?', whereArgs: ['NO-TYPE']);
+      expect(r.first['sheet_type'], InvSheetType.stocktake);
     });
   });
 }
