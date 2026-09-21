@@ -113,23 +113,36 @@ class ShareIntake {
 
     // 热启动：App 已经在跑，用户又分享了一次 → 原生主动推过来
     _ch.setMethodCallHandler((call) async {
-      if (call.method == 'onShare') _accept(call.arguments);
+      if (call.method == 'onShare') handleRaw(call.arguments);
     });
 
     try {
       // 冷启动：App 是被这次分享拉起来的。原生只在"intent 确实是分享"时才回数据，
       // 正常点图标启动会回 null。
       final r = await _ch.invokeMethod('getInitialShare');
-      _accept(r);
+      handleRaw(r);
     } catch (_) {
       // 分享读不出来不该拦着 App 正常启动
     }
   }
 
-  static void _accept(dynamic raw) {
+  /// 原生回传的原始数据 → 落到 [pending] / [notice]。
+  ///
+  /// 公开而不是私有：`init()` 要过平台通道，单测里进不去（Windows 上
+  /// `Platform.isAndroid` 直接 false），所以测试直接打这个方法
+  /// （`test/share_intake_test.dart`）。
+  @visibleForTesting
+  static void handleRaw(dynamic raw) {
     if (raw == null) return; // 正常点图标启动：原生明确回了 null，无事发生
     final p = SharedPayload.from(raw);
     if (p == null) {
+      // 🔴 换 notice 之前必须先把 pending 清掉。
+      //
+      // 这条路径是"分享进来了但一个文件都没读到"（对端没给 content:// 授权、
+      // 或内容已失效）。如果留着上一份 pending，界面上就会弹出一个**跟这次分享
+      // 毫无关系的页面** —— 用户看到的是"第二次分享，小智给我看了第一次的东西"，
+      // 比什么都不做更让人摸不着头脑。
+      pending.value = null;
       notice.value = '没读到你分享的内容，换个方式再试一次';
       return;
     }
