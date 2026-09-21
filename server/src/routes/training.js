@@ -33,6 +33,7 @@ const fs = require('fs');
 const db = require('../db');
 const { verifyToken } = require('../auth');
 const { parseList, envelope } = require('../paging');
+const appoverrides = require('../appoverrides');
 
 const router = express.Router();      // 挂 /api/training
 
@@ -446,6 +447,8 @@ router.post('/sheets/:id/submit', (req, res) => {
 
   const e = db.prepare('SELECT * FROM tr_exam WHERE id = ?').get(sheet.exam_id);
   const answers = Array.isArray(req.body?.answers) ? req.body.answers : [];
+  // 交卷时读一次应用参数（管理台可关掉"回显正确答案"）
+  const showAnswer = appoverrides.paramOf('training', 'showAnswer') !== false;
 
   let score = 0;
   const detail = [];
@@ -480,13 +483,20 @@ router.post('/sheets/:id/submit', (req, res) => {
     score,
     passScore: e.pass_score,
     pass: !!pass,
-    // 判完就把正确答案回给客户端（对答案用）—— 未提交的卷子不给答案
+    // 判完就把正确答案回给客户端（对答案用）—— 未提交的卷子不给答案。
+    //
+    // 🔴 但这是**可关的**（app_overrides → training.showAnswer）：
+    //    考试的目的是让人会，不是让人把答案传下去。关掉之后只少给答案，
+    //    分数、及格线、每题对错（correct）照给 —— 那些是成绩单的一部分，
+    //    不是答案本身。所以关掉它不会让学员看不懂自己的成绩。
+    answerHidden: !showAnswer,
     detail: detail.map((d) => {
       const opts = db.prepare('SELECT label, content, correct FROM tr_option WHERE question_id = ? ORDER BY id')
         .all(d.questionId);
       return {
         ...d,
-        rightLabels: opts.filter((o) => o.correct).map((o) => o.label).join(''),
+        // 关掉时给 null 而不是空串：空串会被读成"这题没有正确答案"，那是另一回事
+        rightLabels: showAnswer ? opts.filter((o) => o.correct).map((o) => o.label).join('') : null,
       };
     }),
   });

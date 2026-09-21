@@ -18,10 +18,17 @@
  * ─────────────────────────────────────────────────────────────
  * 两条刻意的设计约束
  * ─────────────────────────────────────────────────────────────
- * 1. **内置应用不接受"显示/隐藏"开关**。入口可见性只由**业务状态**决定
+ * 1. **内置应用不接受"对谁显示"的开关**。入口可见性只由**业务状态**决定
  *    （没开工作模式就没有考勤、考勤关了就没有打卡），由 listFor() 算出来。
- *    留一个开关必然会配出"入口在、点进去报错"的状态，而管理员根本不知道
- *    该去关哪个开关。要临时停用就改业务状态（attendanceEnabled），语义唯一。
+ *    留一个"按人/按角色显示"的开关必然会配出"入口在、点进去报错"的状态，
+ *    而管理员根本不知道该去关哪个开关。
+ *
+ *    ⚠️ 与「整应用停用」的区别（v0.21.0 起由 appoverrides.js 提供）：
+ *      · 业务状态（need）  = "这个功能此刻对这个人成不成立"，照样**不可覆盖**；
+ *      · 整应用停用        = "这个功能这台服务器上先别用了"，是全局的，
+ *                            而且**隐藏入口 + 后端每条接口都拦**（appguard.js），
+ *                            所以不会造出"入口在、点进去报错"的状态。
+ *    两者语义不重叠：一个是能不能用，一个是用不用。
  *
  * 2. **客户端不认识的应用 id 直接忽略，不报错**。这一条是给未来留的：
  *    服务端先上线一个新应用、客户端还是旧版本，旧客户端只会少一个图标，
@@ -141,39 +148,80 @@ const BUILTIN_APPS = [
 
 /**
  * 按当前服务器/用户状态过滤出可见应用。
+ *
  * 传进来的是**已算好的状态**，本函数不查库 —— 这样它可以被测试直接喂各种组合
  * （"工作模式但没组织""有组织但管理员"…），不用先搭一套数据库。
+ * 覆盖层同理：`overrides` 是一个普通对象（`{ [id]: {title,icon,sort,disabled,params} }`），
+ * 由调用方从 appoverrides.map() 取来传进来，本文件不 require 那个模块
+ * （否则 apps.js 就会依赖 db，纯函数测试也就无从谈起了）。
  */
-function listFor({ friendMode, attendanceEnabled, hasOrg, role } = {}) {
+function listFor({ friendMode, attendanceEnabled, hasOrg, role } = {}, overrides) {
   const isAdmin = role === 'admin';
-  return BUILTIN_APPS.filter((a) => {
-    const n = a.need || {};
-    if (n.workMode && friendMode !== 'work') return false;
-    if (n.attendance && attendanceEnabled === false) return false;
-    if (n.orgMember && !hasOrg) return false;
-    // role: 'employee' = **员工专属**。管理员管的是"别人打了没"，
-    // 让他也进"我的打卡"只会污染统计口径，所以这两项对他隐藏
-    // （他要看的是 att_admin）。
-    if (n.role === 'employee' && isAdmin) return false;
-    // adminOnly = **管理员专属**（主管的看板与代补卡）。员工看到它没有意义，
-    // 而且他点开也是 403 —— 入口和权限必须是同一套判据，不能靠"点了才知道"。
-    if (n.adminOnly && !isAdmin) return false;
-    return true;
-  }).map((a) => ({
-    id: a.id,
-    title: a.title,
-    icon: a.icon,
-    group: a.group,
-    desc: a.desc,
-    kind: 'builtin',
-  }));
+  const ovs = overrides || {};
+  return BUILTIN_APPS
+    .map((a, idx) => {
+      const ov = ovs[a.id];
+      return {
+        def: a,
+        // 出厂次序 = 数组序 × 10，留出空档让管理员插队（排序号 5 能插到前两个之间）
+        sort: ov && ov.sort != null ? ov.sort : idx * 10,
+        disabled: !!(ov && ov.disabled),
+        title: (ov && ov.title) || a.title,
+        icon: (ov && ov.icon) || a.icon,
+        params: (ov && ov.params) || {},
+      };
+    })
+    .filter((x) => {
+      // 整应用停用：直接不出现（后端也会拦它的接口，见 appguard.js）。
+      // 与 need 不同的是，它排在 need 判断之前 —— 停用的应用不该再走一遍
+      // "这个人有没有资格"的推理，因为答案对所有人都是"没有"。
+      if (x.disabled) return false;
+      const a = x.def;
+      const n = a.need || {};
+      if (n.workMode && friendMode !== 'work') return false;
+      if (n.attendance && attendanceEnabled === false) return false;
+      if (n.orgMember && !hasOrg) return false;
+      // role: 'employee' = **员工专属**。管理员管的是"别人打了没"，
+      // 让他也进"我的打卡"只会污染统计口径，所以这两项对他隐藏
+      // （他要看的是 att_admin）。
+      if (n.role === 'employee' && isAdmin) return false;
+      // adminOnly = **管理员专属**（主管的看板与代补卡）。员工看到它没有意义，
+      // 而且他点开也是 403 —— 入口和权限必须是同一套判据，不能靠"点了才知道"。
+      if (n.adminOnly && !isAdmin) return false;
+      return true;
+    })
+    .sort((a, b) => (a.sort - b.sort) || a.def.id.localeCompare(b.def.id))
+    .map((x) => ({
+      id: x.def.id,
+      title: x.title,
+      icon: x.icon,
+      group: x.def.group,
+      desc: x.def.desc,
+      sort: x.sort,
+      kind: 'builtin',
+      // 参数随清单一起下发：客户端不装新包也能读到管理台改的值
+      // （哪些参数客户端真的读，见 appoverrides.js 的 enforced 标注）
+      params: x.params,
+    }));
 }
 
 /** 全部内置应用的元信息（供管理台"应用中心"页展示只读清单） */
-function catalog() {
-  return BUILTIN_APPS.map((a) => ({
-    id: a.id, title: a.title, icon: a.icon, group: a.group, desc: a.desc, need: a.need,
-  }));
+function catalog(overrides) {
+  const ovs = overrides || {};
+  return BUILTIN_APPS.map((a, idx) => {
+    const ov = ovs[a.id];
+    return {
+      id: a.id, title: a.title, icon: a.icon, group: a.group, desc: a.desc, need: a.need,
+      defaultSort: idx * 10,
+      // 生效值（管理台的列表列直接显示这个，不用自己再合一次）
+      effective: {
+        title: (ov && ov.title) || a.title,
+        icon: (ov && ov.icon) || a.icon,
+        sort: ov && ov.sort != null ? ov.sort : idx * 10,
+        disabled: !!(ov && ov.disabled),
+      },
+    };
+  });
 }
 
 module.exports = { GROUPS, BUILTIN_APPS, listFor, catalog };

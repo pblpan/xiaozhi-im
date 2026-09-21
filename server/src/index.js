@@ -33,6 +33,12 @@ app.use('/api/license', require('./routes/license'));
 // 所以既免鉴权、也在 license 放行名单里（未授权/过期的机器同样要能设密码进门）。
 app.use('/api/setup', require('./routes/setup'));
 
+// 应用停用门禁（「应用中心 → 管理 → 停用」的后端那一半）。
+// 🔴 必须排在所有业务路由之前，而且**用 app.use(fn) 不挂前缀** ——
+//    这样 req.path 就是浏览器里看到的那条完整路径（含 /api），
+//    注册表里写的路径跟接口对照不用脑内转换。
+app.use(require('./appguard').middleware);
+
 // API 路由
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));

@@ -11,6 +11,7 @@ const { verifyToken } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
 const appregistry = require('../apps');
+const appoverrides = require('../appoverrides');
 const attendance = require('../attendance');
 const settings = require('../settings');
 const push = require('../push');
@@ -81,6 +82,9 @@ router.get('/config', (req, res) => {
  * 可见性由**业务状态**决定，不由开关决定：没开工作模式就没有考勤入口，
  * 考勤被停用就没有打卡入口 —— 服务端算好再下发，客户端不做判断（SPEC 拍板项 1）。
  * 这样也杜绝了"入口在、点进去报错"的状态。
+ *
+ * v0.21.0 起多了**覆盖层**（appoverrides）：管理员可以改名/换图标/调排序/整应用停用。
+ * 覆盖在这一层合并，客户端一行都不用改 —— 它本来就只按服务端给的清单渲染。
  */
 router.get('/apps', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
@@ -92,14 +96,34 @@ router.get('/apps', (req, res) => {
   // 「组织通讯录」这类只读入口（他要看全员），所以单独放行 role='admin'
   const hasOrg = !!org && (me.org_id === org.id || me.role === 'admin');
 
-  const builtin = appregistry.listFor({
-    friendMode, attendanceEnabled: attEnabled, hasOrg, role: me.role,
-  });
+  const cv = String(req.query.clientVersion || '');
+  let builtin = appregistry.listFor(
+    { friendMode, attendanceEnabled: attEnabled, hasOrg, role: me.role },
+    appoverrides.map(),
+  );
+
+  // 生效参数（出厂默认 + 覆盖）替换掉清单里的"覆盖增量"：
+  // 客户端不该自己去猜"这个键没出现时默认是 true 还是 false"——
+  // 默认值只存在服务端一处，才不会出现新旧客户端行为不一致。
+  for (const a of builtin) a.params = appoverrides.paramsOf(a.id);
+
+  // 最低版本门槛：老客户端连 `?clientVersion=` 都可能没带。
+  // 没带版本时**照旧放行**（而不是一律挡下）——否则升级客户端之前，
+  // 所有老用户都会突然少一批入口，那是比"新功能晚一点用上"严重得多的事故。
+  if (cv) {
+    builtin = builtin.filter((a) => {
+      const min = String(a.params.minClientVersion || '');
+      if (!min) return true;
+      return appmodules.versionGte(cv, min);
+    });
+  }
 
   // 角标：管理者的第一诉求是"有没有待处理"，员工的第一诉求是"我打卡了没"。
   // 只给这两处算角标 —— 每个应用都算就是给每次冷启动加一串查询。
   const now = Date.now();
   for (const a of builtin) {
+    const badgeOn = a.params.badge !== false;
+    if (!badgeOn) continue;
     if (a.id === 'attendance' && me.org_id) {
       const day = attendance.dayOf(now);
       const workdays = settings.get('attWorkdays') || [1, 2, 3, 4, 5];
@@ -131,7 +155,6 @@ router.get('/apps', (req, res) => {
     }
   }
 
-  const cv = String(req.query.clientVersion || '');
   const dynamic = appmodules.listVisible({ userId: uid, role: me.role, clientVersion: cv })
     .map((m) => ({
       id: m.moduleId, title: m.title, icon: m.icon, group: 'custom',

@@ -6,6 +6,9 @@ const config = require('../config');
 const { verifyToken, hashPassword, verifyPassword } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
+const appoverrides = require('../appoverrides');
+const appguard = require('../appguard');
+const appdata = require('../appdata');
 const upstream = require('../upstream');
 const appregistry = require('../apps');
 const settings = require('../settings');
@@ -1081,15 +1084,29 @@ router.get('/apps', (req, res) => {
   const org = db.prepare('SELECT id, name FROM orgs LIMIT 1').get() || null;
   const friendMode = settings.get('friendMode');
   const attEnabled = settings.get('attendanceEnabled') !== false;
-  const visibleIds = appregistry.listFor({
-    friendMode, attendanceEnabled: attEnabled, hasOrg: !!org, role: 'admin',
-  }).map((a) => a.id);
+  const overrides = appoverrides.map();
+  // 可见性必须按**生效后**的清单算（停用的应用已经不在里面了），
+  // 否则管理台会出现"卡片写着可见、客户端里没有"的对不上
+  const visibleIds = appregistry.listFor(
+    { friendMode, attendanceEnabled: attEnabled, hasOrg: !!org, role: 'admin' },
+    overrides,
+  ).map((a) => a.id);
   res.json({
-    builtin: appregistry.catalog().map((a) => ({
-      ...a,
-      // 对"管理员视角"的可见性；员工视角可能更少（如考勤打卡管理员就看不到）
-      visibleForAdmin: visibleIds.includes(a.id),
-    })),
+    builtin: appregistry.catalog(overrides).map((a) => {
+      const ov = overrides[a.id] || null;
+      return {
+        ...a,
+        // 对"管理员视角"的可见性；员工视角可能更少（如考勤打卡管理员就看不到）
+        visibleForAdmin: visibleIds.includes(a.id),
+        disabled: !!(ov && ov.disabled),
+        changed: !!ov,
+        changedFields: ov ? appoverrides.changedFieldsOf(
+          appregistry.BUILTIN_APPS.find((x) => x.id === a.id), ov,
+        ) : [],
+        paramCount: appoverrides.paramSchemaOf(a.id).length,
+        overriddenParams: ov ? Object.keys(ov.params || {}).length : 0,
+      };
+    }),
     dynamic: appmodules.list(),
     context: {
       friendMode,
@@ -1115,6 +1132,199 @@ router.get('/apps/why', (req, res) => {
   if (n.role === 'employee') reasons.push('管理员账号本身不参与考勤，属正常（管理员看的是「考勤记录」）');
   if (n.adminOnly) reasons.push('这是管理员专属入口（主管看板的入口，员工看不到是正常的）');
   res.json({ id, title: app.title, visible: reasons.length === 0, reasons });
+});
+
+/* ==================== 应用管理（v0.21.0：每个应用一个抽屉） ====================
+ *
+ * 一个抽屉要回答四个问题，接口也就按这四块组织：
+ *   ① 它现在长什么样、和出厂差在哪        → GET    /apps/:id  的 app 块
+ *   ② 停用它会关掉什么（后端拦哪些接口）  → GET    /apps/:id  的 guard 块
+ *   ③ 它有哪些数据、现在什么规模          → GET    /apps/:id  的 data 块
+ *   ④ 改它 / 恢复出厂 / 看明细 / 导出 / 清 → PATCH DELETE GET .../data GET .../export POST .../purge
+ *
+ * 为什么"停用会关掉什么"要单独作为一块返回：
+ * 管理员点停用之前唯一想知道的就是这件事。让他点完再去看客户端有没有变化，
+ * 等于让他拿真实用户做实验。
+ */
+
+/** 取出内置应用并做上下文（可见性）计算；不是内置应用则已响应并返回 null */
+function builtinOf(req, res) {
+  const id = String(req.params.id || '');
+  const factory = appregistry.BUILTIN_APPS.find((a) => a.id === id);
+  if (!factory) {
+    res.status(404).json({
+      error: `不是内置应用：${id}。自定义应用（动态模块）有自己的编辑器，改它请到「动态模块」页。`,
+      code: 'not_builtin',
+    });
+    return null;
+  }
+  const org = db.prepare('SELECT id FROM orgs LIMIT 1').get() || null;
+  const overrides = appoverrides.map();
+  const visibleIds = appregistry.listFor({
+    friendMode: settings.get('friendMode'),
+    attendanceEnabled: settings.get('attendanceEnabled') !== false,
+    hasOrg: !!org, role: 'admin',
+  }, overrides).map((a) => a.id);
+  return { id, factory, visible: visibleIds.includes(id), visibleIds };
+}
+
+/** 一个应用的完整抽屉数据（不含明细行 —— 那个按数据源分页拉） */
+router.get('/apps/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const b = builtinOf(req, res); if (!b) return;
+  const m = appdata.metricsOf(b.id);
+  const meta = appdata.APPS[b.id] || {};
+  res.json({
+    app: appoverrides.view(b.id, { visibleIds: b.visibleIds }),
+    // 停用会关掉哪些接口：写清楚，管理员才知道自己按下的是什么
+    guard: appguard.rulesOf(b.id),
+    data: {
+      localOnly: !!meta.localOnly,
+      localOnlyNote: meta.localOnlyNote || '',
+      overviewNote: meta.overviewNote || '',
+      readOnlyReason: meta.readOnlyReason || '',
+      metrics: m.items,
+      warnings: m.warnings,
+      sources: appdata.sourcesOf(b.id),
+      purgeables: appdata.purgeablesOf(b.id),
+      // 共用的平台接口（审批中心等）不随单个应用停用而关闭，明写出来
+      shared: appguard.SHARED,
+    },
+    icons: appmodules.ICONS,
+  });
+});
+
+/**
+ * 改覆盖（PATCH 语义：没给的字段不动，给 null 是"清回出厂"）。
+ * `disabled` 的改动是**立刻生效**的：下一个请求就会被 appguard 拦下来。
+ */
+router.patch('/apps/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const b = builtinOf(req, res); if (!b) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const r = appoverrides.set(req.params.id, req.body || {}, u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  const posted = appoverrides.view(b.id, { visibleIds: b.visibleIds });
+  res.json({
+    ok: true,
+    app: posted,
+    message: posted.changed
+      ? (posted.effective.disabled ? `已保存，「${posted.effective.title}」已停用` : `已保存，「${posted.effective.title}」已更新`)
+      : `已恢复出厂设置，「${posted.effective.title}」现在是默认样子`,
+  });
+});
+
+/** 恢复出厂：删掉覆盖行（不是写回默认值 —— 这样"和出厂逐字一致"是可验证的） */
+router.delete('/apps/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const b = builtinOf(req, res); if (!b) return;
+  const r = appoverrides.reset(b.id);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({
+    ok: true,
+    removed: r.removed,
+    app: appoverrides.view(b.id, { visibleIds: b.visibleIds }),
+    message: r.removed ? '已恢复出厂设置' : '本来就是出厂设置，没有可恢复的',
+  });
+});
+
+/**
+ * 明细（分页）。`?source=` 指定数据源；不传时只回元信息（抽屉打开时用）。
+ * 时间窗默认最近 30 天（与全站列表一致的默认），`allTime=1` 才不限。
+ */
+router.get('/apps/:id/data', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const b = builtinOf(req, res); if (!b) return;
+  const sourceKey = String(req.query.source || '');
+  if (!sourceKey) {
+    return res.json({
+      sources: appdata.sourcesOf(b.id),
+      purgeables: appdata.purgeablesOf(b.id),
+    });
+  }
+  const list = paging.parseList(req.query, { defaultPageSize: 50 });
+  if (list.error) return res.status(400).json({ error: list.error });
+  const r = appdata.detail(b.id, sourceKey, list, req.query.q);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({
+    source: sourceKey,
+    columns: (appdata.sourceOf(b.id, sourceKey) || {}).columns
+      ? appdata.sourceOf(b.id, sourceKey).columns.map((c) => ({ key: c.key, label: c.label, width: c.width || 120, text: !!c.text }))
+      : [],
+    // timeFiltered=false 表示这个数据源没有时间列，"最近 7 天"对它不起作用 ——
+    // 不告诉界面的话，管理员会以为筛选坏了
+    timeFiltered: r.timeFiltered,
+    ...r,
+  });
+});
+
+/** 导出 CSV（UTF-8 BOM，Excel 直接双击不乱码） */
+router.get('/apps/:id/export', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const b = builtinOf(req, res); if (!b) return;
+  const list = paging.parseList(req.query, { defaultPageSize: 50 });
+  if (list.error) return res.status(400).json({ error: list.error });
+  const r = appdata.csv(b.id, String(req.query.source || ''), list, req.query.q);
+  if (r.error) return res.status(400).json({ error: r.error });
+  const stamp = stampName();
+  const name = `${b.id}-${r.sourceName || 'data'}-${stamp}.csv`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="${b.id}-data-${stamp}.csv"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  res.send(r.csv);
+});
+
+/**
+ * 清理（三步安全模型）：
+ *   第一步 dryRun=1              → 只算条数 + 抽 20 条样例，不动数据
+ *   第二步 看条数、手输确认       （前端的事）
+ *   第三步 dryRun=0 + expectCount → 服务端**重算条数比对**，一致才删，并且先落一份备份
+ * expectCount 必须原样送回来：期间新产生的数据会让条数变化，
+ * 变化了就中止 —— 否则"我看着 300 条点的确认，实际删了 305 条"。
+ */
+router.post('/apps/:id/purge', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const b = builtinOf(req, res); if (!b) return;
+  const body = req.body || {};
+  const sourceKey = String(body.source || '');
+  const list = paging.parseList(body, { defaultPageSize: 50 });
+  if (list.error) return res.status(400).json({ error: list.error });
+
+  if (body.dryRun !== false) {
+    const p = appdata.purgePreview(b.id, sourceKey, list, body.q);
+    if (p.error) return res.status(400).json({ error: p.error });
+    return res.json({ dryRun: true, ...p, maxBackupRows: 5000 });
+  }
+
+  const expect = Number(body.expectCount);
+  if (!Number.isFinite(expect)) {
+    return res.status(400).json({ error: '缺少确认条数（expectCount），请先预览再确认', code: 'need_confirm' });
+  }
+  // 先备份再删：备份失败**不阻断**（删除是管理员的明确意图），
+  // 但要把"没留下备份"这件事带回响应，不能悄悄过去
+  const bk = appdata.rowsForBackup(b.id, sourceKey, list, body.q);
+  const saved = bk.error ? { name: null, error: bk.error } : writePurgeBackup(
+    `app-${b.id}-${sourceKey}`,
+    bk.rows,
+    { app: b.id, source: sourceKey, total: bk.total, truncated: bk.truncated, by: uid, from: list.from, to: list.to },
+  );
+
+  const r = appdata.purge(b.id, sourceKey, list, body.q, expect);
+  if (r.error) {
+    return res.status(409).json({ ...r, backup: saved.name, backupError: saved.error || bk.error || null });
+  }
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  console.log(`[小智IM] 应用数据清理：${b.id}.${sourceKey} 删除 ${r.deleted} 条（by ${u?.username || uid}，备份 ${saved.name || '失败'}）`);
+  res.json({
+    ok: true,
+    deleted: r.deleted,
+    label: r.label,
+    backup: saved.name,
+    backupError: saved.error || bk.error || null,
+    backupTruncated: !!bk.truncated,
+    backupTotal: bk.total,
+    message: `已清理 ${r.deleted} 条「${r.label}」${saved.name ? `，备份：${saved.name}` : '（⚠️ 备份失败，见 backupError）'}`,
+  });
 });
 
 /* ============ 上游接口登记（第三期：让动态模块真能取到数） ============ */

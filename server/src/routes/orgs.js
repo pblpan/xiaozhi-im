@@ -2,6 +2,7 @@ const router = require('express').Router();
 const db = require('../db');
 const { verifyToken, hashPassword } = require('../auth');
 const settings = require('../settings');
+const appoverrides = require('../appoverrides');
 
 function uidOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -106,11 +107,16 @@ router.get('/my', (req, res) => {
   }
   if (!org) return res.json({ org: null, members: [] });
 
-  const members = db.prepare(`SELECT ${ORG_COLS} ${MEMBER_JOIN}
+  const raw = db.prepare(`SELECT ${ORG_COLS} ${MEMBER_JOIN}
     WHERE u.org_id=? ORDER BY u.id`).all(org.id);
+  // 「组织通讯录」的功能参数（app_overrides → work_org.showEmployeeNo）：
+  // 关掉时**在服务端就抹掉工号**，不是让客户端"别显示"—— 工号是登录账号，
+  // 只藏不拦等于把账号名发给了所有人。
+  const showNo = appoverrides.paramOf('work_org', 'showEmployeeNo') !== false;
+  const members = showNo ? raw : raw.map((m) => ({ ...m, employee_no: null }));
   const depts = db.prepare('SELECT id, name, parent_id, sort FROM org_depts WHERE org_id=? ORDER BY sort, id').all(org.id);
   const positions = db.prepare('SELECT id, name, dept_id, sort FROM org_positions WHERE org_id=? ORDER BY sort, id').all(org.id);
-  res.json({ org, members, depts, positions });
+  res.json({ org, members, depts, positions, employeeNoShown: showNo });
 });
 
 // ============================================================

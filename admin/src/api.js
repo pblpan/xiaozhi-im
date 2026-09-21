@@ -5,6 +5,11 @@ const api = axios.create({ baseURL: '/api' });
 api.interceptors.request.use((cfg) => {
   const t = localStorage.getItem('xz_token');
   if (t) cfg.headers.Authorization = `Bearer ${t}`;
+  // 管理台身份标识。服务端用它区分"这棵路由树的两拨调用方"：
+  // /api/admin/attendance/* 既有管理台的「考勤管理」页在调，也有客户端
+  // 「考勤记录」应用在调 —— 停用后者时不能把前者一起关掉。
+  // ⚠️ 这不是鉴权（那些接口本来就要求 admin 身份），只是区分调用方。
+  cfg.headers['X-Console'] = '1';
   return cfg;
 });
 

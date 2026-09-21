@@ -1697,9 +1697,25 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               </div>
             </template>
             <el-table :data="appCatalog.builtin || []" border size="small">
-              <el-table-column prop="title" label="内置应用" width="130" />
-              <el-table-column prop="desc" label="说明" min-width="240" />
-              <el-table-column label="对员工是否可见" width="150">
+              <el-table-column label="内置应用" width="180">
+                <template #default="{ row }">
+                  <b>{{ row.effective.title }}</b>
+                  <el-tag v-if="row.effective.title !== row.title" size="small" type="warning" effect="plain"
+                    style="margin-left:6px" :title="`出厂名：${row.title}`">已改名</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="desc" label="说明" min-width="220" show-overflow-tooltip />
+              <el-table-column label="状态" width="150">
+                <template #default="{ row }">
+                  <el-tag v-if="row.disabled" size="small" type="danger">已停用</el-tag>
+                  <el-tag v-else-if="row.changed" size="small" type="warning" effect="plain">
+                    已调整 {{ row.changedFields.length }} 项
+                  </el-tag>
+                  <el-tag v-else size="small" type="info" effect="plain">出厂设置</el-tag>
+                  <div v-if="row.disabled" class="hint" style="margin-top:2px">入口已隐藏，接口也已拦</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="对员工是否可见" width="140">
                 <template #default="{ row }">
                   <el-tag v-if="!appWhy[row.id]" size="small" effect="plain">—</el-tag>
                   <el-tag v-else :type="appWhy[row.id].visible ? 'success' : 'warning'" size="small" effect="plain">
@@ -1707,7 +1723,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="原因 / 说明" min-width="320">
+              <el-table-column label="原因 / 说明" min-width="300">
                 <template #default="{ row }">
                   <span v-if="appWhy[row.id] && appWhy[row.id].reasons.length" class="hint">
                     {{ appWhy[row.id].reasons.join('；') }}
@@ -1715,15 +1731,253 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <span v-else class="hint">正常可见</span>
                 </template>
               </el-table-column>
+              <el-table-column label="操作" width="130" fixed="right">
+                <template #default="{ row }">
+                  <el-button size="small" type="primary" plain @click="openAppAdmin(row.id)">管理</el-button>
+                </template>
+              </el-table-column>
             </el-table>
             <div class="hint" style="margin-top:8px">
-              内置应用随客户端安装包发布（考勤打卡、我的申请、组织通讯录、考勤记录）；它们的入口可见性由<b>业务状态</b>决定
+              内置应用随客户端安装包发布；它们的入口可见性由<b>业务状态</b>决定
               （是否工作模式 / 是否建了组织 / 考勤是否启用），不是开关 —— 所以不会出现"入口在、点进去报错"。
               其中<b>考勤打卡 / 我的申请</b>是员工专属（自己打卡、自己提申请），<b>考勤记录</b>是管理员专属
               （看今日全员出勤与缺卡、代员工补卡）—— 两类人看到的工作台本来就该不一样。
               下面拼出来的自定义模块和它们并列出现在同一个工作台里。
+              <br />
+              点每行的<b>「管理」</b>可以给内置应用改名 / 换图标 / 调顺序 / 调参数 / <b>整应用停用</b>
+              （停用会同时隐藏入口<b>并拦掉它的后端接口</b>，不是只藏图标）。自定义模块请到下方模块清单里编辑
+              —— 两处都能改同一件事迟早对不上。
             </div>
           </el-card>
+
+          <!-- 应用管理抽屉：一个内置应用的全部可调项都在这里。
+               刻意做成"出厂值 / 当前值 / 差异"三列可见 —— 管理员最需要回答的问题是
+               "这一版和出厂差在哪"，只给当前值他答不出来。 -->
+          <el-drawer v-model="appAdm.open" size="70%" :title="appAdm.title">
+            <div v-if="appAdm.loading" style="padding:20px"><el-skeleton :rows="6" animated /></div>
+            <div v-else-if="appAdm.error">
+              <el-alert type="error" :closable="false" :title="appAdm.error" />
+            </div>
+            <div v-else>
+              <el-alert v-if="appAdm.data?.app?.effective?.disabled" type="error" :closable="false"
+                style="margin-bottom:12px" show-icon
+                title="这个应用当前已停用：客户端看不到入口，它的后端接口一律回 403（app_disabled）。" />
+              <el-alert v-if="appAdm.data?.data?.localOnly" type="info" :closable="false" show-icon
+                style="margin-bottom:12px" :title="appAdm.data.data.localOnlyNote" />
+
+              <el-tabs v-model="appAdm.tab">
+                <!-- ============ 基本信息 ============ -->
+                <el-tab-pane label="基本信息" name="basic">
+                  <el-form label-width="130px" label-position="left" style="max-width:640px">
+                    <el-form-item :label="`名称（出厂：${appAdm.data?.app?.factory?.title}）`">
+                      <el-input v-model="appAdm.form.title" maxlength="12" show-word-limit
+                        :placeholder="appAdm.data?.app?.factory?.title" />
+                    </el-form-item>
+                    <el-form-item :label="`图标（出厂：${appAdm.data?.app?.factory?.icon}）`">
+                      <el-select v-model="appAdm.form.icon" clearable filterable
+                        :placeholder="appAdm.data?.app?.factory?.icon" style="width:100%">
+                        <el-option v-for="ic in (appAdm.data?.icons || [])" :key="ic" :label="ic" :value="ic" />
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="排序号（越小越靠前）">
+                      <el-input-number v-model="appAdm.form.sort" :min="0" :max="9999" :step="5" />
+                      <span class="hint" style="margin-left:10px">
+                        出厂顺序号是 {{ appAdm.data?.app?.factory?.sort ?? '—' }}；留空 = 用出厂顺序
+                      </span>
+                    </el-form-item>
+                    <el-form-item>
+                      <el-button type="primary" :loading="appAdm.saving" @click="saveAppAdm">保存</el-button>
+                      <el-button :disabled="!appAdm.data?.app?.changed" @click="resetAppAdm">恢复出厂设置</el-button>
+                    </el-form-item>
+                  </el-form>
+                  <el-divider content-position="left">与出厂的差异</el-divider>
+                  <el-table v-if="(appAdm.data?.app?.changedFields || []).length" :data="appAdm.data.app.changedFields"
+                    border size="small">
+                    <el-table-column prop="label" label="项目" width="140" />
+                    <el-table-column label="出厂" min-width="150">
+                      <template #default="{ row }">{{ row.from === null ? '（无）' : row.from }}</template>
+                    </el-table-column>
+                    <el-table-column label="当前" min-width="150">
+                      <template #default="{ row }">{{ row.to === true ? '是' : (row.to === false ? '否' : row.to) }}</template>
+                    </el-table-column>
+                  </el-table>
+                  <div v-else class="hint">当前和出厂完全一致。</div>
+                  <el-divider content-position="left">出厂定义（只读）</el-divider>
+                  <div class="hint">
+                    说明：{{ appAdm.data?.app?.factory?.desc }}<br />
+                    <code class="mono">{{ appAdm.data?.app?.id }}</code>
+                    · 分组 {{ appAdm.data?.app?.factory?.group }}
+                    · 分组内不再有可覆盖项 —— <b>「什么时候该出现」由业务状态决定，不可覆盖</b>：
+                    {{ needText(appAdm.data?.app?.factory?.need) }}
+                  </div>
+                </el-tab-pane>
+
+                <!-- ============ 功能设置 ============ -->
+                <el-tab-pane label="功能设置" name="params">
+                  <div class="hint" style="margin-bottom:10px">
+                    参数的取值由<b>服务端保存并下发</b>；标注「服务端」的改完立刻生效，
+                    标注「客户端」的下发到手机后由客户端读取（需要客户端版本支持）。
+                  </div>
+                  <el-table :data="appAdm.data?.app?.params || []" border size="small">
+                    <el-table-column prop="label" label="参数" width="170">
+                      <template #default="{ row }">
+                        <div>{{ row.label }}</div>
+                        <el-tag size="small" :type="row.enforced === 'server' ? 'success' : 'warning'" effect="plain">
+                          {{ row.enforced === 'server' ? '服务端' : '客户端' }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="取值" width="200">
+                      <template #default="{ row }">
+                        <el-switch v-if="row.type === 'bool'" :model-value="row.value"
+                          @change="(v) => setAppParam(row.key, v)" />
+                        <el-input v-else :model-value="row.value" :placeholder="row.type === 'version' ? '留空 = 不限' : ''"
+                          @change="(v) => setAppParam(row.key, v)" />
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="desc" label="说明" min-width="280" />
+                    <el-table-column label="状态" width="110">
+                      <template #default="{ row }">
+                        <el-tag v-if="row.overridden" size="small" type="warning" effect="plain">已改</el-tag>
+                        <el-tag v-else size="small" type="info" effect="plain">默认</el-tag>
+                        <el-button v-if="row.overridden" link size="small" style="margin-left:4px"
+                          @click="setAppParam(row.key, row.def)">还原</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </el-tab-pane>
+
+                <!-- ============ 数据 ============ -->
+                <el-tab-pane label="数据" name="data">
+                  <div v-if="!(appAdm.data?.data?.sources || []).length" class="hint" style="padding:10px 0">
+                    <span v-if="appAdm.data?.data?.localOnly">{{ appAdm.data.data.localOnlyNote }}</span>
+                    <span v-else>这个应用暂无可查看的数据源。</span>
+                  </div>
+                  <template v-else>
+                    <div class="hint" style="margin-bottom:10px">{{ appAdm.data?.data?.overviewNote }}</div>
+                    <div v-if="(appAdm.data?.data?.warnings || []).length" style="margin-bottom:10px">
+                      <el-alert v-for="(w, i) in appAdm.data.data.warnings" :key="i" type="warning"
+                        :closable="false" :title="w" style="margin-bottom:4px" />
+                    </div>
+
+                    <div class="mtiles">
+                      <div v-for="m in (appAdm.data?.data?.metrics || [])" :key="m.key" class="mtile">
+                        <div class="mtile-k">{{ m.label }}</div>
+                        <div class="mtile-v">
+                          {{ m.value }}<span v-if="m.unit" style="font-size:13px;font-weight:500;margin-left:2px">{{ m.unit }}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="card-hdr" style="margin:14px 0 8px">
+                      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                        <el-select v-model="appAdm.src" style="width:190px" @change="loadAppRows">
+                          <el-option v-for="s in appAdm.data.data.sources" :key="s.key" :label="s.name" :value="s.key" />
+                        </el-select>
+                        <el-input v-model="appAdm.q" placeholder="搜索" clearable style="width:170px"
+                          @keyup.enter="loadAppRows" @clear="loadAppRows" />
+                        <el-date-picker v-model="appAdm.range" type="daterange" unlink-panels
+                          range-separator="~" start-placeholder="开始" end-placeholder="结束"
+                          value-format="YYYY-MM-DD" style="width:240px" @change="loadAppRows" />
+                        <el-checkbox v-model="appAdm.allTime" @change="loadAppRows">全部时间</el-checkbox>
+                        <el-button size="small" :loading="appAdm.rowsLoading" @click="loadAppRows">查询</el-button>
+                        <el-button size="small" type="primary" plain @click="exportAppRows">导出 CSV</el-button>
+                      </div>
+                    </div>
+                    <div v-if="appAdm.srcTimeFiltered === false" class="hint" style="margin-bottom:6px">
+                      该数据源没有时间维度，时间筛选对它不生效。
+                    </div>
+
+                    <el-table :data="appAdm.rows" border size="small" v-loading="appAdm.rowsLoading" max-height="420">
+                      <el-table-column v-for="c in appAdm.cols" :key="c.key" :prop="c.key" :label="c.label"
+                        :width="c.width" show-overflow-tooltip />
+                    </el-table>
+                    <div style="margin-top:10px;display:flex;justify-content:flex-end">
+                      <el-pagination small background layout="total, prev, pager, next, sizes"
+                        :total="appAdm.total" :current-page="appAdm.page" :page-size="appAdm.pageSize"
+                        :page-sizes="[20, 50, 100, 200]"
+                        @current-change="(p) => { appAdm.page = p; loadAppRows(); }"
+                        @size-change="(s) => { appAdm.pageSize = s; appAdm.page = 1; loadAppRows(); }" />
+                    </div>
+                  </template>
+                </el-tab-pane>
+
+                <!-- ============ 停用与清理 ============ -->
+                <el-tab-pane label="停用与清理" name="danger">
+                  <el-divider content-position="left">整应用停用</el-divider>
+                  <div class="hint" style="margin-bottom:10px">
+                    停用 = <b>隐藏入口 + 后端每条接口都拦</b>（回 403 / app_disabled）。只藏入口是不够的：
+                    老客户端、缓存页面照样能打卡、能上传，而你以为已经停用了。
+                  </div>
+                  <el-switch :model-value="appAdm.data?.app?.effective?.disabled" active-text="停用这个应用"
+                    @change="toggleAppDisabled" />
+                  <div style="margin-top:12px">
+                    <div class="hint" style="margin-bottom:6px">
+                      停用后会关掉这些接口（{{ appAdm.data?.guard?.note }}）：
+                    </div>
+                    <el-table v-if="(appAdm.data?.guard?.items || []).length" :data="appAdm.data.guard.items"
+                      border size="small">
+                      <el-table-column prop="scope" label="范围" width="200" />
+                      <el-table-column label="接口" min-width="320">
+                        <template #default="{ row }">
+                          <code v-for="p in row.paths" :key="p" class="mono" style="display:block">{{ p }}</code>
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="管理台" width="130">
+                        <template #default="{ row }">
+                          <el-tag v-if="row.consoleOnly" size="small" type="success" effect="plain">不受影响</el-tag>
+                          <span v-else class="hint">一并停用</span>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                    <div v-else class="hint">{{ appAdm.data?.guard?.localOnly ? '这个应用没有服务端接口（见上方说明）。' : '没有登记到接口。' }}</div>
+                  </div>
+                  <div v-if="appAdm.data?.data?.shared" class="hint" style="margin-top:10px">
+                    <b>共用接口不随停用而关闭：</b>
+                    <div v-for="(v, k) in appAdm.data.data.shared" :key="k">· <code class="mono">{{ k }}</code> — {{ v }}</div>
+                  </div>
+
+                  <el-divider content-position="left">数据清理</el-divider>
+                  <template v-if="(appAdm.data?.data?.purgeables || []).length">
+                    <el-alert type="warning" :closable="false" show-icon style="margin-bottom:10px"
+                      title="清理不可逆。流程是：先预览命中条数 → 确认后手输条数 → 服务端重算比对一致才执行，并先落一份备份。" />
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+                      <el-select v-model="appAdm.purgeSrc" style="width:190px">
+                        <el-option v-for="p in appAdm.data.data.purgeables" :key="p.key" :label="p.label" :value="p.key" />
+                      </el-select>
+                      <el-date-picker v-model="appAdm.range" type="daterange" unlink-panels
+                        range-separator="~" start-placeholder="开始" end-placeholder="结束"
+                        value-format="YYYY-MM-DD" style="width:240px" />
+                      <el-checkbox v-model="appAdm.allTime">全部时间</el-checkbox>
+                      <el-button type="warning" plain :loading="appAdm.purgeBusy" @click="appPurgePreview">预览要清理什么</el-button>
+                    </div>
+                    <div v-if="appAdm.purgePrev">
+                      <el-alert :type="appAdm.purgePrev.count ? 'error' : 'success'" :closable="false" show-icon
+                        :title="appAdm.purgePrev.count
+                          ? `将删除 ${appAdm.purgePrev.count} 条「${appAdm.purgePrev.label}」。下面是最新的若干条样例：`
+                          : '当前条件下没有可清理的数据。'" />
+                      <!-- 样例的形状是"每行一个 {key,label,value} 数组"（服务端按数据源
+                           自己那套列定义生成的），所以列头取自 sample[0]，单元格取 row[key].value -->
+                      <el-table v-if="appAdm.purgePrev.count" :data="appAdm.purgePrev.sample" border size="small"
+                        max-height="260" style="margin-top:8px">
+                        <el-table-column v-for="c in (appAdm.purgePrev.sample[0] || [])" :key="c.key" :label="c.label"
+                          show-overflow-tooltip>
+                          <template #default="{ row }">{{ row[c.key]?.value }}</template>
+                        </el-table-column>
+                      </el-table>
+                      <div v-if="appAdm.purgePrev.count" style="margin-top:10px;display:flex;gap:8px;align-items:center">
+                        <span class="hint">请输入上面的条数以确认：</span>
+                        <el-input-number v-model="appAdm.purgeConfirm" :min="0" />
+                        <el-button type="danger" :disabled="appAdm.purgeConfirm !== appAdm.purgePrev.count"
+                          :loading="appAdm.purgeBusy" @click="appPurgeRun">确认清理</el-button>
+                      </div>
+                    </div>
+                  </template>
+                  <div v-else class="hint">{{ appAdm.data?.data?.readOnlyReason || '这个应用的数据不支持清理。' }}</div>
+                </el-tab-pane>
+              </el-tabs>
+            </div>
+          </el-drawer>
 
           <el-row :gutter="16">
             <el-col :span="8">
@@ -6874,6 +7128,223 @@ async function loadAppCatalog() {
     appWhy.value = map;
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '加载应用清单失败');
+  }
+}
+
+// ====== 应用管理抽屉（v0.21.0） ======
+//
+// 四块：基本信息（改名/图标/排序）、功能设置（参数）、数据（概览/明细/导出）、停用与清理。
+//
+// ⚠️ 一个刻意的取舍：基本信息是"整份表单提交"，参数与停用是"改一下立刻保存"。
+//    因为表单里的名称/图标/排序是一个整体（改完点保存才生效，能反悔），
+//    而开关类的参数如果也要"改完再点保存"，管理员会漏点 —— 他以为已经生效了。
+const appAdm = reactive({
+  open: false, loading: false, error: '', id: '', title: '', tab: 'basic',
+  data: null, saving: false,
+  form: { title: '', icon: '', sort: null },
+  src: '', q: '', range: null, allTime: true, page: 1, pageSize: 50,
+  rows: [], cols: [], total: 0, rowsLoading: false, srcTimeFiltered: true,
+  purgeSrc: '', purgePrev: null, purgeConfirm: 0, purgeBusy: false,
+});
+
+const NEED_LABEL = {
+  workMode: '需开启工作模式', attendance: '需开启考勤', orgMember: '需录进组织名册',
+};
+/** 出厂条件（need）翻成人话 —— 管理台要能回答"为什么员工看不到" */
+function needText(need) {
+  if (!need || !Object.keys(need).length) return '无（对所有人生效）';
+  const t = [];
+  if (need.workMode) t.push(NEED_LABEL.workMode);
+  if (need.attendance) t.push(NEED_LABEL.attendance);
+  if (need.orgMember) t.push(NEED_LABEL.orgMember);
+  if (need.role === 'employee') t.push('员工专属（管理员看不到）');
+  if (need.adminOnly) t.push('管理员专属（员工看不到）');
+  return t.join(' · ') || '无';
+}
+
+function admFormOf(d) {
+  const ov = d.app.override || {};
+  return { title: ov.title || '', icon: ov.icon || '', sort: ov.sort ?? null };
+}
+
+/** 只刷数据、不重置界面状态（保存完、清理完要留在原处，不能把抽屉弹回第一页） */
+async function refreshAppAdmin() {
+  const { data } = await api.get('/admin/apps/' + appAdm.id);
+  appAdm.data = data;
+  appAdm.title = `${data.app.factory.title} · 应用管理`;
+  appAdm.form = admFormOf(data);
+  return data;
+}
+
+async function openAppAdmin(id) {
+  Object.assign(appAdm, {
+    open: true, loading: true, error: '', id, tab: 'basic', data: null,
+    rows: [], cols: [], total: 0, q: '', range: null, allTime: true, page: 1,
+    purgePrev: null, purgeConfirm: 0,
+  });
+  try {
+    const data = await refreshAppAdmin();
+    appAdm.src = (data.data.sources[0] || {}).key || '';
+    appAdm.purgeSrc = (data.data.purgeables[0] || {}).key || '';
+    if (appAdm.src) await loadAppRows();
+  } catch (e) {
+    appAdm.error = e.response?.data?.error || '加载应用信息失败';
+  } finally {
+    appAdm.loading = false;
+  }
+}
+
+async function saveAppAdm() {
+  appAdm.saving = true;
+  try {
+    // 留空 = 清回出厂（服务端把 '' 与 null 都当"不覆盖"）。
+    // 表单里预填的是**当前覆盖值**，所以保存 = "让覆盖正好等于这些值"，
+    // 没碰过的项本来就是空的，不会被这次保存莫名其妙改掉。
+    const { data } = await api.patch('/admin/apps/' + appAdm.id, {
+      title: appAdm.form.title || '',
+      icon: appAdm.form.icon || '',
+      sort: appAdm.form.sort === null || appAdm.form.sort === undefined ? null : Number(appAdm.form.sort),
+    });
+    ElMessage.success(data.message || '已保存');
+    await Promise.all([refreshAppAdmin(), loadAppCatalog()]);
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    appAdm.saving = false;
+  }
+}
+
+async function resetAppAdm() {
+  try {
+    await ElMessageBox.confirm('恢复出厂设置：名称、图标、排序、参数、停用状态全部回到出厂。确定吗？',
+      '恢复出厂', { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' });
+  } catch { return; }
+  try {
+    const { data } = await api.delete('/admin/apps/' + appAdm.id);
+    ElMessage.success(data.message || '已恢复出厂设置');
+    await Promise.all([refreshAppAdmin(), loadAppCatalog()]);
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '恢复失败');
+  }
+}
+
+/** 单个参数即时保存。送出厂默认值 = 还原（服务端会把这个键删掉，不留"假覆盖"） */
+async function setAppParam(key, value) {
+  try {
+    const { data } = await api.patch('/admin/apps/' + appAdm.id, { params: { [key]: value } });
+    appAdm.data.app = data.app;
+    ElMessage.success('已保存');
+    await loadAppCatalog();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '参数保存失败');
+  }
+}
+
+async function toggleAppDisabled(v) {
+  if (v) {
+    const label = appAdm.data?.app?.effective?.title || appAdm.id;
+    try {
+      await ElMessageBox.confirm(
+        `停用「${label}」后：客户端不再显示这个入口，它的后端接口一律回 403（不再只是藏图标）。`
+        + '已经产生的数据不受影响，随时可以在同一个开关上恢复。确定停用吗？',
+        '停用应用', { type: 'warning', confirmButtonText: '停用', cancelButtonText: '取消' });
+    } catch { return; }
+  }
+  try {
+    const { data } = await api.patch('/admin/apps/' + appAdm.id, { disabled: !!v });
+    ElMessage.success(data.message || '已更新');
+    await Promise.all([refreshAppAdmin(), loadAppCatalog()]);
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '操作失败');
+  }
+}
+
+/** 时间窗（明细与清理共用同一套口径，避免两个 tab 各筛一套） */
+function admWindow() {
+  const p = {};
+  if (appAdm.allTime) { p.allTime = 1; return p; }
+  if (appAdm.range && appAdm.range.length === 2) {
+    p.from = new Date(`${appAdm.range[0]}T00:00:00`).getTime();
+    p.to = new Date(`${appAdm.range[1]}T23:59:59`).getTime();
+  }
+  return p;
+}
+
+async function loadAppRows() {
+  if (!appAdm.src) return;
+  appAdm.rowsLoading = true;
+  try {
+    const { data } = await api.get(`/admin/apps/${appAdm.id}/data`, {
+      params: { source: appAdm.src, page: appAdm.page, pageSize: appAdm.pageSize, q: appAdm.q || undefined, ...admWindow() },
+    });
+    appAdm.rows = data.items || [];
+    appAdm.total = data.total || 0;
+    appAdm.cols = data.columns || [];
+    appAdm.srcTimeFiltered = data.timeFiltered !== false;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载明细失败');
+  } finally {
+    appAdm.rowsLoading = false;
+  }
+}
+
+async function exportAppRows() {
+  try {
+    const res = await api.get(`/admin/apps/${appAdm.id}/export`, {
+      params: { source: appAdm.src, q: appAdm.q || undefined, ...admWindow() },
+      responseType: 'blob',
+    });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${appAdm.id}-${appAdm.src}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    ElMessage.success('已导出（Excel 直接双击打开，中文不乱码）');
+  } catch (e) {
+    ElMessage.error('导出失败：' + (e.response?.data?.error || e.message || '未知错误'));
+  }
+}
+
+async function appPurgePreview() {
+  appAdm.purgeBusy = true;
+  appAdm.purgePrev = null;
+  appAdm.purgeConfirm = 0;
+  try {
+    const { data } = await api.post(`/admin/apps/${appAdm.id}/purge`,
+      { source: appAdm.purgeSrc, dryRun: true, ...admWindow() });
+    appAdm.purgePrev = data;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '预览失败');
+  } finally {
+    appAdm.purgeBusy = false;
+  }
+}
+
+async function appPurgeRun() {
+  const expect = appAdm.purgePrev?.count;
+  if (!expect) return;
+  appAdm.purgeBusy = true;
+  try {
+    const { data } = await api.post(`/admin/apps/${appAdm.id}/purge`,
+      { source: appAdm.purgeSrc, dryRun: false, expectCount: expect, ...admWindow() });
+    appAdm.purgePrev = null;
+    appAdm.purgeConfirm = 0;
+    ElMessage.success(data.message || '已清理');
+    // 备份没落盘必须单独说 —— 删成功但没备份，是"以为能捞回来其实不能"
+    if (data.backupError) ElMessage.warning('注意：备份没能落盘 —— ' + data.backupError);
+    if (data.backupTruncated) ElMessage.warning(`备份只含前 ${data.backupTotal} 行中的一部分（见响应 backupTruncated）`);
+    await refreshAppAdmin();
+    if (appAdm.src) await loadAppRows();
+  } catch (e) {
+    const d = e.response?.data;
+    ElMessage.error(d?.error || '清理失败');
+    // 条数变了就作废预览：让管理员重新看一遍现在的命中范围，而不是照着旧数字再点一次
+    if (d?.code === 'count_changed') appAdm.purgePrev = null;
+  } finally {
+    appAdm.purgeBusy = false;
   }
 }
 
