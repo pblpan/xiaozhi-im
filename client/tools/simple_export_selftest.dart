@@ -169,13 +169,22 @@ void main() {
     eq('清单外但数量 0 → 不进段3（它本来就没扫到）', s.extra.length, 0);
     ok('accounted 只算清单内的', s.accounted);
 
-    // 清单里数量 0 的行：按"没盘到"处理
-    final s2 = SimpleExport.build(
-      items: list,
-      qty: <String, double>{'A1': 0},
-    );
-    eq('清单里有 0 的数 → 当没盘到（写 0）', s2.missing.length, 1);
-    eq('不会同时出现在段1', s2.data.length, 0);
+    // 清单里数量 0 的行：按"没盘到"处理。
+    // 🔴 这里必须用**3 条清单**（和单测同一个形状），不能用 1 条：
+    //    段2 装的是"整份清单里所有没数的"（压根没扫过的也在里面），
+    //    用 1 条清单时写 `missing.length == 1` 也能过，
+    //    于是单测那边（3 条清单）写成 `.single` 就炸了 —— 本地预检
+    //    挡不住的原因不是判据弱，是 **fixture 比单测小**。
+    final three = <Map<String, dynamic>>[
+      <String, dynamic>{'barcode': 'A1', 'name': '甲', 'seq': 1},
+      <String, dynamic>{'barcode': 'A2', 'name': '乙', 'seq': 2},
+      <String, dynamic>{'barcode': 'A3', 'name': '丙', 'seq': 3},
+    ];
+    final s2 = SimpleExport.build(items: three, qty: <String, double>{'A1': 0});
+    eq('清单里有 0 的数 → 段1 必须是空的（0 不算盘到了）', s2.data.length, 0);
+    eq('段2 = 整份清单里没数的那些（这里三条全在）', s2.missing.length, 3);
+    eq('段2 第一条就是那个 0', s2.missing.rows.first.barcode, 'A1');
+    ok('accounted', s2.accounted);
   }
 
   // ============ CSV 细节 ============

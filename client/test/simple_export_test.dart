@@ -125,8 +125,12 @@ void main() {
 
     test('清单里有 0 的数 → 当"没盘到"处理，不会同时出现在段1', () {
       final s = SimpleExport.build(items: list, qty: <String, double>{'A1': 0});
-      expect(s.data, isEmpty);
-      expect(s.missing.rows.single.barcode, 'A1');
+      expect(s.data, isEmpty, reason: '0 不算"盘到了"，否则段1 会出现一行 0');
+      // ⚠️ 段2 装的是**整份清单里所有没数的**（这里 A2/A3 压根没扫，也在这段），
+      //    所以判据是"A1 落在段2"，不能写 `.single`（那会 RangeError，
+      //    看着像产品坏了，其实是我把 fixture 想小了）。
+      expect(s.missing.rows.map((r) => r.barcode).toList(),
+          <String>['A1', 'A2', 'A3']);
       expect(s.accounted, isTrue);
     });
 

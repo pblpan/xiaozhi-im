@@ -101,6 +101,27 @@ class SimpleRepo {
     return int.tryParse(v.toString()) ?? 0;
   }
 
+  /// 取一个**确实存在**的任务号（规范化后的），不存在就抛错。
+  ///
+  /// 🔴 为什么"拿这一轮内容"的方法必须报错，而不是给空集合：
+  ///    任务号对不上时返回空，界面上和"确实还没导入清单 / 真的一件都没盘"
+  ///    **长得一模一样** —— 员工会照着空清单盘一整趟，导出来还是 0 行，
+  ///    那时才发现白干了。返回空是"静默"，这里要的是"吵起来"。
+  ///    "它到底在不在"用 [findTask]（那个就该返回 null）。
+  ///
+  /// ⚠️ 空串仍然抛 `ArgumentError`（参数本身不合法），与"目标不存在"
+  ///    用的 `StateError` 分开：这两种错排查方向完全不同，
+  ///    合成一个类型会让排查的人先往错的方向走。
+  ///
+  /// 注意它是**实例方法**（要调 [findTask]），别顺手改成 static。
+  Future<String> _requireTask(String taskNo) async {
+    final no = _req(taskNo, 'taskNo');
+    if (await findTask(no) == null) {
+      throw StateError('盘点任务 $no 不存在');
+    }
+    return no;
+  }
+
   // ============================================================
   // 任务
   // ============================================================
@@ -280,9 +301,7 @@ class SimpleRepo {
   ///    [startNewRound]（新任务），所以不会出现"清单换了、上一轮扫的数还挂着"
   ///    这种自相矛盾的状态。真要给同一个任务换清单，先把节点删掉。
   Future<int> importItems(String taskNo, List<SimpleImportRow> rows) async {
-    final no = _req(taskNo, 'taskNo');
-    final task = await findTask(no);
-    if (task == null) throw StateError('盘点任务 $no 不存在');
+    final no = await _requireTask(taskNo);
 
     final db = await LocalDb.I.db();
     await db.transaction((txn) async {
@@ -300,10 +319,11 @@ class SimpleRepo {
 
   /// 某轮的待盘清单，**按导入顺序**（导出照这个排，员工好对数）。
   Future<List<Map<String, dynamic>>> listItems(String taskNo) async {
+    final no = await _requireTask(taskNo);
     final db = await LocalDb.I.db();
     return db.query('simple_item',
         where: 'task_no = ?',
-        whereArgs: <Object?>[_req(taskNo, 'taskNo')],
+        whereArgs: <Object?>[no],
         orderBy: 'seq asc, barcode asc');
   }
 
@@ -323,8 +343,8 @@ class SimpleRepo {
   /// 「已盘 N / M」里的 N **只数清单内的**：N 比 M 还大会让人以为出错了，
   /// 而清单外扫到的那些（口径允许，导出作第三段）单独给一个数。
   Future<SimpleTaskTally> taskTally(String taskNo) async {
+    final no = await _requireTask(taskNo);
     final db = await LocalDb.I.db();
-    final no = _req(taskNo, 'taskNo');
     final t = await db.rawQuery(
         'select total_items from simple_task where task_no = ?', <Object?>[no]);
     final rows = await db.rawQuery('''
@@ -350,11 +370,15 @@ class SimpleRepo {
   // ============================================================
 
   /// 某轮的全部节点（按趟次升序）。
+  ///
+  /// 与 [listItems] 同一个口径：任务号对不上就报错，不给"空列表"
+  /// （历史趟次面板显示空的，和"这一趟都还没开"分不清）。
   Future<List<Map<String, dynamic>>> listNodes(String taskNo) async {
+    final no = await _requireTask(taskNo);
     final db = await LocalDb.I.db();
     return db.query('stocktake_sheet',
         where: 'zone_code = ? and sheet_type = ?',
-        whereArgs: <Object?>[_req(taskNo, 'taskNo'), InvSheetType.simple],
+        whereArgs: <Object?>[no, InvSheetType.simple],
         orderBy: 'phase asc, started_at asc');
   }
 
@@ -397,13 +421,13 @@ class SimpleRepo {
     String? operator,
     bool forceNew = false,
   }) async {
-    final no = _req(taskNo, 'taskNo');
+    final no = await _requireTask(taskNo);
     if (phase != SimplePhase.first) {
       throw StateError('简易盘点这一版只做初盘这一趟'
           '（${SimplePhase.label(phase)}是下一版的功能）');
     }
-    final task = await findTask(no);
-    if (task == null) throw StateError('盘点任务 $no 不存在');
+    // `!` 是安全的：_requireTask 刚确认过它存在。
+    final task = (await findTask(no))!;
     if (_int(task['status']) != taskOpen) {
       throw StateError('这一轮已经归档（${task['task_no']}），不能再开新的趟次');
     }

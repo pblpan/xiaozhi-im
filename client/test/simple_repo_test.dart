@@ -130,9 +130,20 @@ void main() {
     });
 
     test('任务不存在时报错，不静默', () async {
+      // 两种语义要分清：
+      //   · "它到底在不在" → findTask 返回 null（它就是干查询的）；
+      //   · "拿这一轮的内容" → **必须吵起来**。给空列表的话，界面上和
+      //     "还没导清单 / 一件都没盘"长得一模一样 —— 员工会照着空清单
+      //     盘一整趟，导出来才发现 0 行。
       await expectLater(repo.findTask('SMP-nope'), completion(isNull));
-      await expectLater(
-          repo.listItems('SMP-nope'), throwsA(isA<ArgumentError>()));
+      await expectLater(repo.listItems('SMP-nope'), throwsA(isA<StateError>()));
+      // 同一个口径要盖住"拿内容"的每个入口：只拦一个等于没拦
+      // （换个入口照样静默，而且更难发现）。
+      await expectLater(repo.listNodes('SMP-nope'), throwsA(isA<StateError>()));
+      await expectLater(repo.taskTally('SMP-nope'), throwsA(isA<StateError>()));
+      // ⚠️ 空串是**参数本身不合法**（ArgumentError），跟"目标不存在"
+      //    （StateError）分开：这两种错排查方向完全不同。
+      await expectLater(repo.listItems('  '), throwsA(isA<ArgumentError>()));
     });
   });
 
@@ -199,16 +210,19 @@ void main() {
       final no = await openRound();
       final n = await repo.openOrCreateNode(no, SimplePhase.first);
       final nno = n['sheet_no'] as String;
-      await repo.scan(nno, rows(1).first.barcode);
+      // ⚠️ 用 rows(2)：下面要取第 2 个条码。早先这里写的是 rows(1)[1]，
+      //    长度 1 的列表取下标 1 —— 直接 RangeError，看着像产品坏了。
+      final two = rows(2);
+      await repo.scan(nno, two[0].barcode);
       await repo.submitNode(nno);
       expect((await repo.findNode(nno))!['status'], InvSheetStatus.submitted);
       // 锁死之后扫码被拒（不是"判定了但照写"）
-      final r = await repo.scan(nno, rows(1)[1].barcode);
+      final r = await repo.scan(nno, two[1].barcode);
       expect(r.accepted, isFalse);
       expect(r.decision.verdict, SimpleScanVerdict.sheetLocked);
       await repo.reopenNode(nno);
       expect((await repo.findNode(nno))!['status'], InvSheetStatus.open);
-      expect((await repo.scan(nno, rows(1)[1].barcode)).accepted, isTrue);
+      expect((await repo.scan(nno, two[1].barcode)).accepted, isTrue);
     });
   });
 
