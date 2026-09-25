@@ -49,6 +49,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 版本号一致性（pubspec.yaml ↔ lib/core/app_version.dart）。
+      # 🔴 为什么要卡在这里（2026-09-25 加）：这两处不一致**不会让任何东西报错**，
+      #    但安装包界面会显示错的版本、"要不要升级"的比对读的也是 kAppVersion ——
+      #    属于"看着没事、实际发错版"。原来只有 verify_ios.py 有一条断言，
+      #    而它没有任何流程会调用（既不进 CI 也不在打包脚本里），等于没有。
+      # 判据本身已在四个用例上校准过（一致 0 / 不一致 1 / 判据读不到 2 / 文件缺失 2），
+      # 且"读不到"与"不一致"分开报 —— 后者是漏改，前者是判据失效，排查方向相反。
+      # 放在 Setup Flutter 之前：这条只读文本，最快失败、省掉装 SDK 的时间。
+      - name: 版本号一致性
+        run: bash ${{ env.CLIENT_DIR }}/tools/check_version_sync.sh ${{ env.CLIENT_DIR }}
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
