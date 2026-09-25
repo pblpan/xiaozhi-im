@@ -102,6 +102,20 @@ const APP_PARAMS = {
       desc: '扫到条码时播放提示音。',
     },
   ],
+  //
+  // 电子秤码（生鲜称重码）的商品码位数。
+  // 🔴 各软件不一样（泰格是 5 位），写在**类别属性**里，所以必须做成参数：
+  //    写死 5 的话，换一套软件之后秤码会被解成别的商品、数量也跟着错，
+  //    而全程**不报错**（扫出来还是个正常的条码样子）。
+  //    谁读它：客户端 replenish 页（补货·生鲜），见 core/scale_code.dart。
+  replenish: [
+    {
+      key: 'scaleCodeLen', label: '电子秤码的商品码位数', type: 'int', def: 5,
+      min: 3, max: 8, enforced: 'client',
+      desc: '生鲜秤打出来的条码里，"商品码"占几位（泰格是 5 位，13 位码 = 1 标识 + 5 商品码 + 5 重量 + 1 校验）。'
+        + '改错的表现是秤码解成别的商品、数量跟着错，而且不报错 —— 按门店那套软件的类别属性填。',
+    },
+  ],
   training: [
     {
       key: 'showAnswer', label: '交卷后回显正确答案', type: 'bool', def: true, enforced: 'server',

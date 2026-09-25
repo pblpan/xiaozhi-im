@@ -2,8 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../core/app_params.dart';
 import '../core/file_io.dart';
 import '../core/inventory_rules.dart';
+import '../core/scale_code.dart';
 import '../core/replenish_export.dart';
 import '../core/replenish_repo.dart';
 import '../core/replenish_rules.dart';
@@ -57,6 +59,9 @@ class _ReplenishPageState extends State<ReplenishPage> {
   void initState() {
     super.initState();
     _repo = widget.repo ?? ReplenishRepo();
+    // 拉一次管理台配的参数（电子秤码的商品码位数）。不等它：
+    // 弱网时等它会让进页面卡住，而拿不到只是回到默认 5 位。
+    AppParams.I.refresh();
     _reload();
   }
 
@@ -126,17 +131,32 @@ class _ReplenishPageState extends State<ReplenishPage> {
   }
 
   Future<void> _addRow() async {
-    final barcode = _scanCtl.text.trim();
-    if (barcode.isEmpty) {
+    final input = _scanCtl.text.trim();
+    if (input.isEmpty) {
       _snack('先扫一个条码');
       return;
     }
+
+    // 电子秤码（生鲜称重码）：条码里**编着重量**，不必再手输数量。
+    // 只在生鲜场景解 —— 杂百区扫到的 13 位数字是普通商品码，
+    // 拿秤码的规则去解它会解出一个不存在的商品，还不报错。
+    var barcode = input;
+    double? scaleKg;
+    if (_scene == ReplenishScene.fresh) {
+      final info =
+          ScaleCode.parse(input, codeLen: AppParams.I.scaleCodeLen);
+      if (info != null) {
+        barcode = info.plu; // 商档里存的是 PLU（秤上的商品号），不是整串秤码
+        scaleKg = info.kg;
+      }
+    }
+
     setState(() => _busy = true);
     try {
       final d = await _repo.addRow(
         sheetNo: _sheetNo,
         barcode: barcode,
-        qtyRaw: _qtyCtl.text,
+        qtyRaw: scaleKg != null ? scaleKg.toString() : _qtyCtl.text,
       );
       if (!mounted) return;
       if (!d.accepted) {
@@ -147,6 +167,11 @@ class _ReplenishPageState extends State<ReplenishPage> {
       _qtyCtl.text = '1';
       await _reload();
       if (!mounted) return;
+      // 秤码要**明说**解出了什么：默默用秤上的重量顶掉手输数量，
+      // 员工会以为是数量填错了（而这个数其实比手填的准）。
+      if (scaleKg != null) {
+        _snack('秤码 $input → 商品码 $barcode，${scaleKg.toStringAsFixed(3)} 公斤');
+      }
       _focusScan();
     } catch (e) {
       if (!mounted) return;
