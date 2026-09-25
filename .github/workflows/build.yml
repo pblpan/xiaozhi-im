@@ -128,29 +128,37 @@ jobs:
         working-directory: ${{ env.CLIENT_DIR }}
         run: flutter build apk --release --dart-define=BASE_URL=${{ env.BASE_URL }} --dart-define=WAN_URL=${{ env.WAN_URL }}
 
-      # 🔴 这一步必须能**红**，而且**红的原因必须写在日志里**（2026-09-25 重写）
+      # 🔴 这一步必须能**红**，而且**红的原因必须写在日志里**（2026-09-25 两次返工）
       #
-      # 旧版本有两个问题，第二个比第一个严重得多：
-      #   ① 名叫「断言签名证书」，实际只用 apksigner **打印**一遍，工具缺失时打一句
-      #      「跳过」就过去了 —— 它永远不会失败。
-      #   ② 改成真断言之后**第一次真跑就翻车**，而日志里只有：
-      #          APK: build/app/outputs/flutter-apk/app-release.apk
-      #          ##[error]Process completed with exit code 1.
-      #      中间一个字都没有。原因是 `set -e` + `X=$(a | b | c)`：
-      #      命令替换里的管道任何一环失败（glob 没匹配上 / grep 没找到行），
-      #      赋值语句就直接把脚本带走了，**stderr 还进了 /dev/null**。
-      #      看起来像"指纹断言失败"，实际是"工具没找到"——**同一种红，两种完全不同的病**。
+      # 三种错法都踩过一遍，记在这儿免得再犯：
       #
-      # 所以现在的写法：
-      #   · 故意**不加 `-e`**（`set -uo pipefail`）：本步每条路径都必须**显式 exit**，
-      #     不许有"静默死"的路径；
-      #   · apksigner 四级兜底查找，每级都打印；
+      # ① 名叫「断言签名证书」，实际只用 apksigner **打印**一遍，工具缺失时打一句
+      #    「跳过」就过去了 —— 它永远不会失败。**看着像检查，其实是装饰。**
+      #
+      # ② 改成真断言后第一次真跑，日志只有：
+      #        APK: build/app/outputs/flutter-apk/app-release.apk
+      #        ##[error]Process completed with exit code 1.
+      #    中间什么都没有。原因：`X=$(a | b | c)` 里管道有一环失败（glob 没匹配上），
+      #    赋值语句被 `-e` 带走，而 stderr 还写着 2>/dev/null。
+      #    →「工具没找到」和「指纹不一致」变成同一种红。
+      #
+      # ③ **第二版修了一半**：以为 `set -uo pipefail` 就去掉了 `-e`。
+      #    错 —— **GitHub Actions 是用 `bash -e {0}` 调脚本的，`-e` 是命令行参数，
+      #    脚本里 `set -u` 覆盖不掉它**，必须显式 `set +e`。
+      #    而且本地自测时跑的是 `bash script.sh`（没有 -e），**测试环境和线上不一致**，
+      #    所以四个分支本地全绿、线上照样静默死。
+      #
+      # 现在的写法：
+      #   · `set +e` 显式关掉外层 -e：本步每条路径都必须**显式 exit**，不留静默死的分支；
+      #   · 每个 `$( )` 捕获都带 `|| true`，双保险；
+      #   · apksigner 三级兜底查找，每级都打印；
       #   · 失败时把 SDK 路径、build-tools 目录内容、apksigner 原始输出全打出来。
       - name: Verify APK signing cert (断言签名证书)
         working-directory: ${{ env.CLIENT_DIR }}
         run: |
           set -uo pipefail
-          APK=$(ls build/app/outputs/flutter-apk/*.apk 2>/dev/null | head -1)
+          set +e                       # 🔴 见上面 ③：Actions 的 -e 是命令行参数，覆盖不掉
+          APK=$(ls build/app/outputs/flutter-apk/*.apk 2>/dev/null | head -1) || true
           echo "APK: ${APK:-<没找到>}"
           if [ -z "$APK" ]; then
             echo "::error::没有 APK 产物"
@@ -162,11 +170,11 @@ jobs:
 
           APKSIGNER=""
           if [ -n "$SDK" ]; then
-            APKSIGNER=$(find "$SDK/build-tools" -maxdepth 2 -type f -name 'apksigner*' 2>/dev/null | sort -V | tail -1)
+            APKSIGNER=$(find "$SDK/build-tools" -maxdepth 2 -type f -name 'apksigner*' 2>/dev/null | sort -V | tail -1) || true
           fi
           [ -n "$APKSIGNER" ] || APKSIGNER=$(command -v apksigner 2>/dev/null || true)
           if [ -z "$APKSIGNER" ]; then
-            APKSIGNER=$(find /usr/local/lib/android /opt /home/runner -maxdepth 6 -type f -name 'apksigner' 2>/dev/null | sort -V | tail -1)
+            APKSIGNER=$(find /usr/local/lib/android /opt /home/runner -maxdepth 6 -type f -name 'apksigner' 2>/dev/null | sort -V | tail -1) || true
           fi
           if [ -z "$APKSIGNER" ]; then
             echo "::error::找不到 apksigner —— 无法断言签名，拒绝放行"
@@ -181,11 +189,17 @@ jobs:
           printf '%s\n' "$RAW" | head -20
           echo "-----------------------------------------"
 
+          # ⚠️ 匹配串**不能带「Signer #1」前缀**（2026-09-25 线上实测）：
+          #    旧版 apksigner 打的是 `Signer #1 certificate SHA-256 digest: ...`，
+          #    而 build-tools 37 的 apksigner 改成了 `V2 Signer: certificate SHA-256 digest: ...`，
+          #    锚死前者就一条也匹配不到 → 静默 exit 1。
+          #    只锚 `certificate SHA-256 digest`（两种格式都含），前缀是什么都不管。
           DIGEST=$(printf '%s\n' "$RAW" \
-            | grep -F 'Signer #1 certificate SHA-256 digest' | head -1 \
-            | awk '{print $NF}' | tr -d ':' | tr 'A-Z' 'a-z')
+            | grep -F 'certificate SHA-256 digest' | head -1 \
+            | sed 's/.*certificate SHA-256 digest:[[:space:]]*//' \
+            | tr -d ':' | tr 'A-Z' 'a-z') || true
           if [ -z "$DIGEST" ]; then
-            echo "::error::解析不出签名指纹（APK 可能没签名，或 apksigner 没跑起来）"
+            echo "::error::解析不出签名指纹（APK 可能没签名，或 apksigner 输出格式又变了）"
             exit 1
           fi
           echo "实际 SHA-256: $DIGEST"
