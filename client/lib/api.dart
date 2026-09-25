@@ -620,6 +620,30 @@ class ImApi {
             if (bindings != null && bindings.isNotEmpty) 'bindings': bindings,
           });
 
+  /// 上传库房减货单（`/api/deduct`）。
+  ///
+  /// 🔴 和盘点一样**不传 `force`**：覆盖已上传的单是留痕的例外动作，
+  ///    不给手机上一个顺手可点的按钮 —— 减货要对账，事后能改就没意义了。
+  ///
+  /// 失败时看 [ApiException.code]：
+  ///   - `already_uploaded`(409)：服务端已有这张单，归档本地即可（但必须说出来）
+  ///   - `wrong_sheet_type`(409)：这个单号属于盘点单（正常流程不会出现）
+  /// [startedAt] 必须是**开单那一刻**的真值，不是上传时刻：
+  /// 管理台按它排序和按日期筛，落成上传时间的话，
+  /// "昨天减的货"会在后台显示成今天，对账对不上。
+  Future<Map<String, dynamic>> uploadDeductSheet({
+    required String sheetNo,
+    required List<Map<String, dynamic>> rows,
+    String? deviceId,
+    int? startedAt,
+  }) async =>
+      await _post('/deduct/sheet/${Uri.encodeComponent(sheetNo)}/upload',
+          <String, dynamic>{
+            'rows': rows,
+            if (deviceId != null && deviceId.isNotEmpty) 'device_id': deviceId,
+            if (startedAt != null) 'started_at': startedAt,
+          });
+
   // ---- 审批中心（M2/P2）----
 
   /// 提交审批。盘点单走 `kind: 'stocktake'`，`ref` 是盘点单号。

@@ -903,6 +903,10 @@ router.get('/sheets', (req, res) => {
 
   const where = [];
   const params = [];
+  // 🔴 减货单和盘点单**共用 inv_sheets**（靠 sheet_type 区分），所以盘点侧所有
+  //    列表类查询必须显式限定类型 —— 否则管理台的"盘点单列表"里会混进减货单，
+  //    点开一看点位是空的、阶段小结全是 0，而减货本来就不看点位不看阶段。
+  where.push("sheet_type = 'inventory'");
   const zc = code(req.query.zone);
   if (zc) { where.push('zone_code = ?'); params.push(zc); }
   const phase = Number(req.query.phase);
@@ -945,7 +949,9 @@ router.get('/sheet/:no', (req, res) => {
   const no = code(req.params.no, 160);
   if (!no) return res.status(400).json({ error: 'sheet_no 不合法' });
   const s = sheetOf(no);
-  if (!s) return res.status(404).json({ error: '盘点单不存在' });
+  // 减货单号（JH-…）也可能被传进来 —— 那是另一类单，走 /api/deduct，
+  // 这里按"盘点单不存在"回，而不是拿减货的数去算点位的阶段小结。
+  if (!s || s.sheet_type !== 'inventory') return res.status(404).json({ error: '盘点单不存在' });
 
   const rows = scansOf(no);
   // 单据级差异是**行级**的（这张单上扫到的、和上一阶段对不上的），

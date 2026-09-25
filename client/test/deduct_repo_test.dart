@@ -358,4 +358,78 @@ void main() {
       expect(invOnly, isEmpty, reason: '减货单被盘点侧认成了盘点单');
     });
   });
+
+  group('上传服务端', () {
+    test('🔴 未提交的单不许上传', () async {
+      final s = await repo.openOrCreate();
+      final no = s['sheet_no'] as String;
+      await repo.addRow(sheetNo: no, barcode: '6901', qtyRaw: '2');
+
+      // 为什么必须挡：服务端默认拒覆盖、客户端又不传 force，
+      // 半成品传上去之后"改完再传"会被 409 挡回，本地还被记成已上传
+      // → 服务端永远是那次半成品，而手机上看不出异常。
+      await expectLater(repo.uploadPayload(no), throwsA(isA<StateError>()),
+          reason: '未提交的单拿到了载荷 = 半成品会被传到服务端');
+    });
+
+    test('已提交的单：rows 带得上真数量与真扫描时刻', () async {
+      final s = await repo.openOrCreate();
+      final no = s['sheet_no'] as String;
+      await repo.addRow(sheetNo: no, barcode: '6901', qtyRaw: '2');
+      await repo.addRow(sheetNo: no, barcode: '6902', qtyRaw: '3.5');
+      await repo.submitSheet(no);
+
+      final p = await repo.uploadPayload(no);
+      expect(p['sheet_no'], no);
+      final rows = (p['rows'] as List).cast<Map<String, dynamic>>();
+      expect(rows, hasLength(2));
+      expect(rows.first['barcode'], '6901');
+      expect(rows.first['qty'], 2.0);
+      // 🔴 扫描时刻必须是**真的那个**，不能是上传时刻：
+      // 后台要靠它回答"这批货是什么时候减的"。
+      expect(rows.first['scanned_at'], isA<int>());
+      // 开单时间：管理台按它排序与按日期筛
+      expect(p['started_at'], isA<int>());
+    });
+
+    test('单不存在 → 报错（不静默给一个空载荷）', () async {
+      // 空载荷会让界面认为"没数据可传"，而真实原因是单没了（比如刚清过缓存）
+      await expectLater(repo.uploadPayload('JH-nope'),
+          throwsA(isA<StateError>()));
+    });
+
+    test('markUploaded：单据置已上传，且明细逐条标记', () async {
+      final s = await repo.openOrCreate();
+      final no = s['sheet_no'] as String;
+      await repo.addRow(sheetNo: no, barcode: '6901', qtyRaw: '2');
+      await repo.submitSheet(no);
+      await repo.markUploaded(no);
+
+      final after = await repo.findSheet(no);
+      expect(after?['status'], InvSheetStatus.uploaded);
+      expect(after?['uploaded_at'], isNotNull);
+
+      final db = await LocalDb.I.db();
+      final recs = await db.query('scan_record',
+          where: 'sheet_no = ?', whereArgs: <Object?>[no]);
+      expect(recs, hasLength(1));
+      expect(recs.first['uploaded'], 1,
+          reason: '明细没被标记已上传，下次会重复传');
+    });
+
+    test('markUploaded 不波及盘点单的流水', () async {
+      final invNo = await seedStocktakeSheet();
+      final s = await repo.openOrCreate();
+      final no = s['sheet_no'] as String;
+      await repo.addRow(sheetNo: no, barcode: '6901', qtyRaw: '2');
+      await repo.submitSheet(no);
+      await repo.markUploaded(no);
+
+      final db = await LocalDb.I.db();
+      final invRows = await db.query('scan_record',
+          where: 'sheet_no = ?', whereArgs: <Object?>[invNo]);
+      expect(invRows.first['uploaded'], 0,
+          reason: '标减货已上传把盘点的流水也标了');
+    });
+  });
 }

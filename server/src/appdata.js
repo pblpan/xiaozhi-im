@@ -309,16 +309,20 @@ const APPS = {
     sources: [],
   },
 
-  /* ---------------- 库房减货（纯离线） ---------------- */
+  /* ---------------- 库房减货 ---------------- */
+  //
+  // 🔴 2026-09-25 起**不再纯离线**：龙哥定"减货单要上传管理台，因为要对账"。
+  //    单据与明细从手机上传上来（POST /api/deduct/sheet/:no/upload），
+  //    管理台「库房减货」页能对账（按商品跨单累加）。
   warehouse_deduct: {
-    localOnly: true,
-    localOnlyNote: '「库房减货」是**纯离线**应用：减货单、明细、导出全部在手机上完成，'
-      + '数据落在手机本地的 stocktake_sheet / scan_record（sheet_type=deduct），'
-      + '服务端没有它的任何接口，也没有它的任何数据。'
-      + '所以这里没有可看的数据 —— 不是"数据丢了"，而是它本来就不往服务器传。'
-      + '停用它只会让客户端不再显示入口，手机上已减过的单据与导出不受影响。',
-    metrics: [],
-    sources: [],
+    metrics: [
+      { key: 'sheets', label: '减货单', sql: "SELECT COUNT(*) n FROM inv_sheets WHERE sheet_type = 'deduct'" },
+      { key: 'rows', label: '明细行', sql: "SELECT COUNT(*) n FROM inv_scans WHERE sheet_type = 'deduct'" },
+      { key: 'total_qty', label: '减货总数量', sql: "SELECT COALESCE(SUM(qty),0) n FROM inv_scans WHERE sheet_type = 'deduct'" },
+    ],
+    sources: [
+      { label: '减货单与明细', table: 'inv_sheets / inv_scans', note: "sheet_type = 'deduct'" },
+    ],
   },
 
   /* ---------------- 盘点 ---------------- */

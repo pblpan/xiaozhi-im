@@ -279,6 +279,74 @@ class DeductRepo {
     });
   }
 
+  // ---------------- 上传服务端 ----------------
+
+  /// 构造上传给服务端的载荷（`POST /api/deduct/sheet/:no/upload`）。
+  ///
+  /// 界面拿到它之后自己调 `api.uploadDeductSheet` —— 仓库层不认识 HTTP，
+  /// 这里是**纯数据**，所以能直接单测（不用起桩服务器）。
+  Future<Map<String, dynamic>> uploadPayload(String sheetNo) async {
+    final no = _req(sheetNo, 'sheetNo');
+    final sheet = await findSheet(no);
+    if (sheet == null) throw StateError('减货单 $no 不存在');
+
+    final status = (sheet['status'] as num? ?? 0).toInt();
+    //
+    // 🔴 只有**已提交**的单才准上传。这不是洁癖，是覆盖保护逼出来的：
+    //    未提交 = 还能改。先把半成品传上去，服务端就存了个中间态；
+    //    改完再传会被 409 already_uploaded 挡回来（服务端默认拒覆盖，
+    //    而客户端按口径**不传 force**），本地还被记成"已上传" ——
+    //    结果是**服务端永远是那次半成品**，而手机上看不出任何异常。
+    //    减货单本来就允许"撤销提交继续扫"，这条不卡住就一定会踩到。
+    if (status == InvSheetStatus.open) {
+      throw StateError('请先提交这张减货单再上传（未提交的单还在改）');
+    }
+
+    final rows = <Map<String, dynamic>>[];
+    for (final r in await listRows(no)) {
+      final bc = (r['barcode'] ?? '').toString().trim();
+      if (bc.isEmpty) continue;
+      final ts = (r['scanned_at'] as num?)?.toInt();
+      rows.add(<String, dynamic>{
+        'barcode': bc,
+        'qty': (r['qty'] as num? ?? 0).toDouble(),
+        // 扫描时刻必须是**真实的那个**，不能落成上传时刻：
+        // 离线减了一整天的货，后台得能看出"这批是什么时候减的"。
+        if (ts != null) 'scanned_at': ts,
+      });
+    }
+
+    return <String, dynamic>{
+      'sheet_no': no,
+      'rows': rows,
+      // 开单时间（管理台按它排序/按日期筛；缺了服务端会落成上传时刻）
+      'started_at': (sheet['started_at'] as num?)?.toInt(),
+      'operator': (sheet['operator'] ?? '').toString(),
+    };
+  }
+
+  /// 标记本地已上传（服务端收下之后，或 409 已有这张单时）。
+  ///
+  /// 🔴 只在服务端**确实已有这批数据**时调：本地标成已上传之后，
+  ///    界面就不再提示上传了，数据却没到服务端 = 这笔货永远对不上账。
+  ///    所以 400 那类"服务端拒收了"的错绝不走这里。
+  Future<void> markUploaded(String sheetNo) async {
+    final no = _req(sheetNo, 'sheetNo');
+    final db = await LocalDb.I.db();
+    await db.transaction((txn) async {
+      await txn.update(
+          'stocktake_sheet',
+          <String, Object?>{
+            'status': InvSheetStatus.uploaded,
+            'uploaded_at': DateTime.now().millisecondsSinceEpoch,
+          },
+          where: 'sheet_no = ? and sheet_type = ?',
+          whereArgs: <Object?>[no, InvSheetType.deduct]);
+      await txn.update('scan_record', <String, Object?>{'uploaded': 1},
+          where: 'sheet_no = ?', whereArgs: <Object?>[no]);
+    });
+  }
+
   /// 清空本地减货数据（界面走在二次确认路径上）。
   /// 返回删掉的【单 / 明细】条数，界面要显示"清了几张单、几行"。
   Future<Map<String, int>> clearAll() async {

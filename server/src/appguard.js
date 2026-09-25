@@ -111,6 +111,21 @@ const RULES = [
     consoleOnly: true,
   },
   {
+    // 减货单不再是纯离线（2026-09-25 龙哥定"要上传管理台，因为要对账"）。
+    // 员工端上传、管理台列表/详情/对账**共用这一批接口**，所以不设 consoleOnly：
+    // 设了的话员工就传不上来了，而"传不上来"在现场只会表现为"点了没反应"。
+    app: 'warehouse_deduct',
+    scope: '减货单据（员工上传 / 管理台对账）',
+    label: '减货单上传 / 列表 / 明细 / 按商品对账',
+    paths: [
+      'POST /api/deduct/sheet/:no/upload',
+      'GET  /api/deduct/sheets',
+      'GET  /api/deduct/sheet/:no',
+      'GET  /api/deduct/reconcile',
+    ],
+    test: (p) => /^\/api\/deduct\//.test(p),
+  },
+  {
     app: 'training',
     scope: '学员端',
     label: '课程 / 章节 / 看视频记进度 / 考试与交卷',
@@ -139,9 +154,6 @@ const RULES = [
 const LOCAL_ONLY = {
   stocktake: '「扫码枪」纯离线运行：扫码数据只存在手机上，服务端没有任何它的接口。'
     + '停用后客户端不再显示入口，但手机上已经采集的数据还在，导出照旧可用。',
-  warehouse_deduct: '「库房减货」同样是**纯离线**：减货单和明细都落在手机本地的'
-    + 'stocktake_sheet / scan_record（sheet_type=deduct），服务端没有它的任何接口。'
-    + '停用只会让客户端不再显示入口，手机上已经减过的单据与导出照旧可用。',
   simple_stocktake: '「简易盘点」也是**纯离线**：待盘清单（simple_task / simple_item）、'
     + '节点（stocktake_sheet，sheet_type=simple）和扫码明细全在手机本地，'
     + '服务端没有它的任何接口。停用只影响入口，已导的清单与盘过的数据、导出照旧可用。',

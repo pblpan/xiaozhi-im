@@ -57,6 +57,7 @@
         <el-menu-item index="modules">动态模块</el-menu-item>
         <el-menu-item index="upstreams">上游接口</el-menu-item>
         <el-menu-item index="master">商品档案</el-menu-item>
+        <el-menu-item index="deduct">库房减货</el-menu-item>
         <el-menu-item index="training">培训中心</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
         <el-menu-item index="license">授权管理</el-menu-item>
@@ -3447,6 +3448,129 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           </div>
         </div>
 
+        <!-- ===== 库房减货（对账） ===== -->
+        <div v-else-if="tab === 'deduct'">
+          <el-alert type="success" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              手机上的「库房减货」提交后点<b>上传管理台</b>，数据就到这里。
+              <b>按商品对账</b>把这段时间所有单<b>累加</b>起来 —— 回答"这个品一共减了多少、
+              分几次减的"；<b>减货单</b>回答"谁、什么时候、减了一单"。
+              <br />
+              <b>传上来的数改不了</b>：服务端默认拒绝覆盖已经上传过的单（手机要显式重传才行），
+              所以这里的数就是当时传上来的原样 —— 这也是"能对账"的前提。
+            </template>
+          </el-alert>
+
+          <div class="page-bar">
+            <el-date-picker v-model="deductRange" type="daterange" size="small"
+              range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期"
+              value-format="x" style="width:250px" @change="reloadDeduct" />
+            <el-button size="small" :disabled="!deductRange" @click="deductRange = null; reloadDeduct()">全部时间</el-button>
+            <el-input v-model="deduct.q" size="small" placeholder="搜条码或商品名" clearable
+              style="width:200px;margin-left:8px" @keyup.enter="reloadDeduct" @clear="reloadDeduct" />
+            <el-button size="small" type="primary" style="margin-left:8px" @click="reloadDeduct">查询</el-button>
+            <span class="hint">减货不挂盘点位、不分阶段，只看时间和商品</span>
+          </div>
+
+          <el-descriptions border :column="4" style="margin:14px 0">
+            <el-descriptions-item label="减货单">{{ deduct.overall.sheets ?? 0 }} 张</el-descriptions-item>
+            <el-descriptions-item label="明细行">{{ deduct.overall.rows_count ?? 0 }}</el-descriptions-item>
+            <el-descriptions-item label="减货总数量"><b>{{ deduct.overall.total_qty ?? 0 }}</b></el-descriptions-item>
+            <el-descriptions-item label="统计范围">{{ deductRangeLabel }}</el-descriptions-item>
+          </el-descriptions>
+
+          <el-tabs v-model="deductTab">
+            <el-tab-pane label="按商品对账" name="reconcile">
+              <el-table :data="deduct.rec" border stripe v-loading="deduct.loading">
+                <el-table-column label="条码" width="170">
+                  <template #default="{ row }"><code class="mono">{{ row.barcode }}</code></template>
+                </el-table-column>
+                <el-table-column label="商品名" min-width="200">
+                  <template #default="{ row }">{{ row.name || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="规格" width="110">
+                  <template #default="{ row }">{{ row.spec || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="单位" width="70">
+                  <template #default="{ row }">{{ row.unit || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="减货总量" width="110">
+                  <template #default="{ row }"><b>{{ row.total_qty }}</b></template>
+                </el-table-column>
+                <el-table-column label="涉及单数" width="90">
+                  <template #default="{ row }">{{ row.sheets_count }}</template>
+                </el-table-column>
+                <el-table-column label="最后减货时间" width="160">
+                  <template #default="{ row }">{{ fmtTime(row.last_at) }}</template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="!deduct.rec.length && !deduct.loading"
+                description="这段时间还没有减货记录。手机上的减货单要「提交」之后再点「上传管理台」才会到这里" />
+              <div v-if="deduct.rec.length" class="page-bar" style="margin-top:10px">
+                <el-button size="small" :disabled="deduct.recPage <= 1" @click="loadDeductRec(deduct.recPage - 1)">上一页</el-button>
+                <span class="hint">第 {{ deduct.recPage }} 页 · 共 {{ deduct.recTotal }} 个品</span>
+                <el-button size="small" :disabled="deduct.rec.length < 100"
+                  @click="loadDeductRec(deduct.recPage + 1)">下一页</el-button>
+              </div>
+            </el-tab-pane>
+
+            <el-tab-pane label="减货单" name="sheets">
+              <el-table :data="deduct.sheets" border stripe v-loading="deduct.loading">
+                <el-table-column label="单号" width="200">
+                  <template #default="{ row }">
+                    <a class="link" @click="openDeductSheet(row.sheet_no)"><code class="mono">{{ row.sheet_no }}</code></a>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作人" width="120">
+                  <template #default="{ row }">{{ row.operator || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="开单时间" width="160">
+                  <template #default="{ row }">{{ fmtTime(row.started_at) }}</template>
+                </el-table-column>
+                <el-table-column label="上传时间" width="160">
+                  <template #default="{ row }">{{ row.uploaded_at ? fmtTime(row.uploaded_at) : '—' }}</template>
+                </el-table-column>
+                <el-table-column label="品种数" width="90">
+                  <template #default="{ row }">{{ row.rows_count ?? 0 }}</template>
+                </el-table-column>
+                <el-table-column label="数量" width="100">
+                  <template #default="{ row }"><b>{{ row.total_qty ?? 0 }}</b></template>
+                </el-table-column>
+                <el-table-column label="设备" width="130">
+                  <template #default="{ row }">{{ row.device_id || '—' }}</template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="!deduct.sheets.length && !deduct.loading" description="还没有减货单" />
+              <div v-if="deduct.sheets.length" class="page-bar" style="margin-top:10px">
+                <el-button size="small" :disabled="deduct.sheetsPage <= 1" @click="loadDeductSheets(deduct.sheetsPage - 1)">上一页</el-button>
+                <span class="hint">第 {{ deduct.sheetsPage }} 页 · 共 {{ deduct.sheetsTotal }} 张</span>
+                <el-button size="small" :disabled="deduct.sheets.length < 50"
+                  @click="loadDeductSheets(deduct.sheetsPage + 1)">下一页</el-button>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+
+          <el-dialog v-model="deduct.dlg" :title="`减货单 ${deduct.cur || ''}`" width="860px">
+            <el-table :data="deduct.detail" border stripe max-height="440">
+              <el-table-column label="条码" width="170">
+                <template #default="{ row }"><code class="mono">{{ row.barcode }}</code></template>
+              </el-table-column>
+              <el-table-column label="商品名" min-width="200">
+                <template #default="{ row }">{{ row.name || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="规格" width="110">
+                <template #default="{ row }">{{ row.spec || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="减货数量" width="110">
+                <template #default="{ row }"><b>{{ row.qty }}</b></template>
+              </el-table-column>
+              <el-table-column label="扫码时间" width="170">
+                <template #default="{ row }">{{ fmtTime(row.scanned_at) }}</template>
+              </el-table-column>
+            </el-table>
+          </el-dialog>
+        </div>
+
         <!-- ===== 培训中心 ===== -->
         <!-- 名字就叫「培训中心」：与客户端应用台入口、服务端模块名三处一致 -->
         <div v-else-if="tab === 'training'">
@@ -4981,6 +5105,86 @@ async function loadTab() {
   else if (tab.value === 'training') { await loadTrCourses(); await loadTrSheets(); }
   else if (tab.value === 'license') await loadLicense();
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
+  else if (tab.value === 'deduct') await reloadDeduct();
+}
+
+/* ====== 库房减货（对账） ======
+ * 手机上的减货单提交后点「上传管理台」落到这里。
+ * 两个视图回答的是两个不同的问题，缺一个都不算"能对账"：
+ *   按商品对账 = 这个品一共减了多少、分几次减的（跨单据累加）；
+ *   减货单     = 谁、哪台设备、什么时候减了一单（追责与排查用）。
+ */
+const deductTab = ref('reconcile');
+const deductRange = ref(null);
+const deduct = ref({
+  rec: [], recPage: 1, recTotal: 0,
+  sheets: [], sheetsPage: 1, sheetsTotal: 0,
+  overall: {}, q: '', loading: false,
+  dlg: false, detail: [], cur: '',
+});
+
+const deductRangeLabel = computed(() => {
+  const r = deductRange.value;
+  if (!r || r.length !== 2) return '全部时间';
+  const d = (v) => new Date(Number(v)).toLocaleDateString('zh-CN');
+  return `${d(r[0])} 至 ${d(r[1])}`;
+});
+
+/** 时间范围与关键字 → 查询参数（两个视图共用）。 */
+function deductParams() {
+  const p = {};
+  const r = deductRange.value;
+  // 结束日给到当天 23:59:59.999 —— 日期选择器给的是当天 0 点，
+  // 不补的话"减货当天"那一整天的数据会被排除在外，而用户以为选了就是包含。
+  if (r && r.length === 2) { p.from = r[0]; p.to = Number(r[1]) + 86399999; }
+  if (deduct.value.q && deduct.value.q.trim()) p.q = deduct.value.q.trim();
+  return p;
+}
+
+async function loadDeductRec(page = 1) {
+  deduct.value.loading = true;
+  try {
+    const { data } = await api.get('/deduct/reconcile', {
+      params: { ...deductParams(), page, pageSize: 100 },
+    });
+    deduct.value.rec = data.items || [];
+    deduct.value.recTotal = data.total || 0;
+    deduct.value.recPage = page;
+    // 总览挂在**对账**接口上：它是按当前筛选算的，
+    // 用减货单列表的合计会漏掉"筛选范围内只出现在一张单里的品"。
+    deduct.value.overall = data.overall || {};
+  } catch (e) {
+    ElMessage.error('减货对账加载失败：' + (e.response?.data?.error || e.message));
+  } finally { deduct.value.loading = false; }
+}
+
+async function loadDeductSheets(page = 1) {
+  deduct.value.loading = true;
+  try {
+    const { data } = await api.get('/deduct/sheets', {
+      params: { ...deductParams(), page, pageSize: 50 },
+    });
+    deduct.value.sheets = data.items || [];
+    deduct.value.sheetsTotal = data.total || 0;
+    deduct.value.sheetsPage = page;
+  } catch (e) {
+    ElMessage.error('减货单列表加载失败：' + (e.response?.data?.error || e.message));
+  } finally { deduct.value.loading = false; }
+}
+
+function reloadDeduct() {
+  return Promise.all([loadDeductRec(1), loadDeductSheets(1)]);
+}
+
+async function openDeductSheet(no) {
+  deduct.value.cur = no;
+  try {
+    const { data } = await api.get(`/deduct/sheet/${encodeURIComponent(no)}`);
+    deduct.value.detail = data.rows || [];
+    deduct.value.dlg = true;
+  } catch (e) {
+    ElMessage.error('读取减货单失败：' + (e.response?.data?.error || e.message));
+  }
 }
 
 /* ====== 用户管理：服务端分页 + 服务端搜索 ====== */

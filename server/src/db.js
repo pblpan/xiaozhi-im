@@ -731,6 +731,24 @@ ensureColumn('inv_sheets', 'approval_status', 'approval_status INTEGER NOT NULL 
 // 驳回理由（批准时为空）。驳回必填，见 routes/approval.js。
 ensureColumn('inv_sheets', 'reject_reason', 'reject_reason TEXT');
 
+// 单据类型：'inventory' 盘点 / 'deduct' 库房减货。
+//
+// 🔴 为什么减货要和盘点**共用这一张表**（而不是另建 deduct_sheets）：
+//    单据状态机（进行中/已提交/已上传）、幂等键、导出口径这三件事两边完全一样，
+//    各建一套的结果是"改了盘点忘了减货"，而这两边的单号前缀（INV- / JH-）不同，
+//    混在一起根本看不出来哪张是减货 —— 靠一列显式区分，谁都不会看错。
+//
+// 🔴 加了这列之后，**盘点侧所有列表类查询必须带 sheet_type 过滤**，
+//    否则减货单会混进"盘点单列表"（现场表现为：点开一张单，里面是减货的货，
+//    而减货不看点位不看阶段，点位的阶段小结会算出莫名其妙的数）。
+//    按 sheet_no 精确查的那些不用改（单号本身不冲突）。
+ensureColumn('inv_sheets', 'sheet_type', "sheet_type TEXT NOT NULL DEFAULT 'inventory'");
+// 减货单不挂盘点位，但 inv_sheets.zone_code 是 NOT NULL（盘点位的语义就在这列上）。
+// 用一个**不可能成为合法点位码**的占位值：code() 会拒掉含空白/斜杠的串，
+// 而 '-' 既过得了校验又不会是任何门店起的点位名，正好当"无点位"。
+// 见 routes/deduct.js 的 DEDUCT_ZONE。
+ensureColumn('inv_scans', 'sheet_type', "sheet_type TEXT NOT NULL DEFAULT 'inventory'");
+
 // ---- 商品档案（商档）----
 //
 // 🔴 为什么要把商档搬到服务端：

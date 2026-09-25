@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../api.dart';
 import '../core/deduct_export.dart';
 import '../core/deduct_repo.dart';
 import '../core/deduct_rules.dart';
@@ -426,6 +427,69 @@ class _DeductPageState extends State<DeductPage> {
     }
   }
 
+  /// 上传这一单到管理台（对账用）。
+  ///
+  /// 🔴 两个"必须说出来"的地方，别省：
+  ///   ① 409 `already_uploaded` 按成功归档本地，但**要说"没有覆盖服务端"** ——
+  ///      静默当成功的话，万一本地这份和服务端那份不一样，用户永远不知道；
+  ///   ② 服务端拒收的条数要说 —— 不然"传了 50 条、服务端只收 48 条"
+  ///      在手机上看不出来，对账时才发现少了两个品。
+  Future<void> _upload() async {
+    final no = _sheetNo;
+    if (no.isEmpty) {
+      _snack('还没有减货单，先开一单');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final payload = await _repo.uploadPayload(no);
+      final rows = (payload['rows'] as List).cast<Map<String, dynamic>>();
+      if (rows.isEmpty) {
+        _snack('这一单一条减货记录都没有，没有可上传的数据');
+        return;
+      }
+      // ImApi 是单例工厂（`factory ImApi() => _i`），随用随建，不用存字段
+      final api = ImApi();
+      final res = await api.uploadDeductSheet(
+        sheetNo: no,
+        rows: rows,
+        startedAt: payload['started_at'] as int?,
+      );
+      // 🔴 只有服务端真的收下了才标本地已上传。
+      //    标早了（比如放在 try 开头）会导致"手机显示已上传、服务端其实没有"。
+      await _repo.markUploaded(no);
+      await _reload(loadNo: no);
+      if (!mounted) return;
+
+      final rejected = (res['rejected'] as List?) ?? const <dynamic>[];
+      final accepted = (res['accepted'] as num?)?.toInt() ?? rows.length;
+      final buf = StringBuffer('已上传管理台，服务端收下 $accepted 条');
+      if (rejected.isNotEmpty) buf.write('，拒收 ${rejected.length} 条');
+      _snack(buf.toString());
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'already_uploaded') {
+        await _repo.markUploaded(no);
+        await _reload(loadNo: no);
+        if (!mounted) return;
+        _snack('服务端已有这张单，本次没有覆盖它；本地已记为已上传');
+      } else if (e.isUnauthorized) {
+        _snack('登录已失效，请重新登录后再上传');
+      } else {
+        _snack('上传失败：${e.message}');
+      }
+    } on StateError catch (e) {
+      if (!mounted) return;
+      // uploadPayload 抛的（"不存在" / "请先提交再上传"）—— 是人能改的事，直说。
+      _snack(e.message.toString());
+    } catch (e) {
+      if (!mounted) return;
+      _snack('上传失败：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   // ---------------- UI ----------------
 
   @override
@@ -443,6 +507,14 @@ class _DeductPageState extends State<DeductPage> {
             icon: const Icon(Icons.history, color: AppColors.textSub),
             onPressed: _busy ? null : _pickSheet,
           ),
+          // 上传是这一页**唯一会写服务端**的动作，放在 AppBar 上而不是塞进
+          // 菜单里：龙哥踩过"功能藏在菜单里 = 找不到"，而对账全靠这一步。
+          IconButton(
+            key: const Key('deduct-upload'),
+            tooltip: '上传管理台',
+            icon: const Icon(Icons.cloud_upload_outlined, color: AppColors.textSub),
+            onPressed: _busy ? null : _upload,
+          ),
           IconButton(
             key: const Key('deduct-export'),
             tooltip: '导出 CSV',
@@ -454,6 +526,9 @@ class _DeductPageState extends State<DeductPage> {
             icon: const Icon(Icons.more_vert, color: AppColors.textSub),
             onSelected: (v) {
               switch (v) {
+                case 'upload':
+                  _upload();
+                  break;
                 case 'submit':
                   _submit();
                   break;
@@ -469,6 +544,13 @@ class _DeductPageState extends State<DeductPage> {
               }
             },
             itemBuilder: (_) => <PopupMenuEntry<String>>[
+              PopupMenuItem<String>(
+                value: 'upload',
+                // 未提交的单**不给传**（理由见 DeductRepo.uploadPayload 的注释：
+                // 传了半成品就再也传不上修改后的版本了）。
+                enabled: !_editable,
+                child: const Text('上传管理台'),
+              ),
               PopupMenuItem<String>(
                 value: 'submit',
                 enabled: _editable,

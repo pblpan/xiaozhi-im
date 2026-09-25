@@ -83,6 +83,10 @@ app.use('/api/approval', require('./routes/approval'));
 // 培训中心：课程 / 章节 / 课时（看视频记进度）/ 章节考试（判分留档）。
 // 客户端工作台入口 id 与显示名都是「培训中心」。
 app.use('/api/training', require('./routes/training'));
+// 库房减货单：员工上传 / 管理台列表·明细·对账。
+// 与盘点共用 inv_sheets + inv_scans，靠 sheet_type='deduct' 区分
+// （盘点走 /api/stocktake，减货走这里，两边互不干扰）。
+app.use('/api/deduct', require('./routes/deduct'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
