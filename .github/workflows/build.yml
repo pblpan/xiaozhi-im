@@ -28,6 +28,10 @@ env:
   #    确实要预置的内部包：在仓库 secrets 里配 BASE_URL / WAN_URL 即可（不配就是空）。
   BASE_URL: ${{ secrets.BASE_URL }}
   WAN_URL: ${{ secrets.WAN_URL }}
+  # 签名证书指纹（secrets 里那把固定 keystore 的 SHA-256）。
+  # 用途：打完 APK 后**硬断言**，指纹一变就红 —— 变了意味着这版包盖不上旧版（安装报 -7）。
+  # 取自 2026-09-25 实测：0.17.0 已交付包 与 CI 新包 指纹完全一致。
+  EXPECT_APK_SHA256: "64d99000e061259a94c2a54cc408487c9461cf678f7f155f488293534e0ed6d5"
 
 jobs:
   # 最先跑：编译错误 / 测试失败不该等到打完两个包才发现。
@@ -124,17 +128,37 @@ jobs:
         working-directory: ${{ env.CLIENT_DIR }}
         run: flutter build apk --release --dart-define=BASE_URL=${{ env.BASE_URL }} --dart-define=WAN_URL=${{ env.WAN_URL }}
 
+      # 🔴 这一步必须能**红**（2026-09-25 重写）
+      #    旧版本名叫「断言签名证书」，实际只用 apksigner **打印**了一遍证书，
+      #    而且 apksigner 找不到时打印一句「跳过」就过去了 —— 它永远不会失败。
+      #    这种步骤比没有更坏：绿着的时候让人以为"签名查过了"。
+      #    现在改成：拿不到指纹 = 红；指纹对不上 EXPECT_APK_SHA256 = 红。
       - name: Verify APK signing cert (断言签名证书)
         working-directory: ${{ env.CLIENT_DIR }}
         run: |
+          set -euo pipefail
           APK=$(ls build/app/outputs/flutter-apk/*.apk | head -1)
           echo "APK: $APK"
           APKSIGNER=$(ls "${ANDROID_SDK_ROOT:-$ANDROID_HOME}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
-          if [ -n "$APKSIGNER" ]; then
-            "$APKSIGNER" verify --print-certs "$APK"
-          else
-            echo "apksigner 未找到，跳过指纹打印"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner 未找到 —— 无法断言签名，拒绝放行"
+            exit 1
           fi
+          DIGEST=$("$APKSIGNER" verify --print-certs "$APK" \
+            | grep -F 'Signer #1 certificate SHA-256 digest' | head -1 \
+            | awk '{print $NF}' | tr 'A-Z' 'a-z')
+          if [ -z "$DIGEST" ]; then
+            echo "::error::没解析出签名指纹（APK 可能根本没签名）"
+            "$APKSIGNER" verify --print-certs "$APK" || true
+            exit 1
+          fi
+          echo "实际 SHA-256: $DIGEST"
+          echo "期望 SHA-256: $EXPECT_APK_SHA256"
+          if [ "$DIGEST" != "$EXPECT_APK_SHA256" ]; then
+            echo "::error::签名指纹与已交付版本不一致 —— 这版 APK 装不到旧版上（报 -7），不许交付"
+            exit 1
+          fi
+          echo "✅ 签名断言通过：与已交付版本同源，可覆盖安装"
 
       # 🔴 为什么不发 actions/upload-artifact（2026-09-25 改）
       #
