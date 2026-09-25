@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:xiaozhi_im_client/core/deduct_repo.dart';
 import 'package:xiaozhi_im_client/core/inventory_repo.dart';
 import 'package:xiaozhi_im_client/core/inventory_rules.dart';
 import 'package:xiaozhi_im_client/core/local_db.dart';
@@ -691,6 +692,32 @@ void main() {
           reason: '盘点单没清干净');
       expect(await scan.listScans(pd), hasLength(1),
           reason: '清盘点缓存把扫码枪的单也清了 —— 那批扫码数据就白干了');
+    });
+
+    test('clearAllData **不许碰库房减货（JH）** —— v3 起这张表是三家共用的', () async {
+      // v3 迁移把库房减货挂到了同一张 stocktake_sheet 上（靠 sheet_type 区分）。
+      // 老写法 `txn.delete('stocktake_sheet')` **没有 where** ——
+      // 清盘点会把减货的单头一起删掉，而流水只按 INV-% 前缀删，
+      // 于是减货明细全成孤儿行。现场现象是"减货历史凭空消失、但明细还在"，
+      // 没人会想到是"清盘点缓存"干的。这条用例就是钉住这个。
+      final repo = await seedZone(barcodes: <String>['6901']);
+      final s = await repo.openSheet(zoneCode: 'Z01', phase: 1);
+      await repo.scan(s['sheet_no'] as String, '6901');
+
+      final ded = DeductRepo();
+      final hs = await ded.openOrCreate();
+      final hsNo = hs['sheet_no'] as String;
+      await ded.addRow(sheetNo: hsNo, barcode: '6901', qtyRaw: '2');
+
+      final r = await repo.clearAllData();
+
+      expect(r['sheet'], 1,
+          reason: '只该删掉那 1 张盘点单 —— 数字比 1 大就是把别家的单也算进来了');
+      expect(await repo.listSheetsOfZone('Z01'), isEmpty, reason: '盘点单没清干净');
+      expect(await ded.findSheet(hsNo), isNotNull,
+          reason: '清盘点缓存把减货单头删了 —— 减货历史会"凭空消失"');
+      expect(await ded.listRows(hsNo), hasLength(1),
+          reason: '减货明细被连带删了');
     });
 
     test('clearAllData 之后还能重新开单（不是把库搞坏了）', () async {

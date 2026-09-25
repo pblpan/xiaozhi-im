@@ -1010,12 +1010,33 @@ class InventoryRepo {
   }
 
   /// 清**全部**盘点数据（所有点位）。点位/库位档案不动。
+  ///
+  /// 🔴 **必须按 sheet_type 限定，不能用无条件的 `delete('stocktake_sheet')`。**
+  ///    v3 起这张表是**三家人共用**的：盘点(stocktake) / 库房减货(deduct) /
+  ///    简易盘点(simple)。老写法 `txn.delete('stocktake_sheet')` 没有 where ——
+  ///    清盘点会把减货、简易盘点的**单头一起删掉**，而流水只按 `INV-%` 前缀删，
+  ///    于是它们的明细变成一堆**孤儿行**。
+  ///    现场看到的现象是"减货历史凭空消失了，但点进去明细还在"，
+  ///    几乎不可能联想到是"清盘点缓存"干的。
+  ///    （同上：扫码枪(PD-)本来就靠前缀躲过一劫，这是同一个道理，
+  ///      只是当时只有它一家，没暴露出"共表无条件删"这个坑。）
   Future<Map<String, int>> clearAllData() async {
     final db = await LocalDb.I.db();
     return db.transaction((txn) async {
-      final sheets = await txn.delete('stocktake_sheet');
-      final rows = await txn.delete('scan_record',
-          where: 'sheet_no like ?', whereArgs: <Object?>['$sheetPrefix%']);
+      final nos = (await txn.query('stocktake_sheet',
+              columns: <String>['sheet_no'],
+              where: 'sheet_type = ?',
+              whereArgs: <Object?>[InvSheetType.stocktake]))
+          .map((r) => r['sheet_no'].toString())
+          .toList();
+      var rows = 0;
+      if (nos.isNotEmpty) {
+        final marks = List<String>.filled(nos.length, '?').join(',');
+        rows = await txn.delete('scan_record',
+            where: 'sheet_no in ($marks)', whereArgs: nos);
+      }
+      final sheets = await txn.delete('stocktake_sheet',
+          where: 'sheet_type = ?', whereArgs: <Object?>[InvSheetType.stocktake]);
       return <String, int>{'sheet': sheets, 'scan_record': rows};
     });
   }
