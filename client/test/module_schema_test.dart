@@ -7,6 +7,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xiaozhi_im_client/core/apps.dart';
 import 'package:xiaozhi_im_client/core/module_schema.dart';
+import 'package:xiaozhi_im_client/screens/deduct.dart';
 
 void main() {
   group('组件类型识别', () {
@@ -182,9 +183,15 @@ void main() {
       // 2026-09-20 补上 'training'（**培训中心**，M4）。名字必须叫「培训中心」——
       // 是龙哥定的，不要改成"培训管理""学习中心"之类。
       //
-      // ⚠️ **以后每加一个内置应用，必须同时改三处**：① core/apps.dart 的
-      // kBuiltinAppIds ② server/src/apps.js 的 BUILTIN_APPS ③ 下面这份期望值。
-      // 漏任何一处，要么入口不显示，要么这条判据变红。**加完请立刻跑 flutter test。**
+      // 2026-09-22 补上 'warehouse_deduct'（**库房减货**，M5 软件项）。
+      // 🔴 它一开始是塞在「盘点」页 AppBar 里的小图标，真机验收时龙哥说
+      //    "**我没找到你说的功能在哪里**" —— 一个每天要干的活，藏在别人页面
+      //    的图标里就是没有入口。所以 0.17.1 起它单独占一个工作台卡片。
+      //
+      // ⚠️ **以后每加一个内置应用要同步改五处**（清单写在 core/apps.dart 顶上）：
+      //    kBuiltinAppIds / builtinAppPage / server 的 apps.js / appguard.js /
+      //    appdata.js，再加上下面这份期望值。**加完请立刻跑 flutter test 和
+      //    server/test/apps_admin_e2e.js**（服务端两处注册表都有自检拦着）。
       expect(kBuiltinAppIds, {
         'attendance',
         'my_requests',
@@ -192,6 +199,7 @@ void main() {
         'att_admin',
         'stocktake',
         'inventory',
+        'warehouse_deduct',
         'training',
       });
     });
@@ -202,6 +210,13 @@ void main() {
       expect(builtinAppPage('some_future_app'), isNull);
       expect(isKnownBuiltinApp(''), isFalse);
       expect(builtinAppPage(''), isNull);
+    });
+
+    test('🔴 「库房减货」认得出来，且点进去就是那一页', () {
+      // 这个 id 只登记不路由的话，工作台上会出现一张**点了没反应**的卡片
+      // （比不显示更糟：员工会以为"这个功能坏了"）。
+      expect(isKnownBuiltinApp('warehouse_deduct'), isTrue);
+      expect(builtinAppPage('warehouse_deduct'), isA<DeductPage>());
     });
   });
 

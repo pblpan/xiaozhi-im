@@ -355,6 +355,28 @@ async function main() {
   ok('  /api/location/* 同样被拦', r.status === 403, `实际 ${r.status}`);
   await api('DELETE', '/api/admin/apps/inventory', { token: admin });
 
+  // ── 停用「库房减货」：**纯离线应用没有接口可拦**，停用只作用于入口。
+  //    为什么不省掉这一段：LOCAL_ONLY / appdata 里那两段"它是纯离线的"注释
+  //    是**声明**，这里才是实证 —— 要能证明"停了之后工作台真的没有它了"。
+  //    这条判据的来历：0.17.0 第一版把它塞在「盘点」页 AppBar 的小图标里，
+  //    真机验收时龙哥说"**我没找到你说的功能在哪里**" —— 入口是入口、
+  //    接口是接口，纯离线不等于不该出现在工作台上。
+  apps = (await api('GET', '/api/client/apps?clientVersion=0.17.1', { token: empT })).body?.apps || [];
+  const wd = apps.find((a) => a.id === 'warehouse_deduct');
+  ok('🔴 库房减货出现在员工工作台清单里（纯离线也要下发入口）',
+    wd && wd.kind === 'builtin', apps.map((a) => a.id).join(','));
+  ok('  下发的是「库房减货」这个名字与 shopping_cart 图标',
+    wd?.title === '库房减货' && wd?.icon === 'shopping_cart', JSON.stringify(wd));
+
+  await api('PATCH', '/api/admin/apps/warehouse_deduct', { token: admin, body: { disabled: true } });
+  apps = (await api('GET', '/api/client/apps?clientVersion=0.17.1', { token: empT })).body?.apps || [];
+  ok('🔴 停用后它从工作台清单消失', !apps.some((a) => a.id === 'warehouse_deduct'),
+    apps.map((a) => a.id).join(','));
+  await api('DELETE', '/api/admin/apps/warehouse_deduct', { token: admin });
+  apps = (await api('GET', '/api/client/apps?clientVersion=0.17.1', { token: empT })).body?.apps || [];
+  ok('  恢复出厂（DELETE 覆盖层）后它又回来了', apps.some((a) => a.id === 'warehouse_deduct'),
+    apps.map((a) => a.id).join(','));
+
   // ── 停用「考勤记录」：客户端调 /api/admin/attendance/* 要拦，管理台调不能拦
   await api('PATCH', '/api/admin/apps/att_admin', { token: admin, body: { disabled: true } });
   r = await api('GET', '/api/admin/attendance/overview', { token: admin });

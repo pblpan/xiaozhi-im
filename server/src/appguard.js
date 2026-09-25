@@ -139,6 +139,9 @@ const RULES = [
 const LOCAL_ONLY = {
   stocktake: '「扫码枪」纯离线运行：扫码数据只存在手机上，服务端没有任何它的接口。'
     + '停用后客户端不再显示入口，但手机上已经采集的数据还在，导出照旧可用。',
+  warehouse_deduct: '「库房减货」同样是**纯离线**：减货单和明细都落在手机本地的'
+    + 'stocktake_sheet / scan_record（sheet_type=deduct），服务端没有它的任何接口。'
+    + '停用只会让客户端不再显示入口，手机上已经减过的单据与导出照旧可用。',
 };
 
 /**

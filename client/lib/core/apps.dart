@@ -28,12 +28,24 @@ import 'package:flutter/material.dart';
 import '../screens/attendance.dart';
 import '../screens/attendance_admin.dart';
 import '../screens/attendance_request.dart';
+import '../screens/deduct.dart';
 import '../screens/inventory.dart';
 import '../screens/org_screen.dart';
 import '../screens/stocktake.dart';
 import '../screens/training.dart';
 
 /// 内置应用 id 清单（与服务端 apps.js 的 BUILTIN_APPS 一一对应）
+///
+/// 🔴 **加一个内置应用要同步改五处**（漏一处就是"装了却看不到入口"，
+///    而且服务端那两处有自检测试会拦，客户端这一处漏了只是静默不显示）：
+///    ① 这里 `kBuiltinAppIds`
+///    ② 下面的 `builtinAppPage` 路由
+///    ③ `server/src/apps.js` 的 `BUILTIN_APPS`
+///    ④ `server/src/appguard.js`：有服务端接口就进 `RULES`，纯离线就进 `LOCAL_ONLY`
+///    ⑤ `server/src/appdata.js` 的 `APPS`（纯离线也要登记，写明"为什么没有数据"）
+///    ＋ `client/test/module_schema_test.dart` 里那份期望集合（不加就变红）。
+///
+/// ⚠️ **发布后 id 不可改名**（改名等于老客户端丢入口）。
 ///
 /// `attendance` / `my_requests` 是**员工专属**（自己打卡、自己提申请）；
 /// `att_admin` 是**管理员专属**（今日看板 + 代补卡）。谁看得见由服务端按角色
@@ -49,6 +61,7 @@ const kBuiltinAppIds = {
   'att_admin',
   'stocktake',
   'inventory',
+  'warehouse_deduct',
   'training',
 };
 
@@ -71,6 +84,8 @@ Widget? builtinAppPage(String id) {
       return const StocktakePage();
     case 'inventory':
       return const InventoryPage();
+    case 'warehouse_deduct':
+      return const DeductPage();
     case 'training':
       return const TrainingPage();
     default:

@@ -14,6 +14,8 @@
 //      自己拼 /assets/... 会拿到 21 字节的 {"error":"not found"}，看着像"没部署"）
 //
 // 退出码 0 = 全部通过。
+const fs = require('fs');
+const path = require('path');
 const BASE = process.env.IM_BASE || 'http://192.168.31.44:3602';
 const PASS = process.env.IM_PASS || '';
 
@@ -43,6 +45,24 @@ async function req(path, opts = {}) {
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+/**
+ * 期望的服务端版本 —— **从 server/package.json 现读，不写死**。
+ *
+ * 踩过：这个探针原来断言 `=== '0.21.0'`。服务端升到 0.21.1（加一个内置应用）之后
+ * 它立刻变成第一个红的判据，而红的原因跟"应用中心"毫无关系 ——
+ * 这种"写死的版本断言"过期后只有两种结局：要么误报卡住交付，要么被人顺手注释掉，
+ * 连带把整段校验一起废掉。版本一律从源头取。
+ */
+function expectedServerVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(
+      path.join(__dirname, '..', 'server', 'package.json'), 'utf8')).version;
+  } catch (e) {
+    console.log(`  ⚠️ 读不到 server/package.json 的版本号（${e.message}），跳过版本断言`);
+    return null;
+  }
+}
+
 async function main() {
   console.log(`线上只读验收：${BASE}\n`);
 
@@ -50,7 +70,10 @@ async function main() {
   // ⚠️ 路径是 /api/client/bootstrap（client 路由挂在 /api/client 下）。
   //    第一版写成 /api/bootstrap 拿到 404，看着像"版本没升上去"，其实是探针自己的错。
   const boot = (await req('/api/client/bootstrap')).body || {};
-  ok('服务端版本已升到 0.21.0', boot.serverVersion === '0.21.0', `实际 ${boot.serverVersion}`);
+  const sv = expectedServerVersion();
+  if (sv) {
+    ok(`服务端版本已升到 ${sv}`, boot.serverVersion === sv, `实际 ${boot.serverVersion}`);
+  }
   ok('/api/health 正常', (await req('/api/health')).status === 200);
 
   /* ---------- ② 未鉴权必须被拦 ---------- */
