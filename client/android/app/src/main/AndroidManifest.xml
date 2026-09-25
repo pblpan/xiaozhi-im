@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 语音消息：录音与音频播放 -->
@@ -9,6 +10,22 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 蓝牙耳机（免提切换时需要） -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- 蓝牙价签 / 标签打印机的**（经典蓝牙 SPP）**。
+         读"已配对设备"、连打印机这两个动作在 Android 12+ 都归 BLUETOOTH_CONNECT
+         （上面那条已经有了）；BLUETOOTH_SCAN 只在**主动扫描新设备**时需要，
+         这里不扫，加上是为了万一以后要加"扫新机器"。
+         neverForLocation = 声明"我不会用蓝牙推断位置" —— 不加这个标记，
+         系统会把它当成定位权限追问，用户会莫名其妙（而扫描本来也就用不到位置）。
+         BLUETOOTH（旧机型读配对列表要用） -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <!-- 声明了不用就装不上用，索性说清楚：蓝牙打印只跑 Android。 -->
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <application

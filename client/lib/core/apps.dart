@@ -35,6 +35,7 @@ import '../screens/replenish.dart';
 import '../screens/simple_stocktake.dart';
 import '../screens/stocktake.dart';
 import '../screens/training.dart';
+import '../screens/price_tag_print.dart';
 
 /// 内置应用 id 清单（与服务端 apps.js 的 BUILTIN_APPS 一一对应）
 ///
@@ -61,6 +62,11 @@ import '../screens/training.dart';
 /// 盘点是**制度型**（点位/货架位/三遍互比）；简易盘点是**干活型**
 /// （导入这一轮要盘的清单 → 一趟趟扫 → 导出一张全量单）。
 /// 两者并存、互不改动，见 `docs/简易盘点通道方案-v1.md` §1。
+///
+/// ⚠️ `price_tag`（价签打印）**只在 Android 上真的能打**（经典蓝牙串口，
+/// Windows 桌面端没有这条通路）。桌面端会进得去、也扫得了码，但一按打印就
+/// 出一段明说不支持的话 —— 没有在上面藏掉它，是因为"上完架顺手打标签"这趟活
+/// 可能就发生在货架边上、手里偏偏是平板，藏了反而更让人找不到。
 const kBuiltinAppIds = {
   'attendance',
   'my_requests',
@@ -72,6 +78,7 @@ const kBuiltinAppIds = {
   'warehouse_deduct',
   'replenish',
   'training',
+  'price_tag',
 };
 
 /// 该 id 是否是本客户端认识的内置应用。
@@ -101,6 +108,8 @@ Widget? builtinAppPage(String id) {
       return const ReplenishPage();
     case 'training':
       return const TrainingPage();
+    case 'price_tag':
+      return const PriceTagPrintPage();
     default:
       return null;
   }

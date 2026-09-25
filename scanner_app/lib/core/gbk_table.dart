@@ -1,7 +1,7 @@
-/// GBK → Unicode 解码码表（**自动生成，不要手改**）。
+/// GBK → Unicode 码表（**自动生成，不要手改**）。
 ///
-/// 由 `tools/gen_gbk_table.py` 生成：
-///     python tools/gen_gbk_table.py
+/// 由 `tools/gen_gbk_table.py` 生成，两个 App 共用同一份：
+///     python tools/gen_gbk_table.py --out <文件名>
 ///
 /// ── 为什么不是引一个 pub 包 ──────────────────────────────────────
 /// pub 上那几个 GBK 包（gbk_codec / fast_gbk）都停在 2021 年，

@@ -61,16 +61,29 @@ dependencies:
   # 培训中心：课件视频**内嵌播放**（不交给系统播放器）。
   # 有了它才拿得到"看到第几秒、是不是真在播"，进度才不是"打开即完成"的假进度。
   #
-  # 🔴 **版本号锁死，不要改成 `^2.11.1`**。本机跑不了 pub get（Dart 起子进程被拦），
-  #    本地类型检查用的是 pub 缓存里**已经解出来的这一套闭包**
-  #    （video_player 2.11.1 + android 2.10.0 + platform_interface 6.9.0 + …）。
-  #    写成 caret 的话 CI 会解出更高版本，本地预检就对不上号了 —— 那等于把
-  #    "改完能自查"这个唯一的本机闸门又废掉。要升版本：先升本地缓存，再改这里。
+  # 🔴 **版本号锁死，不要写成 caret**。本机跑不了 pub get（Dart 起子进程被拦），
+  #    本地类型检查用的是 `_pubfetch.py` 从清华镜像解出来的**这一套闭包**
+  #    （video_player + android/avfoundation/platform_interface/web + html…）。
+  #    写成 caret 的话 CI 会解出更高版本（各平台实现还会跟着跳小版本），
+  #    本地预检就对不上号了 —— 等于把"改完能自查"这个唯一的本机闸门又废掉。
+  #    要升版本：先把本地缓存升上去，再改这里。
   #
   # 🔴 **只有 Android / iOS / macOS / Web 的实现，没有 Windows**。
   #    桌面端不碰它（见 core/lesson_player.dart 的 supported 判断），
   #    所以 Windows 构建产物里不会多出播放器的原生代码。
-  video_player: 2.11.1
+  video_player: 2.14.0
+
+  # ── 蓝牙价签打印：**故意不引蓝牙包** ──────────────────────────────
+  # 原先引了 flutter_blue_plus，后来弃用：它的 FlutterBluePlus License 白纸黑字
+  # 写着 "For for-profit organizations, a commercial license is required"，
+  # 超市打价签是营利用途，用了就是违约。
+  #
+  # 而且打印机这边本来就不需要 BLE —— 主流蓝牙价签/标签机走的是**经典蓝牙 SPP**
+  # （串口 RFCOMM，UUID 固定 00001101-0000-1000-8000-00805F9B34FB，与型号无关）。
+  # 所以改成原生侧 `android/.../BluetoothPrinter.kt` 用 android.bluetooth 写
+  # （Apache-2.0，无许可问题），Dart 侧只经 'xiaozhi/btprint' 方法通道搬字节。
+  #
+  # ⚠️ Windows 上没有这条通路，桌面端根本进不去（见 core/bt_printer.dart）。
 
 # ── SQLite 原生库从哪来（构建期配置；不写会让 APK 构建必挂）────────────
 # `sqlite3` 这个包默认在构建时**从 GitHub Releases 下载**预编译的

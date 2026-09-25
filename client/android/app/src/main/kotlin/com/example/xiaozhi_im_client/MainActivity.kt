@@ -28,10 +28,56 @@ class MainActivity : FlutterActivity() {
 
     private var channel: MethodChannel? = null
 
+    /// 蓝牙打印机。持有 Activity 引用（要申请运行时权限），所以在这里建。
+    private val btPrinter: BluetoothPrinter by lazy { BluetoothPrinter(this) }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channel = ch
+
+        // 蓝牙价签 / 标签机。经典蓝牙 SPP，见 BluetoothPrinter.kt。
+        // 通道名与 Dart 侧 core/bt_printer.dart 的 'xiaozhi/btprint' 必须逐字一致。
+        // 写字节要走 socket，不能在主线程跑 —— 交给 BluetoothPrinter 自己开线程。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BT_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "ensurePermission" -> result.success(btPrinter.ensurePermission())
+                    "listPaired" -> result.success(btPrinter.listPaired())
+                    "connect" -> {
+                        val addr = call.argument<String>("address")
+                        if (addr == null) {
+                            result.error("BAD_ARG", "缺 address", null)
+                        } else {
+                            try {
+                                btPrinter.connect(addr)
+                                result.success(true)
+                            } catch (e: BluetoothPrinterException) {
+                                result.error(e.code, e.message, null)
+                            }
+                        }
+                    }
+                    "write" -> {
+                        val addr = call.argument<String>("address")
+                        val bytes = call.argument<ByteArray>("bytes")
+                        if (addr == null || bytes == null) {
+                            result.error("BAD_ARG", "缺 address 或 bytes", null)
+                        } else {
+                            try {
+                                btPrinter.write(bytes)
+                                result.success(true)
+                            } catch (e: BluetoothPrinterException) {
+                                result.error(e.code, e.message, null)
+                            }
+                        }
+                    }
+                    "disconnect" -> {
+                        btPrinter.disconnect()
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
 
         // 包完整性自校验：读本 APK 的签名证书指纹，与内置官方指纹比对。
         // 同步返回 —— 读 PackageManager 是内存操作，不值得为它开线程。
@@ -253,5 +299,9 @@ class MainActivity : FlutterActivity() {
 
         /// 与 Dart 侧 core/integrity.dart 的通道名必须逐字一致（写错 = 校验静默失效）
         private const val GUARD_CHANNEL = "xiaozhi/guard"
+
+        /// 与 Dart 侧 core/bt_printer.dart 的通道名必须逐字一致
+        /// （写错 = 点打印毫无反应，且不报错）
+        private const val BT_CHANNEL = "xiaozhi/btprint"
     }
 }

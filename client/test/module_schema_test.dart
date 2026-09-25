@@ -9,6 +9,7 @@ import 'package:xiaozhi_im_client/core/apps.dart';
 import 'package:xiaozhi_im_client/core/module_schema.dart';
 import 'package:xiaozhi_im_client/screens/deduct.dart';
 import 'package:xiaozhi_im_client/screens/inventory.dart';
+import 'package:xiaozhi_im_client/screens/price_tag_print.dart';
 import 'package:xiaozhi_im_client/screens/simple_stocktake.dart';
 
 void main() {
@@ -197,6 +198,10 @@ void main() {
       //    在服务端 apps.js 里它俩是**紧挨着**排的（员工才分得清），
       //    这里也照同样的次序写。见 docs/简易盘点通道方案-v1.md §1。
       //
+      // 2026-09-26 补上 'price_tag'（**价签打印**）。⚠️ 它**不落单**：
+      //    打完就贴在货上，没有第二方认它，存表只为"重打"——所以 appdata.js 里
+      //    它**刻意不给 metrics**，别为了"跟别的一致"给个空的"0 单 0 行"（那是句假话）。
+      //
       // ⚠️ **以后每加一个内置应用要同步改五处**（清单写在 core/apps.dart 顶上）：
       //    kBuiltinAppIds / builtinAppPage / server 的 apps.js / appguard.js /
       //    appdata.js，再加上下面这份期望值。**加完请立刻跑 flutter test 和
@@ -216,6 +221,7 @@ void main() {
         'warehouse_deduct',
         'replenish',
         'training',
+        'price_tag',
       });
     });
 
@@ -232,6 +238,13 @@ void main() {
       // （比不显示更糟：员工会以为"这个功能坏了"）。
       expect(isKnownBuiltinApp('warehouse_deduct'), isTrue);
       expect(builtinAppPage('warehouse_deduct'), isA<DeductPage>());
+    });
+
+    test('🔴 「价签打印」认得出来，且点进去就是那一页', () {
+      // 服务端 apps.js 先下发 id，客户端这一版才认得 → 装旧版的人看不到这个入口，
+      // 装新版的人点进去必须是价签页（而不是某个"长得挺正常"但完全不对的页）。
+      expect(isKnownBuiltinApp('price_tag'), isTrue);
+      expect(builtinAppPage('price_tag'), isA<PriceTagPrintPage>());
     });
 
     test('🔴 「简易盘点」认得出来，且点进去就是那一页（不是「盘点」）', () {
