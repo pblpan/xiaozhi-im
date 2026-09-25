@@ -138,11 +138,14 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       _error = null;
     });
     try {
+      // 先落到本地变量：`_curTaskNo` 是**字段**，字段不做类型提升，
+      // 直接 `findTask(_curTaskNo)` 会被判成 `String?` 传给 `String`。
+      final curTaskNo = _curTaskNo;
       Map<String, dynamic>? t;
       if (loadTaskNo != null) {
         t = await _repo.findTask(loadTaskNo);
-      } else if (_curTaskNo != null) {
-        t = await _repo.findTask(_curTaskNo);
+      } else if (curTaskNo != null) {
+        t = await _repo.findTask(curTaskNo);
       }
       t ??= await _repo.latestTask();
 
@@ -167,10 +170,11 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       final taskNo = (t['task_no'] ?? '').toString();
       final archived = _intOf(t['status']) != SimpleRepo.taskOpen;
 
+      final curNodeNo = _curNodeNo;
       Map<String, dynamic>? n;
       if (loadNodeNo != null) n = await _repo.findNode(loadNodeNo);
-      if (n == null && _curNodeNo != null && _curTaskNo == taskNo) {
-        n = await _repo.findNode(_curNodeNo);
+      if (n == null && curNodeNo != null && _curTaskNo == taskNo) {
+        n = await _repo.findNode(curNodeNo);
       }
       n ??= await _repo.openNodeOf(taskNo, SimplePhase.first);
       // 归档的那一轮**不再开新趟**（它已经盘完了），只把已有趟次读出来看。

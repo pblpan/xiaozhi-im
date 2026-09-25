@@ -1,6 +1,11 @@
 // 简易盘点「导出层」的本地自测（纯 Dart，`dart run` 可跑）。
 // 见 tools/run_pure_tests.sh 的说明：这台机器上 flutter test 起不来，
 // 所以纯逻辑先在这里跑，正式判据仍是 CI 上的 test/simple_export_test.dart。
+//
+// 相对路径 import 是**故意**的：run_pure_tests.sh 会把 lib/core 与本文件拷到
+// 一个包外临时目录再跑（包内 dart run 会去跑 native-assets 构建钩子并失败），
+// 那时 `package:xiaozhi_im_client/...` 解析不出来。
+// ignore_for_file: avoid_relative_lib_imports
 import 'dart:io';
 
 import '../lib/core/simple_export.dart';

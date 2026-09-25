@@ -12,6 +12,11 @@
 //
 // 用法（在 client/ 下）：
 //   ../../tools/flutter/bin/dart.bat run tools/simple_selftest.dart
+//
+// 这里**故意**用相对路径 import：run_pure_tests.sh 会把 lib/core 与本文件
+// 一起拷到一个**包外**的临时目录再跑（包内 dart run 会去跑 native-assets
+// 构建钩子并失败），那时 `package:xiaozhi_im_client/...` 是解析不出来的。
+// ignore_for_file: avoid_relative_lib_imports
 import 'dart:convert';
 import 'dart:io';
 

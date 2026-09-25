@@ -73,11 +73,11 @@ void main() {
         items: list,
         qty: <String, double>{'A1': 5, 'A3': 2, 'Z9': 7},
       );
-      expect(s.data.map((r) => r.barcode).toList(), <String>['A1', 'A3']);
-      expect(s.missing.map((r) => r.barcode).toList(), <String>['A2']);
+      expect(s.data.rows.map((r) => r.barcode).toList(), <String>['A1', 'A3']);
+      expect(s.missing.rows.map((r) => r.barcode).toList(), <String>['A2']);
       expect(s.missing.rows.first.qty, 0.0,
           reason: '🔴 没盘到的写 0，留空的话对账的人分不清"是 0 还是没读到"');
-      expect(s.extra.map((r) => r.barcode).toList(), <String>['Z9']);
+      expect(s.extra.rows.map((r) => r.barcode).toList(), <String>['Z9']);
       expect(s.extra.rows.first.qty, 7.0);
       expect(s.extra.rows.first.name, SimpleExport.unknownName,
           reason: '清单外查不到名字，给占位而不是空串');
@@ -91,7 +91,7 @@ void main() {
         items: list,
         qty: <String, double>{'A1': 1, 'A3': 1},
       );
-      expect(s.missing.map((r) => r.barcode).toList(), <String>['A2']);
+      expect(s.missing.rows.map((r) => r.barcode).toList(), <String>['A2']);
       // 再造一个"第一行就没盘到"的，确认它待在原位、不跑到段2的末尾顺序之外
       final list2 = <Map<String, dynamic>>[
         <String, dynamic>{'barcode': 'B1', 'name': '一', 'seq': 1},
@@ -102,7 +102,7 @@ void main() {
         items: list2,
         qty: <String, double>{'B1': 1, 'B3': 1},
       );
-      expect(s2.missing.single.barcode, 'B2');
+      expect(s2.missing.rows.single.barcode, 'B2');
     });
 
     test('段3 按条码升序（它们没有导入顺序）', () {
@@ -110,7 +110,8 @@ void main() {
         items: list,
         qty: <String, double>{'A1': 1, 'Z9': 1, 'Y8': 1, 'X7': 1},
       );
-      expect(s.extra.map((r) => r.barcode).toList(), <String>['X7', 'Y8', 'Z9']);
+      expect(s.extra.rows.map((r) => r.barcode).toList(),
+          <String>['X7', 'Y8', 'Z9']);
     });
 
     test('清单外但数量 0 → 不进段3（它本来就没扫到）', () {
@@ -125,7 +126,7 @@ void main() {
     test('清单里有 0 的数 → 当"没盘到"处理，不会同时出现在段1', () {
       final s = SimpleExport.build(items: list, qty: <String, double>{'A1': 0});
       expect(s.data, isEmpty);
-      expect(s.missing.single.barcode, 'A1');
+      expect(s.missing.rows.single.barcode, 'A1');
       expect(s.accounted, isTrue);
     });
 
@@ -136,7 +137,7 @@ void main() {
         ],
         qty: <String, double>{'A1': 1},
       );
-      expect(s.data.single.name, SimpleExport.unknownName);
+      expect(s.data.rows.single.name, SimpleExport.unknownName);
     });
   });
 
@@ -154,9 +155,9 @@ void main() {
         qty: <String, double>{'A1': 5, 'A2': 3},
         pending: <String>{'A2'},
       );
-      expect(s.data.single.barcode, 'A1');
-      expect(s.missing.single.barcode, 'A3', reason: '真没盘到的是 A3');
-      expect(s.pending.single.barcode, 'A2');
+      expect(s.data.rows.single.barcode, 'A1');
+      expect(s.missing.rows.single.barcode, 'A3', reason: '真没盘到的是 A3');
+      expect(s.pending.rows.single.barcode, 'A2');
       expect(s.pending.rows.first.qty, isNull,
           reason: '数量列留空 —— 替盘点员挑一个数就是替他签字');
       expect(s.totalRows, 3, reason: '一条都不能丢');
