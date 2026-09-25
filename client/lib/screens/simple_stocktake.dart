@@ -81,6 +81,18 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
   String? _curTaskNo;
   String? _curNodeNo;
 
+  /// 当前趟次（1初盘 / 2复盘 / 3差异复盘）。
+  int get _phase => _intOf(_node?['phase']);
+
+  /// 差异集（前两趟对不上的条码）。差异复盘那一趟**只许扫这批**。
+  ///
+  /// 每次刷新算一次存着，不每次扫码都算 —— 扫码是逐笔的连续动作，
+  /// 每扫一次就全表聚合一遍会让枪在长列表上明显发涩。
+  Set<String> _diffSet = const <String>{};
+
+  /// 差异复盘那一趟做完了吗（决定导出时"对不上的"是定稿还是待复核）。
+  bool _thirdDone = false;
+
   @override
   void initState() {
     super.initState();
@@ -179,8 +191,14 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       n ??= await _repo.openNodeOf(taskNo, SimplePhase.first);
       // 归档的那一轮**不再开新趟**（它已经盘完了），只把已有趟次读出来看。
       if (n == null && !archived) {
-        n = await _repo.openOrCreateNode(taskNo, SimplePhase.first,
-            forceNew: forceNewNode);
+        // 🔴 不能写死开初盘：初盘交完之后 `openNodeOf(初盘)` 是 null，
+        //    写死就会**再开一张空的初盘**，刚刚盘完的数据看着像凭空消失了。
+        //    问仓库"下一趟该开哪一趟"，三趟都开过且都交了 → 不开新的。
+        final next = await _repo.nextOpenPhase(taskNo);
+        if (next != null) {
+          n = await _repo.openOrCreateNode(taskNo, next,
+              forceNew: forceNewNode);
+        }
       }
 
       final nodeNo = n == null ? null : (n['sheet_no'] ?? '').toString();
@@ -192,11 +210,19 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       final nt = nodeNo == null
           ? const SimpleNodeTally(rows: 0, totalQty: 0, offList: 0)
           : await _repo.nodeTally(nodeNo);
+      // 差异集与"第三趟做完了吗"：差异复盘只扫差异集，
+      // 导出时要知道"对不上的那些是定稿了还是还待复核"。
+      final diff = await _repo.diffSet(taskNo);
+      final third = await _repo.nodeOf(taskNo, SimplePhase.third);
+      final thirdDone =
+          third != null && _intOf(third['status']) >= InvSheetStatus.submitted;
 
       if (!mounted) return;
       setState(() {
         _task = t;
         _node = n;
+        _diffSet = diff;
+        _thirdDone = thirdDone;
         _curTaskNo = taskNo;
         _curNodeNo = nodeNo;
         _items = items;
@@ -473,8 +499,12 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
     }
     setState(() => _busy = true);
     try {
+      // 差异复盘那一趟**只许扫差异集**：把集合传进去，由规则层判
+      // （规则层还会再确认一次 phase 真是第三趟，不靠这里自觉）。
       final r = await _repo.scan(_nodeNo, barcode,
-          qty: SimpleRules.parseQty(qtyRaw) ?? 1);
+          qty: SimpleRules.parseQty(qtyRaw) ?? 1,
+          allowedBarcodes:
+              SimplePhase.onlyDiffSet(_phase) ? _diffSet : null);
       if (!mounted) return;
       if (!r.accepted) {
         // 被拒时**保留输入**：他要看到自己扫的是哪个码才知道下一步做什么。
@@ -643,15 +673,30 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
     }
     setState(() => _busy = true);
     try {
-      final qty = await _repo.nodeQtyMap(_nodeNo);
-      final segs = SimpleExport.build(items: _items, qty: qty);
+      // 🔴 数量取哪一趟的，是这一版最要紧的一处口径：
+      //   · 差异复盘做完（或正在做第三趟）→ 取**合并后的最终数**
+      //     （初盘 → 复盘覆盖 → 差异复盘只覆盖差异项，方案 §0「以差异复盘为准」）；
+      //   · 否则取当前趟的数（就是员工眼前这一趟）。
+      //   拿错了的表现很难发现：数字看着都正常，只是对不上的那几行用了旧数。
+      final qty = (_thirdDone || SimplePhase.onlyDiffSet(_phase))
+          ? await _repo.finalQtyMap(_taskNo)
+          : await _repo.nodeQtyMap(_nodeNo);
+      // 前两趟对不上、差异复盘又还没交 → 那批**不下结论**，
+      // 进第 4 段「差异待复核」（数量留空）。放进段 1 等于拿一个没定的数当结论，
+      // 放进段 2 写 0 更是错（它明明盘到了）。
+      final pending = (_diffSet.isNotEmpty && !_thirdDone)
+          ? _diffSet
+          : const <String>{};
+      final segs =
+          SimpleExport.build(items: _items, qty: qty, pending: pending);
 
-      // 🔴 硬判据：清单里的每一条都必须落在"已确定"或"没盘到"里。
+      // 🔴 硬判据：清单里的每一条都必须落在"已确定"/"没盘到"/"待复核"里。
       //    不成立就说明有商品被悄悄丢掉了 —— 宁可挡住不让导，
       //    也不能发出一份"看着正常、其实少了几行"的对账单。
       if (!segs.accounted) {
         _snack('导出的行数对不上清单（清单 ${segs.importedCount} 条，'
-            '已落位 ${segs.data.length + segs.missing.length} 条），先别导，找开发看');
+            '已落位 ${segs.data.length + segs.missing.length + segs.pending.length} 条），'
+            '先别导，找开发看');
         return;
       }
 
@@ -1076,9 +1121,50 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                       style: const TextStyle(color: AppColors.warn, fontSize: 12),
                     ),
                   ),
+          // 本趟交完之后才给"开下一趟"。放在这一行而不是塞进菜单：
+          // 三趟是这套流程的主线，藏起来等于让员工以为"盘完一趟就完了"。
+          if (hasNode && !_editable && SimplePhase.next(_phase) != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: FilledButton(
+                key: const Key('simple-next-trip'),
+                onPressed: _busy ? null : _openNextTrip,
+                style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.brand,
+                    visualDensity: VisualDensity.compact),
+                child: Text('开${SimplePhase.label(SimplePhase.next(_phase)!)}'),
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  /// 开下一趟（初盘 → 复盘 → 差异复盘）。
+  Future<void> _openNextTrip() async {
+    final next = SimplePhase.next(_phase);
+    if (next == null || _taskNo.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final n = await _repo.openOrCreateNode(_taskNo, next);
+      final nodeNo = (n['sheet_no'] ?? '').toString();
+      await _reload(loadNodeNo: nodeNo);
+      if (!mounted) return;
+      // 差异复盘要**明说**只扫哪几个：不说的话员工会对着"扫什么都被拒"发懵。
+      final extra = SimplePhase.onlyDiffSet(next)
+          ? '（只盘前两趟对不上的 ${_diffSet.length} 个品）'
+          : '';
+      _snack('已开「${SimplePhase.label(next)}」$extra');
+    } on StateError catch (e) {
+      // 仓库挡回来的（"前两趟完全一致，不用开差异复盘"这类）—— 是结论，不是故障
+      if (!mounted) return;
+      _snack(e.message.toString());
+    } catch (e) {
+      if (!mounted) return;
+      _snack('开新的一趟失败：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Widget _inputBar() {

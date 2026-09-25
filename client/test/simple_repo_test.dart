@@ -189,14 +189,26 @@ void main() {
       expect((await repo.listNodes(no)).length, 1);
     });
 
-    test('🔴 S1 的阶段闸门：复盘 / 差异复盘要 S2 才做，现在**明说做不到**', () async {
+    // ⚠️ 这条原来叫「S1 阶段闸门」（S1 只做初盘，开 2/3 趟一律明说做不到）。
+    //    S2 放开之后它**仍然绿**，但拦的理由变了 —— 现在拦的是**跳趟**
+    //    （上一趟没交就开下一趟），不是"功能没做"。
+    //    判据没变、名字变了：留着旧名字的话，下一个人会以为这条在钉 S1 的闸门。
+    test('🔴 跳趟被拦：上一趟没交，就不许开下一趟', () async {
       final no = await openRound();
-      // 差异复盘的准入依赖"前两趟的差异集"，现在还没算 —— 这时候若让它
-      // "看起来能开"，员工把对上的商品又盘一遍，差异复盘就失去意义了。
+      // 差异复盘的准入清单是"前两趟对不上的那批"，没有前两趟就**算不出这个集合**，
+      // 而"算不出的集合"在现场的表现是"扫什么都被拒"，员工只会以为机器坏了。
       await expectLater(
           repo.openOrCreateNode(no, SimplePhase.second), throwsA(isA<StateError>()));
       await expectLater(
           repo.openOrCreateNode(no, SimplePhase.third), throwsA(isA<StateError>()));
+    });
+
+    test('🔴 趟次号不合法 → ArgumentError（和"还开不了"分开报）', () async {
+      final no = await openRound();
+      // 这句是**调用方写错了**，不是"这趟还不能开"：
+      // 两种错排查方向完全不同，所以要分开。
+      await expectLater(repo.openOrCreateNode(no, 9),
+          throwsA(isA<ArgumentError>()));
     });
 
     test('归档的一轮不再开新趟', () async {
@@ -456,6 +468,164 @@ void main() {
       final t = await repo.startNewRound(scene: SimpleScene.store, rows: rows(2));
       expect(t['status'], SimpleRepo.taskOpen);
       expect((await repo.listItems(t['task_no'] as String)).length, 2);
+    });
+  });
+
+  group('S2 多趟：复盘与差异复盘', () {
+    /// 开一轮并盘完初盘（每个条码各 1 个），返回任务号与初盘节点号。
+    Future<String> roundWithFirst(List<SimpleImportRow> items) async {
+      final no = (await (repo.startNewRound(
+              scene: SimpleScene.store, rows: items)))['task_no']
+          as String;
+      final n1 = await repo.openOrCreateNode(no, SimplePhase.first);
+      final nodeNo = n1['sheet_no'] as String;
+      for (final it in items) {
+        await repo.scan(nodeNo, it.barcode, qty: 1);
+      }
+      await repo.submitNode(nodeNo);
+      return no;
+    }
+
+    test('🔴 不能跳趟：初盘没交就开复盘 → 报错', () async {
+      final no = await openRound(n: 3);
+      await repo.openOrCreateNode(no, SimplePhase.first);
+      await expectLater(repo.openOrCreateNode(no, SimplePhase.second),
+          throwsA(isA<StateError>()),
+          reason: '没盘完初盘就开了复盘 → 复盘的数没有可比对象');
+    });
+
+    test('初盘提交后能开复盘', () async {
+      final no = await roundWithFirst(rows(3));
+      final n2 = await repo.openOrCreateNode(no, SimplePhase.second);
+      expect(n2['phase'], SimplePhase.second);
+    });
+
+    test('🔴 差异集：数量对不上 → 进差异集', () async {
+      final items = rows(3);
+      final no = await roundWithFirst(items);
+      // 复盘把第一个品改成 2，其余照旧 1
+      final n2 = await repo.openOrCreateNode(no, SimplePhase.second);
+      final n2no = n2['sheet_no'] as String;
+      await repo.scan(n2no, items[0].barcode, qty: 2);
+      await repo.scan(n2no, items[1].barcode, qty: 1);
+      await repo.scan(n2no, items[2].barcode, qty: 1);
+      await repo.submitNode(n2no);
+
+      final diff = await repo.diffSet(no);
+      expect(diff, <String>{items[0].barcode},
+          reason: '只有第一个品两趟数量不同，其余不该进差异集');
+    });
+
+    test('🔴 差异集：复盘漏盘 → 也算对不上（那正是要复核的）', () async {
+      final items = rows(3);
+      final no = await roundWithFirst(items);
+      final n2 = await repo.openOrCreateNode(no, SimplePhase.second);
+      final n2no = n2['sheet_no'] as String;
+      // 只盘前两个，第三个**没扫**
+      await repo.scan(n2no, items[0].barcode, qty: 1);
+      await repo.scan(n2no, items[1].barcode, qty: 1);
+      await repo.submitNode(n2no);
+
+      final diff = await repo.diffSet(no);
+      expect(diff, <String>{items[2].barcode},
+          reason: '漏盘当"一致"的话，这个品就永远进不了最终结果');
+    });
+
+    test('两趟完全一致 → 差异集为空，开差异复盘会被拦（不是扫什么都被拒）', () async {
+      final items = rows(3);
+      final no = await roundWithFirst(items);
+      final n2 = await repo.openOrCreateNode(no, SimplePhase.second);
+      final n2no = n2['sheet_no'] as String;
+      for (final it in items) {
+        await repo.scan(n2no, it.barcode, qty: 1);
+      }
+      await repo.submitNode(n2no);
+
+      expect(await repo.diffSet(no), isEmpty);
+      await expectLater(repo.openOrCreateNode(no, SimplePhase.third),
+          throwsA(isA<StateError>()),
+          reason: '空差异集开出来的趟次会拒收一切扫码，员工只会以为机器坏了');
+    });
+
+    test('🔴 差异复盘只许扫差异集里的条码', () async {
+      final items = rows(3);
+      final no = await roundWithFirst(items);
+      final n2 = await repo.openOrCreateNode(no, SimplePhase.second);
+      final n2no = n2['sheet_no'] as String;
+      await repo.scan(n2no, items[0].barcode, qty: 2); // 只有它是差异
+      await repo.scan(n2no, items[1].barcode, qty: 1);
+      await repo.scan(n2no, items[2].barcode, qty: 1);
+      await repo.submitNode(n2no);
+
+      final n3 = await repo.openOrCreateNode(no, SimplePhase.third);
+      final n3no = n3['sheet_no'] as String;
+      final allowed = await repo.diffSet(no);
+
+      final ok = await repo.scan(n3no, items[0].barcode,
+          qty: 2, allowedBarcodes: allowed);
+      expect(ok.accepted, isTrue);
+
+      final bad = await repo.scan(n3no, items[1].barcode,
+          qty: 1, allowedBarcodes: allowed);
+      expect(bad.accepted, isFalse, reason: '对上了的商品不该在差异复盘里再盘一遍');
+      expect(bad.decision.verdict, SimpleScanVerdict.notInDiffSet);
+    });
+
+    test('🔴 finalQtyMap：以复盘为准，差异项由差异复盘覆盖', () async {
+      final items = rows(3);
+      final no = await roundWithFirst(items);
+      final n2 = await repo.openOrCreateNode(no, SimplePhase.second);
+      final n2no = n2['sheet_no'] as String;
+      await repo.scan(n2no, items[0].barcode, qty: 2); // 复盘：2
+      await repo.scan(n2no, items[1].barcode, qty: 1);
+      await repo.scan(n2no, items[2].barcode, qty: 1);
+      await repo.submitNode(n2no);
+
+      // 第三趟之前：差异项还是复盘的数（2），因为它还没定
+      var q = await repo.finalQtyMap(no);
+      expect(q[items[0].barcode], 2.0);
+
+      // 差异复盘说其实是 5
+      final n3 = await repo.openOrCreateNode(no, SimplePhase.third);
+      final n3no = n3['sheet_no'] as String;
+      await repo.scan(n3no, items[0].barcode, qty: 5,
+          allowedBarcodes: await repo.diffSet(no));
+      // 没提交时不覆盖
+      q = await repo.finalQtyMap(no);
+      expect(q[items[0].barcode], 2.0,
+          reason: '差异复盘还没交 → 不能拿未定的数当结论');
+      await repo.submitNode(n3no);
+
+      q = await repo.finalQtyMap(no);
+      expect(q[items[0].barcode], 5.0, reason: '方案 §0：以差异复盘为准');
+      // 非差异项原样保留复盘的数
+      expect(q[items[1].barcode], 1.0);
+    });
+
+    test('nextOpenPhase：三趟都交完 → 不再开新的', () async {
+      final items = rows(3);
+      final no = await roundWithFirst(items);
+      final n2 = await repo.openOrCreateNode(no, SimplePhase.second);
+      final n2no = n2['sheet_no'] as String;
+      await repo.scan(n2no, items[0].barcode, qty: 2);
+      for (final it in items.skip(1)) {
+        await repo.scan(n2no, it.barcode, qty: 1);
+      }
+      await repo.submitNode(n2no);
+
+      final n3 = await repo.openOrCreateNode(no, SimplePhase.third);
+      final n3no = n3['sheet_no'] as String;
+      await repo.scan(n3no, items[0].barcode, qty: 2,
+          allowedBarcodes: await repo.diffSet(no));
+      await repo.submitNode(n3no);
+
+      expect(await repo.nextOpenPhase(no), isNull);
+    });
+
+    test('🔴 nextOpenPhase：初盘交了之后指到复盘（不再开一张空初盘）', () async {
+      final no = await roundWithFirst(rows(2));
+      expect(await repo.nextOpenPhase(no), SimplePhase.second,
+          reason: '指回初盘的话会再开一张空初盘，刚盘完的数据看着像丢了');
     });
   });
 }

@@ -407,14 +407,115 @@ class SimpleRepo {
     return rows.isEmpty ? null : rows.first;
   }
 
+  /// 某轮某一趟的节点（**不管状态**：进行中 / 已提交都算）。
+  ///
+  /// 和 [openNodeOf] 的区别就在状态：[openNodeOf] 只找还能扫的那张（复用用），
+  /// 这个用来回答"这一趟到底有没有做过"（判能不能开下一趟）。
+  Future<Map<String, dynamic>?> nodeOf(String taskNo, int phase) async {
+    final db = await LocalDb.I.db();
+    final rows = await db.query('stocktake_sheet',
+        where: 'zone_code = ? and sheet_type = ? and phase = ?',
+        whereArgs: <Object?>[_req(taskNo, 'taskNo'), InvSheetType.simple, phase],
+        orderBy: 'started_at desc',
+        limit: 1);
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// **下一趟该开哪一趟**：三趟里第一个"还没开过"或"还开着"的。
+  ///
+  /// 全部都开过且都已提交 → 返回 null（这一轮盘完了，不再开新的）。
+  ///
+  /// 🔴 为什么不能直接 `openOrCreateNode(first)`：初盘交了之后
+  ///    `openNodeOf(first)` 是 null（它只找进行中的），那就**又开一张新的初盘**，
+  ///    现场看到的是"我刚盘完的初盘变成了一张空的、刚才扫的全没了"。
+  ///    判"下一趟"必须先看"这一趟到底有没有做过"，不是只看"有没有进行中的"。
+  Future<int?> nextOpenPhase(String taskNo) async {
+    final no = await _requireTask(taskNo);
+    for (final p in SimplePhase.all) {
+      final n = await nodeOf(no, p);
+      if (n == null) return p;
+      if (_int(n['status']) == InvSheetStatus.open) return p;
+    }
+    return null;
+  }
+
+  /// 某一趟的「条码 → 数量」汇总（跨该趟的所有节点求和）。
+  Future<Map<String, double>> _phaseQtyMap(String taskNo, int phase) async {
+    final db = await LocalDb.I.db();
+    final rows = await db.rawQuery('''
+      select r.barcode as barcode, sum(r.qty) as qty
+        from scan_record r
+        join stocktake_sheet s on s.sheet_no = r.sheet_no
+       where s.zone_code = ? and s.sheet_type = ? and s.phase = ?
+       group by r.barcode
+    ''', <Object?>[taskNo, InvSheetType.simple, phase]);
+    return <String, double>{
+      for (final r in rows)
+        (r['barcode'] ?? '').toString().trim(): _dbl(r['qty']),
+    };
+  }
+
+  /// **最终数量**：以复盘为准（它是完整的一趟），差异项用差异复盘的数覆盖。
+  ///
+  /// 方案 §0 的口径：「初盘≠复盘的商品…以差异复盘为准」——
+  /// 所以导出不能拿初盘的数、也不能拿复盘的数了事，得按这个顺序合：
+  ///   初盘 → 复盘覆盖 → 差异复盘只覆盖差异项。
+  ///
+  /// 差异复盘**没提交**时不覆盖：那说明还没定，对应的商品要进「差异待复核」段
+  /// （数量留空），而不是拿一个未定的数当结论。
+  Future<Map<String, double>> finalQtyMap(String taskNo) async {
+    final no = await _requireTask(taskNo);
+    final merged = <String, double>{...(await _phaseQtyMap(no, SimplePhase.first))};
+    for (final e in (await _phaseQtyMap(no, SimplePhase.second)).entries) {
+      merged[e.key] = e.value;
+    }
+    final third = await nodeOf(no, SimplePhase.third);
+    if (third != null && _int(third['status']) >= InvSheetStatus.submitted) {
+      final t = await _phaseQtyMap(no, SimplePhase.third);
+      for (final code in await diffSet(no)) {
+        final v = t[code];
+        if (v != null) merged[code] = v;
+      }
+    }
+    return merged;
+  }
+
+  /// 🔴 **差异集**：前两趟（初盘 vs 复盘）**对不上**的条码。
+  ///
+  /// 这是差异复盘那一趟的准入清单 —— 只扫这批，其余一律拒收。
+  ///
+  /// 什么算"对不上"（三条，缺一条都会漏掉真差异）：
+  ///   ① 两边数量不一样；
+  ///   ② 初盘有、复盘没扫到（**漏盘**：这正是差异复盘要补的，
+  ///      当成"一致"会让漏掉的商品永远进不了最终结果）；
+  ///   ③ 复盘扫到了、初盘没有（初盘的漏盘，同理）。
+  ///
+  /// 浮点用容差比：称重商品走小数，两个 1.25 相减可能是 2e-16 而不是 0。
+  Future<Set<String>> diffSet(String taskNo) async {
+    final no = await _requireTask(taskNo);
+    final a = await _phaseQtyMap(no, SimplePhase.first);
+    final b = await _phaseQtyMap(no, SimplePhase.second);
+    final out = <String>{};
+    for (final code in <String>{...a.keys, ...b.keys}) {
+      if (code.isEmpty) continue;
+      final qa = a[code];
+      final qb = b[code];
+      if (qa == null || qb == null) {
+        out.add(code); // ②③ 一边没有
+        continue;
+      }
+      if ((qa - qb).abs() > 1e-9) out.add(code); // ① 数量不同
+    }
+    return out;
+  }
+
   /// 开某个任务的某一趟（默认复用还开着的那张 —— 一进来就开新的会让
   /// 上次扫的数据"凭空消失"，员工以为丢了）。
   ///
-  /// 🔴 **S1 只放开初盘**。复盘 / 差异复盘要 S2 才做，而差异复盘的准入
-  ///    依赖"前两趟的差异集"（现在还没算）。这时候**不能**让它"看起来能开"：
-  ///    只扫差异集这条限制如果没实现，员工把对上的商品又盘一遍，
-  ///    差异复盘就失去意义了 —— 那是当场看不出来的错。
-  ///    S2 实现差异集时把下面这个闸门放开，并补上门禁判据。
+  /// 🔴 **不能跳趟**：每一趟的准入都依赖上一趟的数据 ——
+  ///    差异复盘的清单是"前两趟对不上的那批"，没有前两趟就**算不出这个集合**，
+  ///    而"算不出的集合"在现场的表现是"扫什么都被拒"（空集合谁都不在里头），
+  ///    员工只会以为机器坏了。所以让开第二趟之前先确认第一趟已经交了。
   Future<Map<String, dynamic>> openOrCreateNode(
     String taskNo,
     int phase, {
@@ -422,9 +523,30 @@ class SimpleRepo {
     bool forceNew = false,
   }) async {
     final no = await _requireTask(taskNo);
-    if (phase != SimplePhase.first) {
-      throw StateError('简易盘点这一版只做初盘这一趟'
-          '（${SimplePhase.label(phase)}是下一版的功能）');
+    if (!SimplePhase.isValid(phase)) {
+      throw ArgumentError.value(
+          phase, 'phase', '趟次只能是 1初盘 / 2复盘 / 3差异复盘');
+    }
+
+    final prevPhase = SimplePhase.prev(phase);
+    if (prevPhase != null) {
+      final prev = await nodeOf(no, prevPhase);
+      final prevDone = prev != null &&
+          _int(prev['status']) >= InvSheetStatus.submitted;
+      if (!prevDone) {
+        throw StateError('要先完成「${SimplePhase.label(prevPhase)}」'
+            '才能开「${SimplePhase.label(phase)}」');
+      }
+    }
+
+    // 差异复盘还多一道：**没有差异就别开**。
+    // 前两趟完全一致时差异集是空的，开出来会"扫什么都被拒"
+    // （空集合里没有任何条码），员工只会以为这台机器坏了。
+    if (SimplePhase.onlyDiffSet(phase)) {
+      final diff = await diffSet(no);
+      if (diff.isEmpty) {
+        throw StateError('前两趟完全一致，没有需要复核的商品 —— 不用开差异复盘');
+      }
     }
     // `!` 是安全的：_requireTask 刚确认过它存在。
     final task = (await findTask(no))!;
