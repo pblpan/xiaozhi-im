@@ -128,28 +128,64 @@ jobs:
         working-directory: ${{ env.CLIENT_DIR }}
         run: flutter build apk --release --dart-define=BASE_URL=${{ env.BASE_URL }} --dart-define=WAN_URL=${{ env.WAN_URL }}
 
-      # 🔴 这一步必须能**红**（2026-09-25 重写）
-      #    旧版本名叫「断言签名证书」，实际只用 apksigner **打印**了一遍证书，
-      #    而且 apksigner 找不到时打印一句「跳过」就过去了 —— 它永远不会失败。
-      #    这种步骤比没有更坏：绿着的时候让人以为"签名查过了"。
-      #    现在改成：拿不到指纹 = 红；指纹对不上 EXPECT_APK_SHA256 = 红。
+      # 🔴 这一步必须能**红**，而且**红的原因必须写在日志里**（2026-09-25 重写）
+      #
+      # 旧版本有两个问题，第二个比第一个严重得多：
+      #   ① 名叫「断言签名证书」，实际只用 apksigner **打印**一遍，工具缺失时打一句
+      #      「跳过」就过去了 —— 它永远不会失败。
+      #   ② 改成真断言之后**第一次真跑就翻车**，而日志里只有：
+      #          APK: build/app/outputs/flutter-apk/app-release.apk
+      #          ##[error]Process completed with exit code 1.
+      #      中间一个字都没有。原因是 `set -e` + `X=$(a | b | c)`：
+      #      命令替换里的管道任何一环失败（glob 没匹配上 / grep 没找到行），
+      #      赋值语句就直接把脚本带走了，**stderr 还进了 /dev/null**。
+      #      看起来像"指纹断言失败"，实际是"工具没找到"——**同一种红，两种完全不同的病**。
+      #
+      # 所以现在的写法：
+      #   · 故意**不加 `-e`**（`set -uo pipefail`）：本步每条路径都必须**显式 exit**，
+      #     不许有"静默死"的路径；
+      #   · apksigner 四级兜底查找，每级都打印；
+      #   · 失败时把 SDK 路径、build-tools 目录内容、apksigner 原始输出全打出来。
       - name: Verify APK signing cert (断言签名证书)
         working-directory: ${{ env.CLIENT_DIR }}
         run: |
-          set -euo pipefail
-          APK=$(ls build/app/outputs/flutter-apk/*.apk | head -1)
-          echo "APK: $APK"
-          APKSIGNER=$(ls "${ANDROID_SDK_ROOT:-$ANDROID_HOME}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
-          if [ -z "$APKSIGNER" ]; then
-            echo "::error::apksigner 未找到 —— 无法断言签名，拒绝放行"
+          set -uo pipefail
+          APK=$(ls build/app/outputs/flutter-apk/*.apk 2>/dev/null | head -1)
+          echo "APK: ${APK:-<没找到>}"
+          if [ -z "$APK" ]; then
+            echo "::error::没有 APK 产物"
             exit 1
           fi
-          DIGEST=$("$APKSIGNER" verify --print-certs "$APK" \
+
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          echo "SDK root: '${SDK:-<环境变量为空>}'"
+
+          APKSIGNER=""
+          if [ -n "$SDK" ]; then
+            APKSIGNER=$(find "$SDK/build-tools" -maxdepth 2 -type f -name 'apksigner*' 2>/dev/null | sort -V | tail -1)
+          fi
+          [ -n "$APKSIGNER" ] || APKSIGNER=$(command -v apksigner 2>/dev/null || true)
+          if [ -z "$APKSIGNER" ]; then
+            APKSIGNER=$(find /usr/local/lib/android /opt /home/runner -maxdepth 6 -type f -name 'apksigner' 2>/dev/null | sort -V | tail -1)
+          fi
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::找不到 apksigner —— 无法断言签名，拒绝放行"
+            echo "  build-tools 目录：${SDK:-<空>}/build-tools"
+            ls -1 "${SDK:-/nonexistent}/build-tools" 2>&1 | head -20
+            exit 1
+          fi
+          echo "apksigner: $APKSIGNER"
+
+          RAW=$("$APKSIGNER" verify --print-certs "$APK" 2>&1 || true)
+          echo "--- apksigner verify --print-certs 输出 ---"
+          printf '%s\n' "$RAW" | head -20
+          echo "-----------------------------------------"
+
+          DIGEST=$(printf '%s\n' "$RAW" \
             | grep -F 'Signer #1 certificate SHA-256 digest' | head -1 \
-            | awk '{print $NF}' | tr 'A-Z' 'a-z')
+            | awk '{print $NF}' | tr -d ':' | tr 'A-Z' 'a-z')
           if [ -z "$DIGEST" ]; then
-            echo "::error::没解析出签名指纹（APK 可能根本没签名）"
-            "$APKSIGNER" verify --print-certs "$APK" || true
+            echo "::error::解析不出签名指纹（APK 可能没签名，或 apksigner 没跑起来）"
             exit 1
           fi
           echo "实际 SHA-256: $DIGEST"
@@ -158,7 +194,8 @@ jobs:
             echo "::error::签名指纹与已交付版本不一致 —— 这版 APK 装不到旧版上（报 -7），不许交付"
             exit 1
           fi
-          echo "✅ 签名断言通过：与已交付版本同源，可覆盖安装"
+          echo "✅ 签名断言通过：与已交付版本同源（$DIGEST），可覆盖安装"
+          exit 0
 
       # 🔴 为什么不发 actions/upload-artifact（2026-09-25 改）
       #
