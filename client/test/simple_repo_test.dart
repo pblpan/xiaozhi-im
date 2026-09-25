@@ -418,7 +418,12 @@ void main() {
 
       // 简易盘点自己的都没了
       expect(await repo.findTask(no), isNull);
-      expect(await repo.listNodes(no), isEmpty);
+      // ⚠️ 这里**不能**写 `expect(await repo.listNodes(no), isEmpty)` 来表达"没了"：
+      //    任务都没了，"读它的内容"按本轮定的口径是要**抛错**的
+      //    （返回空列表会和"还没开趟次 / 还没导清单"分不清，正是要消掉的静默）。
+      //    要验"真没了"就看**库里**还有没有残留 —— 也就是下面那段 DB 断言。
+      await expectLater(repo.listNodes(no), throwsA(isA<StateError>()));
+      await expectLater(repo.listItems(no), throwsA(isA<StateError>()));
 
       // 别人的还在（这条是这个测试存在的理由）
       final db = await LocalDb.I.db();
@@ -440,7 +445,9 @@ void main() {
       final db = await LocalDb.I.db();
       expect(await db.query('simple_item'), isEmpty);
       expect(await db.query('simple_task'), isEmpty);
-      expect(await repo.listItems(no), isEmpty);
+      // "读出来是空的"**不算**"清掉了"的判据（任务都没了，读它本来就该抛错）；
+      // 上面两条直接数库里的行数才是判据。这条只是顺带把新口径钉住。
+      await expectLater(repo.listItems(no), throwsA(isA<StateError>()));
     });
 
     test('清完还能正常开新一轮（不留半截状态）', () async {
