@@ -142,6 +142,9 @@ const LOCAL_ONLY = {
   warehouse_deduct: '「库房减货」同样是**纯离线**：减货单和明细都落在手机本地的'
     + 'stocktake_sheet / scan_record（sheet_type=deduct），服务端没有它的任何接口。'
     + '停用只会让客户端不再显示入口，手机上已经减过的单据与导出照旧可用。',
+  simple_stocktake: '「简易盘点」也是**纯离线**：待盘清单（simple_task / simple_item）、'
+    + '节点（stocktake_sheet，sheet_type=simple）和扫码明细全在手机本地，'
+    + '服务端没有它的任何接口。停用只影响入口，已导的清单与盘过的数据、导出照旧可用。',
 };
 
 /**

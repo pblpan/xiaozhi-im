@@ -377,6 +377,35 @@ async function main() {
   ok('  恢复出厂（DELETE 覆盖层）后它又回来了', apps.some((a) => a.id === 'warehouse_deduct'),
     apps.map((a) => a.id).join(','));
 
+  // ── 停用「简易盘点」：同样纯离线，停用只作用于入口。
+  //
+  // ⚠️ 服务端先注册、客户端页面还没做（客户端 0.18.0 才出）。这一段照样要测：
+  //    "先注册"的意义就在于到时候客户端一发，入口就能出来 —— 若这里不验，
+  //    等客户端真发了才发现服务端漏注册，就会重演库房减货那次
+  //    「装了却看不到入口」。老客户端认不出这个 id 会直接隐藏，不会出坏卡片。
+  apps = (await api('GET', '/api/client/apps?clientVersion=0.17.1', { token: empT })).body?.apps || [];
+  const ss = apps.find((a) => a.id === 'simple_stocktake');
+  ok('🔴 简易盘点出现在员工工作台清单里（纯离线也要下发入口）',
+    ss && ss.kind === 'builtin', apps.map((a) => a.id).join(','));
+  ok('  下发的是「简易盘点」这个名字与 list 图标',
+    ss?.title === '简易盘点' && ss?.icon === 'list', JSON.stringify(ss));
+  // 顺序：必须紧跟在「盘点」后面 —— 两个都叫盘点，挨着放员工才分得清
+  {
+    const ids = apps.map((a) => a.id);
+    const inv = ids.indexOf('inventory');
+    ok('  紧跟在「盘点」后面一位（两个都叫盘点，挨着才分得清）',
+      inv >= 0 && ids.indexOf('simple_stocktake') === inv + 1,
+      `inventory@${inv} simple_stocktake@${ids.indexOf('simple_stocktake')}`);
+  }
+  await api('PATCH', '/api/admin/apps/simple_stocktake', { token: admin, body: { disabled: true } });
+  apps = (await api('GET', '/api/client/apps?clientVersion=0.17.1', { token: empT })).body?.apps || [];
+  ok('🔴 停用后它从工作台清单消失', !apps.some((a) => a.id === 'simple_stocktake'),
+    apps.map((a) => a.id).join(','));
+  await api('DELETE', '/api/admin/apps/simple_stocktake', { token: admin });
+  apps = (await api('GET', '/api/client/apps?clientVersion=0.17.1', { token: empT })).body?.apps || [];
+  ok('  恢复出厂（DELETE 覆盖层）后它又回来了', apps.some((a) => a.id === 'simple_stocktake'),
+    apps.map((a) => a.id).join(','));
+
   // ── 停用「考勤记录」：客户端调 /api/admin/attendance/* 要拦，管理台调不能拦
   await api('PATCH', '/api/admin/apps/att_admin', { token: admin, body: { disabled: true } });
   r = await api('GET', '/api/admin/attendance/overview', { token: admin });
