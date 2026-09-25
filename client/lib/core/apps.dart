@@ -31,6 +31,7 @@ import '../screens/attendance_request.dart';
 import '../screens/deduct.dart';
 import '../screens/inventory.dart';
 import '../screens/org_screen.dart';
+import '../screens/replenish.dart';
 import '../screens/simple_stocktake.dart';
 import '../screens/stocktake.dart';
 import '../screens/training.dart';
@@ -69,6 +70,7 @@ const kBuiltinAppIds = {
   'inventory',
   'simple_stocktake',
   'warehouse_deduct',
+  'replenish',
   'training',
 };
 
@@ -95,6 +97,8 @@ Widget? builtinAppPage(String id) {
       return const SimpleStocktakePage();
     case 'warehouse_deduct':
       return const DeductPage();
+    case 'replenish':
+      return const ReplenishPage();
     case 'training':
       return const TrainingPage();
     default:

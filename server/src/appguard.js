@@ -154,6 +154,9 @@ const RULES = [
 const LOCAL_ONLY = {
   stocktake: '「扫码枪」纯离线运行：扫码数据只存在手机上，服务端没有任何它的接口。'
     + '停用后客户端不再显示入口，但手机上已经采集的数据还在，导出照旧可用。',
+  replenish: '「补货」也是**纯离线**：补货单和明细都落在手机本地的 '
+    + 'stocktake_sheet / scan_record（sheet_type=replenish），服务端没有它的任何接口。'
+    + '停用只会让客户端不再显示入口，手机上已经补过的单据与导出照旧可用。',
   simple_stocktake: '「简易盘点」也是**纯离线**：待盘清单（simple_task / simple_item）、'
     + '节点（stocktake_sheet，sheet_type=simple）和扫码明细全在手机本地，'
     + '服务端没有它的任何接口。停用只影响入口，已导的清单与盘过的数据、导出照旧可用。',

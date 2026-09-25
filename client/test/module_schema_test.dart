@@ -201,6 +201,10 @@ void main() {
       //    kBuiltinAppIds / builtinAppPage / server 的 apps.js / appguard.js /
       //    appdata.js，再加上下面这份期望值。**加完请立刻跑 flutter test 和
       //    server/test/apps_admin_e2e.js**（服务端两处注册表都有自检拦着）。
+      // 2026-09-25 补上 'replenish'（**补货**，生鲜/杂百分列）。
+      // 单位口径是龙哥定的两套：生鲜按公斤、杂百按最小单位，**不做第三套**。
+      // 它与 'warehouse_deduct'（库房减货）方向相反（出库 vs 上架），
+      // 所以是两张单，不是一张单的两个按钮。
       expect(kBuiltinAppIds, {
         'attendance',
         'my_requests',
@@ -210,6 +214,7 @@ void main() {
         'inventory',
         'simple_stocktake',
         'warehouse_deduct',
+        'replenish',
         'training',
       });
     });

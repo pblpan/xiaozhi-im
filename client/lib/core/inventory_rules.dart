@@ -127,7 +127,11 @@ class InvSheetType {
   ///    不用点位、不用货架位、不比账面。见 `docs/简易盘点通道方案-v1.md`。
   static const String simple = 'simple';
 
-  static const List<String> all = <String>[stocktake, deduct, simple];
+  /// 补货单：分**生鲜（称重）**与**杂百（非称重）**两个场景，
+  /// 单位口径不同（见 `lib/core/replenish_rules.dart`），除此之外与减货同构。
+  static const String replenish = 'replenish';
+
+  static const List<String> all = <String>[stocktake, deduct, simple, replenish];
 
   static bool isValid(String t) => all.contains(t);
 
