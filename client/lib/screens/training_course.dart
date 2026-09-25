@@ -2,18 +2,22 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../core/file_io.dart';
+import '../core/lesson_player.dart';
+import 'lesson_player_page.dart';
 import 'training_exam.dart';
 
 /// 课程详情：章节 → 课时（点开看课件）/ 章节考试。
 ///
-/// ── 课件为什么是"下载后用系统播放器打开"，而不是内嵌播放器 ──────
-/// 内嵌播放要在客户端加 video_player 这类依赖，而 Windows 桌面端那边的
-/// 支持情况没实测过；为了一个"倍速"的便利去引入一个没验过的播放器，
-/// 风险不对称。系统播放器本来就有倍速、倍速记忆、投屏，还不用下载依赖。
+/// ── 课件怎么播（2026-09-25 改过，别照着老注释改回去）──────────
+/// · **手机端（Android/iOS）**：课件视频走**内嵌播放器**（screens/lesson_player_page.dart）。
+///   只有内嵌才能数出"真看了多少秒"，完成率才是真的 —— 老口径是
+///   "交给系统播放器、打开成功就记完成"，点开就退出也算学完。
+/// · **Windows 桌面端**：`video_player` 没有 Windows 实现（见 core/lesson_player.dart），
+///   继续走系统播放器。桌面端不是培训的主场（学员用手机看），
+///   但**文档类课件在任何平台都走系统播放器** —— 内嵌播放器只管视频。
 ///
-/// 代价：拿不到"看到第几秒"，所以进度记的是**课时有没有看完**，
-/// 不是秒数。对培训来说够用 —— 完成率看的是课时数。
-/// 服务端 `tr_progress.position_sec` 的字段留着，等内嵌播放器落地就能接上。
+/// ⚠️ 判据不是"打开过"，而是"真看完 90%"（core/lesson_progress.dart）。
+///    拖进度条跳过去的不算，暂停/缓冲的不算，倍速的照算。
 ///
 /// ── 考试入口为什么在章节上 ──────────────────────────────────
 /// "学完一章考一章"，才有"进度不达标不放行"的落脚点。
@@ -86,7 +90,12 @@ class _TrainingCoursePageState extends State<TrainingCoursePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  /// 打开课件：下载到本地（已下过就直接复用）→ 交系统播放器 → 标记已看。
+  /// 打开课件：下载到本地（已下过就直接复用）→ 播。
+  ///
+  /// 两条路，判据完全不同：
+  /// · 内嵌播放器（手机端视频）：秒数由播放器自己数，**完成由播放器判定**；
+  ///   这里只负责刷新列表，不再"打开即标记完成"。
+  /// · 系统播放器（桌面端 / 文档）：拿不到秒数，只能沿用"打开成功就记完成"。
   ///
   /// 🔴 「标记已看」放在打开**成功**之后：下载失败/没装播放器时不标记，
   ///    否则学员会拿到一个"看了但其实没打开"的完成率。
@@ -106,6 +115,29 @@ class _TrainingCoursePageState extends State<TrainingCoursePage> {
         name: title,
         headers: _api.authHeaders,
       );
+
+      // 🔴 只有"视频 + 这台设备支持内嵌"才走内嵌。文档类在任何平台都走系统打开。
+      final isVideo = '${lesson['kind'] ?? ''}' != 'doc';
+      if (isVideo && LessonPlayer.supported) {
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => LessonPlayerPage(
+              lessonId: id,
+              title: title,
+              filePath: f.path,
+              serverDurationSec: lesson['durationSec'] as int? ?? 0,
+              startSec: lesson['positionSec'] as int? ?? 0,
+            ),
+          ),
+        );
+        // 播放器退出时已上报过一次（dispose 里兜底），这里只把列表刷成最新。
+        if (!mounted) return;
+        await _load();
+        return;
+      }
+
       final err = await FileIo.open(f);
       if (err.isNotEmpty) {
         _tip(err);
@@ -214,6 +246,29 @@ class _TrainingCoursePageState extends State<TrainingCoursePage> {
   }
 }
 
+/// 课时副标题：类型 + 时长 + 学到哪。
+///
+/// 这里**故意不写"已完成"以外的话术**：真正判完成的是 `done`，
+/// 而 `positionSec`（上次看到哪）只是续播用的，别让人误以为"看到 90% 就算过"。
+String _lessonSubtitle(Map<String, dynamic> l) {
+  final parts = <String>[l['kind'] == 'doc' ? '文档' : '视频'];
+  final dur = l['durationSec'] as int? ?? 0;
+  if (dur > 0) parts.add('${(dur / 60).round()} 分');
+  final pos = l['positionSec'] as int? ?? 0;
+  if (pos > 0) parts.add('上次看到 ${_mmss(pos)}');
+  // 服务端记的"真看了多少秒"（手机端内嵌播放才会涨；
+  // 桌面端/文档走系统播放器，拿不到，就不会显示这一项）。
+  final watched = l['watchedSec'] as int? ?? 0;
+  if (watched > 0) parts.add('真看了 ${_mmss(watched)}');
+  return parts.join(' · ');
+}
+
+String _mmss(int seconds) {
+  final s = seconds < 0 ? 0 : seconds;
+  return '${(s ~/ 60).toString().padLeft(2, '0')}'
+      ':${(s % 60).toString().padLeft(2, '0')}';
+}
+
 class _ChapterCard extends StatelessWidget {
   final Map<String, dynamic> chapter;
   final int busyLesson;
@@ -275,7 +330,7 @@ class _ChapterCard extends StatelessWidget {
                       ? Icons.check_circle
                       : Icons.play_circle_outline),
                   title: Text('${l['title'] ?? ''}'),
-                  subtitle: Text(l['kind'] == 'doc' ? '文档' : '视频'),
+                  subtitle: Text(_lessonSubtitle(l)),
                   trailing: busyLesson == (l['id'] as int? ?? 0)
                       ? const SizedBox(
                           width: 18,

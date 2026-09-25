@@ -58,6 +58,19 @@ dependencies:
   #    桌面端实例化 MobileScanner 会抛 UnimplementedError，所以入口必须按平台判断
   #    （见 screens/stocktake_scan.dart 的 StocktakeScanPage.supported）。
   mobile_scanner: ^7.4.2
+  # 培训中心：课件视频**内嵌播放**（不交给系统播放器）。
+  # 有了它才拿得到"看到第几秒、是不是真在播"，进度才不是"打开即完成"的假进度。
+  #
+  # 🔴 **版本号锁死，不要改成 `^2.11.1`**。本机跑不了 pub get（Dart 起子进程被拦），
+  #    本地类型检查用的是 pub 缓存里**已经解出来的这一套闭包**
+  #    （video_player 2.11.1 + android 2.10.0 + platform_interface 6.9.0 + …）。
+  #    写成 caret 的话 CI 会解出更高版本，本地预检就对不上号了 —— 那等于把
+  #    "改完能自查"这个唯一的本机闸门又废掉。要升版本：先升本地缓存，再改这里。
+  #
+  # 🔴 **只有 Android / iOS / macOS / Web 的实现，没有 Windows**。
+  #    桌面端不碰它（见 core/lesson_player.dart 的 supported 判断），
+  #    所以 Windows 构建产物里不会多出播放器的原生代码。
+  video_player: 2.11.1
 
 # ── SQLite 原生库从哪来（构建期配置；不写会让 APK 构建必挂）────────────
 # `sqlite3` 这个包默认在构建时**从 GitHub Releases 下载**预编译的

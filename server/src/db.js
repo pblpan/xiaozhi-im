@@ -943,6 +943,21 @@ CREATE TABLE IF NOT EXISTS tr_answer (
 );
 `);
 
+// ---- 培训：真看了多少秒 ----
+//
+// `position_sec` 是"看到第几秒"，只用于续播 —— 拖一下进度条就能到 95%，
+// 拿它当完成度等于没有门禁。所以另开一列记**客户端真数出来的观看秒数**：
+// 暂停/缓冲不涨，拖过去的片段不涨，倍速照涨（见 client/lib/core/lesson_progress.dart）。
+//
+// 只有**内嵌播放器**（手机端视频）填得上这一列；桌面端/文档走系统播放器，
+// 拿不到秒数，就一直是 0 —— 看到 0 要知道是"这条路本来就数不出来"，
+// 不是"这人一秒没看"。
+//
+// ⚠️ 位置别往上挪：db.js 是**顺序执行**的，`ensureColumn` 在 require 时就跑，
+//    而 `tr_progress` 的 CREATE TABLE 在文件后半段。写在前面会直接
+//    `no such table: tr_progress`，服务起不来（2026-09-25 踩过一次）。
+ensureColumn('tr_progress', 'watched_sec', 'watched_sec INTEGER NOT NULL DEFAULT 0');
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

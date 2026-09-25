@@ -163,6 +163,32 @@ function stopServer() {
   r = await api('GET', `/api/training/courses/${courseId}`, { token: STU });
   const l1 = r.body?.chapters?.[0]?.lessons?.[0];
   ok('🔴 重传不产生第二条记录（进度是覆盖不是叠加）', l1?.positionSec === 300, JSON.stringify(l1));
+
+  // ── 真进度：positionSec 是"看到哪"，watchedSec 才是"看了多少" ──
+  // 客户端内嵌播放器每秒 tick 一次，退出时还会**兜底再报一次**（dispose 里发的）。
+  // 两条链路到达顺序不定，所以服务端这两个数都取 MAX —— 否则退出那次
+  // （比如已经 seek 回开头）会把真进度冲小。
+  r = await api('POST', '/api/training/progress', {
+    token: STU, body: { lessonId: lesson1, positionSec: 300, watchedSec: 260, done: false },
+  });
+  ok('上报真观看秒数（watchedSec）', r.status === 200 && r.body?.watchedSec === 260, JSON.stringify(r.body));
+  r = await api('POST', '/api/training/progress', {
+    token: STU, body: { lessonId: lesson1, positionSec: 12, watchedSec: 5, done: false },
+  });
+  ok('🔴 退出时的兜底上报不会把真进度冲小（两个值都取 MAX）',
+    r.body?.watchedSec === 260 && r.body?.positionSec === 300, JSON.stringify(r.body));
+  r = await api('GET', `/api/training/courses/${courseId}`, { token: STU });
+  ok('  课程详情里带得出 watchedSec（学员看得见自己真看了多少）',
+    r.body?.chapters?.[0]?.lessons?.[0]?.watchedSec === 260,
+    JSON.stringify(r.body?.chapters?.[0]?.lessons?.[0]));
+  // 🔴 反向：把进度条拖到 99999 秒，一秒没真看 —— 服务端**不能**因此判完成。
+  //    （判完成是客户端按 watchedSec 定的；这里钉的是"服务端不会自己拿位置算"）
+  r = await api('POST', '/api/training/progress', {
+    token: STU, body: { lessonId: lesson1, positionSec: 99999, watchedSec: 0, done: false },
+  });
+  ok('🔴 只把位置拖到头、没真看 → 服务端不算完成（位置不当完成度）',
+    r.status === 200 && r.body?.done === false && r.body?.positionSec === 99999,
+    JSON.stringify(r.body));
   ok('  done 只升不降（报一次 done=1 后再报 done=0 也不会掉回去）',
     await (async () => {
       await api('POST', '/api/training/progress', { token: STU, body: { lessonId: lesson1, positionSec: 10, done: true } });

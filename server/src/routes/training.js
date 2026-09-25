@@ -89,7 +89,7 @@ function courseProgressPct(userId, courseId) {
 
 /** 课时上带"我学到哪了" —— 客户端靠它续播、靠它打勾 */
 function lessonWithProgress(userId, l) {
-  const p = db.prepare('SELECT position_sec, done, updated_at FROM tr_progress WHERE user_id = ? AND lesson_id = ?')
+  const p = db.prepare('SELECT position_sec, watched_sec, done, updated_at FROM tr_progress WHERE user_id = ? AND lesson_id = ?')
     .get(userId, l.id);
   const doneCount = 0;
   return {
@@ -99,7 +99,11 @@ function lessonWithProgress(userId, l) {
     fileId: l.file_id,
     durationSec: l.duration_sec,
     sort: l.sort,
+    // 看到第几秒 → 续播用。**不是完成度**（拖一下就到 95%）。
     positionSec: p?.position_sec || 0,
+    // 真看了多少秒 → 给学员自己看"我到底看了多少"。
+    // 桌面端/文档走系统播放器时数不出来，恒为 0（见 db.js 里那列的注释）。
+    watchedSec: p?.watched_sec || 0,
     done: !!p?.done,
     updatedAt: p?.updated_at || 0,
     _doneCount: doneCount,
@@ -226,14 +230,19 @@ router.delete('/courses/:id/join', (req, res) => {
 
 /**
  * POST /api/training/progress
- * body: { lessonId, positionSec, done }
+ * body: { lessonId, positionSec, watchedSec, done }
  *
  * 🔴 幂等是刚需：客户端"退出播放时上报"，弱网下会重传。
  *    走 UPSERT，重复的只覆盖，不会变成两行（两行的后果是进度来回跳）。
  *
- * 🔴 done 只由客户端传、服务端照记 —— 但**判分/门禁只看 done**，
+ * 🔴 done 由客户端判（看满 90% 才传），服务端照记 —— 但**判分/门禁只看 done**，
  *    不看 positionSec。因为"看到 95%"不算学完，而"看到 95%"这个值
  *    在拖动进度条时可以随便造。用它当门禁等于没有门禁。
+ *
+ * 🔴 positionSec / watchedSec 都取 MAX，不取最新值：
+ *    客户端是"周期性上报 + 退出时兜底上报"，两条链路到达顺序不定，
+ *    取最新会把"退出时那次"覆盖回一个更小的数（比如退播前 seek 回开头）。
+ *    这两个数在语义上都是**只增不减**的，取 MAX 才对得上语义。
  */
 router.post('/progress', (req, res) => {
   const u = auth(req, res); if (!u) return;
@@ -243,19 +252,27 @@ router.post('/progress', (req, res) => {
     return res.status(404).json({ error: '课时不存在' });
   }
   const positionSec = Math.max(0, Math.floor(num(req.body?.positionSec, 0)));
+  const watchedSec = Math.max(0, Math.floor(num(req.body?.watchedSec, 0)));
   const done = req.body?.done ? 1 : 0;
 
   db.prepare(`
-    INSERT INTO tr_progress (user_id, lesson_id, position_sec, done, updated_at)
-    VALUES (?,?,?,?,?)
+    INSERT INTO tr_progress (user_id, lesson_id, position_sec, watched_sec, done, updated_at)
+    VALUES (?,?,?,?,?,?)
     ON CONFLICT(user_id, lesson_id) DO UPDATE SET
-      position_sec = excluded.position_sec,
+      position_sec = MAX(position_sec, excluded.position_sec),
+      watched_sec = MAX(watched_sec, excluded.watched_sec),
       done = MAX(done, excluded.done),
       updated_at = excluded.updated_at
-  `).run(u.id, lessonId, positionSec, done, now());
+  `).run(u.id, lessonId, positionSec, watchedSec, done, now());
 
   const p = db.prepare('SELECT * FROM tr_progress WHERE user_id = ? AND lesson_id = ?').get(u.id, lessonId);
-  res.json({ ok: true, lessonId, positionSec: p.position_sec, done: !!p.done });
+  res.json({
+    ok: true,
+    lessonId,
+    positionSec: p.position_sec,
+    watchedSec: p.watched_sec,
+    done: !!p.done,
+  });
 });
 
 /**

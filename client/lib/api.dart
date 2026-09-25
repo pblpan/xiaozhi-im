@@ -711,11 +711,19 @@ class ImApi {
       await _delete('/training/courses/$id/join');
 
   /// 上报进度。弱网会重传，服务端按 (user, lesson) 覆盖，重复调用安全。
+  ///
+  /// [positionSec] 到的最远处，**只用于续播**，服务端不拿它判完成；
+  /// [watchedSec] 真看进去的秒数（见 core/lesson_progress.dart 的口径）；
+  /// [done] 有没有看满。三者都传，管理台才看得到"到底看了多少"。
+  ///
+  /// ⚠️ [watchedSec] 必须是客户端真数出来的，不能拿 positionSec 顶替 ——
+  ///    那会让"拖到 95%"重新变成"看完了"，白做。
   Future<Map<String, dynamic>> reportLessonProgress(int lessonId,
-      {int positionSec = 0, bool done = false}) async =>
+      {int positionSec = 0, int watchedSec = 0, bool done = false}) async =>
       await _post('/training/progress', <String, dynamic>{
         'lessonId': lessonId,
         'positionSec': positionSec,
+        'watchedSec': watchedSec,
         'done': done,
       });
 
