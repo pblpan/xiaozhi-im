@@ -1,0 +1,13 @@
+# 换行符策略
+#
+# 🔴 为什么要专门写 `*.sh text eol=lf`（2026-09-25 加）：
+#    本机 git 开了 `core.autocrlf=true`（Windows 默认那套），checkout 时会把
+#    仓库里的 LF 换成 CRLF。**Dart 源文件被换成 CRLF 无所谓**，
+#    但 shell 脚本换成 CRLF 之后，bash 读到行尾的 \r 会报
+#    `$'\r': command not found` —— 而且报错行号指向第一行，看着像是语法错。
+#    `client/tools/run_pure_tests.sh` 是本机唯一能跑测试的路子
+#    （flutter test 在这台机器上起不来），它坏了等于测试全哑。
+#
+# 其余文件保持 git 默认行为：不在这里做批量归一，避免一次提交把整个仓库
+# 的文件都标成"改动"（那种提交没法 review）。
+*.sh text eol=lf

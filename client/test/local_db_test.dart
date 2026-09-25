@@ -513,4 +513,153 @@ void main() {
       expect(r.first['sheet_type'], InvSheetType.stocktake);
     });
   });
+
+  // ============================================================
+  //
+  // v3 → v4：加「简易盘点」的两张表（simple_task / simple_item）。
+  //
+  // 这一组盯的是两件事：
+  //   ① **老用户升级不丢数据** —— 升级只建新表、不动任何已有表；
+  //   ② `simple_item` 的主键是 (task_no, barcode) ——
+  //      同一个商品出现在**两轮**里是常态（这轮盘过、下轮还要盘），
+  //      主键若写成单列 barcode，第二轮导入会把这轮的行顶掉，
+  //      表现是"上一轮的清单莫名其妙少了几条"。
+  group('v3 → v4 迁移', () {
+    /// 用真身迁移建一个 v3 库（等价于"上次装的那一版"留下的文件）。
+    Future<Database> openLegacyV3() async {
+      sqfliteFfiInit();
+      final path = await LocalDb.I.dbPathForTest();
+      return databaseFactoryFfi.openDatabase(
+        path,
+        options: OpenDatabaseOptions(
+          version: 3,
+          onCreate: (db, v) async {
+            for (var i = 1; i <= v; i++) {
+              await LocalDb.migrationsForTest[i - 1](db);
+            }
+          },
+        ),
+      );
+    }
+
+    test('老 v3 库升到 v4：两张新表建好，已有的单一张不少', () async {
+      final old = await openLegacyV3();
+
+      // 前置条件自检：此刻必须真的是 v3、且**还没有** simple_task。
+      // 不检查的话，"升级建了新表"可能测的是空气（库本来就是 v4）。
+      expect((await old.rawQuery('PRAGMA user_version')).first.values.first, 3,
+          reason: '老库没建成 v3，onUpgrade 不会触发，这轮测的是空气');
+      final tables = (await old.rawQuery(
+              "SELECT name FROM sqlite_master WHERE type = 'table'"))
+          .map((r) => r['name'].toString())
+          .toSet();
+      expect(tables, isNot(contains('simple_task')),
+          reason: '老库里居然已经有 simple_task 了');
+
+      // 造存量数据：一张盘点单 + 一张减货单 + 各一笔流水
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await old.insert('stocktake_sheet', {
+        'sheet_no': 'INV-Z01-1-20260920150000',
+        'zone_code': 'Z01',
+        'phase': 1,
+        'status': 1,
+        'started_at': now,
+      });
+      await old.insert('stocktake_sheet', {
+        'sheet_no': 'JH-20260920160000',
+        'phase': 1,
+        'status': 0,
+        'started_at': now,
+        'sheet_type': InvSheetType.deduct,
+      });
+      await old.insert('scan_record', {
+        'sheet_no': 'INV-Z01-1-20260920150000',
+        'barcode': '6901234599999',
+        'qty': 3.0,
+        'scanned_at': now,
+        'uploaded': 1,
+        'phase': 1,
+      });
+      await old.close();
+
+      // 用真身打开 → 触发 onUpgrade(3→4)
+      final db = await LocalDb.I.db();
+      expect((await db.rawQuery('PRAGMA user_version')).first.values.first,
+          LocalDb.schemaVersion);
+
+      final t2 = (await db.rawQuery(
+              "SELECT name FROM sqlite_master WHERE type = 'table'"))
+          .map((r) => r['name'].toString())
+          .toSet();
+      expect(t2, containsAll(<String>['simple_task', 'simple_item']));
+
+      // 🔴 升级只建新表：盘点的单必须原样在（含 phase/status/uploaded）
+      final inv = await db.query('stocktake_sheet',
+          where: 'sheet_no = ?', whereArgs: ['INV-Z01-1-20260920150000']);
+      expect(inv, hasLength(1));
+      expect(inv.first['zone_code'], 'Z01');
+      expect(inv.first['phase'], 1);
+      expect(inv.first['status'], 1);
+      expect(inv.first['sheet_type'], InvSheetType.stocktake);
+      final jh = await db.query('stocktake_sheet',
+          where: 'sheet_no = ?', whereArgs: ['JH-20260920160000']);
+      expect(jh, hasLength(1));
+      expect(jh.first['sheet_type'], InvSheetType.deduct);
+      final rec = await db.query('scan_record',
+          where: 'sheet_no = ?', whereArgs: ['INV-Z01-1-20260920150000']);
+      expect(rec, hasLength(1));
+      expect(rec.first['uploaded'], 1, reason: '升级不该把已上传的流水退回未上传');
+    });
+
+    test('新装直接到 v4：两张表 + 两个索引都在', () async {
+      final db = await LocalDb.I.db();
+      final tables = (await db.rawQuery(
+              "SELECT name FROM sqlite_master WHERE type = 'table'"))
+          .map((r) => r['name'].toString())
+          .toSet();
+      expect(tables, containsAll(<String>['simple_task', 'simple_item']));
+
+      final idx = (await db.rawQuery(
+              "SELECT name FROM sqlite_master WHERE type = 'index'"))
+          .map((r) => r['name'])
+          .toList();
+      expect(
+          idx,
+          containsAll(<String>[
+            'idx_simple_task_scene',
+            'idx_simple_item_task',
+          ]),
+          reason: '清单按 seq 取、任务按场景+状态取，都是热查询');
+    });
+
+    test('🔴 simple_item 主键是 (task_no, barcode)：同一个商品能出现在两轮里', () async {
+      final db = await LocalDb.I.db();
+      await db.insert('simple_item', {
+        'task_no': 'SMP-A',
+        'barcode': '6901234567890',
+        'name': '甲',
+        'seq': 1,
+      });
+      // 同一个条码、**另一轮** —— 必须能共存（这轮盘过、下轮还要盘）
+      await db.insert('simple_item', {
+        'task_no': 'SMP-B',
+        'barcode': '6901234567890',
+        'name': '甲',
+        'seq': 1,
+      });
+      expect(await db.query('simple_item'), hasLength(2),
+          reason: '主键写成单列 barcode 的话，第二轮导入会顶掉第一轮的行');
+
+      // 反向：同一轮里同一个条码再插要被主键拒（不是静默插两行）
+      expect(
+          () => db.insert('simple_item', {
+                'task_no': 'SMP-A',
+                'barcode': '6901234567890',
+                'name': '甲（重复）',
+                'seq': 2,
+              }),
+          throwsA(isA<DatabaseException>()));
+      expect(await db.query('simple_item'), hasLength(2));
+    });
+  });
 }

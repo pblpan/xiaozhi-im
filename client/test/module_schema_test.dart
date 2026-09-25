@@ -8,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:xiaozhi_im_client/core/apps.dart';
 import 'package:xiaozhi_im_client/core/module_schema.dart';
 import 'package:xiaozhi_im_client/screens/deduct.dart';
+import 'package:xiaozhi_im_client/screens/inventory.dart';
+import 'package:xiaozhi_im_client/screens/simple_stocktake.dart';
 
 void main() {
   group('组件类型识别', () {
@@ -188,6 +190,13 @@ void main() {
       //    "**我没找到你说的功能在哪里**" —— 一个每天要干的活，藏在别人页面
       //    的图标里就是没有入口。所以 0.17.1 起它单独占一个工作台卡片。
       //
+      // 2026-09-25 补上 'simple_stocktake'（**简易盘点**，S1）。
+      // ⚠️ 它和 'inventory'（盘点）是两个应用，名字极容易看混：
+      //    盘点是**制度型**（点位/货架位/三遍互比），
+      //    简易盘点是**干活型**（导入这一轮要盘的清单 → 一趟趟扫 → 导全量单）。
+      //    在服务端 apps.js 里它俩是**紧挨着**排的（员工才分得清），
+      //    这里也照同样的次序写。见 docs/简易盘点通道方案-v1.md §1。
+      //
       // ⚠️ **以后每加一个内置应用要同步改五处**（清单写在 core/apps.dart 顶上）：
       //    kBuiltinAppIds / builtinAppPage / server 的 apps.js / appguard.js /
       //    appdata.js，再加上下面这份期望值。**加完请立刻跑 flutter test 和
@@ -199,6 +208,7 @@ void main() {
         'att_admin',
         'stocktake',
         'inventory',
+        'simple_stocktake',
         'warehouse_deduct',
         'training',
       });
@@ -217,6 +227,15 @@ void main() {
       // （比不显示更糟：员工会以为"这个功能坏了"）。
       expect(isKnownBuiltinApp('warehouse_deduct'), isTrue);
       expect(builtinAppPage('warehouse_deduct'), isA<DeductPage>());
+    });
+
+    test('🔴 「简易盘点」认得出来，且点进去就是那一页（不是「盘点」）', () {
+      // ⚠️ 这里刻意同时断言"不是 InventoryPage"：两个 id 名字太像，
+      //    把 simple_stocktake 路由到盘点页是**很容易犯、且很难发现**的错
+      //    （点进去是个长得挺正常的页面，只是完全不是他要的功能）。
+      expect(isKnownBuiltinApp('simple_stocktake'), isTrue);
+      expect(builtinAppPage('simple_stocktake'), isA<SimpleStocktakePage>());
+      expect(builtinAppPage('simple_stocktake'), isNot(isA<InventoryPage>()));
     });
   });
 

@@ -120,7 +120,14 @@ class InvSheetType {
   /// 库房减货：扫码 → 减货数量 → 确定减货，同码不许重复。
   static const String deduct = 'deduct';
 
-  static const List<String> all = <String>[stocktake, deduct];
+  /// 简易盘点：一个**节点**（＝一趟）一张单，`zone_code` 借来存任务号，
+  /// `phase` 用 1初盘 / 2复盘 / 3差异复盘（值域与盘点共用，标签不同）。
+  ///
+  /// 🔴 和 [stocktake] 最本质的区别：这条通道**只盘导入的那份清单**，
+  ///    不用点位、不用货架位、不比账面。见 `docs/简易盘点通道方案-v1.md`。
+  static const String simple = 'simple';
+
+  static const List<String> all = <String>[stocktake, deduct, simple];
 
   static bool isValid(String t) => all.contains(t);
 
@@ -130,6 +137,8 @@ class InvSheetType {
         return '盘点';
       case deduct:
         return '减货';
+      case simple:
+        return '简易盘点';
       default:
         return '未知单据';
     }

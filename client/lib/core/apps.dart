@@ -31,6 +31,7 @@ import '../screens/attendance_request.dart';
 import '../screens/deduct.dart';
 import '../screens/inventory.dart';
 import '../screens/org_screen.dart';
+import '../screens/simple_stocktake.dart';
 import '../screens/stocktake.dart';
 import '../screens/training.dart';
 
@@ -54,6 +55,11 @@ import '../screens/training.dart';
 /// ⚠️ `stocktake`（扫码枪）与 `inventory`（盘点）是**两个不同的应用**，
 /// 名字很容易看混 —— 区分见 `docs/盘点复刻与开放接口方案-v1.md` §3.0：
 /// 扫码枪是"把条码扫成一笔账"的工具；盘点有盘点位、货架位与三遍制。
+///
+/// ⚠️ `inventory`（盘点）与 `simple_stocktake`（简易盘点）也是**两个不同的应用**：
+/// 盘点是**制度型**（点位/货架位/三遍互比）；简易盘点是**干活型**
+/// （导入这一轮要盘的清单 → 一趟趟扫 → 导出一张全量单）。
+/// 两者并存、互不改动，见 `docs/简易盘点通道方案-v1.md` §1。
 const kBuiltinAppIds = {
   'attendance',
   'my_requests',
@@ -61,6 +67,7 @@ const kBuiltinAppIds = {
   'att_admin',
   'stocktake',
   'inventory',
+  'simple_stocktake',
   'warehouse_deduct',
   'training',
 };
@@ -84,6 +91,8 @@ Widget? builtinAppPage(String id) {
       return const StocktakePage();
     case 'inventory':
       return const InventoryPage();
+    case 'simple_stocktake':
+      return const SimpleStocktakePage();
     case 'warehouse_deduct':
       return const DeductPage();
     case 'training':

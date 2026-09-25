@@ -40,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 3;
+  static const int schemaVersion = 4;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -178,6 +178,55 @@ class LocalDb {
       await db.execute(
           'CREATE INDEX idx_sheet_type_status ON stocktake_sheet(sheet_type, status)');
     },
+
+    // v4：简易盘点（`simple_stocktake`）的**任务**与**待盘清单**两张表。
+    //
+    // 🔴 为什么只加两张表，节点与扫码明细还是复用现有两张：
+    //    简易通道的"一趟"就是一张 `stocktake_sheet`（`sheet_type='simple'`、
+    //    `zone_code` 借来存任务号、`phase` 用 1/2/3），"一笔扫码"就是一条
+    //    `scan_record`（`sheet_no` = 节点号）。提交 / 撤销 / 本地单号 / 导出
+    //    这四条链路现有代码已经写好且有测试钉着，另起一套表等于各抄一遍。
+    //    见 docs/简易盘点通道方案-v1.md §3。
+    //
+    // ⚠️ `zone_code` 借来存任务号：简易通道**本来就不看点位**，这一列在这条
+    //    通道里没有别的含义。借它比新增一列（要动所有读表的地方）划算。
+    //
+    // 🔴 `simple_item` 是**这一轮导入的清单**，不是商品档案：
+    //    简易通道**绝不读** `stock_master` / `stocktake_zone` / `location` /
+    //    `barcode_location` 里的任何一个 —— 一旦读了，"盘点那边改了设置、
+    //    简易盘点跟着变"这种问题就会冒出来，而且极难查。商品名称只从导入的
+    //    CSV 来（CSV 里没有名称就留空）。
+    //
+    // 主键写成 (task_no, barcode)：同一轮里同一个条码重复导入没有意义，
+    // 用主键让"重复只留一行"这件事由数据库兜底，而不是只靠导入前的代码去重。
+    (Database db) async {
+      await db.execute('''
+        CREATE TABLE simple_task (
+          task_no     TEXT PRIMARY KEY,
+          task_name   TEXT,
+          scene       TEXT NOT NULL DEFAULT 'store',
+          total_items INTEGER NOT NULL DEFAULT 0,
+          status      INTEGER NOT NULL DEFAULT 0,
+          created_at  INTEGER,
+          closed_at   INTEGER
+        )
+      ''');
+      await db.execute(
+          'CREATE INDEX idx_simple_task_scene ON simple_task(scene, status)');
+
+      await db.execute('''
+        CREATE TABLE simple_item (
+          task_no  TEXT NOT NULL,
+          barcode  TEXT NOT NULL,
+          name     TEXT,
+          spec     TEXT,
+          seq      INTEGER,
+          PRIMARY KEY (task_no, barcode)
+        )
+      ''');
+      await db.execute(
+          'CREATE INDEX idx_simple_item_task ON simple_item(task_no, seq)');
+    },
   ];
 
   /// 有序迁移列表（**仅供测试**读取）。生产代码不要碰它。
@@ -243,7 +292,8 @@ class LocalDb {
   }
 
   /// 新建库（onCreate 收到的 version 即当前 schemaVersion）。
-  /// 冷启动在 v1 时只跑 _migrations[0]；将来从 0 直装到 v3 会跑 [0,1,2]。
+  /// 冷启动在 v1 时只跑 _migrations[0]；从 0 直装到 v4 会跑 [0,1,2,3]。
+  /// ⚠️ 加迁移时这句里的数字要跟着改（写死的版本号最容易变成假说明）。
   Future<void> _onCreate(Database db, int version) async {
     for (var i = 1; i <= version; i++) {
       await _migrations[i - 1](db);
