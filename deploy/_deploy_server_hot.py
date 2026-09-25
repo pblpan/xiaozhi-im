@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""把本轮服务端改动推到飞牛上跑着的容器（rsync/版本库都没有，只能逐个文件传）。
+
+背景（2026-09-26 实测）：
+    线上容器的挂载是 `/vol1/@appcenter/xiaozhi-im/src -> /app`（rw），
+    但那个目录**不是 git 仓库**（fpk 解包出来的，没有 .git），所以 `git pull` 无意义。
+    而且它最后一次改动是 9-20 —— 也就是说**减货单上传那条接口一直没上线**
+    （现场探测 `/api/deduct/sheets` 返回 404 not found，路由根本不存在）。
+    所以「功能做好了」和「功能能用了」之间还差这一脚。
+
+【顺序不能乱】
+    1) 先给远端 src 拍整目录快照（回滚要用）
+    2) 只传本轮改过的文件（不传 node_modules / data）
+    3) 重启容器（新路由文件不会被运行中的 node 拾取）
+    4) 复探：404 -> 401 才算路由真的挂上了
+
+用法：
+    python deploy/_deploy_server_hot.py --dry-run      # 只看要传哪些、服务端现在什么样
+    python deploy/_deploy_server_hot.py                # 真干
+    python deploy/_deploy_server_hot.py --restart-only  # 我只想重启（传完忘了重启时用）
+
+回滚：`docker compose` 那一层没有快照，但 src 整目录快照在
+    /vol1/@appcenter/xiaozhi-im/src_pre_deploy_<时间戳>/，拷回去再重启即可。
+"""
+import argparse
+import os
+import shlex
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from fnos_ssh import connect, put_file, run  # noqa: E402
+
+REPO = os.path.dirname(HERE)
+SERVER_DIR = os.path.join(REPO, 'server')
+REMOTE_ROOT = '/vol1/@appcenter/xiaozhi-im/src'
+CONTAINER = 'xiaozhi-im'
+
+# 本轮自 0.21.2 起改动的服务端文件（相对 server/）。
+# 🔴 用 git diff 算出来贴在这里，而不是"传整个 server 目录" ——
+#    整目录上传会把别处可能的手改一起覆盖掉，而且没法预览。
+FILES = [
+    'src/appdata.js',
+    'src/appguard.js',
+    'src/appoverrides.js',
+    'src/apps.js',
+    'src/db.js',
+    'src/index.js',
+    'src/routes/deduct.js',
+    'src/routes/inventory.js',
+    'src/routes/training.js',
+    'public/index.html',
+    # 🔴 只传 index.html 实际引用的那个 bundle。
+    #     formerly 把 index-CGeyGD1r.js 也列进来过，但本地根本没这个构建产物
+    #    （它是 9-25 那次部署留下的旧文件名）—— 列了会让脚本以为文件缺失而拒跑。
+    #    顺带一个真发现：远端 index.html 引用的是 CGeyGD1r，而它里面
+    #    「价签 / price_tag / 消息推送」三个关键词计数全是 0 = **管理台 UI 也是过期的**，
+    #    这轮一起换成 BzyV4oOy（实测含「消息推送」），属于升级不是降级。
+    'public/assets/index-BzyV4oOy.js',
+]
+
+
+def describe_remote(c):
+    """远端现在到底是个什么状态 —— 每次动手前先看一眼，别按想象做事。"""
+    out = []
+    out.append('容器状态: ' + run(c, "docker ps --filter name=%s --format '{{.Status}}'"
+                                 % CONTAINER))
+    out.append('远端有无 deduct.js: ' + run(c, 'test -f %s/src/routes/deduct.js'
+                                            ' && echo 有 || echo 没有'))
+    out.append('远端 src 最后改动: ' + run(c, "stat -c '%%y' %s" % REMOTE_ROOT))
+    return '\n'.join(out)
+
+
+def snapshot(c):
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    dst = '/vol1/@appcenter/xiaozhi-im/src_pre_deploy_%s' % stamp
+    print('  快照 ->', dst)
+    run(c, 'cp -a %s %s' % (REMOTE_ROOT, dst))
+    # 留个最新指针，回滚脚本好找
+    run(c, 'rm -f /vol1/@appcenter/xiaozhi-im/src_pre_deploy_latest;'
+           ' ln -s %s /vol1/@appcenter/xiaozhi-im/src_pre_deploy_latest' % dst)
+    print('  快照已就位')
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--dry-run', action='store_true', help='只看不传')
+    ap.add_argument('--restart-only', action='store_true', help='跳过上传，只重启')
+    args = ap.parse_args()
+
+    c = connect()
+    print('=== 动手前，远端现状 ===')
+    print(describe_remote(c))
+
+    if args.restart_only:
+        print('\n=== 只重启 ===')
+        run(c, 'docker restart %s' % CONTAINER)
+        time.sleep(6)
+        print('重启后: ' + run(c, "docker ps --filter name=%s --format '{{.Status}}'"
+                               % CONTAINER))
+        return 0
+
+    missing = [f for f in FILES if not os.path.isfile(os.path.join(SERVER_DIR, f))]
+    if missing:
+        print('本地缺文件，不传：', missing)
+        return 2
+
+    print('\n=== 将上传 %d 个文件 ===' % len(FILES))
+    for f in FILES:
+        p = os.path.join(SERVER_DIR, f)
+        print('  %-40s %d 字节' % (f, os.path.getsize(p)))
+
+    if args.dry_run:
+        print('\n（dry-run，到此为止）')
+        return 0
+
+    print('\n=== 1) 拍快照 ===')
+    snapshot(c)
+
+    print('\n=== 2) 上传 ===')
+    for f in FILES:
+        local = os.path.join(SERVER_DIR, f)
+        remote = REMOTE_ROOT + '/' + f
+        ok, detail = put_file(c, local, remote, backup=True, stamp='pre_hotfix')
+        # 🔴 别假设 detail 一定是字节数 —— `run()` 在 stderr 非空时会把
+        #    "[stderr] xxx" 拼到返回值后面，于是 detail 变成非数字，
+        #    用 `'%d' % detail` 直接 TypeError。这里一律按字符串显示。
+        print('  %-40s %s' % (f, ('OK ' + str(detail) + ' 字节') if ok else ('失败 ' + str(detail))))
+
+    print('\n=== 3) 重启容器 ===')
+    run(c, 'docker restart %s' % CONTAINER)
+    time.sleep(6)
+    print('  重启后: ' + run(c, "docker ps --filter name=%s --format '{{.Status}}'"
+                             % CONTAINER))
+
+    print('\n=== 4) 复探（等容器起来再看） ===')
+    time.sleep(5)
+    run(c, "for p in /api/deduct/sheets /api/admin/apps/price_tag/data;"
+           " do printf '%%s -> ' \"$p\"; curl -s -o /dev/null -w '%%{http_code}\\n'"
+           " --max-time 8 http://127.0.0.1:3602$p; done")
+    print('\n完成。401 = 路由已挂上（只是要鉴权）；404 = 还是没挂上。')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
