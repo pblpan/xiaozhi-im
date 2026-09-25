@@ -59,6 +59,7 @@
         <el-menu-item index="master">商品档案</el-menu-item>
         <el-menu-item index="deduct">库房减货</el-menu-item>
         <el-menu-item index="training">培训中心</el-menu-item>
+        <el-menu-item index="push">消息推送</el-menu-item>
         <el-menu-item index="settings">系统设置</el-menu-item>
         <el-menu-item index="license">授权管理</el-menu-item>
         <el-menu-item index="help">系统帮助</el-menu-item>
@@ -3893,6 +3894,114 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           </el-dialog>
         </div>
 
+        <!-- ===== 消息推送（APNs） ===== -->
+        <div v-else-if="tab === 'push'">
+          <el-alert type="info" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              手机锁屏时要有消息提醒，只能靠 Apple 的推送通道（APNs）——
+              App 自己连着 WebSocket，但**退到后台就被系统挂起**了。
+              这里配的是服务端的 APNs 凭据：配好之后服务端直接把提醒推给 Apple，
+              由 Apple 送到手机。
+              <br />
+              <b>四样东西缺一不可</b>：Key ID / Team ID / Bundle ID（App 的标识）/
+              .p8 私钥（在 Apple 开发者后台「Keys」里下载，<b>只能下一次</b>）。
+            </template>
+          </el-alert>
+
+          <el-descriptions border :column="4" style="margin-bottom:14px">
+            <el-descriptions-item label="当前状态">
+              <el-tag :type="push.info?.enabled ? 'success' : 'info'" effect="plain" size="small">
+                {{ push.info?.enabled ? '已启用' : '未配置' }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="环境">
+              {{ push.info?.envLabel || '—' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Bundle ID">
+              <code class="mono">{{ push.info?.topic || '—' }}</code>
+            </el-descriptions-item>
+            <el-descriptions-item label="私钥">
+              {{ push.info?.hasKey ? '已配置（内容不回显）' : '未配置' }}
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <el-descriptions border :column="4" style="margin-bottom:14px">
+            <el-descriptions-item label="已登记设备">{{ push.stats?.devices ?? 0 }}</el-descriptions-item>
+            <el-descriptions-item label="在线设备">{{ push.stats?.activeDevices ?? 0 }}</el-descriptions-item>
+            <el-descriptions-item label="近 24 小时发出">{{ push.stats?.last24h?.sent ?? 0 }}</el-descriptions-item>
+            <el-descriptions-item label="近 24 小时失败">
+              <b :style="{ color: (push.stats?.last24h?.fail ?? 0) > 0 ? 'var(--el-color-danger)' : '' }">
+                {{ push.stats?.last24h?.fail ?? 0 }}
+              </b>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <el-form :model="pushForm" label-width="130px" style="max-width:720px">
+            <el-form-item label="Key ID">
+              <el-input v-model="pushForm.keyId" placeholder="Apple 后台生成的 Key ID，如 A1B2C3D4E5" />
+            </el-form-item>
+            <el-form-item label="Team ID">
+              <el-input v-model="pushForm.teamId" placeholder="开发者账号的 Team ID（10 位）" />
+            </el-form-item>
+            <el-form-item label="Bundle ID">
+              <el-input v-model="pushForm.topic" placeholder="如 com.xxx.xiaozhi，必须与 App 的标识完全一致" />
+            </el-form-item>
+            <el-form-item label="环境">
+              <el-radio-group v-model="pushForm.env">
+                <el-radio value="production">生产（App Store / TestFlight 装的包）</el-radio>
+                <el-radio value="sandbox">沙盒（Xcode 直连调试）</el-radio>
+              </el-radio-group>
+              <div class="hint">
+                🔴 手机装的包是哪种，这里就要选哪种。选错的表现是"服务端说发出去了、
+                手机一条都收不到"—— 而日志里看起来是成功的。
+              </div>
+            </el-form-item>
+            <el-form-item label=".p8 私钥">
+              <el-input v-model="pushForm.keyP8" type="textarea" :rows="4"
+                placeholder="-----BEGIN PRIVATE KEY-----&#10;（把文件内容整个粘进来）&#10;-----END PRIVATE KEY-----" />
+              <div class="hint">
+                私钥<b>只写不读</b>：保存之后服务端只回"有没有、第一行长什么样"，
+                界面上不会再显示内容。要换就重新粘一份。
+              </div>
+            </el-form-item>
+          </el-form>
+
+          <div class="page-bar">
+            <el-button type="primary" :loading="push.busy" @click="savePush">保存并立即生效</el-button>
+            <el-button :loading="push.busy" @click="probePush">本地自检（先试再存）</el-button>
+            <el-button :disabled="!push.info?.enabled" :loading="push.busy" @click="testPush">发一条测试推送</el-button>
+            <el-button :disabled="!push.info?.enabled" @click="clearPush">清空配置</el-button>
+            <el-button @click="loadPush">刷新</el-button>
+          </div>
+
+          <el-alert v-if="push.probeText" :title="push.probeText" :type="push.probeOk ? 'success' : 'error'"
+            show-icon :closable="false" style="margin:12px 0" />
+
+          <div class="sec-title">最近投递</div>
+          <el-table :data="push.logs" border stripe>
+            <el-table-column label="时间" width="160">
+              <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+            </el-table-column>
+            <el-table-column label="接收人" width="130">
+              <template #default="{ row }">{{ row.user }}</template>
+            </el-table-column>
+            <el-table-column label="标题" min-width="180">
+              <template #default="{ row }">{{ row.title }}</template>
+            </el-table-column>
+            <el-table-column label="结果" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.ok ? 'success' : 'danger'" effect="plain" size="small">
+                  {{ row.ok ? '成功' : '失败' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="220">
+              <template #default="{ row }">{{ row.reason || row.status || '—' }}</template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-if="!push.logs.length" description="还没有投递记录" />
+        </div>
+
         <div v-else-if="tab === 'settings'">
           <el-card style="margin-bottom:16px">
             <template #header>公司与好友模式（对全服务器生效，客户端登录页/扫描结果即时可见）</template>
@@ -5106,6 +5215,95 @@ async function loadTab() {
   else if (tab.value === 'license') await loadLicense();
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
   else if (tab.value === 'deduct') await reloadDeduct();
+  else if (tab.value === 'push') await loadPush();
+}
+
+/* ====== 消息推送（APNs） ======
+ * 服务端接口早就齐了（server/src/routes/push.js 的 admin 路由），
+ * 缺的一直是**管理台这一页** —— 于是只能改配置文件、改完还得重启才知道对不对。
+ * 这一页把"配 → 自检 → 发一条真的"三步连起来：
+ * 自检能证明私钥能签名，**只有真发一条**才能证明 Apple 认这对凭据。
+ */
+const pushForm = reactive({ keyId: '', teamId: '', topic: '', keyP8: '', env: 'production' });
+const push = ref({ info: {}, stats: {}, logs: [], busy: false, probeText: '', probeOk: false });
+
+async function loadPush() {
+  try {
+    const { data } = await api.get('/admin/push', { params: { limit: 50 } });
+    push.value.info = data.info || {};
+    push.value.stats = data.stats || {};
+    push.value.logs = data.logs || [];
+    // 已配好的字段回填，但**私钥不回填**（服务端只给"有没有"，内容不回来）
+    if (data.info) {
+      pushForm.topic = data.info.topic || pushForm.topic;
+      pushForm.env = data.info.env || pushForm.env;
+    }
+  } catch (e) {
+    ElMessage.error('读取推送状态失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+async function probePush() {
+  push.value.busy = true;
+  try {
+    // 带上还没保存的凭据去试：服务端只在内存里试签一次就还原，**不落盘**
+    const { data } = await api.post('/admin/push/probe', {
+      keyId: pushForm.keyId || undefined,
+      teamId: pushForm.teamId || undefined,
+      topic: pushForm.topic || undefined,
+      keyP8: pushForm.keyP8 || undefined,
+      env: pushForm.env,
+    });
+    push.value.probeOk = !!data.ok;
+    push.value.probeText = data.ok
+      ? `自检通过：私钥能签名（${data.detail || data.env || ''}）`
+      : `自检没通过：${data.error || data.reason || '未知原因'}`;
+  } catch (e) {
+    push.value.probeOk = false;
+    push.value.probeText = '自检失败：' + (e.response?.data?.error || e.message);
+  } finally { push.value.busy = false; }
+}
+
+async function savePush() {
+  push.value.busy = true;
+  try {
+    const { data } = await api.post('/admin/push/config', {
+      keyId: pushForm.keyId, teamId: pushForm.teamId,
+      topic: pushForm.topic, keyP8: pushForm.keyP8, env: pushForm.env,
+    });
+    push.value.info = data.info || {};
+    pushForm.keyP8 = ''; // 存完就把私钥从界面上抹掉：没必要让它留在内存里
+    ElMessage.success('已保存并立即生效（不用重启）');
+    await loadPush();
+  } catch (e) {
+    ElMessage.error('保存失败：' + (e.response?.data?.error || e.message));
+  } finally { push.value.busy = false; }
+}
+
+async function testPush() {
+  push.value.busy = true;
+  try {
+    const { data } = await api.post('/admin/push/test', {});
+    if (data.ok) ElMessage.success('已发出，看手机上有没有收到');
+    else ElMessage.warning('没发出去：' + ((data.lastLog && data.lastLog.reason) || '看下面的投递记录'));
+    await loadPush();
+  } catch (e) {
+    // 400 是最常见的：那台手机上还没有登记过的 iOS 令牌 —— 是人能补的事，直说
+    ElMessage.error(e.response?.data?.error || ('发测试推送失败：' + e.message));
+  } finally { push.value.busy = false; }
+}
+
+async function clearPush() {
+  try {
+    await ElMessageBox.confirm(
+      '清空之后所有手机都收不到推送了（要重新配一遍四样东西）。',
+      '清空推送配置', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.post('/admin/push/clear');
+    ElMessage.success('已清空');
+    await loadPush();
+  } catch (e) { ElMessage.error('清空失败：' + (e.response?.data?.error || e.message)); }
 }
 
 /* ====== 库房减货（对账） ======
