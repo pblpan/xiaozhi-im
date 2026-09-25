@@ -9,9 +9,18 @@ on:
 
 # 说明：本仓库根就是 xiaozhi-im，客户端代码在 client/ 子目录。
 # 如果你的仓库根直接就是 client 目录，把下面 CLIENT_DIR 改成 "." 即可。
+
+# 发布产物走 Release 附件，需要 contents: write。
+# 不显式写的话，仓库「Workflow permissions」一旦被设成只读，这一步就会静默失败。
+permissions:
+  contents: write
+
 env:
   CLIENT_DIR: client
   FLUTTER_VERSION: "3.47.2"
+  # 产物的去处：一个**滚动 release**（每次 push 覆盖同名附件）。
+  # 为什么不用 actions/upload-artifact —— 见下面 Publish 那两步的注释。
+  ROLLING_TAG: ci-latest
   # ⚠️ 客户端加固后**不再兜底任何生产地址**（2026-09-16，任务 #127）。
   #    以前这里写着 `|| 'http://192.168.31.44:3602'` —— 等于把内网地址
   #    随每个安装包发出去，客户拿到手还连不上（他要连的是自己那台服务器）。
@@ -46,44 +55,6 @@ jobs:
       - name: Pub get
         working-directory: ${{ env.CLIENT_DIR }}
         run: flutter pub get
-
-      # 🔴 为什么要在这里清旧产物（2026-09-25 加）
-      #    免费档的 Actions 产物存储只有 500MB，而本仓库一轮出
-      #    22MB(EXE) + 44MB(APK)，默认保留 **90 天** —— 实测 12 天堆到
-      #    139 份 / 3.4GB，于是两个上传步骤双双报
-      #        Failed to CreateArtifact: Artifact storage quota has been hit.
-      #    最坑的是**构建本身是成功的**：日志里 `Build APK (release)` 是绿的，
-      #    只有最后一步 Upload 红，很容易被误读成"编译挂了"去改代码。
-      #    兜底：每次跑之前删掉 6 小时前的旧产物（远大于本轮构建时长，
-      #    不会误删同一轮正在上传的包）。这步失败不影响流水线 ——
-      #    它只是个配额清理，不该让一个能成功的构建变红。
-      - name: Purge stale artifacts (quota guard)
-        if: github.event_name != 'release'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 - <<'PY'
-          import datetime as dt, os, subprocess
-          repo = os.environ['GITHUB_REPOSITORY']
-          rows = subprocess.run(
-              ['gh', 'api', '--paginate', 'repos/%s/actions/artifacts' % repo,
-               '--jq', '.artifacts[] | "\(.id) \(.created_at)"'],
-              capture_output=True, text=True).stdout
-          now = dt.datetime.now(dt.timezone.utc)
-          gone = 0
-          for line in rows.split('\n'):
-              if not line.strip():
-                  continue
-              aid, ts = line.split()
-              born = dt.datetime.strptime(ts, '%Y-%m-%dT%H:%M:%SZ').replace(
-                  tzinfo=dt.timezone.utc)
-              if (now - born).total_seconds() > 6 * 3600:
-                  subprocess.run(['gh', 'api', '-X', 'DELETE',
-                                  'repos/%s/actions/artifacts/%s' % (repo, aid)])
-                  gone += 1
-          print('清掉 %d 个 6 小时前的旧产物' % gone)
-          PY
 
       # analyze 只让 error/warning 卡住流水线：info 级 lint 长期存在，
       # 把它算失败只会让人习惯性忽略这个 job（那才是真的失去信号）。
@@ -165,15 +136,33 @@ jobs:
             echo "apksigner 未找到，跳过指纹打印"
           fi
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: xiaozhi-im-android-apk
-          path: ${{ env.CLIENT_DIR }}/build/app/outputs/flutter-apk/*.apk
-          if-no-files-found: error
-          # 默认 90 天 —— 一个 44MB 的 APK 留 90 天等于把 500MB 配额
-          # 三天就吃光（见上面 Purge 那步的说明）。留 1 天，够下载。
-          retention-days: 1
+      # 🔴 为什么不发 actions/upload-artifact（2026-09-25 改）
+      #
+      # 免费档的「Actions 产物」存储只有 **500MB**，而本仓库一轮出
+      # 22MB(EXE) + 44MB(APK)、默认保留 **90 天** —— 实测 12 天堆到 139 份 /
+      # 3.4GB，于是上传步骤开始报
+      #     Failed to CreateArtifact: Artifact storage quota has been hit.
+      # 更坑的是**清空产物之后不会马上恢复**：
+      #     Usage is recalculated every 6-12 hours.
+      # 上一轮就是这样：产物数已经归零、构建全绿，Upload 还是红，只能干等半天。
+      #
+      # 改传 **Release 附件**：实测不占那 500MB 配额（产物配额明明已满，
+      # 附件照样 201 传上去），而且随时能下、不受保留策略影响。
+      # 标签固定 `ci-latest`，每次 `--clobber` 覆盖 —— 这里放的是
+      # **构建流水线的中间产物**，正式发给用户的包在桌面目录里。
+      - name: Publish APK to rolling release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" \
+                 --title "CI 最新产物（滚动，勿直接分发）" \
+                 --notes "每次 push 到 main 覆盖同名附件。这里是流水线中间产物；正式安装包另行交付。" \
+                 --prerelease || true
+          gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" \
+            ${CLIENT_DIR}/build/app/outputs/flutter-apk/*.apk --clobber
 
   build-windows:
     name: Windows EXE
@@ -203,10 +192,25 @@ jobs:
         working-directory: ${{ env.CLIENT_DIR }}
         run: flutter build windows --release --dart-define=BASE_URL=${{ env.BASE_URL }} --dart-define=WAN_URL=${{ env.WAN_URL }}
 
-      - name: Upload EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: xiaozhi-im-windows-exe
-          path: ${{ env.CLIENT_DIR }}/build/windows/x64/runner/Release/
-          if-no-files-found: error
-          retention-days: 1
+      # 一个目录没法直接当附件传，先压成一个 zip（Release 附件只收文件）。
+      - name: Zip Windows release dir
+        shell: pwsh
+        run: >
+          Compress-Archive -Force
+          -Path ${env:CLIENT_DIR}/build/windows/x64/runner/Release/*
+          -DestinationPath xiaozhi-im-windows-exe.zip
+
+      # 见 Android 那边 Publish 步骤上的长注释（配额 vs Release 附件）。
+      - name: Publish EXE zip to rolling release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" \
+                 --title "CI 最新产物（滚动，勿直接分发）" \
+                 --notes "每次 push 到 main 覆盖同名附件。这里是流水线中间产物；正式安装包另行交付。" \
+                 --prerelease || true
+          gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" \
+            xiaozhi-im-windows-exe.zip --clobber

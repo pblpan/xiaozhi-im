@@ -63,11 +63,36 @@ k32.CreateFileW.restype = wt.HANDLE
 k32.CreateFileW.argtypes = [
     wt.LPCWSTR, wt.DWORD, wt.DWORD, wt.LPVOID, wt.DWORD, wt.DWORD, wt.HANDLE]
 
-# 疑犯名单（名字里带这些字的进程，出错时会点名）
-SUSPECTS = ('hips', 'hr', 'huorong', '360', 'qqpcmgr', 'qhsafe', 'kxe', 'kav',
-            'mcafee', 'symantec', 'crowdstrike', 'sophos', 'trend', 'eset',
-            'mi', 'xiaomi', 'lenovo', 'gameviewer', 'sunlogin', 'todesk',
-            'anydesk', 'rustdesk', 'clink', 'sangfor', 'edr')
+# 疑犯名单。
+#
+# 🔴 只放**够长、能指名道姓**的片段，不要放 `hr` / `mi` / `qq` 这种短的：
+#    实测 `'hr' in name` 会把 **chrome** 命中、`'mi' in name` 会把
+#    **tiger.middleware.*** / **wmiapsrv** 命中 —— 名单里混进一堆无关进程，
+#    等于没有名单（真凶反而被淹没）。短前缀单独用「开头匹配」那条规则兜。
+SUSPECT_TOKEN = (
+    # 火绒
+    'hips', 'huorong', 'sysdiag', 'usysdiag', 'hrdevmon', 'hrwfpdrv',
+    # 金山毒霸 / 卡巴 / 迈克菲 / 诺顿 / 其它企业级
+    'kxescore', 'kxetray', 'klif', 'klflt', 'kavfs', 'mcafee', 'symantec',
+    'sophos', 'crowdstrike', 'sangfor', 'trendmicro',
+    # 远控 / 屏幕共享（它们的驱动也会 hook 设备与管道）
+    'todesk', 'anydesk', 'sunlogin', 'rustdesk', 'gameviewer',
+    # 跨设备互传（命名管道的另一个重灾区）
+    'lenovosmart', 'lenovopcmanager',
+    'miplaycastservice', 'mismartsharehandoff', 'mihygienebroker',
+    'mideviceservice', 'miservice', 'mipcaudio', 'micont_service', 'xiaomi',
+)
+
+# 开头匹配（只给必须用短前缀的留口子）：火绒的 HrASDaemon / HRInstMonitor /
+# HrAppStoreAppOM 只能靠 `hr` 开头认；360 家族靠 `360` 开头。
+SUSPECT_PREFIX = ('hr', '360', 'qqpcmgr', 'qhsafe', 'qclife')
+
+
+def _suspect(name):
+    n = name.lower()
+    return (any(t in n for t in SUSPECT_TOKEN)
+            or any(n.startswith(p) for p in SUSPECT_PREFIX))
+
 
 results = []
 
@@ -169,7 +194,33 @@ def running_processes():
         return []
     names = sorted({ln.split('","')[0].strip('"').lower()
                     for ln in out.splitlines() if '","' in ln})
-    return [n for n in names if any(s in n for s in SUSPECTS)]
+    return [n for n in names if _suspect(n)]
+
+
+def loaded_drivers():
+    """列出名字可疑的**已加载内核驱动**。
+
+    实测（本机 2026-09-25 故障时）：
+        hrdevmon   Huorong Internet Security Devmon Kext   ← 火绒设备监控
+        hrwfpdrv   Huorong Network Security Firewall (WFP) ← 火绒网络过滤
+        sysdiag    Huorong Network Security Core Kext
+    命名管道是**设备**，`hrdevmon` 这种 devmon 驱动正是会管它的那一类。
+    """
+    try:
+        out = subprocess.run(['driverquery', '/FO', 'CSV', '/NH'],
+                             capture_output=True, text=True, encoding='gbk',
+                             errors='replace', timeout=90).stdout
+    except Exception:                                        # noqa: BLE001
+        return []
+    hits = []
+    for ln in out.splitlines():
+        cells = [c.strip('"') for c in ln.split('","')]
+        if len(cells) < 2:
+            continue
+        joined = (cells[0] + ' ' + cells[1]).lower()
+        if any(s in joined for s in SUSPECT_TOKEN):
+            hits.append('%s (%s)' % (cells[0], cells[1]))
+    return sorted(set(hits))
 
 
 def main():
@@ -217,9 +268,11 @@ def main():
             dart_ok = (n == total)
             record('dart spawn', dart_ok, 'ok=%d / %d' % (n, total))
 
-    print('\n④ 本机在跑的相关进程（出错时点名用）')
+    print('\n④ 本机在跑的相关进程 / 驱动（出错时点名用）')
     sus = running_processes()
-    print('  ' + (', '.join(sus) if sus else '(没发现名单里的进程)'))
+    print('  进程：' + (', '.join(sus) if sus else '(没发现名单里的进程)'))
+    drv = loaded_drivers()
+    print('  驱动：' + (', '.join(drv) if drv else '(没发现名单里的驱动)'))
 
     print('\n' + '=' * 66)
     bad = [r for r in results if not r[1]]
@@ -231,12 +284,24 @@ def main():
         print('   - %s  (%s)' % (n, d))
     print("""
 处置（按顺序，每步做完重跑本脚本，看 ③ 是否变成 ok=8 / 8）：
-  1) 临时退出安全软件（火绒：托盘右键「退出」；HipsDaemon 是它的主动防御），重跑。
-     好了 → 在火绒「防护中心」给 flutter/dart 目录加信任，或关掉命名管道类防护。
-  2) 还在 → 退掉跨设备/远控类软件（小米电脑管家 MiService/PcClipboard、
-     联想 LenovoSmartService、GameViewerService、向日葵/ToDesk 等），重跑。
+
+  1) **先退用户可以退的**：小米电脑管家（MiService / MiSmartShareHandoff /
+     MiHygieneBroker —— 跨设备互传就是靠命名管道做的）、GameViewer（游戏远控）、
+     联想 LenovoSmartService、向日葵 / ToDesk。这些是用户态程序，退得掉。
+  2) 还在 → 火绒「**防护中心**」把开关**逐个关掉**（文件实时监控 / 系统加固 /
+     网络入侵拦截 …）。
+     ⚠️ **`HipsDaemon.exe` 进程不会因此消失，这是正常的，不代表没关成功。**
+        火绒官方原话（2025-11-02，版务答复）：
+        「为防止程序被恶意代码攻击影响程序的正常运行，火绒对自己的进程、
+          目录文件、注册表都有对应的自保措施，该安全服务模块进程没有退出，
+          因为安全软件需要高权限服务程序，保证下次的正常启动，
+          **目前只有卸载火绒才会将该程序结束**。」
+        → 所以「托盘右键退出」和「任务管理器结束 HipsDaemon」都**没用**，
+          别再在这上面耗时间。判据是**②③ 变绿**，不是进程消失。
   3) 还在 → 重启机器再试一次（驱动 hook 卡死时重启能恢复）。
-  4) 都无效 → 换一台机器构建，或把 Flutter SDK 放到没装这些软件的机器上。
+  4) 还不行 → **别跟这台机器死磕**：本仓库 `.github/workflows/build.yml`
+     已能在 CI 上出 Android APK + Windows EXE（`flutter analyze` + `flutter test`
+     也在那边跑）。本地跑不了不影响交付，只影响改代码时的反馈速度。
 
 ⚠️ 别去 "taskkill /IM dart.exe" 之类地折腾 —— 那个报错跟残留进程无关，
    dart 进程压根不存在；本脚本 ③ 会证明这一点（每次都是干净进程）。""")
