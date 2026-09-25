@@ -24,7 +24,8 @@ import 'package:xiaozhi_im_client/screens/stocktake.dart';
 ///   ③ 没有任何扫码记录时，底部两个导出按钮仍然在（导出文档/导出表格）
 ///   ④ 重复扫同一个码**合并成一行、数量加 1**；未知码用预留值；行尾能删
 ///   ⑤ **数量可以点开改**（改大 / 改成 0 = 二次确认后删行 / 取消则不动）
-///   ⑥ 导出后弹层里有**一条"把文件发出去"的路**（手机=分享面板 / 桌面=文件夹）
+///   ⑥ 导出后弹层里**这条"把文件发出去"的路与当前平台匹配**
+///      （Android/iOS=分享面板 / Windows=打开文件夹 / 其它平台=一条都不给）
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -260,32 +261,59 @@ void main() {
   });
 
   // ── ⑥ 导出后能直接发出去（2026-09-19 下午反馈）──────────────
-  testWidgets('导出后弹层里有"把文件发出去"那条路，且与当前平台匹配', (tester) async {
+  //
+  // 🔴 2026-09-25 修：老写法只判了「Windows ? 文件夹 : 手机分享」两个分支，
+  //    而 CI 跑在 **Linux**（`subosito/flutter-action` 的 ubuntu runner）——
+  //    Linux 既不是手机也不是 Windows，`FileShare.channel` 真值是 `none`，
+  //    弹层里一条都不渲染，期望值却落在"手机那条"上 → 必然超时。
+  //    （现象：`等待超时：导出之后应弹出"发给同事 / 打开文件夹"的弹层`，
+  //      546 passed / 1 failed，整轮 CI 就是这个红。）
+  //    App 只投放 Android / iOS / Windows，第三个分支代表本平台**故意不给**，
+  //    要当成**反向判据**验（多一条才是错），不能当成"跳过"。
+  testWidgets('导出后弹层里的"发出去"那条路与当前平台匹配（本平台没有就要真没有）',
+      (tester) async {
     await tester.runAsync(seedScans);
     await pumpPage(tester);
 
     await tester.tap(find.text('导出文档'));
 
-    // 导出会真写文件（真实 IO），假时钟推不动，必须让出真实异步
+    // 导出会真写文件（真实 IO），假时钟推不动，必须让出真实异步。
+    //
+    // ⚠️ 等的判据用「已生成 N 行」—— 那是弹层的第一行，**任何平台都有**。
+    //    不要等 `share-to-others`：本平台没有那条路时它本来就不该出现，
+    //    等它 = 把"正确行为"等成超时，正是这一版红掉的原因。
     await pumpUntil(
       tester,
-      () => find.byKey(const Key('share-to-others')).evaluate().isNotEmpty,
-      why: '导出之后应弹出"发给同事 / 打开文件夹"的弹层',
+      () => find.textContaining('已生成').evaluate().isNotEmpty,
+      why: '导出之后应弹出操作面板',
     );
 
     // 🔴 这一条是独立判据，不复用 FileShare.channelFor —— 复用就成了
     //    "实现自己验自己"。直接按平台写死期望值，写反分支必然报红。
-    final want = Platform.isWindows
-        ? '打开所在文件夹（拖进微信发送）'
-        : '发给同事（微信 / 企微 / 钉钉…）';
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('share-to-others')),
-        matching: find.text(want),
-      ),
-      findsOneWidget,
-      reason: '弹层第一条必须是这台设备真能走的那条路',
-    );
+    //    三个分支**必须写全**：少写一个，那个平台就会静默按错的期望走。
+    final String? want;
+    if (Platform.isAndroid || Platform.isIOS) {
+      want = '发给同事（微信 / 企微 / 钉钉…）';
+    } else if (Platform.isWindows) {
+      want = '打开所在文件夹（拖进微信发送）';
+    } else {
+      want = null; // CI 的 Linux 等：App 不投放，本来就不该有这一条
+    }
+
+    if (want == null) {
+      expect(find.byKey(const Key('share-to-others')), findsNothing,
+          reason: '${Platform.operatingSystem} 上没有可用的分享通道，'
+              '弹层里就不该摆这一条 —— 摆了就是"点了没反应"的假按钮');
+    } else {
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('share-to-others')),
+          matching: find.text(want),
+        ),
+        findsOneWidget,
+        reason: '弹层第一条必须是这台设备真能走的那条路',
+      );
+    }
 
     // 打开 / 另存为 仍然要在（发不出去时的兜底不能丢）
     expect(find.text('打开（用 WPS / Excel / 记事本看）'), findsOneWidget);
