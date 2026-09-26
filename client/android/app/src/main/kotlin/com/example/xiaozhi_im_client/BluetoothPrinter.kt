@@ -39,6 +39,9 @@ class BluetoothPrinter(private val activity: Activity) {
         private val SPP_UUID: UUID =
             UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
+        /** 每块 512 字节、块间隔 2ms。一次写太大，部分机器的蓝牙缓冲会顶住不吐。 */
+        private const val CHUNK = 512
+
         const val ERR_PERMISSION = "PERMISSION_DENIED"
         const val ERR_BLUETOOTH_OFF = "BLUETOOTH_OFF"
         const val ERR_NO_PEER = "NO_PEER"
@@ -181,11 +184,6 @@ class BluetoothPrinter(private val activity: Activity) {
         var t: Thread? = null
         t = thread(name = "btprint-write") { body() }
         t.join(30_000)
-    }
-
-    private companion object {
-        /** 每块 512 字节、块间隔 2ms。一次写太大，部分机器的蓝牙缓冲会顶住不吐。 */
-        const val CHUNK = 512
     }
 }
 
