@@ -59,7 +59,7 @@ FILES = [
     'public/index.html',
     # 🔴 只传 index.html 实际引用的那个 bundle（0.21.3 管理台：应用中心
     #    排序列 + ↑↓ 调序、编辑按钮 primary plain —— vite 构建产物）。
-    'public/assets/index-YDtztiLr.js',
+    'public/assets/index-Ca21U-Yx.js',
 ]
 
 
