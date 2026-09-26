@@ -35,8 +35,10 @@ import '../core/inventory_rules.dart';
 import '../core/simple_export.dart';
 import '../core/simple_repo.dart';
 import '../core/simple_rules.dart';
+import '../core/simple_scan_sink.dart';
 import '../core/theme.dart';
 import '../widgets/export_flow.dart';
+import 'camera_scan.dart';
 
 /// 导入时选定的场景与轮次名。
 class _RoundPick {
@@ -92,6 +94,13 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
 
   /// 差异复盘那一趟做完了吗（决定导出时"对不上的"是定稿还是待复核）。
   bool _thirdDone = false;
+
+  /// 明细区当前显示哪个视图：true = 「还没盘」（按清单顺序引导扫），
+  /// false = 「本趟已录」（按扫描先后核对）。
+  ///
+  /// 默认"还没盘"：20 个品的清单，员工要的是**下一个扫什么**，
+  /// 不是自己已经扫过什么 —— 那个他心里有数。
+  bool _showPending = true;
 
   @override
   void initState() {
@@ -530,6 +539,53 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
     }
   }
 
+  /// 摄像头扫码：复用扫码枪/盘点同一套相机页（去重、冷却、闪绿都在那层）。
+  Future<void> _openCameraScan() async {
+    if (_node == null || !_editable || _nodeNo.isEmpty) return;
+    final onlyDiff = SimplePhase.onlyDiffSet(_phase);
+    final sink = SimpleScanSink(_repo,
+        allowedBarcodes: onlyDiff ? _diffSet : null);
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => CameraScanPage(
+        title: '简易盘点 · ${SimplePhase.label(_phase)}',
+        sheetNo: _nodeNo,
+        sink: sink,
+        hint: onlyDiff ? '这一趟只盘前两趟对不上的 ${_diffSet.length} 个品' : null,
+      ),
+    ));
+    if (!mounted) return;
+    await _reload(loadNodeNo: _nodeNo);
+  }
+
+  /// 本趟**还没盘**的，按清单顺序（seq）排 —— 这就是"下一个扫什么"的引导。
+  ///
+  /// 差异复盘那一趟只许扫差异集 → 「还没盘」就只列差异集里剩下的
+  /// （照清单顺序排，清单外的差异码排最后），其余清单品列出来只会误导员工去扫一个必然被拒的码。
+  List<Map<String, dynamic>> get _pendingRows {
+    final done =
+        _rows.map((r) => (r['barcode'] ?? '').toString()).toSet();
+    if (SimplePhase.onlyDiffSet(_phase)) {
+      final inList = <Map<String, dynamic>>[];
+      final offList = <Map<String, dynamic>>[];
+      for (final b in _diffSet) {
+        if (done.contains(b)) continue;
+        Map<String, dynamic>? it;
+        for (final i in _items) {
+          if ((i['barcode'] ?? '').toString() == b) {
+            it = i;
+            break;
+          }
+        }
+        (it == null ? offList : inList)
+            .add(it ?? <String, dynamic>{'barcode': b, 'name': '', 'spec': ''});
+      }
+      return <Map<String, dynamic>>[...inList, ...offList];
+    }
+    return _items
+        .where((i) => !done.contains((i['barcode'] ?? '').toString()))
+        .toList();
+  }
+
   Future<void> _editQty(Map<String, dynamic> r) async {
     final ctl = TextEditingController(text: _fmtQty(r['qty']));
     final ok = await showDialog<bool>(
@@ -940,28 +996,12 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                     _nodeBar(),
                     _inputBar(),
                     const Divider(height: 1, color: AppColors.divider),
+                    _viewSwitch(),
                     // 🔴 表头**空列表也要画**：不画的话第一次进来的人整页
                     //    看不到列名，只会得出"这页没有这个功能"的结论。
-                    _listHeader(),
+                    if (_showPending) _pendingHeader() else _listHeader(),
                     Expanded(
-                      child: _rows.isEmpty
-                          ? const Center(
-                              child: Padding(
-                                padding: EdgeInsets.all(24),
-                                child: Text(
-                                  '这一趟还没记到东西\n扫一个条码开始',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                      color: AppColors.textWeak, fontSize: 14),
-                                ),
-                              ),
-                            )
-                          : ListView.separated(
-                              itemCount: _rows.length,
-                              separatorBuilder: (_, __) => const Divider(
-                                  height: 1, color: AppColors.divider),
-                              itemBuilder: (_, i) => _rowTile(_rows[i]),
-                            ),
+                      child: _showPending ? _pendingList() : _recordedList(),
                     ),
                     _bottomBar(),
                   ],
@@ -1210,6 +1250,16 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
             ),
           ),
           const SizedBox(width: 8),
+          // 摄像头扫码：手机端的另一条路 —— 没带扫码枪、也不该让员工
+          // 在软键盘上手打 13 位条码。桌面端没有相机，直接不画。
+          if (cameraScanSupported)
+            IconButton(
+              key: const Key('simple-camera'),
+              tooltip: '摄像头扫码',
+              icon: const Icon(Icons.qr_code_scanner, color: AppColors.brand),
+              onPressed: (_editable && !_busy) ? _openCameraScan : null,
+            ),
+          const SizedBox(width: 8),
           FilledButton(
             key: const Key('simple-add'),
             onPressed: (_editable && !_busy) ? _addScan : null,
@@ -1244,6 +1294,134 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               child: Text('操作', key: Key('simple-col-op'), style: style)),
         ],
       ),
+    );
+  }
+
+  /// 「还没盘 / 本趟已录」切换。两个数字都常显 —— 盘到一半想回头核对
+  /// 已录的，不该靠"再扫一遍"去翻。
+  Widget _viewSwitch() {
+    final pending = _pendingRows.length;
+    final onlyDiff = SimplePhase.onlyDiffSet(_phase);
+    return Container(
+      color: AppColors.bgElevated,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Row(
+        children: [
+          ChoiceChip(
+            key: const Key('simple-view-pending'),
+            label: Text(onlyDiff ? '差异待盘 $pending' : '还没盘 $pending'),
+            selected: _showPending,
+            onSelected: (_) => setState(() => _showPending = true),
+          ),
+          const SizedBox(width: 8),
+          ChoiceChip(
+            key: const Key('simple-view-recorded'),
+            label: Text('本趟已录 ${_nodeTally.rows}'),
+            selected: !_showPending,
+            onSelected: (_) => setState(() => _showPending = false),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 未盘视图的列头（没有数量列 —— 还没盘的东西没有数）。
+  Widget _pendingHeader() {
+    const style = TextStyle(color: AppColors.textWeak, fontSize: 12);
+    return Container(
+      color: AppColors.bgElevated,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: const Row(
+        children: [
+          Expanded(
+              flex: 4,
+              child: Text('条码', key: Key('simple-col-barcode'), style: style)),
+          Expanded(
+              flex: 3,
+              child: Text('商品', key: Key('simple-col-name'), style: style)),
+          Expanded(
+              child: Text('规格', key: Key('simple-col-spec'), style: style)),
+        ],
+      ),
+    );
+  }
+
+  Widget _pendingList() {
+    final rows = _pendingRows;
+    if (rows.isEmpty) {
+      final onlyDiff = SimplePhase.onlyDiffSet(_phase);
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            onlyDiff ? '对不上的都复核完了\n可以导出盘点数据单了' : '这一趟要盘的都盘到了\n可以点右上「完成本趟」',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.textWeak, fontSize: 14),
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      itemCount: rows.length,
+      separatorBuilder: (_, __) =>
+          const Divider(height: 1, color: AppColors.divider),
+      itemBuilder: (_, i) {
+        final r = rows[i];
+        final name = (r['name'] ?? '').toString().trim();
+        final offList = name.isEmpty;
+        return Container(
+          key: Key('simple-pending-${r['barcode']}'),
+          color: AppColors.bg,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 4,
+                child: Text((r['barcode'] ?? '').toString(),
+                    style: const TextStyle(color: AppColors.text, fontSize: 13)),
+              ),
+              Expanded(
+                flex: 3,
+                child: Text(offList ? '未录入计划' : name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color:
+                            offList ? AppColors.warn : AppColors.textSub,
+                        fontSize: 13)),
+              ),
+              Expanded(
+                child: Text((r['spec'] ?? '').toString(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: AppColors.textWeak, fontSize: 12)),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _recordedList() {
+    if (_rows.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            '这一趟还没记到东西\n扫一个条码开始',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textWeak, fontSize: 14),
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      itemCount: _rows.length,
+      separatorBuilder: (_, __) =>
+          const Divider(height: 1, color: AppColors.divider),
+      itemBuilder: (_, i) => _rowTile(_rows[i]),
     );
   }
 

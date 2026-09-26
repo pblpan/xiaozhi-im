@@ -1,13 +1,18 @@
 name: xiaozhi_im_client
 description: 小智 IM 客户端 (Windows + Android)
 publish_to: 'none'
-version: 0.19.0+56
+version: 0.19.1+57
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
   flutter:
+    sdk: flutter
+  # 框架级中文文案（长按选择菜单、日期选择器等）。SDK 自带，不走 pub 拉取；
+  # 🔴 intl 版本必须跟着 flutter_localizations 走（SDK 决定下限，0.20.3）——
+  #    单独降 intl 会 version solving failed。冲突时以 `dart pub get` 的报错为准。
+  flutter_localizations:
     sdk: flutter
   http: ^1.2.0
   # 包完整性自校验（core/integrity.dart）算 SHA-256 用。
@@ -18,7 +23,7 @@ dependencies:
   shared_preferences: ^2.2.0
   file_picker: ^12.2.0
   image: ^4.2.0
-  intl: ^0.19.0
+  intl: ^0.20.3
   record: ^7.1.1
   audioplayers: ^6.8.1
   path_provider: ^2.1.6

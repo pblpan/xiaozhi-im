@@ -1,6 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+// 本地化：长按文本框弹出的"剪切/拷贝/分享"这类**框架级文案**跟着它走。
+// 不挂这套 delegate，Material 默认英文 —— 员工看到 Cut/Copy 会愣一下
+// （龙哥 2026-09-26 真机指出）。App 自己写的字全是中文，这里只管框架兜底。
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'api.dart';
 import 'core/call_service.dart';
 import 'core/config.dart';
@@ -109,6 +113,15 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           title: brand,
           navigatorKey: appNavigatorKey,
           theme: AppTheme.dark(),
+          // 🔴 固定 zh：现场全是中文用户，不跟系统语言走（跟了反而不可控）。
+          //    长按文本选择菜单、日期选择器、对话框按钮等框架文案随之变中文。
+          locale: const Locale('zh'),
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          supportedLocales: const [Locale('zh'), Locale('en')],
           // 挂在 builder 而不是包某一条路由：协作请求必须**在任何页面之上**
           // 弹出来（用户在聊天页里照样要能看到），"正在被协助"的警示条同理。
           // 包 login 或 home 都做不到 —— 一旦 push 了新路由就盖不住了。

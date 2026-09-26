@@ -891,7 +891,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </el-table-column>
             <el-table-column label="操作" width="260">
               <template #default="{ row }">
-                <el-button size="small" @click="openUserDialog(row)">编辑</el-button>
+                <el-button size="small" type="primary" plain @click="openUserDialog(row)">编辑</el-button>
                 <el-button size="small" @click="toggleRole(row)">{{ row.role === 'admin' ? '降为普通' : '设为管理员' }}</el-button>
                 <el-button size="small" type="danger" @click="delUser(row)">删除</el-button>
               </template>
@@ -929,7 +929,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </el-table-column>
             <el-table-column label="操作" width="200">
               <template #default="{ row }">
-                <el-button size="small" @click="openGroupDialog(row)">编辑</el-button>
+                <el-button size="small" type="primary" plain @click="openGroupDialog(row)">编辑</el-button>
                 <el-button size="small" type="danger" @click="delGroup(row)">解散</el-button>
               </template>
             </el-table-column>
@@ -1707,6 +1707,15 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 </template>
               </el-table-column>
               <el-table-column prop="desc" label="说明" min-width="220" show-overflow-tooltip />
+              <!-- 排序直接在这里调：客户端工作台从上到下就是这个顺序（小的在前）。
+                   ↑↓ = 和相邻那行交换排序号，不用点进「管理」抽屉里填数字。 -->
+              <el-table-column label="排序" width="120" align="center">
+                <template #default="{ row }">
+                  <span class="mono">{{ row.effective.sort }}</span>
+                  <el-button size="small" link type="primary" @click="appMove(row, -1)">↑</el-button>
+                  <el-button size="small" link type="primary" @click="appMove(row, 1)">↓</el-button>
+                </template>
+              </el-table-column>
               <el-table-column label="状态" width="150">
                 <template #default="{ row }">
                   <el-tag v-if="row.disabled" size="small" type="danger">已停用</el-tag>
@@ -1747,7 +1756,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               下面拼出来的自定义模块和它们并列出现在同一个工作台里。
               <br />
               点每行的<b>「管理」</b>可以给内置应用改名 / 换图标 / 调顺序 / 调参数 / <b>整应用停用</b>
-              （停用会同时隐藏入口<b>并拦掉它的后端接口</b>，不是只藏图标）。自定义模块请到下方模块清单里编辑
+              （停用会同时隐藏入口<b>并拦掉它的后端接口</b>，不是只藏图标）；<b>调顺序直接点排序列的 ↑↓</b> 更快，
+              客户端工作台从上到下就是这里的顺序。自定义模块请到下方模块清单里编辑
               —— 两处都能改同一件事迟早对不上。
             </div>
           </el-card>
@@ -2370,7 +2380,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <el-table-column prop="sort" label="排序" width="80" />
                   <el-table-column label="操作" width="150">
                     <template #default="{ row }">
-                      <el-button size="small" @click="openDeptDlg(row)">编辑</el-button>
+                      <el-button size="small" type="primary" plain @click="openDeptDlg(row)">编辑</el-button>
                       <el-button size="small" type="danger" @click="removeDept(row)">删除</el-button>
                     </template>
                   </el-table-column>
@@ -2391,7 +2401,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <el-table-column prop="sort" label="排序" width="80" />
                   <el-table-column label="操作" width="150">
                     <template #default="{ row }">
-                      <el-button size="small" @click="openPosDlg(row)">编辑</el-button>
+                      <el-button size="small" type="primary" plain @click="openPosDlg(row)">编辑</el-button>
                       <el-button size="small" type="danger" @click="removePos(row)">删除</el-button>
                     </template>
                   </el-table-column>
@@ -2419,7 +2429,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </el-table-column>
                   <el-table-column label="操作" width="150">
                     <template #default="{ row }">
-                      <el-button size="small" @click="openMemberDlg(row)">编辑</el-button>
+                      <el-button size="small" type="primary" plain @click="openMemberDlg(row)">编辑</el-button>
                       <el-button size="small" type="danger" @click="removeMember(row)">移除</el-button>
                     </template>
                   </el-table-column>
@@ -2871,7 +2881,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </el-table-column>
                   <el-table-column label="操作" width="140">
                     <template #default="{ row }">
-                      <el-button size="small" @click="openShiftDlg(row)">编辑</el-button>
+                      <el-button size="small" type="primary" plain @click="openShiftDlg(row)">编辑</el-button>
                       <el-button size="small" type="danger" @click="removeShift(row)">删除</el-button>
                     </template>
                   </el-table-column>
@@ -2910,7 +2920,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </el-table-column>
                   <el-table-column label="操作" width="140">
                     <template #default="{ row }">
-                      <el-button size="small" @click="openGroupDlg(row)">编辑</el-button>
+                      <el-button size="small" type="primary" plain @click="openGroupDlg(row)">编辑</el-button>
                       <el-button size="small" type="danger" @click="removeGroup(row)">删除</el-button>
                     </template>
                   </el-table-column>
@@ -3266,7 +3276,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <template #default="{ row }">
                 <el-button size="small" :loading="usProbing === row.id" @click="probeUs(row)">探活</el-button>
                 <el-button size="small" @click="openUsTest(row)">试跑</el-button>
-                <el-button size="small" @click="openUsDialog(row)">编辑</el-button>
+                <el-button size="small" type="primary" plain @click="openUsDialog(row)">编辑</el-button>
                 <el-button size="small" @click="toggleUs(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
                 <el-button size="small" type="danger" @click="delUs(row)">删除</el-button>
               </template>
@@ -7616,8 +7626,34 @@ async function saveAppAdm() {
   }
 }
 
-async function resetAppAdm() {
+/**
+ * 总览页直接调序（龙哥 2026-09-26：不想为挪个顺序进抽屉填数字）。
+ * 做法：按当前生效排序找到相邻行，两行**交换排序号**，各 PATCH 一次。
+ * 两个 sort 相等时（历史数据撞号）交换不生效，退一步把后面那行
+ * 挪一个位 —— 不追求完美布局，管理员随后还能再点。
+ */
+async function appMove(row, dir) {
+  const list = [...(appCatalog.value.builtin || [])].sort(
+    (a, b) => (a.effective.sort - b.effective.sort) || a.id.localeCompare(b.id));
+  const i = list.findIndex((x) => x.id === row.id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  const a = list[i], b = list[j];
+  let sa = a.effective.sort, sb = b.effective.sort;
+  if (sa === sb) sb = sb + (dir === -1 ? 1 : -1);
   try {
+    await Promise.all([
+      api.patch('/admin/apps/' + a.id, { sort: sb }),
+      api.patch('/admin/apps/' + b.id, { sort: sa }),
+    ]);
+    ElMessage.success('已调整顺序，客户端下次进工作台生效');
+    await loadAppCatalog();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '调整顺序失败');
+  }
+}
+
+async function resetAppAdm() {  try {
     await ElMessageBox.confirm('恢复出厂设置：名称、图标、排序、参数、停用状态全部回到出厂。确定吗？',
       '恢复出厂', { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' });
   } catch { return; }

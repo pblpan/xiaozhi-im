@@ -692,8 +692,11 @@ class SimpleRepo {
   ///    在 simple_item 里没有行，INNER JOIN 会让它整行消失 ——
   ///    而"少了一行"在明细里根本看不出来，员工会以为没扫上、再扫一遍。
   ///
-  /// 排序按 id 升序（＝扫描先后），不是按条码：员工按自己刚才扫的顺序核对最顺，
-  /// 按条码排会让刚扫的那条跑到列表中间去。
+  /// 🔴 排序按 id **降序**（＝扫描先后倒过来，**刚扫的在最上面**）。
+  ///    这是龙哥定的口径（2026-09-26）：扫码的人要核对的是"刚才那一笔"，
+  ///    列表几十行时按正序排，刚扫的那条要滚到最底下才看得见。
+  ///    扫码枪（stocktake_repo.listWithMaster）与盘点（inventory_repo）
+  ///    都是新的在前，简易盘点必须一致 —— 员工换个入口就该得到同样的表现。
   Future<List<Map<String, dynamic>>> listNodeRows(String nodeNo) async {
     final db = await LocalDb.I.db();
     return db.rawQuery('''
@@ -705,7 +708,7 @@ class SimpleRepo {
         left join simple_item i
                on i.task_no = s.zone_code and i.barcode = r.barcode
        where r.sheet_no = ?
-       order by r.id asc
+       order by r.id desc
     ''', <Object?>[_req(nodeNo, 'nodeNo')]);
   }
 
