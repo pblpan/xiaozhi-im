@@ -75,9 +75,12 @@ FILES = [
     #    白屏且控制台一片 404；只传 js 不改 index.html 同理。两者必须同批。
     #
     # 🔴 文件名是**按当轮构建**写的，改完管理台重出包后必须回来换。
-    #    0.21.5 这轮是「培训中心课件外链 + 建课挂课件 + 课时改课件」，
-    #    管理台这两项在「新建课程」弹窗和「课程结构」里，所以引用变了。
-    'public/assets/index-Cu2GcK4-.js',
+    #    0.21.5 这轮是「培训中心课件外链 + 建课挂课件 + 课时改课件」+
+    #    「减货打通商品档案 + 商档标准六列（含进价）」，管理台这几处都改了。
+    #
+    # 🔴 名称每次 `npx vite build` 都会变。重打包后**必须回来改这里**：
+    #    上面注释里那个"白屏"场景就是这么来的。
+    'public/assets/index-DYzK8-t6.js',
     'public/assets/index-CyRloi3S.css',
 ]
 
@@ -211,6 +214,27 @@ def _upload_probe(c, name):
                          % (name, want, got))
     # 容器里这个挂载点就是 /app（宿主机 .../src -> /app）
     return '/app/' + name
+
+
+def check_admin_assets(c):
+    """管理台 index.html 引用的 bundle，到底能不能真的取到。
+
+    🔴 静态资源的挂载点是 **`/admin/assets/`**，**不是 `/assets/`**
+       （2026-09-27 凌晨我拿 `/assets/xxx.js` 去探，新 bundle 一直 404，
+        差点以为"传上去没生效、要么重传要么回滚"，其实是自己的 URL 写错了 ——
+        白白怀疑了一个本来健康的东西）。这个文件/Webdav 前缀记住别再错。
+    """
+    import re
+    html = run(c, 'cat %s/public/index.html' % REMOTE_ROOT) or ''
+    names = re.findall(r'assets/(index-[A-Za-z0-9_-]+\.(?:js|css))', html)
+    if not names:
+        return '(index.html 里没找到 bundle 引用 —— 这本身就是问题)'
+    out = []
+    for n in names:
+        code = (run(c, "curl -s -o /dev/null -w '%%{http_code}' --max-time 8"
+                       " http://127.0.0.1:3602/admin/assets/%s" % n) or '').strip()
+        out.append('%s -> %s' % (n, code or '(无响应)'))
+    return '  '.join(out)
 
 
 def snapshot(c):

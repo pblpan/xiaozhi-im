@@ -40,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 4;
+  static const int schemaVersion = 5;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -227,6 +227,15 @@ class LocalDb {
       await db.execute(
           'CREATE INDEX idx_simple_item_task ON simple_item(task_no, seq)');
     },
+    // v5：商品档案补「进价」。
+    //
+    // 🔴 服务端标准六列里新加了进价（barcode/name/spec/进价/售价/库存），
+    //    客户端这张表是商档的**离线副本**，不同步这一列，同步完本地永远
+    //    是空的 —— 而且不报错（2026-09-26 的教训：字段被静默丢弃最难查）。
+    //    叫 SaveToRefresh，等补货/盘点的金额口径真要用它时才有数据。
+    (Database db) async {
+      await _addColumn(db, 'stock_master', 'purchase_price', 'REAL');
+    },
   ];
 
   /// 有序迁移列表（**仅供测试**读取）。生产代码不要碰它。
@@ -292,7 +301,7 @@ class LocalDb {
   }
 
   /// 新建库（onCreate 收到的 version 即当前 schemaVersion）。
-  /// 冷启动在 v1 时只跑 _migrations[0]；从 0 直装到 v4 会跑 [0,1,2,3]。
+  /// 冷启动在 v1 时只跑 _migrations[0]；从 0 直装到 v5 会跑 [0,1,2,3,4]。
   /// ⚠️ 加迁移时这句里的数字要跟着改（写死的版本号最容易变成假说明）。
   Future<void> _onCreate(Database db, int version) async {
     for (var i = 1; i <= version; i++) {
@@ -329,4 +338,18 @@ class LocalDb {
     }
     _db = null;
   }
+}
+
+/// 给已有表补一列，**列在就什么都不做**。
+///
+/// 🔴 为什么不能直接 `ALTER TABLE … ADD COLUMN`：同一份库可能走过不同路径
+///    （新建时按最新 DDL 建表、之后再跑迁移；或者老库升级），
+///    直接 ALTER 会撞 "duplicate column name"，SQLite 抛错 = App 起不来。
+///    加列这种"跑一次就够"的事，判据必须写在 SQL 之前。
+Future<void> _addColumn(
+    Database db, String table, String column, String type) async {
+  final cols = await db.rawQuery('PRAGMA table_info($table)');
+  final has = cols.any((r) => (r['name'] ?? '').toString() == column);
+  if (has) return;
+  await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
 }

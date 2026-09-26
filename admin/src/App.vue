@@ -3410,7 +3410,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <el-alert type="success" :closable="false" style="margin-bottom:14px">
             <template #title>
               商品档案（商档）是<b>盘点的底表</b>：手机在盘点页点「同步商品档案」，
-              就把这里的条码 / 名称 / 规格 / 单价整份拉到手机上，断网也能盘 ——
+              就把这里的<b>条码 / 名称 / 规格 / 售价 / 进价 / 库存</b>整份拉到手机上，
+              断网也能盘 ——
               扫出来的每一行靠它显示成人看得懂的名字，差异表靠它算金额。
               以前这份数据只能从泰格上游拉 —— 那台机器一关机、IP 一漂就断。
               现在存在自家服务端：<b>一次导入，全员拉同一份</b>。
@@ -3425,6 +3426,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
 
           <div class="page-bar">
             <el-button type="primary" :loading="masterImport.running" @click="pickMasterFile">导入 CSV</el-button>
+            <span class="hint" style="margin-left:8px">
+              标准格式（六列，<b>必须带表头</b>）：商品条码，商品名称，规格，进价，售价，库存
+            </span>
             <el-button :disabled="!master.total || masterImport.running" @click="clearMaster">清空</el-button>
             <span class="hint">
               格式：<code class="mono">序号,条码,商品名字,数量</code> —— 和扫码枪同一份模板，
@@ -3468,8 +3472,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <el-table-column label="单位" width="80">
               <template #default="{ row }">{{ row.unit || '—' }}</template>
             </el-table-column>
-            <el-table-column label="单价" width="100">
+            <el-table-column label="售价" width="100">
               <template #default="{ row }">{{ row.unit_price == null ? '—' : row.unit_price }}</template>
+            </el-table-column>
+            <el-table-column label="进价" width="100">
+              <template #default="{ row }">{{ row.purchase_price == null ? '—' : row.purchase_price }}</template>
             </el-table-column>
             <el-table-column label="账面数（参考）" width="120">
               <template #default="{ row }">
@@ -6274,7 +6281,17 @@ function readFileText(file) {
 }
 
 /**
- * 解析成 {barcode, name, account_qty}。
+ * 解析成龙哥定的**标准商档六列**：
+ *     { barcode 商品条码, name 商品名称, spec 规格,
+ *       purchase_price 进价, unit_price 售价, account_qty 库存 }
+ *
+ * 🔴 为什么必须齐着这六列读（2026-09-26 的血泪）：早先这个解析器只读
+ *    {barcode, name, account_qty} 三列，**其余列一律丢弃**。于是门店按
+ *    「条码/名称/规格/进价/售价/库存」导进来的表，落到库里只剩三个字段 ——
+ *    线上 12.6 万行商档「规格」和「单位」都是 0%，不是档案里没有，
+ *    是**根本没读进来**。而它不报错、不警告，导入照样显示成功。
+ *    少读字段比读错字段更难发现，因为一切看起来都正常。
+ *
  * 认两种形状：带表头（按列名找）/ 不带表头（序号,条码,名字,数量）。
  * 🔴 序号列的判定要**严格**：门店编码常常就是 1001、1002 这种四位数，
  *    宽松判定会把"第一列是编码"误认成序号，于是整表的条码列错位一格 ——
@@ -6292,31 +6309,55 @@ function parseMasterCsv(text) {
     for (const k of keys) { const i = head.findIndex((h) => h.includes(k)); if (i >= 0) return i; }
     return -1;
   };
-  const hb = find(['条码', 'barcode', '商品编码', '国际条码']);
+  // 🔴 '商品条码' 必须排在 '条码' 之前：两者用 includes 匹配，都能命中
+  //    「商品条码」这一列，先命中谁就用谁 —— 结果没差别，但顺序固定了，
+  //    后来看代码的人不用猜。
+  const hb = find(['商品条码', '条码', 'barcode', '商品编码', '国际条码']);
   let start = 0;
   let idx;
   if (hb >= 0) {
     start = 1;
-    idx = { barcode: hb, name: find(['商品名字', '商品名称', '品名', '名称', 'name']), qty: find(['数量', '账面', '库存', 'qty']) };
+    idx = {
+      barcode: hb,
+      name: find(['商品名称', '商品名字', '品名', '名称', 'name']),
+      spec: find(['规格', '型号', 'spec']),
+      purchase_price: find(['进价', '成本价', '采购价', 'purchase']),
+      unit_price: find(['售价', '零售价', '单价', 'price']),
+      account_qty: find(['库存', '账面', '数量', 'qty']),
+    };
   } else {
-    // 没有表头：只有当"第一列严格等于行号"时才认它是序号列
+    // 没有表头：只有当"第一列严格等于行号"时才认它是序号列。
+    // 🔴 无表头时**刻意只读旧的四列**（序号/条码/名称/数量），不去猜
+    //    规格/进价/售价在哪一列 —— 列数对不上就会整表错位，
+    //    错位比少读三个字段严重得多。要带规格和价格，请给文件加表头。
     const sample = cells.slice(0, Math.min(cells.length, 5));
     const hasSerial = cells.length >= 2 && sample.every((c, i) => c[0] === String(i + 1));
     idx = hasSerial
-      ? { barcode: 1, name: 2, qty: 3 }
-      : { barcode: 0, name: 1, qty: 2 };
+      ? { barcode: 1, name: 2, account_qty: 3 }
+      : { barcode: 0, name: 1, account_qty: 2 };
   }
+
+  // 价格/数量都可能带着 ¥、空格、千分位逗号（"1,280.00"），
+  // 只保数字、小数点、负号 —— 账面数出现负数是正常的（盘的货比账多）。
+  const money = (v) => {
+    const s = String(v ?? '').replace(/[^0-9.\-]/g, '');
+    if (s === '' || s === '-') return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
 
   const out = [];
   for (let i = start; i < cells.length; i++) {
     const c = cells[i];
     const barcode = (c[idx.barcode] || '').trim();
     if (!barcode) continue;
-    const rawQty = idx.qty >= 0 ? String(c[idx.qty] ?? '').replace(/[^0-9.\-]/g, '') : '';
     out.push({
       barcode,
       name: idx.name >= 0 ? (c[idx.name] || '') : '',
-      account_qty: rawQty === '' ? null : Number(rawQty),
+      spec: idx.spec >= 0 ? (c[idx.spec] || '') : '',
+      purchase_price: idx.purchase_price >= 0 ? money(c[idx.purchase_price]) : null,
+      unit_price: idx.unit_price >= 0 ? money(c[idx.unit_price]) : null,
+      account_qty: idx.account_qty >= 0 ? money(c[idx.account_qty]) : null,
     });
   }
   return out;
@@ -6339,10 +6380,37 @@ async function onMasterFile(e) {
     ElMessage.error('没解析出任何行。至少要能找到「条码」这一列。');
     return;
   }
+
+  // 🔴 导入前把**每列读到几行**摆出来 —— 这是防"少读字段"的最后一道护栏。
+  //    2026-09-26 线上 12.6 万行商档「规格」「单位」全是 0%，根因就是解析器
+  //    只读了三列、**静默丢弃其余**。它不报错、不警告，导入显示成功，
+  //    直到三个月后要拿单位判定补货口径才发现。
+  //    现在这一栏摆在这儿：哪一列读了 0 行，导入前一眼就能看见。
+  const stat = (k) => rows.filter((r) => {
+    const v = r[k];
+    return v !== null && v !== undefined && v !== '';
+  }).length;
+  const fields = [
+    ['条码', 'barcode'], ['名称', 'name'], ['规格', 'spec'],
+    ['进价', 'purchase_price'], ['售价', 'unit_price'], ['库存', 'account_qty'],
+  ];
+  const missing = fields.filter(([, k]) => stat(k) === 0).map(([label]) => label);
+  const statLine = fields.map(([label, k]) => `${label} <b>${stat(k)}</b>`).join(' / ');
+  const warnHtml = missing.length
+    ? `<div style="margin-top:8px;color:#e6a23c">⚠️ 这几列<b>一行都没读到</b>：${missing.join('、')}`
+      + ` —— 文件里没有这一列，或列名不认识（认的是：`
+      + `商品条码 / 商品名称 / 规格 / 进价 / 售价 / 库存）。<br>`
+      + `缺了也能导，但下游要用的地方会一直显示"—"（比如补货按单位判称重口径）。</div>`
+    : '';
+
   try {
     await ElMessageBox.confirm(
-      `从「${file.name}」解析到 ${rows.length} 行。导入完成后将替换现有的 ${master.value.total} 行商品档案。`,
-      '导入商品档案', { type: 'warning', confirmButtonText: '开始导入', cancelButtonText: '取消' });
+      `<div>从「${file.name}」解析到 <b>${rows.length}</b> 行，`
+      + `导入完成后将替换现有的 ${master.value.total} 行商品档案。</div>`
+      + `<div style="margin-top:6px">${statLine}</div>${warnHtml}`,
+      '导入商品档案',
+      { type: 'warning', confirmButtonText: '开始导入', cancelButtonText: '取消',
+        dangerouslyUseHTMLString: true });
   } catch { return; }
 
   const batch = 'B' + Date.now();

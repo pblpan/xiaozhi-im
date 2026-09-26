@@ -770,13 +770,33 @@ CREATE TABLE IF NOT EXISTS product_master (
   name TEXT,
   spec TEXT,
   unit TEXT,
-  unit_price REAL,
+  unit_price REAL,              -- 售价。名字沿用早期列名，语义见下面那条注释
+  purchase_price REAL,          -- 进价（成本价）
   account_qty REAL,             -- 账面数（库存）；NULL = 账上没有，盘点时算差异
   batch TEXT,                   -- 本次导入批次号，commit 时用它区分新旧
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_product_master_updated ON product_master (updated_at);
 `);
+
+// ── 商档「进价」列：老库是加表之后才有这列的，启动时补上 ────────────────
+// 🔴 为什么不能只写进上面的 CREATE TABLE：已经跑着的库（比如线上 2026-09-20
+//    导的那 12.6 万行）建表时还没有这列，而 `CREATE TABLE IF NOT EXISTS`
+//    对已存在的表**什么都不做** —— 于是新字段永远加不上，导入时服务端静默
+//    丢掉进价，管理台也拿不到。这类毛病最阴的地方是**不报错**：一切照常，
+//    只是那一列永远是空。所以每次启动都要兜住。
+//
+// 🔴 列名沿用 `unit_price` 表示**售价**：早期就叫这个名，线上已有数据按它写入；
+//    改名要同时动数据库、管理台、客户端本地表三处，风险大于收益。
+//    语义在这条注释里钉死：`unit_price` = 售价，`purchase_price` = 进价。
+try {
+  const pmCols = db.prepare('PRAGMA table_info(product_master)').all().map((c) => c.name);
+  if (!pmCols.includes('purchase_price')) {
+    db.exec('ALTER TABLE product_master ADD COLUMN purchase_price REAL');
+  }
+} catch (e) {
+  console.warn('[小智IM] product_master 补 purchase_price 列失败：%s', e.message);
+}
 
 // ── 开放 API 的「签名通道」（对接方用 app_id + app_secret 调，见 apisign.js）──
 //

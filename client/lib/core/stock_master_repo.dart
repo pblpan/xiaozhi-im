@@ -200,6 +200,7 @@ class StockMasterRepo {
         spec TEXT,
         unit TEXT,
         unit_price REAL,
+        purchase_price REAL,
         account_qty REAL,
         source TEXT,
         updated_at INTEGER
@@ -225,6 +226,10 @@ class StockMasterRepo {
             'spec': e['spec'],
             'unit': e['unit'],
             'unit_price': e['unit_price'],
+            // 🔴 进价必须一起落库（标准六列之一）。漏掉的话同步完本地表
+            //    这列永远为空，而它**不报错也不警告** —— 服务端 2026-09-26
+            //    那次就是这么丢掉规格和单位的，直到要按单位判称重口径才发现。
+            'purchase_price': e['purchase_price'],
             'account_qty': e['account_qty'],
           });
         }

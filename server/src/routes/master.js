@@ -88,7 +88,7 @@ router.get('/', (req, res) => {
   const params = since ? [since] : [];
   const total = db.prepare(`SELECT COUNT(*) AS n FROM product_master ${where}`).get(...params).n;
   const rows = db.prepare(`
-    SELECT barcode, name, spec, unit, unit_price, account_qty, updated_at
+    SELECT barcode, name, spec, unit, unit_price, purchase_price, account_qty, updated_at
       FROM product_master ${where}
      ORDER BY barcode ASC
      LIMIT ? OFFSET ?
@@ -108,7 +108,9 @@ router.get('/', (req, res) => {
 // ============================================================
 
 /**
- * 写一块商档。body: { rows: [{barcode, name?, spec?, unit?, unit_price?, account_qty?}], batch }
+ * 写一块商档。导入的标准格式（龙哥 2026-09-26 定的六列）：
+ *   body: { rows: [{ 商品条码 barcode, 商品名称 name, 规格 spec,
+ *                    进价 purchase_price, 售价 unit_price, 库存 account_qty }], batch }
  *
  * 🔴 batch 必填：没有批次号就没法在 commit 时区分新旧，
  *    也就没法做到"传一半不影响店里现有底表"。
@@ -126,13 +128,15 @@ router.post('/upload', (req, res) => {
 
   const now = Date.now();
   const upsert = db.prepare(`
-    INSERT INTO product_master (barcode, name, spec, unit, unit_price, account_qty, batch, updated_at)
-    VALUES (?,?,?,?,?,?,?,?)
+    INSERT INTO product_master
+      (barcode, name, spec, unit, unit_price, purchase_price, account_qty, batch, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?)
     ON CONFLICT(barcode) DO UPDATE SET
       name = excluded.name,
       spec = excluded.spec,
       unit = excluded.unit,
       unit_price = excluded.unit_price,
+      purchase_price = excluded.purchase_price,
       account_qty = excluded.account_qty,
       batch = excluded.batch,
       updated_at = excluded.updated_at
@@ -146,7 +150,7 @@ router.post('/upload', (req, res) => {
       const bc = code(raw && raw.barcode);
       if (!bc) { rejected.push({ barcode: raw && raw.barcode, reason: '条码为空或不合法' }); continue; }
       upsert.run(bc, text(raw.name), text(raw.spec), text(raw.unit),
-        num(raw.unit_price), num(raw.account_qty), batch, now);
+        num(raw.unit_price), num(raw.purchase_price), num(raw.account_qty), batch, now);
       accepted++;
     }
     db.exec('COMMIT');

@@ -323,8 +323,10 @@ function stopServer() {
     body: {
       batch: BATCH,
       rows: [
-        { barcode: '6901234500888', name: '商档专有商品', spec: '1×12', unit: '箱', account_qty: 300 },
-        { barcode: '6901234500024', name: '盘过且商档也有', spec: '1×24', unit: '箱', account_qty: 999 },
+        { barcode: '6901234500888', name: '商档专有商品', spec: '1×12', unit: '箱',
+          account_qty: 300, purchase_price: 8.5, unit_price: 12 },
+        { barcode: '6901234500024', name: '盘过且商档也有', spec: '1×24', unit: '箱',
+          account_qty: 999, purchase_price: 90, unit_price: 120 },
       ],
     },
   });
@@ -354,6 +356,21 @@ function stopServer() {
     r.body?.accountQty === 12, JSON.stringify(r.body?.accountQty));
   ok('  accountFrom = counted',
     r.body?.accountFrom === 'counted', JSON.stringify(r.body?.accountFrom));
+
+  // 标准六列（商品条码 / 商品名称 / 规格 / 进价 / 售价 / 库存）必须**都能落库**。
+  // 🔴 这条看着像废话，但它防的是 2026-09-26 那个坑：管理台解析器只读三列、
+  //    其余静默丢弃，于是线上 12.6 万行商档「规格」「单位」全是 0%，
+  //    而且全程不报错。列少一列，下游就永远显示"—"。
+  r = await api('GET', '/api/master/?pageSize=500', { token: admin });
+  const row888 = (r.body?.items || []).find((x) => x.barcode === '6901234500888');
+  ok('🔴 商档标准六列都能落库（不是只存了三列）',
+    !!row888 && row888.spec === '1×12' && row888.unit === '箱'
+    && row888.purchase_price === 8.5 && row888.unit_price === 12
+    && row888.account_qty === 300,
+    JSON.stringify(row888));
+  ok('  拉商档时 purchase_price 也在返回里（列名写错会静默变成 undefined）',
+    row888 && Object.prototype.hasOwnProperty.call(row888, 'purchase_price'),
+    JSON.stringify(row888 && Object.keys(row888)));
 
   // 商档里没有的码，行为照旧
   r = await api('GET', '/api/deduct/reference?barcode=6901234500999', { token: admin });

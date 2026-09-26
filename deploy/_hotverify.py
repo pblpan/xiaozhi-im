@@ -44,6 +44,10 @@ def main():
     print('\n=== 1) 接口复探（401 = 挂上了，404 = 没挂上）===')
     curl_probes(c)
 
+    print('\n=== 1b) 管理台 bundle 真能取到才是没白屏（期望 200）===')
+    # 换 j、index.html 引入新 bundle 之后，这里能看到新的那个是不是 200
+    print('  ' + d.check_admin_assets(c))
+
     print('\n=== 2) 迁移验列 ===')
     print('  tr_lesson  : ' + d.check_columns(c, 'tr_lesson', ['link_url']))
     print('  tr_progress: ' + d.check_columns(c, 'tr_progress',
