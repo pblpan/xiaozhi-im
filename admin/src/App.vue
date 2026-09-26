@@ -3305,7 +3305,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <el-input v-model="usForm.label" placeholder="如：门店日报数据源（给自己看的）" />
             </el-form-item>
             <el-form-item label="上游地址">
-              <el-input v-model="usForm.baseUrl" placeholder="http://192.168.31.44:3666（写到端口即可，不要带子路径）" />
+              <el-input v-model="usForm.baseUrl" placeholder="http://192.168.1.100:3666（写到端口即可，不要带子路径）" />
               <div class="hint">
                 必须是服务端**能访问到**的地址。填 127.0.0.1 时注意：跑的是容器/服务器上的本机，
                 不是你自己电脑。

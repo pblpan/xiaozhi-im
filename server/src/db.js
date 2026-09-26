@@ -345,7 +345,7 @@ CREATE TABLE IF NOT EXISTS upstreams (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,          -- URL 里用的名字：/api/hooks/up/<name>/...
   label TEXT,                          -- 中文说明，管理台显示
-  base_url TEXT NOT NULL,              -- 如 http://192.168.31.44:3700
+  base_url TEXT NOT NULL,              -- 如 http://192.168.1.100:3700
   auth_header TEXT,                    -- 可选。整条 Authorization 值，服务端持有
   allow_roles TEXT NOT NULL DEFAULT '[]', -- 允许的角色白名单，空=所有登录用户
   timeout_ms INTEGER NOT NULL DEFAULT 10000,
