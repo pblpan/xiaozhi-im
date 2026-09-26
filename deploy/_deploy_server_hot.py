@@ -38,10 +38,15 @@ SERVER_DIR = os.path.join(REPO, 'server')
 REMOTE_ROOT = '/vol1/@appcenter/xiaozhi-im/src'
 CONTAINER = 'xiaozhi-im'
 
-# 本轮自 0.21.2 起改动的服务端文件（相对 server/）。
+# 本轮自 0.21.3 = 9-25 那批文件**重传** + 本轮管理台。
+# 🔴 2026-09-26 中午实测发现：上一轮 0.21.2 热更是**半截** —— 容器版本号
+#    到了 0.21.2，但 routes/deduct.js、training.js 等根本不在（线上
+#    /api/deduct 实测 404，不是当时记录的 401）。原因未查明（疑似 fpk
+#    升级覆盖了 src），所以这里把 0.21.2 的全部文件重新列上，宁多勿漏。
 # 🔴 用 git diff 算出来贴在这里，而不是"传整个 server 目录" ——
 #    整目录上传会把别处可能的手改一起覆盖掉，而且没法预览。
 FILES = [
+    'package.json',
     'src/appdata.js',
     'src/appguard.js',
     'src/appoverrides.js',
@@ -52,13 +57,9 @@ FILES = [
     'src/routes/inventory.js',
     'src/routes/training.js',
     'public/index.html',
-    # 🔴 只传 index.html 实际引用的那个 bundle。
-    #     formerly 把 index-CGeyGD1r.js 也列进来过，但本地根本没这个构建产物
-    #    （它是 9-25 那次部署留下的旧文件名）—— 列了会让脚本以为文件缺失而拒跑。
-    #    顺带一个真发现：远端 index.html 引用的是 CGeyGD1r，而它里面
-    #    「价签 / price_tag / 消息推送」三个关键词计数全是 0 = **管理台 UI 也是过期的**，
-    #    这轮一起换成 BzyV4oOy（实测含「消息推送」），属于升级不是降级。
-    'public/assets/index-BzyV4oOy.js',
+    # 🔴 只传 index.html 实际引用的那个 bundle（0.21.3 管理台：应用中心
+    #    排序列 + ↑↓ 调序、编辑按钮 primary plain —— vite 构建产物）。
+    'public/assets/index-YDtztiLr.js',
 ]
 
 

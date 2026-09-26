@@ -88,14 +88,44 @@ void main() {
     });
 
     test('差异复盘的 allowedBarcodes 真的被带下去：不在集合里的被拒不落库', () async {
-      final (_, nodeNo) = await openFirstNode();
-      final sink = SimpleScanSink(repo, allowedBarcodes: <String>{});
+      // 🔴 场景必须是**真的差异复盘趟**：规则刻意规定"非差异趟不许被
+      //    allowedBarcodes 限制"（方案 §2 规矩 4）—— 给初盘传集合是拦不住的，
+      //    那是设计不是 bug。所以要老老实实走完初盘/复盘、造出差异、开第三趟。
+      final rs = rows(2);
+      final t =
+          await repo.startNewRound(scene: SimpleScene.store, rows: rows(2));
+      final taskNo = (t['task_no'] ?? '').toString();
 
-      final r = await sink.record(nodeNo, rows(1).first.barcode);
-      expect(r.accepted, isFalse, reason: '差异集为空时谁都不该放行');
-      expect(r.hit, isNull, reason: '被拒的不能带 hit（不能闪绿）');
-      final tally = await repo.nodeTally(nodeNo);
-      expect(tally.rows, 0, reason: '被拒的扫码一个字节都不能写');
+      // 初盘：A 扫 5 件 → 提交
+      final n1 = await repo.openOrCreateNode(taskNo, SimplePhase.first);
+      await repo.scan((n1['sheet_no'] ?? '').toString(), rs[0].barcode,
+          qty: 5);
+      await repo.submitNode((n1['sheet_no'] ?? '').toString());
+
+      // 复盘：A 扫 3 件（造差异）→ 提交
+      final n2 = await repo.openOrCreateNode(taskNo, SimplePhase.second);
+      await repo.scan((n2['sheet_no'] ?? '').toString(), rs[0].barcode,
+          qty: 3);
+      await repo.submitNode((n2['sheet_no'] ?? '').toString());
+
+      // 差异集 = {A}；开第三趟
+      final diff = await repo.diffSet(taskNo);
+      expect(diff, contains(rs[0].barcode));
+      final n3 = await repo.openOrCreateNode(taskNo, SimplePhase.third);
+      final nodeNo = (n3['sheet_no'] ?? '').toString();
+
+      // 摄像头页拿到的是这个差异集 —— 扫 B（不在集合里）必须被拒
+      final sink = SimpleScanSink(repo, allowedBarcodes: diff);
+      final rejected = await sink.record(nodeNo, rs[1].barcode);
+      expect(rejected.accepted, isFalse,
+          reason: '差异复盘里扫非差异品必须被拒');
+      expect(rejected.hit, isNull, reason: '被拒的不能带 hit（不能闪绿）');
+      expect((await repo.nodeTally(nodeNo)).rows, 0,
+          reason: '被拒的扫码一个字节都不能写');
+
+      // 反面：扫差异集里的 A 应该放行（同一入口不改变规则）
+      final ok = await sink.record(nodeNo, rs[0].barcode);
+      expect(ok.accepted, isTrue);
     });
 
     test('summary / recent 的口径：kinds=品种数、recent 新的在前', () async {
