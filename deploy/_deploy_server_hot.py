@@ -25,6 +25,7 @@
 """
 import argparse
 import os
+import re
 import shlex
 import sys
 import time
@@ -68,25 +69,46 @@ FILES = [
     'src/routes/inventory.js',
     'src/routes/training.js',
     'public/index.html',
-    # 🔴 只传 index.html 实际引用的那两个 bundle。
-    #    ⚠️ 这里必须**逐个列出 index.html 里引用的真实文件名**，不能"传整个
-    #    public/assets"：vite 每次构建的产物名带哈希（index-XXXX.js），
-    #    只换 index.html 不换 assets → 浏览器拿到新 html 却请求不存在的 js，
-    #    白屏且控制台一片 404；只传 js 不改 index.html 同理。两者必须同批。
+    # 🔴 管理台的 bundle 名**不再写死在这里**（2026-09-27 改）。
+    #    原因：vite 每次构建产物的文件名都带新哈希（index-XXXX.js），
+    #    写在清单里的那一刻就开始过期。忘了改的后果是"新 index.html 引用
+    #    一个没传上去的 js" → 管理台白屏、控制台一片 404 —— 而且很容易
+    #    误判成"服务端坏了"。这类"靠人记得同步"的清单，早晚会漏。
+    #    现在改成运行时从本地 index.html 里读出来（见 asset_files()），
+    #    构建完不用回来改任何东西。
     #
-    # 🔴 文件名是**按当轮构建**写的，改完管理台重出包后必须回来换。
-    #    0.21.5 这轮是「培训中心课件外链 + 建课挂课件 + 课时改课件」+
-    #    「减货打通商品档案 + 商档标准六列（含进价）」，管理台这几处都改了。
-    #
-    # 🔴 名称每次 `npx vite build` 都会变。重打包后**必须回来改这里**：
-    #    上面注释里那个"白屏"场景就是这么来的。
-    'public/assets/index-DYzK8-t6.js',
-    'public/assets/index-CyRloi3S.css',
+    # ⚠️ 唯一要守的规矩还是那条：index.html 与它引用的 assets **必须同批上传**。
+    #    asset_files() 保证了两者同源，天然满足。
 ]
 
 
+def asset_files():
+    """这次构建的 index.html 到底引用了哪几个 assets。
+
+    🔴 为什么不写在 FILES 清单里：vite 产物的文件名带内容哈希，
+        每次 `npx vite build` 都会变。写死的那一刻就开始过期，而"忘了改"
+        的后果是**管理台白屏**（新 html 引用一个没传上去的 js，控制台 404）——
+        很容易被误判成"服务端坏了"。改成每次现读，就没有"回头改清单"这一步。
+
+    ⚠️ 顺带保证了那条铁规矩：index.html 与它引用的 assets **同批上传**。
+    """
+    html_path = os.path.join(SERVER_DIR, 'public', 'index.html')
+    with open(html_path, encoding='utf-8') as f:
+        html = f.read()
+    names = re.findall(r'assets/index-[A-Za-z0-9_-]+\.(?:js|css)', html)
+    # 去重但保序：同一份可能被引两次
+    seen, out = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append('public/' + n)
+    if not out:
+        raise SystemExit('本地 %s 里找不到 assets/index-*.js —— '
+                         '管理台没构建过？先 cd admin && npx vite build' % html_path)
+    return out
+
+
 def describe_remote(c):
-    """远端现在到底是个什么状态 —— 每次动手前先看一眼，别按想象做事。"""
     out = []
     # ⚠️ 注意 bind mount 的对应关系：宿主机 /vol1/@appcenter/xiaozhi-im/src
     #    整个挂进容器 /app，而容器里是 `node src/index.js`。
@@ -266,13 +288,17 @@ def main():
                                % CONTAINER))
         return 0
 
-    missing = [f for f in FILES if not os.path.isfile(os.path.join(SERVER_DIR, f))]
+    # 管理台那两个 bundle 名现读（构建后会变），放在 restart-only 之后算 ——
+    # 只想重启的时候不该因为"本地没构建过"就退出。
+    files = FILES + asset_files()
+
+    missing = [f for f in files if not os.path.isfile(os.path.join(SERVER_DIR, f))]
     if missing:
         print('本地缺文件，不传：', missing)
         return 2
 
-    print('\n=== 将上传 %d 个文件 ===' % len(FILES))
-    for f in FILES:
+    print('\n=== 将上传 %d 个文件 ===' % len(files))
+    for f in files:
         p = os.path.join(SERVER_DIR, f)
         print('  %-40s %d 字节' % (f, os.path.getsize(p)))
 
@@ -284,7 +310,7 @@ def main():
     snapshot(c)
 
     print('\n=== 2) 上传 ===')
-    for f in FILES:
+    for f in files:
         local = os.path.join(SERVER_DIR, f)
         remote = REMOTE_ROOT + '/' + f
         ok, detail = put_file(c, local, remote, backup=True, stamp='pre_hotfix')

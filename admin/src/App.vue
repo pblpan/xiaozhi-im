@@ -3427,7 +3427,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <div class="page-bar">
             <el-button type="primary" :loading="masterImport.running" @click="pickMasterFile">导入 CSV</el-button>
             <span class="hint" style="margin-left:8px">
-              标准格式（六列，<b>必须带表头</b>）：商品条码，商品名称，规格，进价，售价，库存
+              标准格式（七列，<b>必须带表头</b>）：条码，名称，规格，单位，进价，售价，库存
             </span>
             <el-button :disabled="!master.total || masterImport.running" @click="clearMaster">清空</el-button>
             <span class="hint">
@@ -6281,16 +6281,56 @@ function readFileText(file) {
 }
 
 /**
- * 解析成龙哥定的**标准商档六列**：
- *     { barcode 商品条码, name 商品名称, spec 规格,
+ * 按分隔符切一行 CSV，**认得引号包裹**。
+ *
+ * 🔴 不能直接 `line.split(',')`（2026-09-27 被测试当场抓出来）：
+ *    Excel 导出的价格常常是带千分位的 `"¥1,280.00"`，**字段内部的逗号会被
+ *    当成分隔符**，于是这一行从价格开始整列错位 —— 进价吃掉了售价、
+ *    售价吃掉了库存，错得还挺整齐，界面上完全看不出来。
+ *    CSV 的规矩是：字段被双引号包起来时，内部的逗号属于内容；
+ *    字段内部的双引号写成两个（`""`）表示一个字面引号。
+ */
+function splitCsvLine(line, delim) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; }   // "" → 一个引号
+        else inQuotes = false;
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delim) {
+      out.push(cur); cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((c) => c.trim());
+}
+
+/**
+ * 解析成龙哥定的**标准商档七列**：
+ *     { barcode 条码, name 名称, spec 规格, unit 单位,
  *       purchase_price 进价, unit_price 售价, account_qty 库存 }
  *
- * 🔴 为什么必须齐着这六列读（2026-09-26 的血泪）：早先这个解析器只读
+ * 🔴 为什么必须齐着这七列读（2026-09-26 的血泪）：早先这个解析器只读
  *    {barcode, name, account_qty} 三列，**其余列一律丢弃**。于是门店按
- *    「条码/名称/规格/进价/售价/库存」导进来的表，落到库里只剩三个字段 ——
+ *    「条码/名称/规格/单位/进价/售价/库存」导进来的表，落到库里只剩三个字段 ——
  *    线上 12.6 万行商档「规格」和「单位」都是 0%，不是档案里没有，
  *    是**根本没读进来**。而它不报错、不警告，导入照样显示成功。
  *    少读字段比读错字段更难发现，因为一切看起来都正常。
+ *
+ * ⚠️ 七列是**龙哥 2026-09-27 加了「单位」之后**的样子（截图为准）：
+ *     条码 | 名称 | 规格 | 单位 | 进价 | 售价 | 库存
+ *    「单位」不是可有可无的附带信息：补货那套「非称重按最小单位、
+ *    称重按公斤」的判据就是它，缺了就只能一律按最小单位走。
  *
  * 认两种形状：带表头（按列名找）/ 不带表头（序号,条码,名字,数量）。
  * 🔴 序号列的判定要**严格**：门店编码常常就是 1001、1002 这种四位数，
@@ -6302,13 +6342,28 @@ function parseMasterCsv(text) {
   if (!lines.length) return [];
   const probe = lines[0];
   const delim = probe.includes('\t') ? '\t' : (probe.includes(',') ? ',' : (probe.includes(';') ? ';' : '\t'));
-  const cells = lines.map((l) => l.split(delim).map((c) => c.trim().replace(/^"|"$/g, '')));
+  const cells = lines.map((l) => splitCsvLine(l, delim));
 
   const head = cells[0].map((c) => c.toLowerCase());
+
+  // 已经分配出去的列下标。**这一步是给「单位」留的**：
+  //   `unit` 和 `unit_price` 是前缀关系，用裸 includes 匹配时
+  //   `unit` 会命中 `unit_price` 那一列 —— 英文表头下单位就会串到售价上。
+  //   所以按"先具体、后宽泛"的顺序取，并把取过的列排掉。
+  const taken = new Set();
   const find = (keys) => {
-    for (const k of keys) { const i = head.findIndex((h) => h.includes(k)); if (i >= 0) return i; }
+    // 先全等（表头就叫"单位"/"售价"），再包含（"基本单位"/"零售价"）
+    for (const k of keys) {
+      const i = head.findIndex((h, j) => h === k && !taken.has(j));
+      if (i >= 0) { taken.add(i); return i; }
+    }
+    for (const k of keys) {
+      const i = head.findIndex((h, j) => h.includes(k) && !taken.has(j));
+      if (i >= 0) { taken.add(i); return i; }
+    }
     return -1;
   };
+
   // 🔴 '商品条码' 必须排在 '条码' 之前：两者用 includes 匹配，都能命中
   //    「商品条码」这一列，先命中谁就用谁 —— 结果没差别，但顺序固定了，
   //    后来看代码的人不用猜。
@@ -6321,15 +6376,18 @@ function parseMasterCsv(text) {
       barcode: hb,
       name: find(['商品名称', '商品名字', '品名', '名称', 'name']),
       spec: find(['规格', '型号', 'spec']),
+      // ⚠️ 价格必须排在「单位」前面取（见上面 taken 那段），
+      //    否则 unit 会把 unit_price 抢走，售价变成空、单位变成价格。
+      unit_price: find(['售价', '零售价', '单价', 'price', 'unit_price']),
       purchase_price: find(['进价', '成本价', '采购价', 'purchase']),
-      unit_price: find(['售价', '零售价', '单价', 'price']),
+      unit: find(['单位', '基本单位', '计价单位', 'unit']),
       account_qty: find(['库存', '账面', '数量', 'qty']),
     };
   } else {
     // 没有表头：只有当"第一列严格等于行号"时才认它是序号列。
     // 🔴 无表头时**刻意只读旧的四列**（序号/条码/名称/数量），不去猜
-    //    规格/进价/售价在哪一列 —— 列数对不上就会整表错位，
-    //    错位比少读三个字段严重得多。要带规格和价格，请给文件加表头。
+    //    规格/单位/进价/售价在哪一列 —— 列数对不上就会整表错位，
+    //    错位比少读几个字段严重得多。要带这些，请给文件加表头。
     const sample = cells.slice(0, Math.min(cells.length, 5));
     const hasSerial = cells.length >= 2 && sample.every((c, i) => c[0] === String(i + 1));
     idx = hasSerial
@@ -6347,19 +6405,27 @@ function parseMasterCsv(text) {
   };
 
   const out = [];
+  // 🔴 列数和表头不一致 = 这一行**整列错位**了（分隔符猜错、或字段里有
+  //    没加引号的逗号）。错位最坏的地方是"看着挺整齐"：进价吃售价、
+  //    售价吃库存，界面上一点异常都没有。所以数出来，让导入前那一栏能警告。
+  let colMismatch = 0;
   for (let i = start; i < cells.length; i++) {
     const c = cells[i];
+    if (hb >= 0 && c.length !== head.length) colMismatch++;
     const barcode = (c[idx.barcode] || '').trim();
     if (!barcode) continue;
     out.push({
       barcode,
       name: idx.name >= 0 ? (c[idx.name] || '') : '',
       spec: idx.spec >= 0 ? (c[idx.spec] || '') : '',
+      unit: idx.unit >= 0 ? (c[idx.unit] || '') : '',
       purchase_price: idx.purchase_price >= 0 ? money(c[idx.purchase_price]) : null,
       unit_price: idx.unit_price >= 0 ? money(c[idx.unit_price]) : null,
       account_qty: idx.account_qty >= 0 ? money(c[idx.account_qty]) : null,
     });
   }
+  // 挂在数组上带出去（改返回结构会动到所有调用点，没必要）
+  out.colMismatch = colMismatch;
   return out;
 }
 
@@ -6391,7 +6457,7 @@ async function onMasterFile(e) {
     return v !== null && v !== undefined && v !== '';
   }).length;
   const fields = [
-    ['条码', 'barcode'], ['名称', 'name'], ['规格', 'spec'],
+    ['条码', 'barcode'], ['名称', 'name'], ['规格', 'spec'], ['单位', 'unit'],
     ['进价', 'purchase_price'], ['售价', 'unit_price'], ['库存', 'account_qty'],
   ];
   const missing = fields.filter(([, k]) => stat(k) === 0).map(([label]) => label);
@@ -6399,15 +6465,24 @@ async function onMasterFile(e) {
   const warnHtml = missing.length
     ? `<div style="margin-top:8px;color:#e6a23c">⚠️ 这几列<b>一行都没读到</b>：${missing.join('、')}`
       + ` —— 文件里没有这一列，或列名不认识（认的是：`
-      + `商品条码 / 商品名称 / 规格 / 进价 / 售价 / 库存）。<br>`
+      + `条码 / 名称 / 规格 / 单位 / 进价 / 售价 / 库存）。<br>`
       + `缺了也能导，但下游要用的地方会一直显示"—"（比如补货按单位判称重口径）。</div>`
+    : '';
+  // 列数不齐 = 整行错位（进价吃售价、售价吃库存）。这种错"看着很整齐"，
+  // 界面上完全看不出异常，所以必须在这里明说。
+  const mis = rows.colMismatch || 0;
+  const misHtml = mis
+    ? `<div style="margin-top:8px;color:#f56c6c">🔴 有 <b>${mis}</b> 行的列数和表头对不上 `
+      + `—— 这些行<b>整列错位</b>了：多半是字段里有逗号却没加引号`
+      + `（价格带千分位很常见，如 ¥1,280.00 必须写成 "¥1,280.00"）。<br>`
+      + `建议先在 Excel 里另存为 CSV 再导，别直接从表格复制。</div>`
     : '';
 
   try {
     await ElMessageBox.confirm(
       `<div>从「${file.name}」解析到 <b>${rows.length}</b> 行，`
       + `导入完成后将替换现有的 ${master.value.total} 行商品档案。</div>`
-      + `<div style="margin-top:6px">${statLine}</div>${warnHtml}`,
+      + `<div style="margin-top:6px">${statLine}</div>${warnHtml}${misHtml}`,
       '导入商品档案',
       { type: 'warning', confirmButtonText: '开始导入', cancelButtonText: '取消',
         dangerouslyUseHTMLString: true });

@@ -60,6 +60,16 @@ jobs:
       - name: 版本号一致性
         run: bash ${{ env.CLIENT_DIR }}/tools/check_version_sync.sh ${{ env.CLIENT_DIR }}
 
+      # 管理台商档 CSV 解析（真源码，不抄副本）。
+      # 🔴 为什么要卡在这里（2026-09-27 加）：这个解析器曾经只读三列、
+      #    把规格/单位/价格**静默丢弃** —— 线上 12.6 万行商档「规格」「单位」
+      #    全是 0%，而导入照样显示成功、不报错、不警告。
+      #    后来加单位时又被测试当场抓出"千分位价格把整行切错位"。
+      #    纯 node，不需要 Flutter，放在装 SDK 之前：最快失败、最省时间。
+      - name: 商档解析（管理台）
+        working-directory: admin
+        run: node scripts/test_parse_master.cjs
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
