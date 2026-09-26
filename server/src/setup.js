@@ -97,8 +97,13 @@ function needSetup() {
   let value = false;
   do {
     if (markerAt()) break; // 向导已经走过（环境变量可能也被同步过，别再看 hash）
+    // 🔴 2026-09-26 补的一条：环境里压根没配 ADMIN_PASSWORD（飞牛/Docker 部署里
+    // docker/.env 在宿主机上，容器够不着，值恒为空）—— 过去只会走到下面去比对
+    // 一个每次重启都变新的随机串，结果恒 false，**向导永远弹不出来**。
+    // "刚装好还没设过密码"本身就是该弹的理由，不必等到比对成功。
+    if (!config.ADMIN_PASSWORD_CONFIGURED) { value = true; break; }
     const u = adminRow();
-    if (!u || !u.password_hash) break;
+    if (!u || !u.password_hash) { value = true; break; }
     try {
       value = verifyPassword(config.ADMIN_PASSWORD, u.password_hash);
     } catch (_) {
@@ -173,6 +178,16 @@ function runSetup(password, by) {
   db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password), u.id);
   setMarker(by);
   const envSync = syncEnvFile(password);
+  // 飞牛/Docker 没有 DATA_DIR/.env（那边的口令在宿主机的 docker/.env，容器改不到），
+  // syncEnvFile 会返回 'no-file'。这时必须把口令落到容器够得着的 custom.env，
+  // 否则下次启动又变随机、向导会一遍遍弹出来骚扰。
+  if (envSync === 'no-file') {
+    try {
+      config.writeCustomPassword(password);
+    } catch (e) {
+      console.warn('[小智IM] 写 custom.env 失败（%s）：下次启动可能又弹向导', e.message);
+    }
+  }
   // 这一行很重要：谁在什么时候把这台服务器的管理密码定下来的，日志里要留痕
   console.log('[小智IM] 管理台密码已通过「首次运行向导」设置（来源 %s，.env 同步：%s）', by || '未知', envSync);
   return { ok: true, uid: u.id, envSync };

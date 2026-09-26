@@ -31,6 +31,53 @@ function randomSecret() {
   return crypto.randomBytes(15).toString('base64url');
 }
 
+/**
+ * 取「这台机器真正用来创建管理员的口令」。
+ *
+ * 🔴 2026-09-26 修的是一个会让向导永远弹不出来的设计缺陷：
+ *   原来只有「docker/.env 的 ADMIN_PASSWORD 与库里 hash 完全对得上」一种情形才弹
+ *   向导。而飞牛/Docker 部署里 docker/.env 在**宿主机**上，容器够不着 ——
+ *   ADMIN_PASSWORD 一缺，这里就 randomSecret()，重启一次换一串，跟库里 hash
+ *   永远对不上，于是 needSetup 恒 false：**装好了也不弹密码向导**（正是龙哥
+ *   在飞牛上遇到的现象），而"管理员自己改过密码"反而会弹，逻辑整个反了。
+ *
+ * 修法：给口令找一个容器里写得进、重启不丢的落脚点 —— 数据目录的 custom.env。
+ *   优先级：docker/.env（正规部署，容器外管理） > custom.env（向导回写）
+ *          > 随机（谁都没配，只该出现一次，用来建库）
+ * custom.env 里存的是明文口令，所以只写 DATA_DIR（持久挂载），权限 0600。
+ */
+const CUSTOM_ENV = path.join(DATA_DIR, 'custom.env');
+
+function readCustomPassword() {
+  try {
+    const text = fs.readFileSync(CUSTOM_ENV, 'utf8');
+    for (const line of text.split('\n')) {
+      const m = line.match(/^\s*ADMIN_PASSWORD=(.*)$/);
+      if (m && m[1].trim()) return m[1].trim();
+    }
+  } catch (_) { /* 还没有这个文件 */ }
+  return '';
+}
+
+/** 向导设完口令后回头落一份（仅当 docker/.env 那一份够不着时） */
+function writeCustomPassword(password) {
+  fs.writeFileSync(
+    CUSTOM_ENV,
+    '# 由「首次运行向导」写入的管理台口令。不要手改。\n'
+    + '# docker/.env 在宿主机上、容器改不到，所以这里存一份；\n'
+    + '# 读取优先级：docker/.env > custom.env > 随机。移走本文件等于换口令。\n'
+    + 'ADMIN_PASSWORD=' + password + '\n',
+    { encoding: 'utf8', mode: 0o600 },
+  );
+}
+
+function adminPassword() {
+  if (process.env.ADMIN_PASSWORD) return process.env.ADMIN_PASSWORD;
+  const custom = readCustomPassword();
+  if (custom) return custom;
+  return randomSecret();
+}
+
 function persistentJwtSecret(dir) {
   const f = path.join(dir, '.jwt-secret');
   try {
@@ -377,8 +424,13 @@ module.exports = {
   DB_PATH: process.env.DB_PATH || path.join(DATA_DIR, 'xiaozhi-im.db'),
   ADMIN_USERNAME: process.env.ADMIN_USERNAME || 'admin',
   // 没有默认口令。部署时必须由安装脚本写入 docker/.env 的 ADMIN_PASSWORD；
-  // 万一漏了，这里给的是随机值（见文件上方说明），不是 admin123。
-  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || randomSecret(),
+  // 万一漏了，回落到数据目录的 custom.env，再不然给随机值（见文件上方说明），
+  // 绝不是 admin123。ADMIN_PASSWORD_CONFIGURED 表示「环境里到底配没配」，
+  // needSetup 靠它判断"这台是不是刚装好、还没设过密码"。
+  ADMIN_PASSWORD: adminPassword(),
+  ADMIN_PASSWORD_CONFIGURED: Boolean(process.env.ADMIN_PASSWORD || readCustomPassword()),
+  CUSTOM_ENV,
+  writeCustomPassword,
   MAX_FILE_MB: Number(process.env.MAX_FILE_MB || 50),
   PUBLIC_URL: process.env.PUBLIC_URL || '',
   ICE_STUN,

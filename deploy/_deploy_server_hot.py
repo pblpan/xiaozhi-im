@@ -47,6 +47,17 @@ CONTAINER = 'xiaozhi-im'
 #    整目录上传会把别处可能的手改一起覆盖掉，而且没法预览。
 FILES = [
     'package.json',
+    # 🔴 2026-09-26 晚：修「飞牛上装好不弹密码向导」。
+    #    setup.js 的 needSetup 判据加"环境没配 ADMIN_PASSWORD 就该弹"；
+    #    config.js 加 custom.env 回读/回写（飞牛的 docker/.env 在宿主机、
+    #    容器改不到，向导设的口令必须另找落脚点，否则重启后又变随机、反复弹）。
+    'src/config.js',
+    'src/setup.js',
+    # 🔴 线上**一直缺**这两个（缺了容器直接起不来，报
+    #    Cannot find module './routes/master'）：approval 是盘点单审批走的
+    #    通用审批中心，master 是商档。index.js 里 require 了、文件却从没推上去过。
+    'src/routes/master.js',
+    'src/routes/approval.js',
     'src/appdata.js',
     'src/appguard.js',
     'src/appoverrides.js',
