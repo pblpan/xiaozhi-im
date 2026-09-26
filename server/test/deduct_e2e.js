@@ -234,6 +234,84 @@ function stopServer() {
   ok('不存在的减货单 → 404', r.status === 404, String(r.status));
 
   // ============================================================
+  // 龙哥 2026-09-26 的质疑："库房减货不是盘点的一个流程吗？"
+  // 正确的业务链是 **盘点 → 盘点完再拿货销售 → 账实对不上 → 用减货往下减**。
+  // 所以减货的判据来自上一次盘点。这一段钉住"参照数"三条口径：
+  //   ① 只读、不回写盘点；② 不强制先盘点（没盘过照样能减）；
+  //   ③ 参照看的是盘点，"已减"看的是减货自己，两码事别混。
+  console.log('\n【九】参照数（减货凭什么减这么多 —— 龙哥那条业务链的落点）');
+  r = await api('GET', '/api/deduct/reference?barcode=6901234500079');
+  ok('未登录查参照 → 401', r.status === 401, String(r.status));
+  r = await api('GET', '/api/deduct/reference');
+  ok('未登录 → 401（门禁在最前面）', r.status === 401, String(r.status));
+  r = await api('GET', '/api/deduct/reference', { token: admin });
+  ok('登录了但没带 barcode → 400', r.status === 400, String(r.status));
+  r = await api('GET', '/api/deduct/reference?barcode=%20', { token: admin });
+  ok('  只有空格也不合法 → 400', r.status === 400, String(r.status));
+  r = await api('GET', '/api/deduct/reference?barcode=a%2Fb%3F', { token: admin });
+  ok('  条码里带斜杠/问号也不合法 → 400', r.status === 400, String(r.status));
+
+  // 先记下盘点单现在的样子，稍后比对 —— 参照接口**一个字都不许改它**
+  const INV1 = 'INV-ZD1-1-20260101110000';
+  const invBefore = await api('GET', `/api/stocktake/sheet/${INV1}`, { token: admin });
+
+  // 6901234500079 在【六】的盘点单里盘到 4，之后没减过
+  r = await api('GET', '/api/deduct/reference?barcode=6901234500079', { token: admin });
+  ok('盘过的码 → countedQty = 4', r.body?.countedQty === 4, JSON.stringify(r.body));
+  ok('  记着是哪一轮盘点（员工要能翻回去核对）', r.body?.countedSheet === INV1, JSON.stringify(r.body?.countedSheet));
+  ok('  没减过 → deductedQty = 0', r.body?.deductedQty === 0, JSON.stringify(r.body?.deductedQty));
+  ok('  剩 = 4 - 0 = 4', r.body?.remaining === 4, JSON.stringify(r.body?.remaining));
+  ok('  hasRef = true', r.body?.hasRef === true, JSON.stringify(r.body?.hasRef));
+
+  // 🔴 只读验证：查完参照，盘点单必须一个字节都没变
+  const invAfter = await api('GET', `/api/stocktake/sheet/${INV1}`, { token: admin });
+  ok('  🔴 查参照**没有回写盘点**（明细/合计原样）',
+    JSON.stringify(invBefore.body?.rows) === JSON.stringify(invAfter.body?.rows)
+    && invBefore.body?.summary?.total_qty === invAfter.body?.summary?.total_qty,
+    `${JSON.stringify(invBefore.body?.summary)} → ${JSON.stringify(invAfter.body?.summary)}`);
+
+  // 再盘一轮、时间更晚：取的是**最近一次**，不是第一盘
+  const INV2 = 'INV-ZD1-2-20260101110000';
+  r = await api('POST', `/api/stocktake/sheet/${INV2}/upload`, {
+    token: staff,
+    body: {
+      zone: { zone_code: 'ZD1', zone_name: '减货防串测试区' },
+      phase: 2,
+      rows: [
+        { barcode: '6901234500079', qty: 11, scanned_at: Date.now() + 120000 },
+        { barcode: '6901234500024', qty: 9, account_qty: 12, scanned_at: Date.now() + 120000 },
+      ],
+    },
+  });
+  ok('再造一轮更晚的盘点（同一码 4 → 11）', r.status === 200, JSON.stringify(r.body));
+
+  r = await api('GET', '/api/deduct/reference?barcode=6901234500079', { token: admin });
+  ok('  🔴 取最近那一轮 = 11（不是第一盘的 4）', r.body?.countedQty === 11, JSON.stringify(r.body?.countedQty));
+  ok('  指向的是第二轮那张单', r.body?.countedSheet === INV2, JSON.stringify(r.body?.countedSheet));
+
+  // 6901234500024：盘到 9，减过 6（S1 的 5 + S3 的 1）→ 剩 3
+  r = await api('GET', '/api/deduct/reference?barcode=6901234500024', { token: admin });
+  ok('盘 9 又减了 6 → countedQty = 9', r.body?.countedQty === 9, JSON.stringify(r.body));
+  ok('  deductedQty = 6（跨两张减货单累加）', r.body?.deductedQty === 6, JSON.stringify(r.body?.deductedQty));
+  ok('  deductedSheets = 2', r.body?.deductedSheets === 2, JSON.stringify(r.body?.deductedSheets));
+  ok('  🔴 剩 = 9 - 6 = 3', r.body?.remaining === 3, JSON.stringify(r.body?.remaining));
+  ok('  带得出那轮盘点的账面数 12', r.body?.accountQty === 12, JSON.stringify(r.body?.accountQty));
+
+  // 🔴 减货减得再多也不算"上一轮盘点"：6901234500017 在减货里被减了 105，
+  //    但它从没盘过 —— 参照数必须是 null。混了的话，下一轮盘点的初盘
+  //    数就会被"历史减货"污染，这个污染是找不回来的。
+  r = await api('GET', '/api/deduct/reference?barcode=6901234500017', { token: admin });
+  ok('  🔴 只减过、没盘过 → countedQty 是 null', r.body?.countedQty === null, JSON.stringify(r.body));
+  ok('    但 deductedQty = 105（减货自己的账照给）', r.body?.deductedQty === 105, JSON.stringify(r.body?.deductedQty));
+  ok('    remaining 是 null（没有盘点数可减，算"剩"没有意义）', r.body?.remaining === null, JSON.stringify(r.body?.remaining));
+  ok('    hasRef 仍为 true（减货自己的账也算参照）', r.body?.hasRef === true, JSON.stringify(r.body?.hasRef));
+
+  // 临时减货（没盘过、也没减过）不该被拦
+  r = await api('GET', '/api/deduct/reference?barcode=6901234500999', { token: admin });
+  ok('🔴 完全没盘过也没减过 → hasRef = false（不拦人，界面 hide 参照卡）',
+    r.body?.hasRef === false, JSON.stringify(r.body));
+  ok('  这种时候 countedQty / remaining 都是 null',
+    r.body?.countedQty === null && r.body?.remaining === null, JSON.stringify(r.body));
   console.log(`\n[deduct E2E] 通过 ${passed} / 失败 ${failed}`);
   if (failures.length) { console.log('\n失败项：'); failures.forEach((f) => console.log('  - ' + f)); }
   stopServer();

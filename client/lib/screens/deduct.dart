@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -59,6 +60,19 @@ class _DeductPageState extends State<DeductPage> {
   /// 而「撤销提交」还会改到那张新单上 —— 老单永远退不回来。
   String? _curNo;
 
+  // ---------------- 参照数（上一轮盘点，见 _loadRef）----------------
+
+  /// 当前显示的参照数，以及它是**为哪个条码**查的。
+  ///
+  /// 🔴 `_refBarcode` 一定要留着：请求是异步的，扫完一个码就立刻去查，
+  ///    员工手快接着扫下一个码时，上一趟的请求可能后到 ——
+  ///    没有这个判据的话，参照卡会显示成"扫的是 A、显示的是 B 的数"，
+  ///    这种错最要命：看起来对，实际把人往沟里带。
+  Map<String, dynamic>? _ref;
+  String _refBarcode = '';
+  bool _refLoading = false;
+  Timer? _refTimer;
+
   @override
   void initState() {
     super.initState();
@@ -68,6 +82,7 @@ class _DeductPageState extends State<DeductPage> {
 
   @override
   void dispose() {
+    _refTimer?.cancel();
     _scanCtl.dispose();
     _qtyCtl.dispose();
     _scanFocus.dispose();
@@ -89,6 +104,8 @@ class _DeductPageState extends State<DeductPage> {
   /// [forceNew] = 明确要开一张新单（菜单里的「开新单」）。
   /// [loadNo]   = 明确要翻到历史里的某一单（历史面板里点的）。
   Future<void> _reload({bool forceNew = false, String? loadNo}) async {
+    // 换单了（开新单 / 翻历史），上一个码的参照数就不成立了。
+    _clearRef();
     setState(() {
       _loading = true;
       _error = null;
@@ -205,6 +222,54 @@ class _DeductPageState extends State<DeductPage> {
     }
   }
 
+  /// 查这个条码的参照数（上一轮盘了多少 / 之前已经减了多少 / 还剩多少）。
+  ///
+  /// ── 为什么这是"减货"这一页唯一联网的动作 ──────────────────────
+  /// 龙哥 2026-09-26 那句"库房减货不是盘点的一个流程吗"，把业务链讲清楚了：
+  ///   **盘点 → 盘点完再拿货销售 → 账实对不上 → 用减货把已盘点的数往下减**
+  /// 也就是说减货的判断依据**来自上一次盘点**。没有参照，现场就只剩一个
+  /// 空白输入框，减多少凭印象 —— 减错了当场没人知道，等对账时才发现。
+  ///
+  /// ── 🔴 失败**不许拦人** ──────────────────────────────────────
+  /// 库房常常在最里头，信号是有的没的。查不到参照只是少一条提示，
+  /// 绝不能变成"先去盘一点才能减"——临时减货（破损/赠品出库）本来就不盘。
+  /// 所以这里只静默留空，由界面自己决定 hide 参照卡。
+  Future<void> _loadRef(String rawCode, {bool immediate = false}) async {
+    final bc = rawCode.trim();
+    // 空条码 / 非编辑态都不查：锁死之后查也没用，还会白白多几个请求。
+    if (bc.isEmpty || !_editable) { _clearRef(); return; }
+
+    _refTimer?.cancel();
+    if (!immediate) {
+      // 手输条码会一个字一个字地触发，每个字打一次接口是浪费（而且容易
+      // 拿到慢回来的旧结果）。停手 500ms 再查。扫码枪是一次性的，不受影响。
+      _refTimer = Timer(const Duration(milliseconds: 500), () => _loadRef(bc, immediate: true));
+      return;
+    }
+    if (_refLoading) return;
+
+    setState(() { _refLoading = true; _refBarcode = bc; });
+    try {
+      final api = ImApi();
+      final d = await api.deductReference(bc);
+      if (!mounted || _refBarcode != bc) return;   // 已经扫到下一个码了，丢掉
+      setState(() => _ref = Map<String, dynamic>.from(d as Map));
+    } catch (_) {
+      // 没网 / 服务端没这套数据 —— 都当"没有参照"，界面 hide 卡片。
+      if (!mounted || _refBarcode != bc) return;
+      if (mounted) setState(() => _ref = null);
+    } finally {
+      if (mounted) setState(() => _refLoading = false);
+    }
+  }
+
+  void _clearRef() {
+    _refTimer?.cancel();
+    if (_ref == null && _refBarcode.isEmpty) return;
+    if (!mounted) return;
+    setState(() { _ref = null; _refBarcode = ''; _refLoading = false; });
+  }
+
   Future<void> _addRow() async {
     final barcode = _scanCtl.text.trim();
     if (barcode.isEmpty) {
@@ -233,6 +298,10 @@ class _DeductPageState extends State<DeductPage> {
       _qtyCtl.text = '1';
       SystemSound.play(SystemSoundType.click);
       await _reload();
+      if (!mounted) return;
+      // 🔴 参照数是**扫完之后**带出来的：员工刚扫的这个码，上一轮盘了多少、
+      //    之前已经减了多少、还剩多少 —— 下一个数该填多少，这里就是依据。
+      await _loadRef(barcode, immediate: true);
       if (!mounted) return;
       _scanFocus.requestFocus();
     } catch (e) {
@@ -590,6 +659,7 @@ class _DeductPageState extends State<DeductPage> {
                             color: AppColors.danger, fontSize: 13)),
                   ),
                 _header(),
+                _refCard(),
                 _inputBar(),
                 const Divider(height: 1, color: AppColors.divider),
                 // 🔴 表头**空列表也要画**：不画的话没扫过码的人整页看不到列名，
@@ -660,6 +730,18 @@ class _DeductPageState extends State<DeductPage> {
           Text(DeductExport.summaryText(_tally),
               key: const Key('deduct-summary'),
               style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
+          // 龙哥 2026-09-26 的原话："库房减货不是盘点的一个流程吗？怎么独立成一个
+          // 单独的功能了？" —— 它确实是分开的功能，但**依据来自盘点**。这里把那层
+          // 关系写死在页面上（只在没有参照数时占一行），免得每次都得解释一遍。
+          if (_ref == null && !_loading)
+            const Padding(
+              padding: EdgeInsets.only(top: 2),
+              child: Text(
+                '减货不是盘点的下一步：盘点是数实际有多少，减货是拿货/损耗之后把账往下调',
+                key: Key('deduct-flow-hint'),
+                style: TextStyle(color: AppColors.textWeak, fontSize: 11),
+              ),
+            ),
           // 锁死之后输入框是灰的，但不写一句话员工只会以为"手机卡了"。
           if (!_editable && !_loading)
             const Padding(
@@ -673,54 +755,174 @@ class _DeductPageState extends State<DeductPage> {
     );
   }
 
+  /// 参照卡：扫完一个码，把"上一轮盘点 / 之前已减 / 还剩多少"摊在眼前。
+  ///
+  /// 🔴 没查到（`_ref == null`）时必须**整块消失**，而不是留个"暂无数据"：
+  ///    库房里没网是常态，留一块灰字会让人以为"这页坏了"。
+  Widget _refCard() {
+    final ref = _ref;
+    if (ref == null) {
+      // 返回一个空盒子但**保住 key**：测试靠它断言"查不到时确实没画卡片"。
+      return const SizedBox(width: double.infinity, height: 0, key: Key('deduct-ref-slot'));
+    }
+
+    final counted = ref['countedQty'] as num?;
+    final deducted = (ref['deductedQty'] as num? ?? 0).toDouble();
+    final remaining = ref['remaining'] as num?;
+    final sheets = (ref['deductedSheets'] as num? ?? 0).toInt();
+    final name = (ref['name'] ?? '').toString().trim();
+    final code = ref['barcode']?.toString() ?? _refBarcode;
+
+    // 这次减多少 → 减完还剩多少。填了就现算，员工能对着实货核。
+    final q = double.tryParse(_qtyCtl.text.trim());
+    final left = (remaining != null && q != null) ? remaining.toDouble() - q : null;
+
+    return Container(
+      key: const Key('deduct-ref-card'),
+      width: double.infinity,
+      color: AppColors.bgElevated,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.history_edu, size: 14, color: AppColors.textSub),
+              const SizedBox(width: 5),
+              Text('参照',
+                  style: const TextStyle(
+                      color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  name.isEmpty ? code : '$name',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.textWeak, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              _refCell('deduct-ref-counted', '上一轮盘点',
+                  counted != null ? DeductExport.fmtQty(counted) : '—',
+                  counted != null),
+              _refCell('deduct-ref-deducted', '这次之前已减',
+                  deducted > 0 ? DeductExport.fmtQty(deducted) : '—',
+                  deducted > 0,
+                  sub: sheets > 1 ? '$sheets 张单' : null),
+              _refCell('deduct-ref-left', '减完剩',
+                  left != null
+                      ? DeductExport.fmtQty(left)
+                      : (remaining != null
+                          ? DeductExport.fmtQty(remaining)
+                          : '—'),
+                  true,
+                  strong: left != null),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Text(
+            remaining == null
+                ? '这个码没有盘过点参照（临时减货照样能减）；已减的是最近 ${(ref['windowDays'] ?? 30).toString()} 天'
+                : '参照来自上一次盘点（减货是拿货/损耗之后把账往下调，不是盘点这一步）',
+            style: const TextStyle(color: AppColors.textWeak, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _refCell(String key, String label, String value, bool has,
+      {String? sub, bool strong = false}) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              key: Key(key + '-label'),
+              style: const TextStyle(color: AppColors.textWeak, fontSize: 11)),
+          const SizedBox(height: 1),
+          Text(
+            value,
+            key: Key(key),
+            style: TextStyle(
+              color: !has
+                  ? AppColors.textWeak
+                  : strong
+                      ? AppColors.brand
+                      : AppColors.text,
+              fontSize: 15,
+              fontWeight: strong ? FontWeight.w700 : FontWeight.w600,
+            ),
+          ),
+          if (sub != null)
+            Text(sub, style: const TextStyle(color: AppColors.textWeak, fontSize: 10)),
+        ],
+      ),
+    );
+  }
+
   Widget _inputBar() {
     return Container(
       color: AppColors.bgElevated,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            flex: 3,
-            child: TextField(
-              key: const Key('deduct-barcode-input'),
-              controller: _scanCtl,
-              focusNode: _scanFocus,
-              enabled: _editable,
-              autofocus: true,
-              textInputAction: TextInputAction.next,
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
-              decoration: const InputDecoration(
-                labelText: '条码',
-                isDense: true,
-                labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  key: const Key('deduct-barcode-input'),
+                  controller: _scanCtl,
+                  focusNode: _scanFocus,
+                  enabled: _editable,
+                  autofocus: true,
+                  textInputAction: TextInputAction.next,
+                  style: const TextStyle(color: AppColors.text, fontSize: 15),
+                  decoration: const InputDecoration(
+                    labelText: '条码',
+                    isDense: true,
+                    labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
+                  ),
+                  // 手输的条码：停手 500ms 再查参照（见 _loadRef 的防抖）。
+                  onChanged: (_) => _loadRef(_scanCtl.text),
+                  onSubmitted: (_) => _addRow(),
+                ),
               ),
-              onSubmitted: (_) => _addRow(),
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 76,
-            child: TextField(
-              key: const Key('deduct-qty-field'),
-              controller: _qtyCtl,
-              enabled: _editable,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
-              decoration: const InputDecoration(
-                labelText: '数量',
-                isDense: true,
-                labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 76,
+                child: TextField(
+                  key: const Key('deduct-qty-field'),
+                  controller: _qtyCtl,
+                  enabled: _editable,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(color: AppColors.text, fontSize: 15),
+                  decoration: const InputDecoration(
+                    labelText: '数量',
+                    isDense: true,
+                    labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
+                  ),
+                  onChanged: (_) {
+                    // 改数量时即时刷新"减完剩"，不用等下一次扫码。
+                    if (_ref != null && mounted) setState(() {});
+                  },
+                  onSubmitted: (_) => _addRow(),
+                ),
               ),
-              onSubmitted: (_) => _addRow(),
-            ),
-          ),
-          const SizedBox(width: 8),
-          FilledButton(
-            key: const Key('deduct-add'),
-            onPressed: (_editable && !_busy) ? _addRow : null,
-            style: FilledButton.styleFrom(backgroundColor: AppColors.brand),
-            child: const Text('确定减货'),
+              const SizedBox(width: 8),
+              FilledButton(
+                key: const Key('deduct-add'),
+                onPressed: (_editable && !_busy) ? _addRow : null,
+                style: FilledButton.styleFrom(backgroundColor: AppColors.brand),
+                child: const Text('确定减货'),
+              ),
+            ],
           ),
         ],
       ),

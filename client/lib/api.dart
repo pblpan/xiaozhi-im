@@ -644,6 +644,21 @@ class ImApi {
             if (startedAt != null) 'started_at': startedAt,
           });
 
+  /// 减货时查这个条码的「参照数」（`/api/deduct/reference`）。
+  ///
+  /// 🔴 这个是**软查询**，调用方不要因为它失败就拦住用户：
+  ///    减货现场常常没网（库房在仓库最里头）。查不到参照数只是少一条提示，
+  ///    绝不能变成"先去盘点才能减货"——临时减货（破损/赠品出库）本来就不盘。
+  /// 返回里 `hasRef=false` 表示服务端查不到任何参照（这个码没盘过、也没减过）。
+  Future<Map<String, dynamic>> deductReference(String barcode) async {
+    final d =
+        await _get('/deduct/reference?barcode=${Uri.encodeComponent(barcode)}');
+    // 🔴 取不到就返回空 map，不要抛：`hasRef=false` 是正常业务结果，
+    //    抛异常会让界面分不清"没数据"和"网络挂了"，处理时会一律当成出错。
+    if (d is! Map) return <String, dynamic>{'hasRef': false};
+    return Map<String, dynamic>.from(d);
+  }
+
   // ---- 审批中心（M2/P2）----
 
   /// 提交审批。盘点单走 `kind: 'stocktake'`，`ref` 是盘点单号。

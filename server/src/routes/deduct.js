@@ -38,6 +38,14 @@ const SHEET_TYPE = 'deduct';
 const DEDUCT_ZONE = '-';
 const NEUTRAL_PHASE = 1;
 
+/**
+ * 参照数里"累计已减"往前看几天。
+ * 取 30 天是个折中：库房减货是高频作业，只算最近这一个月的量，
+ * 既让"剩多少"够用，又不至于让老单子的数把新员工的判断带偏。
+ * 要按门店配置就从环境变量进来，别在这里写死业务口径。
+ */
+const REF_WINDOW_DAYS = Math.max(1, Number(process.env.DEDUCT_REF_WINDOW_DAYS) || 30);
+
 // ============================================================
 // 小工具（与盘点侧同口径，别改出一分叉）
 // ============================================================
@@ -214,6 +222,88 @@ router.post('/sheet/:no/upload', (req, res) => {
     db.exec('ROLLBACK');
     res.status(500).json({ error: '上传失败：' + e.message });
   }
+});
+
+// ============================================================
+// 参照数（减货时的"凭什么减这么多"）
+// ============================================================
+
+/**
+ * GET /api/deduct/reference?barcode=xxx —— 扫到一个码，告诉员工"你凭什么减"
+ *
+ * ── 为什么要这个接口 ──────────────────────────────────────────
+ * 龙哥 2026-09-26 质疑减货"为什么独立成一个功能"，正确的业务链是：
+ *   **盘点库存 → 盘点完了再拿货销售 → 账实对不上 → 用减货把已盘点的数往下减**
+ * 也就是说，减货的判断依据**来自上一次盘点**。没有参照数，员工面对的
+ * 只有一个空白输入框，减多少全凭印象 —— 减错了当场看不出来，等对账时才发现。
+ *
+ * ── 三条硬口径 ────────────────────────────────────────────────
+ * ① **只读**。这个接口绝不写任何东西，特别是**不回写盘点**：
+ *    减货只是"调账"，不是盘点的一部分，把减的数塞回 inv_scans 会让
+ *    下一轮盘点的初盘数据被上一趟减货污染（这个坑一污染就找不回来）。
+ * ② **不强制先盘点**。临时减货（货架破了、赠品出库）照样能做，
+ *    查不到就返回 `hasRef: false`，界面 hides 参照卡，不拦人。
+ * ③ **看的是"上一轮盘点"，不是"本单"**。减货单自己不算参照，
+ *    否则同一张单里扫第二遍时参照数会跟着变，员工会以为系统乱跳。
+ *    所以查询固定 `sheet_type='inventory'`，减货自己的行在下面单独算。
+ */
+router.get('/reference', (req, res) => {
+  const u = auth(req, res); if (!u) return;
+  const bc = code(req.query.barcode, MAX_CODE);
+  if (!bc) return res.status(400).json({ error: 'barcode 不合法' });
+
+  // ① 上一轮盘点的实盘数。跨点位、跨阶段取最近一次：
+  //    员工这一趟可能盘的是 A 区，减货减的是库房，中间不会再盘一次。
+  //    按 scanned_at 排序而不是按单据 started_at —— 同一码可能在不同
+  //    点位被扫过，扫到的时刻才是"这数是什么时候定的"。
+  const counted = db.prepare(`
+    SELECT r.qty AS qty, r.account_qty AS account_qty,
+           r.scanned_at AS at, r.sheet_no AS sheet_no
+      FROM inv_scans r
+      JOIN inv_sheets s ON s.sheet_no = r.sheet_no
+     WHERE r.sheet_type = 'inventory' AND s.sheet_type = 'inventory'
+       AND r.barcode = ?
+     ORDER BY r.scanned_at DESC, r.id DESC
+     LIMIT 1
+  `).get(bc);
+
+  // ② 最近一段时间累计已经减掉多少。没有盘点记录的人也要有这个 ——
+  //    "这个码上一次减了多少、分几张单"是减货自己的账，和盘过点无关。
+  const ded = db.prepare(`
+    SELECT SUM(r.qty) AS qty, COUNT(DISTINCT r.sheet_no) AS sheets
+      FROM inv_scans r
+     WHERE r.sheet_type = 'deduct' AND r.barcode = ?
+       AND r.scanned_at >= ?
+  `).get(bc, Date.now() - REF_WINDOW_DAYS * 86400000);
+
+  // 商品名：管理台/员工看到"6901234"这串码是认不出什么的。
+  const pm = db.prepare('SELECT name, spec, unit FROM product_master WHERE barcode = ?').get(bc);
+
+  const deductedQty = ded && ded.qty ? Number(ded.qty) : 0;
+  // ③ 剩多少没减。**不含本次**：本次减多少要等员工填完才知道，
+  //    提前减掉会出现"系统算出来的剩数"比"员工填的"还小，看着像出错。
+  const remaining = counted ? Number(counted.qty) - deductedQty : null;
+
+  res.json({
+    ok: true,
+    barcode: bc,
+    hasRef: Boolean(counted) || deductedQty > 0,
+    name: pm?.name || '',
+    spec: pm?.spec || '',
+    unit: pm?.unit || '',
+    // 上一轮盘点
+    countedQty: counted ? Number(counted.qty) : null,
+    countedAt: counted?.at ?? null,
+    countedSheet: counted?.sheet_no ?? null,
+    // 那轮盘点时客户端上报的账面数（服务端没有库存账，这数来自上传时）
+    accountQty: counted && counted.account_qty !== null && counted.account_qty !== undefined
+      ? Number(counted.account_qty) : null,
+    // 累计已减 + 剩多少
+    deductedQty,
+    deductedSheets: ded?.sheets ? Number(ded.sheets) : 0,
+    remaining,
+    windowDays: REF_WINDOW_DAYS,
+  });
 });
 
 // ============================================================

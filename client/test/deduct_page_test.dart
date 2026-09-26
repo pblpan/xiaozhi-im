@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/deduct_export.dart';
 import 'package:xiaozhi_im_client/core/deduct_rules.dart';
 import 'package:xiaozhi_im_client/core/local_db.dart';
 import 'package:xiaozhi_im_client/screens/deduct.dart';
+import 'support/api_stub.dart';
 
 /// 库房减货：导出格式化（纯函数）+ 页面行为。
 ///
@@ -432,6 +434,148 @@ void main() {
       final field = tester.widget<TextField>(
           find.byKey(const Key('deduct-barcode-input')));
       expect(field.enabled, isTrue, reason: '开了新单却还是扫不进去');
+    });
+
+    // ============================================================
+    // 参照数：龙哥 2026-09-26 那条业务链的落点
+    //   "库房减货不是盘点的一个流程吗？" —— 它是分开的功能，但判据来自上一次盘点：
+    //   盘点完 → 拿货/损耗销售 → 账实对不上 → 用减货把已盘点的数往下减。
+    // 这一段钉住现场最容易翻车的两件事：**没网时不能拦人**、**数字不能算错**。
+    group('参照数（上一轮盘点 → 剩多少）', () {
+      late ApiStub stub;
+
+      /// 起一个真本地服务端，专门回 `/api/deduct/reference` 这一个接口。
+      ///
+      /// 🔴 为什么不起假 HTTP、偏要真端口：参照数这一块的全部价值就是"服务端
+      ///    回什么、界面就显示什么"。mock 掉的 http 会把 `barcode=` 拼错、
+      ///    字段名读错、401 当 200 这些事**全都能通过** —— 而它们正好是
+      ///    这一版最容易出错的地方（字段名 `countedQty` / `remaining` 全是新的）。
+      Future<void> stubRef(Object? Function(StubCall) h) async {
+        stub = await ApiStub.start();
+        stub.on('GET', '/api/deduct/reference', h);
+        Config.currentUrl = stub.baseUrl;
+        addTearDown(() {
+          HttpOverrides.global = null;
+          return stub.stop();
+        });
+      }
+
+      String refText(WidgetTester tester, String key) {
+        final f = find.byKey(Key(key));
+        if (f.evaluate().isEmpty) return '';
+        return tester.widget<Text>(find.byKey(Key(key))).data ?? '';
+      }
+
+      /// 等参照那一次请求**真的回来**（不是"发出去"就够了）。
+      ///
+      /// 🔴 这里必须给**真实时间**：`tester.pump` 只推假时钟，本地 socket 的
+      ///    响应来回比好几帧还快，也可能慢一帧 —— 只等请求打出去就断言，
+      ///    测的是"请求发出去了"，不是"拿到响应之后界面怎么画的"。
+      ///    所以先用 pumpUntil 确认请求发出，再按真实时间等一段把 RTT 包进去。
+      Future<void> waitRefBack(WidgetTester tester, {int ms = 400}) async {
+        await pumpUntil(
+          tester,
+          () => stub.hits('GET', '/api/deduct/reference') > 0,
+          why: '扫完码压根没去查参照 —— 参照数这块等于没接上',
+        );
+        for (var i = 0; i < ms ~/ 20; i++) {
+          await tester.runAsync(
+              () => Future<void>.delayed(const Duration(milliseconds: 20)));
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+      }
+
+      testWidgets('🔴 查不到参照 → 卡片整块消失，不留灰字、更不拦人', (tester) async {
+        // 500：模拟"服务端炸了"，和 404 区分开 ——
+        // 用 404 的话测试会因为"路由没注册"而假通过。
+        await stubRef((c) => StubResponse(500,
+            <String, dynamic>{'error': 'boom'}));
+        await pumpPage(tester);
+        expect(find.byKey(const Key('deduct-flow-hint')), findsOneWidget,
+            reason: '没有参照数时，页面上要有一句话讲清减货和盘点是什么关系');
+
+        await scan(tester, barcode: '6901234567890', qty: '2');
+        await waitRefBack(tester);
+
+        // 🔴 库房常常在最里头、信号时有时无。留一块"暂无数据"的灰字，
+        //    现场会理解成"这页坏了"；而且绝不能因为查不到就禁止减货 ——
+        //    临时减货（破损/赠品出库）本来就不盘。
+        expect(find.byKey(const Key('deduct-ref-card')), findsNothing,
+            reason: '查不到参照却画了卡片 —— 员工会以为系统不给数据');
+        expect(rowCount(tester), 1, reason: '参照查不到就把这一笔也拒了');
+        expect(find.text('共 1 种，合计减货 2'), findsOneWidget,
+            reason: '这一笔没落库');
+      });
+
+      testWidgets('扫完之后带出参照：上一轮盘点 / 已减 / 减完剩', (tester) async {
+        await stubRef((c) => <String, dynamic>{
+          'ok': true,
+          'hasRef': true,
+          'barcode': c.query['barcode'],
+          'name': '海盐饼干',
+          'countedQty': 50,
+          'countedAt': 1758412800000,
+          'countedSheet': 'INV-20260921090000',
+          'accountQty': 50,
+          'deductedQty': 12,
+          'deductedSheets': 2,
+          'remaining': 38,
+          'windowDays': 30,
+        });
+        await pumpPage(tester);
+        await scan(tester, barcode: '6901234567890', qty: '10');
+
+        // 🔴 顺手钉一下"条码确实带过去了"。参照是按码查的，参数名写错
+        //    （比如 `barcode` 写成 `code`）会永远查空，界面上还看不出异常。
+        expect(stub.hits('GET', '/api/deduct/reference'), greaterThan(0),
+            reason: '扫完码压根没去查参照');
+        expect(stub.last('GET', '/api/deduct/reference').query['barcode'],
+            '6901234567890',
+            reason: '查参照时条码没带上（服务端只能回空）');
+
+        await pumpUntil(
+          tester,
+          () => find.byKey(const Key('deduct-ref-card')).evaluate().isNotEmpty,
+          why: '扫完之后没有带出参照卡',
+        );
+
+        expect(find.byKey(const Key('deduct-ref-card')), findsOneWidget);
+        expect(find.byKey(const Key('deduct-flow-hint')), findsNothing,
+            reason: '已经有参照了，还挂着那句"减货不是盘点的下一步"');
+        expect(refText(tester, 'deduct-ref-counted'), '50',
+            reason: '上一轮盘点是 50，参照数却不是 50');
+        expect(refText(tester, 'deduct-ref-deducted'), '12',
+            reason: '这次之前已减 12，却给成了别的数');
+        // 🔴 剩 = 盘点 50 - 已减 12 - 本次 10 = 28。算错的话员工会照着
+        //    一个假数字去点货，当场就对不上。
+        expect(refText(tester, 'deduct-ref-left'), '28',
+            reason: '减完剩算错了（应 = 50 - 12 - 10）');
+
+        // 改数量要跟着重算，别等下一次扫码
+        await tester.enterText(find.byKey(const Key('deduct-qty-field')), '20');
+        await pumpUntil(
+          tester,
+          () => refText(tester, 'deduct-ref-left') == '18',
+          why: '改了数量但「减完剩」没跟着变（要等下次扫码才刷新）',
+        );
+      });
+
+      testWidgets('没盘过、也没减过 → hasRef=false，卡片不画但能照常减', (tester) async {
+        await stubRef((c) => <String, dynamic>{
+          'ok': true, 'hasRef': false, 'barcode': c.query['barcode'],
+          'countedQty': null, 'deductedQty': 0,
+          'deductedSheets': 0, 'remaining': null, 'windowDays': 30,
+        });
+        await pumpPage(tester);
+        await scan(tester, barcode: '6901', qty: '1');
+        await waitRefBack(tester);
+
+        expect(find.byKey(const Key('deduct-ref-card')), findsNothing,
+            reason: 'hasRef=false 却画了参照卡 —— 临时减货会被误认为有依据');
+        expect(rowCount(tester), 1, reason: '没查到参照就不许减货了');
+        expect(find.text('共 1 种，合计减货 1'), findsOneWidget,
+            reason: '这一笔没落库');
+      });
     });
   });
 }
