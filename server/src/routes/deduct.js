@@ -276,8 +276,25 @@ router.get('/reference', (req, res) => {
        AND r.scanned_at >= ?
   `).get(bc, Date.now() - REF_WINDOW_DAYS * 86400000);
 
-  // 商品名：管理台/员工看到"6901234"这串码是认不出什么的。
-  const pm = db.prepare('SELECT name, spec, unit FROM product_master WHERE barcode = ?').get(bc);
+  // ③ 商品档案（商档）。**底表在服务端，减货/盘点共用这一份**：
+  //    管理台导入一次商品档案，所有人拉到的都是同一份，不会你一份我一份。
+  //    🔴 这里要连 `account_qty` 一起取 —— 早先只取了 name/spec/unit，
+  //       于是"没盘过的码"账面数永远是 null，明明商档里写着 300，
+  //       员工却看到"—"。龙哥 2026-09-26 反馈「商档已经存到商品档案了，
+  //       这个要打通共用」，说的就是这一处。
+  const pm = db.prepare(
+    'SELECT name, spec, unit, account_qty FROM product_master WHERE barcode = ?'
+  ).get(bc);
+
+  // 账面数：**盘过就用那一趟快照，没盘过就用商档现在的**。
+  //   盘点的快照优先，是因为账面数会变 —— 盘点那一刻对的账才是那趟的账，
+  //   事后再拿商档的新账面数去比，等于拿今天的尺子量上个月的布。
+  //   没盘过就退到商档：至少让员工看到"系统账上应该有 300"，
+  //   能立刻发现"这码扫错了"或者"这货账面本来就是负的"。
+  const masterAccount = pm && pm.account_qty !== null && pm.account_qty !== undefined
+    ? Number(pm.account_qty) : null;
+  const accountQty = (counted && counted.account_qty !== null && counted.account_qty !== undefined)
+    ? Number(counted.account_qty) : masterAccount;
 
   const deductedQty = ded && ded.qty ? Number(ded.qty) : 0;
   // ③ 剩多少没减。**不含本次**：本次减多少要等员工填完才知道，
@@ -287,7 +304,10 @@ router.get('/reference', (req, res) => {
   res.json({
     ok: true,
     barcode: bc,
-    hasRef: Boolean(counted) || deductedQty > 0,
+    // 🔴 商档里认得这个码，也算"有参照"：员工扫完能立刻看到商品名，
+    //    确认自己扫的是不是这个货 —— 扫错码时界面一片空白最要命，
+    //    比少看一个数字严重得多。
+    hasRef: Boolean(counted) || deductedQty > 0 || Boolean(pm),
     name: pm?.name || '',
     spec: pm?.spec || '',
     unit: pm?.unit || '',
@@ -295,9 +315,10 @@ router.get('/reference', (req, res) => {
     countedQty: counted ? Number(counted.qty) : null,
     countedAt: counted?.at ?? null,
     countedSheet: counted?.sheet_no ?? null,
-    // 那轮盘点时客户端上报的账面数（服务端没有库存账，这数来自上传时）
-    accountQty: counted && counted.account_qty !== null && counted.account_qty !== undefined
-      ? Number(counted.account_qty) : null,
+    // 账面数：盘点那趟的快照优先，没盘过取商档当前的（见上面 ③）
+    accountQty,
+    accountFrom: (counted && counted.account_qty !== null && counted.account_qty !== undefined)
+      ? 'counted' : (masterAccount !== null ? 'master' : null),
     // 累计已减 + 剩多少
     deductedQty,
     deductedSheets: ded?.sheets ? Number(ded.sheets) : 0,

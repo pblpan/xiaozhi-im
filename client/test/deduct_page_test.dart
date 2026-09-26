@@ -576,6 +576,38 @@ void main() {
         expect(find.text('共 1 种，合计减货 1'), findsOneWidget,
             reason: '这一笔没落库');
       });
+
+      testWidgets('🔴 没盘过但商品档案有 → 账面数带出来，且不冒充盘点', (tester) async {
+        // 龙哥 2026-09-26：「商档我已经存到商品档案了，这个要打通共用」。
+        // 没盘过的货，账面数也要从商品档案来 —— 否则员工扫完只看到"—"，
+        // 连自己扫没扫错码都不知道。
+        await stubRef((c) => <String, dynamic>{
+          'ok': true, 'hasRef': true, 'barcode': c.query['barcode'],
+          'name': '德芙兰洗衣伴侣300ml', 'spec': '1×12', 'unit': '瓶',
+          'countedQty': null, 'countedAt': null, 'countedSheet': null,
+          'accountQty': 300, 'accountFrom': 'master',
+          'deductedQty': 0, 'deductedSheets': 0, 'remaining': null,
+          'windowDays': 30,
+        });
+        await pumpPage(tester);
+        await scan(tester, barcode: '6949', qty: '2');
+        await waitRefBack(tester);
+
+        expect(find.byKey(const Key('deduct-ref-card')), findsOneWidget,
+            reason: '商档认得这个码就该给参照（扫完至少能确认扫对了哪个货）');
+        final acc = find.byKey(const Key('deduct-ref-account'));
+        expect(acc, findsOneWidget, reason: '账面数没带出来 —— 商档没打通');
+        expect(tester.widget<Text>(acc).data, contains('300'),
+            reason: '账面数应该是商品档案里的 300');
+        expect(tester.widget<Text>(acc).data, contains('商品档案'),
+            reason: '得说清这数来自商品档案，不是盘点来的');
+        // 🔴 商档不冒充盘点：没盘过就是没盘过
+        expect(find.byKey(const Key('deduct-ref-counted')).evaluate().single,
+            isNotNull);
+        expect(tester.widget<Text>(find.byKey(const Key('deduct-ref-counted'))).data,
+            '—', reason: '没盘过却显示了一个"盘点数"，那就是拿商档冒充盘点');
+        expect(rowCount(tester), 1, reason: '没盘点数也要能照常减');
+      });
     });
   });
 }

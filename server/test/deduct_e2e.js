@@ -312,6 +312,54 @@ function stopServer() {
     r.body?.hasRef === false, JSON.stringify(r.body));
   ok('  这种时候 countedQty / remaining 都是 null',
     r.body?.countedQty === null && r.body?.remaining === null, JSON.stringify(r.body));
+
+  // ── 商档（商品档案）共用 ────────────────────────────────────────
+  // 龙哥 2026-09-26：「商档我已经存到商品档案了，这个要打通共用」。
+  // 走**真实的管理台导入通道**（upload + commit），不直接改库 —— 顺带
+  // 验"导进去的商档，参照数接口认不认"。
+  const BATCH = 'B' + Date.now();
+  r = await api('POST', '/api/master/upload', {
+    token: admin,
+    body: {
+      batch: BATCH,
+      rows: [
+        { barcode: '6901234500888', name: '商档专有商品', spec: '1×12', unit: '箱', account_qty: 300 },
+        { barcode: '6901234500024', name: '盘过且商档也有', spec: '1×24', unit: '箱', account_qty: 999 },
+      ],
+    },
+  });
+  ok('管理台导入商档（upload）', r.status === 200, JSON.stringify(r.body));
+  r = await api('POST', '/api/master/commit', { token: admin, body: { batch: BATCH } });
+  ok('  提交这批商档（commit）', r.status === 200, JSON.stringify(r.body));
+
+  // 没盘过、没减过，但商档认得这个码
+  r = await api('GET', '/api/deduct/reference?barcode=6901234500888', { token: admin });
+  ok('🔴 没盘过但商档有 → 账面数取商档的 300（不是 null）',
+    r.body?.accountQty === 300, JSON.stringify(r.body));
+  ok('  accountFrom = master（这数来自商档，不是盘点）',
+    r.body?.accountFrom === 'master', JSON.stringify(r.body?.accountFrom));
+  ok('  商品名 / 规格 / 单位都带出来了',
+    r.body?.name === '商档专有商品' && r.body?.spec === '1×12' && r.body?.unit === '箱',
+    JSON.stringify(r.body));
+  ok('  hasRef = true（扫完至少能确认扫对了哪个货 —— 扫错码界面一片空白最要命）',
+    r.body?.hasRef === true, JSON.stringify(r.body?.hasRef));
+  ok('  countedQty 仍是 null（没盘过就是没盘过，商档不冒充盘点）',
+    r.body?.countedQty === null, JSON.stringify(r.body?.countedQty));
+  ok('  remaining 仍是 null（没有盘点数可减，算"剩"没有意义）',
+    r.body?.remaining === null, JSON.stringify(r.body?.remaining));
+
+  // 盘过的码：那趟的快照优先，不被商档后来改的账面数覆盖
+  r = await api('GET', '/api/deduct/reference?barcode=6901234500024', { token: admin });
+  ok('🔴 盘过的码 → 账面数仍取盘点快照 12（不被商档的 999 覆盖）',
+    r.body?.accountQty === 12, JSON.stringify(r.body?.accountQty));
+  ok('  accountFrom = counted',
+    r.body?.accountFrom === 'counted', JSON.stringify(r.body?.accountFrom));
+
+  // 商档里没有的码，行为照旧
+  r = await api('GET', '/api/deduct/reference?barcode=6901234500999', { token: admin });
+  ok('商档里没有的码 → 名字空、账面数 null（不凭空造数）',
+    !r.body?.name && r.body?.accountQty === null, JSON.stringify(r.body));
+
   console.log(`\n[deduct E2E] 通过 ${passed} / 失败 ${failed}`);
   if (failures.length) { console.log('\n失败项：'); failures.forEach((f) => console.log('  - ' + f)); }
   stopServer();

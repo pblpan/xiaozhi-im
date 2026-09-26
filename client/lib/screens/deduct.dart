@@ -771,7 +771,16 @@ class _DeductPageState extends State<DeductPage> {
     final remaining = ref['remaining'] as num?;
     final sheets = (ref['deductedSheets'] as num? ?? 0).toInt();
     final name = (ref['name'] ?? '').toString().trim();
+    final spec = (ref['spec'] ?? '').toString().trim();
+    final unit = (ref['unit'] ?? '').toString().trim();
     final code = ref['barcode']?.toString() ?? _refBarcode;
+
+    // 账面数：**商品档案（商档）是底表**，没盘过也能带出来。
+    //   盘过就用那一趟的快照（账面数会变，事后再拿新账面数比等于拿
+    //   今天的尺子量上个月的布），所以这里要把**来源**说清楚 ——
+    //   两个来源的数不一样时，员工得知道该信哪个。
+    final account = ref['accountQty'] as num?;
+    final fromCounted = (ref['accountFrom'] ?? '').toString() == 'counted';
 
     // 这次减多少 → 减完还剩多少。填了就现算，员工能对着实货核。
     final q = double.tryParse(_qtyCtl.text.trim());
@@ -795,7 +804,13 @@ class _DeductPageState extends State<DeductPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  name.isEmpty ? code : '$name',
+                  () {
+                    final parts = <String>[];
+                    if (name.isNotEmpty) parts.add(name);
+                    if (spec.isNotEmpty) parts.add(spec);
+                    if (parts.isEmpty) parts.add(code);
+                    return parts.join(' ');
+                  }(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: AppColors.textWeak, fontSize: 12),
@@ -803,6 +818,16 @@ class _DeductPageState extends State<DeductPage> {
               ),
             ],
           ),
+          // 账面数（商品档案共用）：没盘过的货也有，能立刻看出扫没扫错码
+          if (account != null) ...[
+            const SizedBox(height: 3),
+            Text(
+              '账面 ${DeductExport.fmtQty(account)}${unit.isNotEmpty ? ' $unit' : ''}'
+              ' · ${fromCounted ? '上轮盘点时' : '商品档案'}',
+              key: const Key('deduct-ref-account'),
+              style: const TextStyle(color: AppColors.textSub, fontSize: 11),
+            ),
+          ],
           const SizedBox(height: 6),
           Row(
             children: [
@@ -826,7 +851,9 @@ class _DeductPageState extends State<DeductPage> {
           const SizedBox(height: 5),
           Text(
             remaining == null
-                ? '这个码没有盘过点参照（临时减货照样能减）；已减的是最近 ${(ref['windowDays'] ?? 30).toString()} 天'
+                ? (account != null
+                    ? '这个码还没盘过，账面数是商品档案里的；减货照样能做'
+                    : '这个码没有盘过点参照（临时减货照样能减）；已减的是最近 ${(ref['windowDays'] ?? 30).toString()} 天')
                 : '参照来自上一次盘点（减货是拿货/损耗之后把账往下调，不是盘点这一步）',
             style: const TextStyle(color: AppColors.textWeak, fontSize: 11),
           ),

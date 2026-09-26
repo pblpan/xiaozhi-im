@@ -192,13 +192,23 @@ def _upload_probe(c, name):
         正确做法是先传到 bind 源目录（宿主机 .../src/），容器那边自然就看见了。
     """
     dst = REMOTE_ROOT + '/' + name
-    present = (run(c, 'test -f %s && echo yes || echo no' % dst) or '').strip()
-    if present != 'yes':
-        put_file(c, os.path.join(HERE, name), dst)
-        # 传完必须**再验一次**：不验就跑，等于把"到底有没有传上去"换成运气。
-        present = (run(c, 'test -f %s && echo yes || echo no' % dst) or '').strip()
-    if present != 'yes':
-        raise SystemExit('探针 %s 没能进到容器可见的位置（%s）' % (name, dst))
+    local = os.path.join(HERE, name)
+    # 🔴 **每次都传，不看"在不在"**（2026-09-26 深夜踩到，代价很大）：
+    #    早先写成 `if present != 'yes'` 才传 —— 于是探针改了内容以后，
+    #    容器里那份永远是第一次上传的旧版，**改了等于没改**。
+    #    后果是：新加的 fallback 分支没上去，探针照样打印空串，
+    #    我据此得出"线上商档一条记录都没有"的结论 —— 而实际库里有
+    #    **12.6 万行**商档。一个"存在就跳过"的优化，换来一个完全错误的结论。
+    #    探针只有几 KB，每次重传的成本可以忽略，正确性不能省。
+    put_file(c, local, dst)
+
+    # 传完必须**比对字节数**：不验就跑，等于把"到底有没有传上去"换成运气。
+    want = os.path.getsize(local)
+    got = (run(c, 'stat -c %%s %s 2>/dev/null || echo 0' % dst) or '0').strip()
+    if not got.isdigit() or int(got) != want:
+        raise SystemExit('探针 %s 字节数对不上（本地 %d / 远端 %s）—— '
+                         '容器里跑的可能是旧版，别信它的输出'
+                         % (name, want, got))
     # 容器里这个挂载点就是 /app（宿主机 .../src -> /app）
     return '/app/' + name
 
@@ -269,10 +279,14 @@ def main():
     time.sleep(5)
     # 🔴 这里的输出要用 print 打出来：`run()` 只执行不回显，
     #    不 print 的话接口到底通不通，屏幕上什么也看不到。
+    # 🔴 这串命令**没有 % 格式化参数**，所以 printf 里就是单 `%s` / `%{http_code}`。
+    #    早先照抄别处写成了 `%%s`（那是为了配合 % 格式化），结果 shell 收到
+    #    字面量 `%%s`，printf 打出来是 "%s -> %{http_code}" —— 三个接口的
+    #    状态码一个都没打出来，看着像"没输出"，其实是转义多写了一层。
     print('  ' + (run(c, "for p in /api/deduct/sheets /api/deduct/reference"
                          " /api/admin/apps/price_tag/data;"
-                         " do printf '%%s -> ' \"$p\";"
-                         " curl -s -o /dev/null -w '%%{http_code}\\n'"
+                         " do printf '%s -> ' \"$p\";"
+                         " curl -s -o /dev/null -w '%{http_code}\\n'"
                          " --max-time 8 http://127.0.0.1:3602$p; done") or '').strip())
 
     print('\n=== 5) 验证数据库迁移真的跑了 ===')
@@ -306,24 +320,25 @@ def probe_reference(c):
                   % (CONTAINER, probe, indb)) or '').strip()
     counted, fallback = (raw.split('|') + ['', ''])[:2]
 
-    # 参照数只要"任意登录用户"，不用管理员 —— 所以临时注册一个一次性账号去问，
-    # 不去碰管理口令（那会在日志里留一串明文口令，没必要）。
-    user = 'refchk%s' % time.strftime('%H%M%S')
-    run(c, "curl -s -o /dev/null -X POST http://127.0.0.1:3602/api/auth/register"
-            " -H 'Content-Type: application/json'"
-            " -d '{\"username\":\"%s\",\"password\":\"Refchk_123\","
-            "\"nickname\":\"参照数体检\"}'" % user)
+    # 🔴 线上是**工作模式**（friend_mode=work），自助注册被服务端挡掉
+    #    （回「工作模式下由管理员统一添加员工账号」），所以临时注册这条路
+    #    走不通。也不去碰管理口令 —— 明文会进 shell 命令、日志和 history。
+    #    改用 `_token_probe.js`：让容器里跑着的那份代码自己签一个令牌，
+    #    用的是同一把 JWT_SECRET，身份是普通用户（参照数本就只要登录用户）。
+    tprobe = _upload_probe(c, '_token_probe.js')
+    token = (run(c, 'docker exec %s node %s %s 2>/dev/null'
+                    % (CONTAINER, tprobe, indb)) or '').strip()
+    if not token:
+        print('  ⚠️ 签不出令牌 → 接口实测做不了（路由 401 那一步已经验过挂上了）')
+        return
 
     def ask(code):
         if not code:
             return '(库里连一个条码都没有，没法验)'
-        return run(c, "TOKEN=$(curl -s -X POST http://127.0.0.1:3602/api/auth/login"
-                      " -H 'Content-Type: application/json'"
-                      " -d '{\"username\":\"%s\",\"password\":\"Refchk_123\"}'"
-                      " | sed -n 's/.*\"token\"[: ]*\"\\([^\"]*\\)\".*/\\1/p'| head -1);"
-                      "curl -s --max-time 8 -H \"Authorization: Bearer $TOKEN\""
+        return run(c, "curl -s --max-time 8"
+                      " -H \"Authorization: Bearer %s\""
                       " 'http://127.0.0.1:3602/api/deduct/reference?barcode=%s'"
-                      % (user, code)) or '(无响应)'
+                      % (token, code)) or '(无响应)'
 
     if counted:
         print('  最近盘过的条码 %s →' % counted)
@@ -333,7 +348,8 @@ def probe_reference(c):
         print('  ⚠️ 这时不能只报"验过了" —— 得拿真实商品条码看接口回什么：')
         print('  备选条码 %s →' % (fallback or '(无)'))
         print('    ' + (ask(fallback) or '').strip())
-        print('    期望：ok、hasRef=false、字段齐全（不是报错、不是整串 null）')
+        print('    期望：ok、字段齐全、'
+              'hasRef=true 且 accountFrom=master（商档认得这个码，账面数带得出来）')
 
 
 if __name__ == '__main__':
