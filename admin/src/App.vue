@@ -3759,6 +3759,37 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-switch v-model="tr.courseForm.published" />
                 <span class="hint" style="margin-left:10px">关着 = 草稿，学员侧看不到</span>
               </el-form-item>
+
+              <!-- 🔴 课件：以前这里一个挂课件的入口都没有，得先建课程、再建章节、
+                   再建课时、最后逐条挂文件，四步走完人就不想建课了。
+                   现在建课当场就能挂（传文件 或 填外链），一起存进去。 -->
+              <el-form-item label="课件">
+                <div style="width:100%">
+                  <div v-for="(w, wi) in tr.courseForm.wares" :key="'ware' + wi" class="tr-ware">
+                    <span class="tr-ware-no">{{ wi + 1 }}</span>
+                    <el-input v-model="w.title" size="small" placeholder="课件名，如：01 陈列三原则"
+                      style="flex:1 1 140px" />
+                    <el-select v-model="w.kind" size="small" style="width:86px">
+                      <el-option value="video" label="视频" />
+                      <el-option value="doc" label="文档" />
+                    </el-select>
+                    <el-input v-model="w.linkUrl" size="small" placeholder="课件链接（http 开头）"
+                      style="flex:1 1 180px" />
+                    <el-button size="small" :loading="tr.uploading && tr.wareIdx === wi"
+                      @click="pickTrWare(wi)">上传</el-button>
+                    <el-button size="small" plain @click="openWare(w)">预览</el-button>
+                    <el-button size="small" type="danger" plain @click="tr.courseForm.wares.splice(wi, 1)">删</el-button>
+                  </div>
+                  <div v-if="!tr.courseForm.wares.length" class="hint" style="margin:2px 0 6px">
+                    还没有课件。这里可以直接传文件，也可以只填一个外链（共享盘 / 视频号 / 腾讯文档）——
+                    都留空也能先建课，之后在「课程结构」里补。
+                  </div>
+                  <el-button size="small" @click="tr.courseForm.wares.push({ title: '', kind: 'video', linkUrl: '', fileId: null })">
+                    + 加一节课
+                  </el-button>
+                  <input ref="trWareEl" type="file" style="display:none" @change="onTrWareFile" />
+                </div>
+              </el-form-item>
             </el-form>
             <template #footer>
               <el-button @click="tr.courseDlg = false">取消</el-button>
@@ -3794,14 +3825,26 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     {{ row.duration_sec ? Math.round(row.duration_sec / 60) + ' 分' : '—' }}
                   </template>
                 </el-table-column>
+                <!-- 课件两列分开写：传了文件 / 填了外链，一眼看得出这节能不能点开。
+                     ⚠️ 管理端这里是下划线的原始列名（SELECT *），别写成 fileId。 -->
                 <el-table-column label="课件" min-width="170">
                   <template #default="{ row }">
-                    <span v-if="row.file_id" class="hint">已挂 file#{{ row.file_id }}</span>
-                    <span v-else style="color:#e6a23c;font-size:12px">未挂课件（学员点开是空的）</span>
+                    <div v-if="row.file_id">已挂 file#{{ row.file_id }}</div>
+                    <div v-else-if="row.link_url" style="color:#909399">
+                      外链（未传文件）
+                    </div>
+                    <div v-else style="color:#e6a23c;font-size:12px">未挂课件（学员点开是空的）</div>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="80">
+                <el-table-column label="链接" min-width="180">
                   <template #default="{ row }">
+                    <span v-if="row.link_url" class="hint">{{ row.link_url }}</span>
+                    <span v-else style="color:#c0c4cc;font-size:12px">—</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="130">
+                  <template #default="{ row }">
+                    <el-button size="small" @click="editTrLesson(ch, row)">改</el-button>
                     <el-button size="small" type="danger" @click="delTrLesson(row)">删</el-button>
                   </template>
                 </el-table-column>
@@ -3840,8 +3883,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <el-empty v-if="!tr.struct.length" description="还没有章节。先「+ 章节」，再往里加课时。" />
           </el-drawer>
 
-          <!-- 加课时 -->
-          <el-dialog v-model="tr.lessonDlg" title="添加课时" width="560px">
+          <!-- 加课时 / 改课时（同一个弹窗：以前只有"加"，挂错课件只能删了重建，
+               而重建会让学员的历史进度一起消失） -->
+          <el-dialog v-model="tr.lessonDlg" :title="tr.lessonEditId ? '修改课时' : '添加课时'" width="560px">
             <el-form label-width="90px">
               <el-form-item label="课时名称">
                 <el-input v-model="tr.lessonForm.title" maxlength="120" placeholder="如：01 陈列三原则" />
@@ -3868,10 +3912,24 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </div>
                 </div>
               </el-form-item>
+              <!-- 🔴 外链：共享盘 / 视频号 / 腾讯文档这类进不了系统文件的课件走这里。
+                   以前整张表只有 file_id，"设置课件链接地址"这个入口根本不存在。 -->
+              <el-form-item label="课件链接">
+                <div style="width:100%">
+                  <el-input v-model="tr.lessonForm.linkUrl" maxlength="2000" clearable
+                    placeholder="http 或 https 开头，例如 https://docs.qq.com/doc/xxxx" />
+                  <div class="hint" style="margin-top:4px">
+                    留空 = 只用上面传的文件；填了 = 学员点这节课直接跳过去。
+                    <b>两者可以同时用</b>（点课时会先跳外链，跳不过去再回落到文件）。
+                  </div>
+                </div>
+              </el-form-item>
             </el-form>
             <template #footer>
               <el-button @click="tr.lessonDlg = false">取消</el-button>
-              <el-button type="primary" :loading="tr.saving" @click="saveTrLesson()">添加</el-button>
+              <el-button type="primary" :loading="tr.saving" @click="saveTrLesson()">
+                {{ tr.lessonEditId ? '保存修改' : '添加' }}
+              </el-button>
             </template>
           </el-dialog>
 
@@ -6342,14 +6400,58 @@ const tr = ref({
   sheets: [], sheetLoading: false, sheetTotal: 0,
   sheetPage: 1, sheetSize: 50, sheetCourse: null, onlyPassed: false,
   courseDlg: false,
-  courseForm: { id: null, title: '', category: '', intro: '', required: false, published: false },
+  // wares = 建课当场挂的课件；保存时一并建成「课件」章节下的课时
+  courseForm: { id: null, title: '', category: '', intro: '', required: false, published: false, wares: [] },
+  wareIdx: -1,
   structDlg: false, structCourse: null, structTitle: '', struct: [],
-  lessonDlg: false, lessonChapter: null,
-  lessonForm: { title: '', kind: 'video', durationSec: 0, fileId: null },
+  lessonDlg: false, lessonChapter: null, lessonEditId: null,
+  lessonForm: { title: '', kind: 'video', durationSec: 0, fileId: null, linkUrl: '' },
   examDlg: false, examChapter: null,
   examForm: { title: '', passScore: 60, attemptLimit: 1, minProgress: 100, questions: [] },
 });
 const trFileEl = ref(null);
+const trWareEl = ref(null);
+
+/** 「新建课程」里点某一行的「上传」：记住行号再触发那个隐藏 file input */
+function pickTrWare(idx) {
+  tr.value.wareIdx = idx;
+  trWareEl.value?.click();
+}
+
+/** 同上，那一行的「预览」：填了外链就跳，没填就提示先看有没有传文件 */
+function openWare(w) {
+  const u = String(w.linkUrl || '').trim();
+  if (!u) {
+    ElMessage.info(w.fileId
+      ? '这一节传了文件（file#' + w.fileId + '），保存后去「课程结构」里改'
+      : '这一节还没有课件地址');
+    return;
+  }
+  window.open(u, '_blank', 'noopener');
+}
+
+/** 课件上传：落到 tr.courseForm.wares[wareIdx] 上 —— 🔴 必须改成"落到指定行"，
+ *    原来那版写死进 lessonForm，两边同时开着就会互相串。 */
+async function onTrWareFile(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  const idx = tr.value.wareIdx;
+  if (!file || idx < 0) return;
+  tr.value.uploading = true;
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const { data } = await api.post('/files/upload', fd);
+    const w = tr.value.courseForm.wares[idx];
+    if (!w) return;
+    w.fileId = data.id;
+    if (!String(w.title || '').trim()) {
+      w.title = String(data.name || '').replace(/\.[^.]+$/, '');
+    }
+    ElMessage.success(`已上传：${data.name}`);
+  } catch (err) { trErr(err, '上传失败'); }
+  finally { tr.value.uploading = false; tr.value.wareIdx = -1; }
+}
 
 function trErr(e, what) {
   ElMessage.error(what + '：' + (e.response?.data?.error || e.message));
@@ -6391,23 +6493,52 @@ async function loadTrSheets() {
 
 // ---- 课程 ----
 function openTrCourse(row) {
-  tr.value.courseForm = row
-    ? {
-      id: row.id, title: row.title, category: row.category || '', intro: row.intro || '',
-      required: !!row.required, published: !!row.published,
-    }
-    : { id: null, title: '', category: '', intro: '', required: false, published: false };
+  // 🔴 改课程时 wares 留空：课件已经落在「课程结构」的课时上了，
+  //    这里再塞回去会跟结构里的课时打架（存一次就多出一节重复的课）。
+  tr.value.courseForm = {
+    id: row ? row.id : null,
+    title: row ? row.title : '',
+    category: row ? (row.category || '') : '',
+    intro: row ? (row.intro || '') : '',
+    required: row ? !!row.required : false,
+    published: row ? !!row.published : false,
+    wares: [],
+  };
+  tr.value.wareIdx = -1;
   tr.value.courseDlg = true;
 }
 
 async function saveTrCourse() {
   const f = tr.value.courseForm;
   if (!f.title.trim()) { ElMessage.warning('请填课程名称'); return; }
+
+  // 只把"填了东西"的课件带过去。名字没填但挂了课件的，用文件名补上，
+  // 否则后台会静默跳过这一节（服务端对空标题直接 continue），管理员看到的是"少了几节"。
+  const wares = (f.wares || [])
+    .map((w, i) => ({
+      ...w,
+      title: String(w.title || '').trim() || `课件${i + 1}`,
+      sort: i,
+    }))
+    .filter((w) => w.linkUrl || w.fileId);
+
   tr.value.saving = true;
   try {
-    if (f.id) await api.patch(`/training/admin/courses/${f.id}`, f);
-    else await api.post('/training/admin/courses', f);
-    ElMessage.success(f.id ? '已保存' : '课程已建（默认是草稿，结构建好后记得点「发布」）');
+    if (f.id) {
+      await api.patch(`/training/admin/courses/${f.id}`, f);
+      ElMessage.success('已保存');
+    } else {
+      await api.post('/training/admin/courses', {
+        title: f.title, intro: f.intro, category: f.category,
+        required: f.required, published: f.published,
+        // 一个课件 = 一节课时，全归在「课件」这一章下；想要多章分组，
+        // 建完再到「课程结构」里加章节。
+        sections: wares.length ? [{ title: '课件', sort: 0, lessons: wares }] : null,
+      });
+      ElMessage.success(wares.length
+        ? '课程已建，' + wares.length + ' 节课件也挂上了（记得点「发布」）'
+        : '课程已建（默认是草稿，课件之后可以在「课程结构」里补）');
+    }
     tr.value.courseDlg = false;
     await loadTrCourses();
   } catch (e) { trErr(e, '保存失败'); }
@@ -6484,7 +6615,29 @@ async function delTrChapter(ch) {
 
 function addTrLesson(ch) {
   tr.value.lessonChapter = ch;
-  tr.value.lessonForm = { title: '', kind: 'video', durationSec: 0, fileId: null };
+  tr.value.lessonEditId = null;
+  tr.value.lessonForm = { title: '', kind: 'video', durationSec: 0, fileId: null, linkUrl: '' };
+  tr.value.lessonDlg = true;
+}
+
+/**
+ * 改课时。
+ *
+ * 🔴 字段名两边不一样，别读错：管理端「课程结构」走的是 `GET /admin/courses/:id`
+ *    里的 `SELECT *`，下发的是**下划线**（file_id / link_url / duration_sec）；
+ *    学员侧接口 `lessonWithProgress` 才转成驼峰（fileId / linkUrl）。
+ *    这里连着 ?? 两种写法一起读，省得以后改接口又白屏一次。
+ */
+function editTrLesson(ch, row) {
+  tr.value.lessonChapter = ch;
+  tr.value.lessonEditId = row.id;
+  tr.value.lessonForm = {
+    title: row.title || '',
+    kind: row.kind === 'doc' ? 'doc' : 'video',
+    durationSec: row.duration_sec ?? row.durationSec ?? 0,
+    fileId: row.file_id ?? row.fileId ?? null,
+    linkUrl: row.link_url ?? row.linkUrl ?? '',
+  };
   tr.value.lessonDlg = true;
 }
 
@@ -6493,18 +6646,28 @@ async function saveTrLesson() {
   if (!f.title.trim()) { ElMessage.warning('请填课时名称'); return; }
   tr.value.saving = true;
   try {
-    await api.post('/training/admin/lessons', {
-      chapterId: tr.value.lessonChapter.id,
-      title: f.title,
-      kind: f.kind,
-      durationSec: f.durationSec,
-      fileId: f.fileId,
-      sort: (tr.value.lessonChapter.lessons || []).length,
-    });
-    tr.value.lessonDlg = false;
-    await reloadTrStruct();
-    ElMessage.success('课时已加');
-  } catch (e) { trErr(e, '添加课时失败'); }
+    if (tr.value.lessonEditId) {
+      await api.patch(`/training/admin/lessons/${tr.value.lessonEditId}`, f);
+      tr.value.lessonDlg = false;
+      await reloadTrStruct();
+      // 🔴 改课件**不会**动学员的历史进度（进度挂在 lesson.id 上，没重建），
+      //    但要明说，否则管理员会以为"又重建了一次、记录清了"。
+      ElMessage.success('课时已更新，学员已看过的记录不受影响');
+    } else {
+      await api.post('/training/admin/lessons', {
+        chapterId: tr.value.lessonChapter.id,
+        title: f.title,
+        kind: f.kind,
+        durationSec: f.durationSec,
+        fileId: f.fileId,
+        linkUrl: f.linkUrl,
+        sort: (tr.value.lessonChapter.lessons || []).length,
+      });
+      tr.value.lessonDlg = false;
+      await reloadTrStruct();
+      ElMessage.success('课时已加');
+    }
+  } catch (e) { trErr(e, '保存课时失败'); }
   finally { tr.value.saving = false; }
 }
 
@@ -8253,6 +8416,10 @@ onMounted(async () => {
 
 <style>
 body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
+/* 建课程时挂的课件：一行一个，flex 自适应宽度，窄屏会自己折行。
+   不加 flex-wrap 的话，最后一列的「删」按钮会被窗口挤到看不见。 */
+.tr-ware { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.tr-ware-no { width: 18px; text-align: center; color: #909399; font-size: 12px; flex: none; }
 .login-wrap { height: 100vh; display: flex; align-items: center; justify-content: center; background: #f0f2f5; }
 .login-card { width: 340px; }
 /* 向导那张卡文字多（说明 + 字符集提示 + 两个输入框），340px 里要折四行，太挤 */

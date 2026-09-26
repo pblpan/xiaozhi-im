@@ -459,6 +459,102 @@ function stopServer() {
       JSON.stringify(r.body));
   }
 
+  // ============================================================
+  // 【十】课件：外链 / 建课带课件 / 改课时不清进度
+  //
+  // 这一段对应管理台两个真问题：
+  //   · 「新建课程没有上传课件的地方」→ 建课时一次带课件（sections）
+  //   · 「课挂错了没法改」→ PATCH /admin/lessons/:id
+  // ============================================================
+  console.log('\n【十】课件：外链 / 建课带课件 / 改课时');
+
+  // 只填外链、不传系统文件的课时
+  r = await api('POST', '/api/training/admin/lessons', {
+    token: ADMIN,
+    body: { chapterId: ch1, title: '外链课件A', kind: 'video', linkUrl: 'https://docs.qq.com/doc/AAA', sort: 9 },
+  });
+  const linkLesson = r.body?.id;
+  ok('建课时可以只挂外链（不传文件）', !!linkLesson, JSON.stringify(r.body));
+
+  r = await api('GET', `/api/training/admin/courses/${courseId}`, { token: ADMIN });
+  const linkRow = (r.body?.chapters?.[0]?.lessons || []).find((x) => x.id === linkLesson) || {};
+  ok('管理端能看到外链地址',
+    linkRow.link_url === 'https://docs.qq.com/doc/AAA',
+    JSON.stringify(linkRow));
+
+  // 🔴 这条最重要：学员侧必须下发 linkUrl。
+  //   0.21.5 之前客户端只认 fileId，fileId==0 直接弹"请管理员先上传"，
+  //   管理员明明填了链接，学员永远打不开 —— 完全无报错的假象。
+  r = await api('GET', `/api/training/courses/${courseId}`, { token: STU });
+  const stuLink = (r.body?.chapters?.[0]?.lessons || []).find((x) => x.id === linkLesson) || {};
+  ok('🔴 学员侧下发 linkUrl（外链课件不能判成"没课件"）',
+    stuLink.linkUrl === 'https://docs.qq.com/doc/AAA', JSON.stringify(stuLink));
+  ok('  fileId 为空时外链仍然可用（客户端两条路的判据）',
+    (stuLink.fileId ?? 0) === 0 && !!stuLink.linkUrl, JSON.stringify(stuLink));
+
+  // 乱七八糟的协议不能进库（javascript: 之类）
+  r = await api('PATCH', `/api/training/admin/lessons/${linkLesson}`, {
+    token: ADMIN, body: { linkUrl: 'javascript:alert(1)' },
+  });
+  r = await api('GET', `/api/training/admin/courses/${courseId}`, { token: ADMIN });
+  const badRow = (r.body?.chapters?.[0]?.lessons || []).find((x) => x.id === linkLesson) || {};
+  ok('🔴 非 http(s) 的外链存不进去', !String(badRow.link_url || '').startsWith('javascript:'),
+    JSON.stringify(badRow.link_url));
+
+  // 改课时：文字和课件都能改
+  r = await api('PATCH', `/api/training/admin/lessons/${linkLesson}`, {
+    token: ADMIN, body: { title: '外链课件A（改过）', linkUrl: 'https://drive.weixin.xyz/d/BBB', durationSec: 120 },
+  });
+  ok('改课时（PATCH）成功', r.status === 200 && r.body?.id === linkLesson, JSON.stringify(r.body));
+  r = await api('GET', `/api/training/admin/courses/${courseId}`, { token: ADMIN });
+  const patched = (r.body?.chapters?.[0]?.lessons || []).find((x) => x.id === linkLesson) || {};
+  ok('  改完名字/链接/时长都生效',
+    patched.title === '外链课件A（改过）'
+    && patched.link_url === 'https://drive.weixin.xyz/d/BBB'
+    && patched.duration_sec === 120, JSON.stringify(patched));
+
+  // 🔴 改课时绝不能清掉学员的进度：老办法"删了重建"会连带把
+  //    tr_progress 一起删掉，学员白学一遍。
+  await api('POST', '/api/training/progress', { token: STU, body: { lessonId: linkLesson, positionSec: 60, done: true } });
+  await api('PATCH', `/api/training/admin/lessons/${linkLesson}`, { token: ADMIN, body: { title: '外链课件A（改过2）' } });
+  ok('🔴 改课时不清学员进度（进度挂在 lesson.id 上）',
+    dbh().prepare('SELECT done, position_sec FROM tr_progress WHERE lesson_id = ?').get(linkLesson)?.done === 1,
+    JSON.stringify(dbh().prepare('SELECT done, position_sec FROM tr_progress WHERE lesson_id = ?').get(linkLesson)));
+
+  // 建课一次带课件：课程 → 章节 → 课时
+  r = await api('POST', '/api/training/admin/courses', {
+    token: ADMIN,
+    body: {
+      title: '一次建好的课', category: '防损', published: true,
+      sections: [{
+        title: '课件', sort: 0,
+        lessons: [
+          { title: '01 防损意识', kind: 'video', linkUrl: 'https://v.example.com/1', sort: 0 },
+          { title: '02 损耗盘点', kind: 'doc', linkUrl: '', durationSec: 300, sort: 1 },
+        ],
+      }],
+    },
+  });
+  const bulkId = r.body?.id;
+  ok('建课程时可以一次带课件（sections）', !!bulkId, JSON.stringify(r.body));
+  r = await api('GET', `/api/training/admin/courses/${bulkId}`, { token: ADMIN });
+  const bulkCh = (r.body?.chapters || [])[0] || {};
+  ok('  章节和课时都建好了', (r.body?.chapters || []).length === 1 && (bulkCh.lessons || []).length === 2,
+    JSON.stringify({ ch: (r.body?.chapters || []).length, ls: (bulkCh.lessons || []).length }));
+  ok('  两节课件的链接各就各位',
+    (bulkCh.lessons || []).some((x) => x.link_url === 'https://v.example.com/1')
+    && (bulkCh.lessons || []).some((x) => x.title === '02 损耗盘点' && x.duration_sec === 300),
+    JSON.stringify((bulkCh.lessons || []).map((x) => ({ t: x.title, l: x.link_url, d: x.duration_sec }))));
+
+  // 不带 sections 就是老行为（只建一个空课程），前端两边共用一个接口
+  r = await api('POST', '/api/training/admin/courses', { token: ADMIN, body: { title: '空课' } });
+  r = await api('GET', `/api/training/admin/courses/${r.body?.id}`, { token: ADMIN });
+  ok('不带 sections 时行为不变（只建课程）', (r.body?.chapters || []).length === 0, JSON.stringify(r.body));
+
+  // 普通用户改不了课时（PATCH 也要过权限）
+  r = await api('PATCH', `/api/training/admin/lessons/${linkLesson}`, { token: STU, body: { title: '越权改名' } });
+  ok('普通用户不能改课时（PATCH 也要鉴权）', r.status === 403, JSON.stringify(r.body));
+
   stopServer();
   console.log(`\n[培训中心 E2E] 通过 ${passed} / 失败 ${failed}`);
   if (failures.length) { console.log('失败项：'); for (const f of failures) console.log('  ✗ ' + f); }

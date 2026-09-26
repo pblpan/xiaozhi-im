@@ -62,6 +62,35 @@ const num = (v, dflt) => {
 };
 const now = () => Date.now();
 
+// 外链地址：只认 http/https。别的协议（javascript:、file:）一律当场打回，
+// 不让它存进去 —— 存进去的就是一个等着被点的坑。
+function linkUrl(v) {
+  const s = str(v, 2000);
+  if (!s) return '';
+  if (!/^https?:\/\//i.test(s)) return '';
+  return s;
+}
+
+/**
+ * 把请求体里的课件字段整理成落库用的形状。
+ *
+ * 🔴 课件是**两条路，不是一条**：
+ * · 系统文件（file_id）：走上传，进度能真数、能缓存，学员断网也能看；
+ * · 外链（link_url）：共享盘 / 视频号 / 腾讯文档之类塞进 files 表的，
+ *   只记个地址，学员点了就跳出去。
+ * 之前只有 file_id，管理台上"填不了课件链接"就是这么来的。
+ */
+function lessonFields(body) {
+  return {
+    title: str(body?.title, MAX_TITLE),
+    kind: body?.kind === 'doc' ? 'doc' : 'video',
+    fileId: num(body?.fileId, 0) || null,
+    linkUrl: linkUrl(body?.linkUrl),
+    durationSec: Math.max(0, Math.floor(num(body?.durationSec, 0))),
+    sort: num(body?.sort, 0),
+  };
+}
+
 /** 章节进度百分比：看完了的课时 / 本章课时总数（没有课时算 0，不是 100） */
 function chapterProgressPct(userId, chapterId) {
   const total = db.prepare('SELECT COUNT(*) n FROM tr_lesson WHERE chapter_id = ?').get(chapterId).n;
@@ -97,6 +126,9 @@ function lessonWithProgress(userId, l) {
     title: l.title,
     kind: l.kind,
     fileId: l.file_id,
+    // 外链课件：共享盘 / 视频号 / 腾讯文档这类进不了系统文件的，走这条。
+    // 老库没有这一列时会是 undefined，统一补成 ''（客户端判空看的是字符串是否为空）。
+    linkUrl: l.link_url || '',
     durationSec: l.duration_sec,
     sort: l.sort,
     // 看到第几秒 → 续播用。**不是完成度**（拖一下就到 95%）。
@@ -540,16 +572,57 @@ router.get('/sheets/:id', (req, res) => {
 // 管理端：课程 / 章节 / 课时 / 考试的增删改
 // ============================================================
 
+/**
+ * POST /api/training/admin/courses
+ *
+ * 建课程时可以顺手把课件带上（`sections`），一次建完 课程 → 章节 → 课时。
+ * 为什么要能一次建：管理台上"新建课程"里填完还要再点进去建章节、建课时、
+ * 再逐条挂课件，走一遍下来一条课就十几次点击，人直接放弃。
+ *
+ * 不带 `sections` 就是老行为（只建一个空课程），前端两边共用一个接口。
+ * ⚠️ 整个 sections 落在**同一个事务**里：建到一半炸了不能留下半个课程。
+ */
 router.post('/admin/courses', (req, res) => {
   const u = auth(req, res, { needAdmin: true }); if (!u) return;
   const title = str(req.body?.title, MAX_TITLE);
   if (!title) return res.status(400).json({ error: '课程名必填' });
+
   const info = db.prepare(`
     INSERT INTO tr_course (title, intro, category, required, published, created_by, created_at)
     VALUES (?,?,?,?,?,?,?)`)
     .run(title, str(req.body?.intro, 2000), str(req.body?.category, 60),
       req.body?.required ? 1 : 0, req.body?.published ? 1 : 0, u.id, now());
-  res.json({ ok: true, id: info.lastInsertRowid });
+  const cid = info.lastInsertRowid;
+
+  const sections = Array.isArray(req.body?.sections) ? req.body.sections : null;
+  if (sections) {
+    db.exec('BEGIN');
+    try {
+      for (const sec of sections) {
+        const chTitle = str(sec?.title, MAX_TITLE);
+        if (!chTitle) continue;
+        const lessons = Array.isArray(sec?.lessons) ? sec.lessons : [];
+        const chInfo = db.prepare('INSERT INTO tr_chapter (course_id, title, sort) VALUES (?,?,?)')
+          .run(cid, chTitle, num(sec?.sort, 0));
+        const chId = chInfo.lastInsertRowid;
+        lessons.slice(0, MAX_LESSONS_PER_COURSE).forEach((raw, i) => {
+          const f = lessonFields(raw);
+          if (!f.title) return;
+          db.prepare(`
+            INSERT INTO tr_lesson (chapter_id, title, kind, file_id, link_url, duration_sec, sort)
+            VALUES (?,?,?,?,?,?,?)`)
+            .run(chId, f.title, f.kind, f.fileId, f.linkUrl, f.durationSec, num(raw?.sort, i));
+        });
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      // ⚠️ 课程已经插进去了，回滚只能撤销结构。这里不删课程：删了的话前端拿
+      //    到的 id 会指向一门空课，反而更难查。让外层报原样错误即可。
+      return res.status(500).json({ error: '建课时失败：' + err.message, courseId: cid });
+    }
+  }
+  res.json({ ok: true, id: cid });
 });
 
 router.patch('/admin/courses/:id', (req, res) => {
@@ -618,8 +691,8 @@ router.post('/admin/chapters', (req, res) => {
 router.post('/admin/lessons', (req, res) => {
   const u = auth(req, res, { needAdmin: true }); if (!u) return;
   const chapterId = num(req.body?.chapterId, 0);
-  const title = str(req.body?.title, MAX_TITLE);
-  if (!chapterId || !title) return res.status(400).json({ error: 'chapterId 与 title 必填' });
+  const f = lessonFields(req.body);
+  if (!chapterId || !f.title) return res.status(400).json({ error: 'chapterId 与 title 必填' });
   if (!db.prepare('SELECT 1 FROM tr_chapter WHERE id = ?').get(chapterId)) {
     return res.status(404).json({ error: '章节不存在' });
   }
@@ -627,12 +700,56 @@ router.post('/admin/lessons', (req, res) => {
   if (cnt >= MAX_LESSONS_PER_COURSE) {
     return res.status(400).json({ error: `单个章节课时数上限 ${MAX_LESSONS_PER_COURSE}` });
   }
-  const kind = req.body?.kind === 'doc' ? 'doc' : 'video';
   const info = db.prepare(`
-    INSERT INTO tr_lesson (chapter_id, title, kind, file_id, duration_sec, sort) VALUES (?,?,?,?,?,?)`)
-    .run(chapterId, title, kind, num(req.body?.fileId, 0) || null,
-      Math.max(0, Math.floor(num(req.body?.durationSec, 0))), num(req.body?.sort, 0));
+    INSERT INTO tr_lesson (chapter_id, title, kind, file_id, link_url, duration_sec, sort)
+    VALUES (?,?,?,?,?,?,?)`)
+    .run(chapterId, f.title, f.kind, f.fileId, f.linkUrl, f.durationSec, f.sort);
   res.json({ ok: true, id: info.lastInsertRowid });
+});
+
+/**
+ * PATCH /api/training/admin/lessons/:id —— 改课时（含改课件）
+ *
+ * 🔴 这是补一个真 bug：0.21.5 之前只有"新增课时"，没有改。管理台上建完课时后
+ *    发现挂错课件 / 想补个外链链接，只能删掉重建 —— 而**历史进度跟着 lesson
+ *    一起没了**，学员的学习记录凭空消失，界面上还看不出来。
+ *    改文案也要重建的话，这个口子必须补上。
+ *
+ * 课件（fileId / linkUrl）和文字（title / kind / durationSec）可以只改一边，
+ * 所以逐个字段判断，没传就保持原值。
+ */
+router.patch('/admin/lessons/:id', (req, res) => {
+  const u = auth(req, res, { needAdmin: true }); if (!u) return;
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM tr_lesson WHERE id = ?').get(id)) {
+    return res.status(404).json({ error: '课时不存在' });
+  }
+
+  const set = [];
+  const args = [];
+  if (req.body?.title !== undefined) {
+    const t = str(req.body.title, MAX_TITLE);
+    if (!t) return res.status(400).json({ error: '课时名不能为空' });
+    set.push('title = ?'); args.push(t);
+  }
+  if (req.body?.kind !== undefined) {
+    const k = req.body.kind === 'doc' ? 'doc' : 'video';
+    set.push('kind = ?'); args.push(k);
+  }
+  if (req.body?.fileId !== undefined) {
+    set.push('file_id = ?'); args.push(num(req.body.fileId, 0) || null);
+  }
+  // 传空串 = 清掉外链；传了非 http(s) 的乱七八糟东西 = 不打进库。
+  if (req.body?.linkUrl !== undefined) { set.push('link_url = ?'); args.push(linkUrl(req.body.linkUrl)); }
+  if (req.body?.durationSec !== undefined) {
+    set.push('duration_sec = ?'); args.push(Math.max(0, Math.floor(num(req.body.durationSec, 0))));
+  }
+  if (req.body?.sort !== undefined) { set.push('sort = ?'); args.push(num(req.body.sort, 0)); }
+  if (!set.length) return res.status(400).json({ error: '没有要改的字段' });
+
+  args.push(id);
+  db.prepare(`UPDATE tr_lesson SET ${set.join(', ')} WHERE id = ?`).run(...args);
+  res.json({ ok: true, id });
 });
 
 /** 考试 + 题目一次建好（题目是考试的组成部分，分开建会出现"没有题的考试"） */

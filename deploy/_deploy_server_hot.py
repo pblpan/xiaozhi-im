@@ -68,14 +68,17 @@ FILES = [
     'src/routes/inventory.js',
     'src/routes/training.js',
     'public/index.html',
-    # 🔴 只传 index.html 实际引用的那两个 bundle（管理台菜单分类折叠 + 品牌
-    #    favicon —— vite 构建产物）。
+    # 🔴 只传 index.html 实际引用的那两个 bundle。
     #    ⚠️ 这里必须**逐个列出 index.html 里引用的真实文件名**，不能"传整个
     #    public/assets"：vite 每次构建的产物名带哈希（index-XXXX.js），
     #    只换 index.html 不换 assets → 浏览器拿到新 html 却请求不存在的 js，
     #    白屏且控制台一片 404；只传 js 不改 index.html 同理。两者必须同批。
-    'public/assets/index-Vr1E8L_l.js',
-    'public/assets/index-CL1_w9iP.css',
+    #
+    # 🔴 文件名是**按当轮构建**写的，改完管理台重出包后必须回来换。
+    #    0.21.5 这轮是「培训中心课件外链 + 建课挂课件 + 课时改课件」，
+    #    管理台这两项在「新建课程」弹窗和「课程结构」里，所以引用变了。
+    'public/assets/index-Cu2GcK4-.js',
+    'public/assets/index-CyRloi3S.css',
 ]
 
 
@@ -98,6 +101,25 @@ def describe_remote(c):
     out.append('线上 assets 实际内容: ' + run(c,
                'ls -1 %s/public/assets/ || echo "(空目录)"' % REMOTE_ROOT))
     return '\n'.join(out)
+
+
+def check_columns(c, table, want):
+    """线上那个 sqlite 里，指定表的列齐不齐。
+
+    🔴 库文件叫 **`xiaozhi-im.db`**（在 DATA_DIR 下），不是通用的 db.sqlite。
+        本地测试用错文件名会看到"列怎么都没加"的假象 —— 这个坑刚踩过。
+    """
+    # 排除 src_pre_deploy_* 快照目录，别把回滚副本当成线上库来读
+    dbfile = (run(c, "find /vol1/@appcenter/xiaozhi-im -name 'xiaozhi-im.db'"
+                     " -not -path '*src_pre_deploy*' 2>/dev/null") or '').split()[-1]
+    if not dbfile:
+        return '(线上找不到 xiaozhi-im.db — 读不到，别当通过)'
+    got = run(c, "sqlite3 %s \"PRAGMA table_info(%s)\" 2>/dev/null"
+                 "| awk -F'|' '{print $2}' | tr '\\n' ','" % (dbfile, table)) or ''
+    miss = [w for w in want if w not in got]
+    return ('%s   [%s]%s' % (got.rstrip(',') or '(空)',
+                          os.path.basename(dbfile),
+                          '' if not miss else '  → 缺: ' + ','.join(miss)))
 
 
 def snapshot(c):
@@ -167,6 +189,17 @@ def main():
     run(c, "for p in /api/deduct/sheets /api/admin/apps/price_tag/data;"
            " do printf '%%s -> ' \"$p\"; curl -s -o /dev/null -w '%%{http_code}\\n'"
            " --max-time 8 http://127.0.0.1:3602$p; done")
+
+    print('\n=== 5) 验证数据库迁移真的跑了 ===')
+    # 🔴 这一步是 2026-09-26 深夜补的。那次改了 db.js 给 tr_lesson 加列，
+    #    但热更脚本**只验接口不验库** —— 而我自己在本地验证时也踩了坑：
+    #    一直 `SELECT * FROM db.sqlite`，而项目真正用的是 **`xiaozhi-im.db`**，
+    #    白折腾半天。所以这里务必核对**真实路径**。
+    #    加了列但接口报 "no such column" 的话，管理台会整个白屏。
+    print('  tr_lesson 列: ' + check_columns(c, 'tr_lesson',
+                                            ['link_url']))
+    print('  tr_progress 列: ' + check_columns(c, 'tr_progress',
+                                              ['watched_sec', 'position_sec']))
     print('\n完成。401 = 路由已挂上（只是要鉴权）；404 = 还是没挂上。')
     return 0
 

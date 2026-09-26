@@ -860,6 +860,8 @@ CREATE TABLE IF NOT EXISTS tr_lesson (
   title TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'video',  -- video / doc（doc 只记"看过"，不算时长）
   file_id INTEGER,                     -- 关联 files.id；doc 也必须挂文件，否则学员点开是空的
+  link_url TEXT NOT NULL DEFAULT '',   -- 🔴 外链课件（可空）：共享盘 / 视频号 / 腾讯文档
+                                       --    这类"文件进不了系统"的课件走这条。
   duration_sec INTEGER NOT NULL DEFAULT 0,
   sort INTEGER NOT NULL DEFAULT 0
 );
@@ -957,6 +959,10 @@ CREATE TABLE IF NOT EXISTS tr_answer (
 //    而 `tr_progress` 的 CREATE TABLE 在文件后半段。写在前面会直接
 //    `no such table: tr_progress`，服务起不来（2026-09-25 踩过一次）。
 ensureColumn('tr_progress', 'watched_sec', 'watched_sec INTEGER NOT NULL DEFAULT 0');
+
+// 老库的 tr_lesson 没有外链列（0.21.5 之前课件只能挂系统文件），在线的库补一列。
+// ⚠️ 和上面同一条规则：**只能往下追加**，别往上挪。
+ensureColumn('tr_lesson', 'link_url', "link_url TEXT NOT NULL DEFAULT ''");
 
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);

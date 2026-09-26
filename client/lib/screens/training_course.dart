@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../core/file_io.dart';
@@ -99,9 +100,55 @@ class _TrainingCoursePageState extends State<TrainingCoursePage> {
   ///
   /// 🔴 「标记已看」放在打开**成功**之后：下载失败/没装播放器时不标记，
   ///    否则学员会拿到一个"看了但其实没打开"的完成率。
+  /// 打勾：把列表里那一节刷成"已看"。
+  /// 外链和文件两条路都要走，所以抽出来；重复代码最容易出现"改了一处忘另一处"。
+  Future<void> _markDone(int id) async {
+    await _api.reportLessonProgress(id, done: true);
+    if (!mounted) return;
+    setState(() {
+      for (final ch in _chapters) {
+        final ls = (ch['lessons'] as List? ?? const []);
+        for (var i = 0; i < ls.length; i++) {
+          if (ls[i]['id'] == id) {
+            ls[i] = {...ls[i] as Map<String, dynamic>, 'done': true};
+          }
+        }
+      }
+    });
+  }
+
   Future<void> _openLesson(Map<String, dynamic> lesson) async {
     final id = lesson['id'] as int? ?? 0;
     final fileId = lesson['fileId'] as int? ?? 0;
+    final link = '${lesson['linkUrl'] ?? ''}'.trim();
+
+    // 🔴 外链课件：没传系统文件也能学。老代码 `fileId == 0` 就直接一句
+    //    "请管理员先上传"，把只填了外链的课时判成"没课件" —— 管理员明明填了
+    //    链接（共享盘 / 视频号 / 腾讯文档），学员侧永远打不开。
+    if (fileId == 0 && link.isNotEmpty) {
+      setState(() => _busyLesson = id);
+      try {
+        final uri = Uri.tryParse(link);
+        if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+          _tip('这个链接地址不合法：\n$link');
+          return;
+        }
+        if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+          _tip('打不开这个链接（没装能打开它的应用）');
+          return;
+        }
+        // 跳出去算"看过"了吗？算一半：这里按打开成功记完成。
+        // 外链在站外，我们数不到秒数，比不了内嵌播放器的门禁 —— 这点要在
+        // 说明里讲清楚，不然完成率会虚高。
+        await _markDone(id);
+      } catch (e) {
+        _tip('打开链接失败：$e');
+      } finally {
+        if (mounted) setState(() => _busyLesson = 0);
+      }
+      return;
+    }
+
     if (id == 0 || fileId == 0) {
       _tip('这个课时还没有课件，请管理员先上传');
       return;
@@ -143,18 +190,7 @@ class _TrainingCoursePageState extends State<TrainingCoursePage> {
         _tip(err);
         return;
       }
-      await _api.reportLessonProgress(id, done: true);
-      if (!mounted) return;
-      setState(() {
-        for (final ch in _chapters) {
-          final ls = (ch['lessons'] as List? ?? const []);
-          for (var i = 0; i < ls.length; i++) {
-            if (ls[i]['id'] == id) {
-              ls[i] = {...ls[i] as Map<String, dynamic>, 'done': true};
-            }
-          }
-        }
-      });
+      await _markDone(id);
     } catch (e) {
       _tip('打开课件失败：$e');
     } finally {
@@ -252,6 +288,10 @@ class _TrainingCoursePageState extends State<TrainingCoursePage> {
 /// 而 `positionSec`（上次看到哪）只是续播用的，别让人误以为"看到 90% 就算过"。
 String _lessonSubtitle(Map<String, dynamic> l) {
   final parts = <String>[l['kind'] == 'doc' ? '文档' : '视频'];
+  // 只挂外链、没传文件的课时标一下，学员才知道点进去是跳走、不在这 App 里播。
+  if ((l['fileId'] as int? ?? 0) == 0 && '${l['linkUrl'] ?? ''}'.trim().isNotEmpty) {
+    parts.add('站外链接');
+  }
   final dur = l['durationSec'] as int? ?? 0;
   if (dur > 0) parts.add('${(dur / 60).round()} 分');
   final pos = l['positionSec'] as int? ?? 0;
@@ -326,9 +366,14 @@ class _ChapterCard extends StatelessWidget {
                   key: Key('training-lesson-${l['id']}'),
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(l['done'] == true
-                      ? Icons.check_circle
-                      : Icons.play_circle_outline),
+                  leading: Icon(
+                    l['done'] == true
+                        ? Icons.check_circle
+                        : ((l['fileId'] as int? ?? 0) == 0 &&
+                                '${l['linkUrl'] ?? ''}'.trim().isNotEmpty)
+                            ? Icons.open_in_new
+                            : Icons.play_circle_outline,
+                  ),
                   title: Text('${l['title'] ?? ''}'),
                   subtitle: Text(_lessonSubtitle(l)),
                   trailing: busyLesson == (l['id'] as int? ?? 0)
