@@ -7,8 +7,10 @@ import 'package:xiaozhi_im_client/core/scale_code.dart';
 /// （龙哥说泰格是 5 位、写在类别属性里），写死必然出错，
 /// 而错的表现是"扫出来像正常条码、其实解成了别的商品"，全程不报错。
 void main() {
-  // 13 位 = 1 标识 + 5 商品码 + 5 重量 + 1 校验
-  const code13 = '2012340125003'; // 商品码 01234，重量 01250 = 1.25 公斤
+  // 13 位 = 2 前缀('20') + 5 商品码 + 5 重量 + 1 校验
+  const code13 = '2001234012503'; // 商品码 01234，重量 01250 = 1.25 公斤
+  // 14 位 = 2 前缀 + 6 商品码 + 5 重量 + 1 校验
+  const code14 = '20012345012503'; // 商品码 012345，重量 01250
 
   group('形状判断', () {
     test('泰格 5 位：13 位、2 开头 → 像秤码', () {
@@ -30,7 +32,7 @@ void main() {
 
     test('🔴 位数是可配的：配 6 位就认 14 位', () {
       expect(ScaleCode.looksLike(code13, codeLen: 6), isFalse);
-      expect(ScaleCode.looksLike('20123450125003', codeLen: 6), isTrue);
+      expect(ScaleCode.looksLike(code14, codeLen: 6), isTrue);
     });
   });
 
@@ -45,8 +47,8 @@ void main() {
     });
 
     test('🔴 不校验校验位（各家算法不同，硬校会把别家门店的合法码判成坏码）', () {
-      final a = ScaleCode.parse('2012340125003');
-      final b = ScaleCode.parse('2012340125009'); // 只改最后一位
+      final a = ScaleCode.parse(code13);
+      final b = ScaleCode.parse('2001234012509'); // 只改最后一位（校验位）
       expect(b, isNotNull);
       expect(b!.plu, a!.plu);
       expect(b.kg, a.kg);

@@ -63,7 +63,7 @@ class PriceTagItem {
   /// 售价（元）。
   final double price;
 
-  /// 计价单位（「元」「kg」「箱」…）。只影响屏幕预览，打印的一律带 ¥。
+  /// 计价单位（「元」「kg」「箱」…）。只影响屏幕预览，打印的一律带 ￥。
   final String unit;
 
   /// 打印份数（多个货架同一张价签时 > 1）。
@@ -287,7 +287,7 @@ class PriceTagPrinter {
 
   /// 规格那一行。有规格就印规格，没有就用单位顶上（称重装「kg」比什么都不印强）。
   ///
-  /// 「元」不印 —— 价格本来就带 ¥，再来一个「元」是废字。
+  /// 「元」不印 —— 价格本来就带 ￥，再来一个「元」是废字。
   /// ⚠️ 打印和预览共用它，两边不会各写一套然后慢慢长歪。
   static String _specLine({required String spec, required String unit}) {
     if (spec.isNotEmpty) return spec;
@@ -299,7 +299,11 @@ class PriceTagPrinter {
   ///
   /// 🔴 **不做"四舍五入到整数"之类的聪明事** —— 打印出来的数字跟收银台看到的
   ///    差一分钱，比丑一点糟糕得多。
-  static String fmtPrice(double price) => '¥${price.toStringAsFixed(2)}';
+  ///
+  /// 🔴 用**全角** `￥`(U+FFE5) 不用半角 `¥`(U+00A5)：GBK 码表里只有全角那个
+  ///    （0xA3A4），半角的编不出来会静默变 `?` —— CI 第一次跑价签测试就
+  ///    抓到过"价格印成 ？12.90"。
+  static String fmtPrice(double price) => '￥${price.toStringAsFixed(2)}';
 
   /// 按打印宽度截断。一个汉字算 2 个西文字符，所以上限按"字符数"给时
   /// 中文实际占的位置会更窄一点 —— 宁可少印一个字，也别让名字冲出条码区。

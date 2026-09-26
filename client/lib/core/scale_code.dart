@@ -6,9 +6,13 @@
 // 换一套软件（或用 4 位/6 位的门店）之后，秤码被解析成别的商品、
 // 数量也跟着错，而**全程不报错** —— 扫出来还是个正常的条码样子。
 //
-// ── 码的构成（最常见的 13 位那种）───────────────────────────
-//   [标识 1 位][商品码 N 位][重量或金额 5 位][校验位 1 位]
-//   总长 = N + 7　（N=5 时就是 13 位，与泰格一致）
+// ── 码的构成（EAN-13 店内码，泰格那种 13 位）────────────────
+//   [前缀 2 位，'20'~'29'][商品码 N 位][重量或金额 5 位][校验位 1 位]
+//   总长 = N + 8　（N=5 时就是 13 位，与泰格一致）
+//
+// 🔴 前缀是 **2 位**不是 1 位：1+N+5+1 = N+7，N=5 时只有 12 位，
+//    凑不出 EAN-13 的 13 位 —— 第一版就栽在这（CI 测试抓的）。
+//    店内码的 EAN 前缀段本来就是 20~29（两位、以 2 开头）。
 //
 // 🔴 **不校验最后那位**。校验算法各家不同（有的是加权和 mod 10、有的没有），
 //    硬校会让"别的门店的合法秤码"被判成非法 —— 而现场的表现是
@@ -60,9 +64,11 @@ class ScaleCode {
 
   static const int _digitLen = 5; // 重量/金额位
   static const int _tailLen = 1; // 校验位
+  static const int _prefixLen = 2; // 店内码前缀（'20'~'29'）
 
-  /// 总长 = 1 标识 + N 商品码 + 5 数量 + 1 校验。
-  static int totalLen(int codeLen) => 1 + codeLen + _digitLen + _tailLen;
+  /// 总长 = 2 前缀 + N 商品码 + 5 数量 + 1 校验。
+  static int totalLen(int codeLen) =>
+      _prefixLen + codeLen + _digitLen + _tailLen;
 
   /// 像不像一个秤码（只按**形状**判断：全数字 + 长度正好 + 2 开头）。
   ///
@@ -85,8 +91,9 @@ class ScaleCode {
     if (!looksLike(s, codeLen: codeLen)) return null;
     if (codeLen <= 0) return null;
 
-    final plu = s.substring(1, 1 + codeLen);
-    final numStart = 1 + codeLen;
+    final pluStart = _prefixLen;
+    final plu = s.substring(pluStart, pluStart + codeLen);
+    final numStart = pluStart + codeLen;
     final v = int.tryParse(s.substring(numStart, numStart + _digitLen));
     if (v == null) return null;
     return ScaleCodeInfo(raw: s, plu: plu, mode: mode, value: v);

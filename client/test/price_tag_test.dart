@@ -23,7 +23,7 @@ void main() {
     });
 
     test('价格符号是给它编码而不是直接跳过的', () {
-      // fmtPrice 出来的 "¥12.90"：¥ 在 GBK 里是双字节 0xA3A4。
+      // fmtPrice 出来的 "￥12.90"：￥ 在 GBK 里是双字节 0xA3A4。
       expect(
         GbkEncode.encode(PriceTagPrinter.fmtPrice(12.9)),
         <int>[0xA3, 0xA4, 0x31, 0x32, 0x2E, 0x39, 0x30],
@@ -31,7 +31,7 @@ void main() {
     });
 
     test('编出来的字节能被 GBK 解码器原样读回（编码表不能长歪）', () {
-      const s = '有机鸡蛋 净重500g ¥9.90';
+      const s = '有机鸡蛋 净重500g ￥9.90';
       final back = Gbk.decode(GbkEncode.encode(s));
       expect(back, s);
     });
@@ -118,10 +118,14 @@ void main() {
         spec: item.spec,
         unit: item.unit,
       );
-      final s = String.fromCharCodes(a);
+      // 🔴 不能用 String.fromCharCodes：那是把每个 GBK 字节当一个字符看，
+      //    中文永远拼不回来 —— 必须先用 Gbk.decode 解回文本再断言。
+      final s = Gbk.decode(a);
       // 顺序钉住：谁把"条码"排到"价格"前面，这条立刻红。
-      expect(s.indexOf('有机鸡蛋'), lessThan(s.indexOf('¥9.90')));
-      expect(s.indexOf('¥9.90'), lessThan(s.indexOf('6901234567890', 10)));
+      expect(s.indexOf('有机鸡蛋'), greaterThan(-1),
+          reason: '商品名必须真的在字节流里（GBK 解得回来）');
+      expect(s.indexOf('有机鸡蛋'), lessThan(s.indexOf('￥9.90')));
+      expect(s.indexOf('￥9.90'), lessThan(s.indexOf('6901234567890', 10)));
       expect(a.contains(<int>[0x1D, 0x21]), isTrue, reason: '价格那一段必须放大');
     });
 
@@ -183,14 +187,16 @@ void main() {
         spec: '',
         unit: '元',
       );
-      final s = String.fromCharCodes(a);
-      expect(s.indexOf('元'), -1, reason: '价格已经带 ¥，再来一个「元」是废字');
+      // 🔴 先解回文本再断言 —— 对 GBK 字节流直接 indexOf 中文恒为 -1，
+      //    那是"永远绿"的假断言，什么坏情况都抓不到。
+      final s = Gbk.decode(a);
+      expect(s.indexOf('元'), -1, reason: '价格已经带 ￥，再来一个「元」是废字');
     });
 
     test('价格不做四舍五入，分位照打', () {
-      expect(PriceTagPrinter.fmtPrice(9.9), '¥9.90');
-      expect(PriceTagPrinter.fmtPrice(12), '¥12.00');
-      expect(PriceTagPrinter.fmtPrice(0.05), '¥0.05');
+      expect(PriceTagPrinter.fmtPrice(9.9), '￥9.90');
+      expect(PriceTagPrinter.fmtPrice(12), '￥12.00');
+      expect(PriceTagPrinter.fmtPrice(0.05), '￥0.05');
     });
   });
 
@@ -209,7 +215,7 @@ void main() {
       expect(pv, contains('有机鸡蛋'));
       expect(pv, contains('净重500g'));
       expect(pv, contains('6901234567890'));
-      expect(pv, contains('¥9.90'));
+      expect(pv, contains('￥9.90'));
     });
   });
 }

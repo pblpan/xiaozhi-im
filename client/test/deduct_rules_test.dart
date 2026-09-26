@@ -22,12 +22,15 @@ void main() {
 
   // ============================================================
   group('单据类型', () {
-    test('只认已登记的两个类型，别的一律非法', () {
+    test('只认已登记的三个类型，别的一律非法', () {
       expect(InvSheetType.isValid(InvSheetType.stocktake), isTrue);
       expect(InvSheetType.isValid(InvSheetType.deduct), isTrue);
+      // 2026-09-25 补货上线（sheet_type=replenish），从"还没做"转正 ——
+      // 这条断言当初盯着它，现在它登记了就该转正，别留着误导下一个人。
+      expect(InvSheetType.isValid('replenish'), isTrue,
+          reason: '补货与减货同构，走同一张表的不同 sheet_type');
       // 反向：没做出来的类型不许悄悄通过，否则会落库一个谁也解释不了的值
-      expect(InvSheetType.isValid('replenish'), isFalse,
-          reason: '补货单还没做，不该被当成已支持的类型');
+      expect(InvSheetType.isValid('some_future_type'), isFalse);
       expect(InvSheetType.isValid(''), isFalse);
       expect(InvSheetType.label(InvSheetType.deduct), '减货');
     });

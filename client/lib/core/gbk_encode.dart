@@ -18,7 +18,7 @@ class GbkEncode {
 
   static Map<int, int>? _byChar;
 
-  /// 反查表：字符的码元 → GBK 双字节码（高字节 << 8 | 低字节）。
+  /// 反查表：字符的码元 → **表内槽位下标**（不是 GBK 码字！见 [_slotToBytes]）。
   ///
   /// 由 `gbk_table.dart` 翻转而来，所以**两个 App 的码表同源、结果必然一致**。
   static Map<int, int> get table {
@@ -32,6 +32,20 @@ class GbkEncode {
     }
     _byChar = m;
     return m;
+  }
+
+  /// 槽位下标 → GBK 双字节。
+  ///
+  /// 🔴 表的排布是 `index = (lead-0x81)*190 + trailIndex`，**下标不是码字**。
+  ///    曾把下标直接当码字切高低字节 —— '中'(0xD6D0) 的槽位是 0x3FA5，
+  ///    打出来就是 `3F A5`，而且**不报错**；CI 第一次真跑测试才抓到。
+  ///    反算规则（与生成器互逆）：trailIndex 0..62 → 0x40..0x7E，
+  ///    63..189 → 0x80..0xFE（0x7F 被跳过）。
+  static List<int> _slotToBytes(int slot) {
+    final lead = 0x81 + slot ~/ kGbkTrailCount;
+    final t = slot % kGbkTrailCount;
+    final trail = t < 63 ? 0x40 + t : 0x80 + (t - 63);
+    return [lead, trail];
   }
 
   /// 一个字符能不能编成 GBK。
@@ -60,13 +74,12 @@ class GbkEncode {
         out.add(c);
         continue;
       }
-      final code = t[c];
-      if (code == null) {
+      final slot = t[c];
+      if (slot == null) {
         out.add(0x3F);
         continue;
       }
-      out.add(code >> 8);
-      out.add(code & 0xFF);
+      out.addAll(_slotToBytes(slot));
     }
     return out;
   }
