@@ -92,8 +92,13 @@ def describe_remote(c):
     #    文件好好的，别被它骗着去重复上传。
     out.append('容器状态: ' + run(c, "docker ps -a --filter 'name=xiaozhi'"
                                  " --format '{{.Names}}|{{.Status}}'"))
-    out.append('远端有无 deduct.js: ' + run(c, 'test -f %s/src/routes/deduct.js'
-                                            ' && echo 有 || echo 没有'))
+    # 🔴 % REMOTE_ROOT 这层格式化**不能漏**（2026-09-26 深夜发现）：
+    #    漏了的话命令会变成 `test -f %s/src/...`，永远成立地失败并打印"没有" ——
+    #    一个**恒假的假报警**。它骗得我对着"deduct.js 没上线"查了半天，
+    #    而文件其实好好的。真机上 `test -f` 判断一律走这里，改的时候看一眼。
+    cmd = ('test -f %s/src/routes/deduct.js'
+           ' && echo 有 || echo 没有') % REMOTE_ROOT
+    out.append('远端有无 deduct.js: ' + run(c, cmd))
     out.append('远端 src 最后改动: ' + run(c, "stat -c '%%y' %s" % REMOTE_ROOT))
     out.append('线上 index.html 引用的 bundle: ' + run(c,
                "grep -oE 'assets/index-[A-Za-z0-9_-]+\\.(js|css)'"
@@ -103,23 +108,99 @@ def describe_remote(c):
     return '\n'.join(out)
 
 
-def check_columns(c, table, want):
-    """线上那个 sqlite 里，指定表的列齐不齐。
+def find_dbfile(c):
+    """线上那个 sqlite 的真实路径。
 
     🔴 库文件叫 **`xiaozhi-im.db`**（在 DATA_DIR 下），不是通用的 db.sqlite。
         本地测试用错文件名会看到"列怎么都没加"的假象 —— 这个坑刚踩过。
     """
-    # 排除 src_pre_deploy_* 快照目录，别把回滚副本当成线上库来读
-    dbfile = (run(c, "find /vol1/@appcenter/xiaozhi-im -name 'xiaozhi-im.db'"
-                     " -not -path '*src_pre_deploy*' 2>/dev/null") or '').split()[-1]
+    # 🔴 数据目录**不在 @appcenter**：容器只有两个 bind
+    #    （`/vol1/@appcenter/xiaozhi-im/src -> /app`、`/vol1/@appshare/xiaozhi-im/data -> /data`），
+    #    库在 **@appshare** 那侧。2026-09-26 深夜这里只 find 了 @appcenter，
+    #    结果一条都没找到 → `.split()[-1]` 抛 IndexError，热更脚本在最后一步崩掉。
+    #    两边都找，并且**不假设找到**：找不到就报错，别拿空串继续往下走。
+    hits = (run(c, "find /vol1/@appcenter/xiaozhi-im /vol1/@appshare/xiaozhi-im"
+                   " -name 'xiaozhi-im.db' -not -path '*src_pre_deploy*'"
+                   " 2>/dev/null") or '').split()
+    if not hits:
+        raise SystemExit('线上找不到 xiaozhi-im.db —— 别让"读不到"变成"通过"')
+    return hits[-1]
+
+
+def check_columns(c, table, want):
+    """线上那个 sqlite 里，指定表的列齐不齐。
+
+    🔴 这里**必须走容器里的 node**（`_cols_probe.js`），不能像早先那样
+       用 `sqlite3` 命令：飞牛这台机器根本没装 sqlite3（2026-09-26 深夜实测），
+       命令跑不通、输出被吞掉，于是"缺列"永远是**假报警** ——
+       迁移早跑成功了，脚本却一直说没跑。假报警比不报警更糟：
+       它会让人去查一个根本不存在的问题，或者反过来让人不敢信这一栏。
+    """
+    dbfile = find_dbfile(c)
     if not dbfile:
         return '(线上找不到 xiaozhi-im.db — 读不到，别当通过)'
-    got = run(c, "sqlite3 %s \"PRAGMA table_info(%s)\" 2>/dev/null"
-                 "| awk -F'|' '{print $2}' | tr '\\n' ','" % (dbfile, table)) or ''
-    miss = [w for w in want if w not in got]
-    return ('%s   [%s]%s' % (got.rstrip(',') or '(空)',
-                          os.path.basename(dbfile),
-                          '' if not miss else '  → 缺: ' + ','.join(miss)))
+
+    # 探针只认**容器内的**路径（容器内看不到宿主机的 /vol1/...）
+    indb = to_container_path(c, dbfile)
+    probe = _upload_probe(c, '_cols_probe.js')
+    # 🔴 末尾那个 `2>/dev/null` 是**必须的，不是保险**（2026-09-27 踩到）：
+    #    node:sqlite 一打开库就往 stderr 打一行 "ExperimentalWarning ..."
+    #    实验性 API。而 `fnos_ssh.run` 只要 stderr 非空就把它的内容**拼进返回值**，
+    #    于是探针的 stdout 前头挂了一截警告 → 解析出来是 "条码 [stderr] (Use
+    #    `node --trace-warnings ...)"，条码变成一串垃圾，下一步全都落空。
+    #    探针要的是**干净的 stdout**，所以显式丢弃 stderr。
+    out = run(c, 'docker exec %s node %s %s %s=%s 2>/dev/null'
+                 % (CONTAINER, probe, indb, table, ','.join(want))) or '(无输出)'
+    return ('%s   [%s]' % (out.strip(), os.path.basename(dbfile)))
+
+
+def to_container_path(c, hostpath):
+    """把宿主机路径换成正跑在容器里的那条路径。
+
+    🔴 **不要再手写映射**（之前那句 `.replace('/vol1/@appcenter/xiaozhi-im/', '/')`
+        给出的是 `/xiaozhi-im.db` —— 容器根本没有这个库，于是报
+        "unable to open database file"，看着像"线上没库"，其实是路径算错了）。
+        正确做法是问 docker：把 `HostConfig.Binds` 里宿主机那一段换成容器内那段。
+    """
+    binds = run(c, "docker inspect --format '{{json .HostConfig.Binds}}'"
+                   " %s" % CONTAINER) or ''
+    # 🔴 拿到的整串长这样：
+    #     ["/vol1/@appshare/xiaozhi-im/data:/data:rw","/vol1/@appcenter/xiaozhi-im/src:/app:rw"]
+    #     ⚠️ 引号和方括号都得先剥掉（2026-09-27）：只 replace 方括号的话，
+    #        第一个 token 仍带着前导 `"` → src 变成 `"/vol1/@appshare/...`，
+    #        永远匹配不上，报"容器里找不到挂载点"，而映射其实一直都在。
+    #        又是一条**假报警** —— 它会让人去查一个不存在的挂载问题。
+    for b in binds.replace('[', ' ').replace(']', ' ').replace('"', ' ').split():
+        # 🔴 一条 bind 是 `宿主机:容器[:选项]`，但**本身带冒号**。
+        #    直接 `split(':')` 会切成三截，src 就变成了只到 "/data"。
+        parts = b.split(':')
+        if len(parts) < 2:
+            continue
+        src, dst = parts[0], parts[1]
+        src = src.rstrip('/')
+        if hostpath.startswith(src + '/'):
+            return dst.rstrip('/') + hostpath[len(src):]
+    raise SystemExit('容器里找不到 %s 对应的挂载点（binds=%s）' % (hostpath, binds))
+
+
+def _upload_probe(c, name):
+    """把探针传进容器**可见**的地方，返回容器内路径。
+
+    🔴 `put_file(..., '/app/x.js')` 是错的：它 cp 到的是**宿主机自己的 /app**，
+        而容器里的 /app 是 bind 挂载 `.../src -> /app`。两个目录八竿子打不着，
+        于是探针传上去、容器却说 `Cannot find module /app/x.js`（2026-09-27 踩到）。
+        正确做法是先传到 bind 源目录（宿主机 .../src/），容器那边自然就看见了。
+    """
+    dst = REMOTE_ROOT + '/' + name
+    present = (run(c, 'test -f %s && echo yes || echo no' % dst) or '').strip()
+    if present != 'yes':
+        put_file(c, os.path.join(HERE, name), dst)
+        # 传完必须**再验一次**：不验就跑，等于把"到底有没有传上去"换成运气。
+        present = (run(c, 'test -f %s && echo yes || echo no' % dst) or '').strip()
+    if present != 'yes':
+        raise SystemExit('探针 %s 没能进到容器可见的位置（%s）' % (name, dst))
+    # 容器里这个挂载点就是 /app（宿主机 .../src -> /app）
+    return '/app/' + name
 
 
 def snapshot(c):
@@ -186,9 +267,13 @@ def main():
 
     print('\n=== 4) 复探（等容器起来再看） ===')
     time.sleep(5)
-    run(c, "for p in /api/deduct/sheets /api/admin/apps/price_tag/data;"
-           " do printf '%%s -> ' \"$p\"; curl -s -o /dev/null -w '%%{http_code}\\n'"
-           " --max-time 8 http://127.0.0.1:3602$p; done")
+    # 🔴 这里的输出要用 print 打出来：`run()` 只执行不回显，
+    #    不 print 的话接口到底通不通，屏幕上什么也看不到。
+    print('  ' + (run(c, "for p in /api/deduct/sheets /api/deduct/reference"
+                         " /api/admin/apps/price_tag/data;"
+                         " do printf '%%s -> ' \"$p\";"
+                         " curl -s -o /dev/null -w '%%{http_code}\\n'"
+                         " --max-time 8 http://127.0.0.1:3602$p; done") or '').strip())
 
     print('\n=== 5) 验证数据库迁移真的跑了 ===')
     # 🔴 这一步是 2026-09-26 深夜补的。那次改了 db.js 给 tr_lesson 加列，
@@ -200,8 +285,55 @@ def main():
                                             ['link_url']))
     print('  tr_progress 列: ' + check_columns(c, 'tr_progress',
                                               ['watched_sec', 'position_sec']))
+    probe_reference(c)
     print('\n完成。401 = 路由已挂上（只是要鉴权）；404 = 还是没挂上。')
     return 0
+
+
+def probe_reference(c):
+    """上线之后，拿一个真条码验一眼「参照数」接口是否 usable。
+
+    只验接口通不通不够 —— 参照数最怕的是"路由 200、字段永远 null"：
+    员工看到三个"—"，会以为自己盘过的货没记上，而谁也查不出为什么。
+    所以这里必须打出一个**不是全 null** 的样本才算数。
+    """
+    print('\n=== 6) 参照数接口实测（要看到真数字，不能全是 null）===')
+    probe = _upload_probe(c, '_ref_probe.js')
+
+    # 容器内看不到宿主机的 /vol1/...，库路径必须走 docker 给的挂载映射
+    indb = to_container_path(c, find_dbfile(c))
+    raw = (run(c, 'docker exec %s node %s %s 2>/dev/null'
+                  % (CONTAINER, probe, indb)) or '').strip()
+    counted, fallback = (raw.split('|') + ['', ''])[:2]
+
+    # 参照数只要"任意登录用户"，不用管理员 —— 所以临时注册一个一次性账号去问，
+    # 不去碰管理口令（那会在日志里留一串明文口令，没必要）。
+    user = 'refchk%s' % time.strftime('%H%M%S')
+    run(c, "curl -s -o /dev/null -X POST http://127.0.0.1:3602/api/auth/register"
+            " -H 'Content-Type: application/json'"
+            " -d '{\"username\":\"%s\",\"password\":\"Refchk_123\","
+            "\"nickname\":\"参照数体检\"}'" % user)
+
+    def ask(code):
+        if not code:
+            return '(库里连一个条码都没有，没法验)'
+        return run(c, "TOKEN=$(curl -s -X POST http://127.0.0.1:3602/api/auth/login"
+                      " -H 'Content-Type: application/json'"
+                      " -d '{\"username\":\"%s\",\"password\":\"Refchk_123\"}'"
+                      " | sed -n 's/.*\"token\"[: ]*\"\\([^\"]*\\)\".*/\\1/p'| head -1);"
+                      "curl -s --max-time 8 -H \"Authorization: Bearer $TOKEN\""
+                      " 'http://127.0.0.1:3602/api/deduct/reference?barcode=%s'"
+                      % (user, code)) or '(无响应)'
+
+    if counted:
+        print('  最近盘过的条码 %s →' % counted)
+        print('    ' + (ask(counted) or '').strip())
+    else:
+        print('  线上一轮盘点都没有（正常：库里没做过盘点）')
+        print('  ⚠️ 这时不能只报"验过了" —— 得拿真实商品条码看接口回什么：')
+        print('  备选条码 %s →' % (fallback or '(无)'))
+        print('    ' + (ask(fallback) or '').strip())
+        print('    期望：ok、hasRef=false、字段齐全（不是报错、不是整串 null）')
 
 
 if __name__ == '__main__':
