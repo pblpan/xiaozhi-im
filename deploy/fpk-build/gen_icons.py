@@ -1,49 +1,60 @@
 # -*- coding: utf-8 -*-
-"""生成小智 IM 品牌图标（渐变靛紫 + 聊天气泡）—— 供 fpk 打包脚本调用"""
-from PIL import Image, ImageDraw
-import os
+"""生成小智 IM 品牌图标 —— 供 fpk 打包脚本调用
 
-def draw_icon(size, path):
-    S = size * 4
-    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    R = S * 0.22
-    c1 = (91, 116, 245)
-    c2 = (157, 91, 245)
-    for y in range(S):
-        t = y / (S - 1)
-        r = int(c1[0] + (c2[0] - c1[0]) * t)
-        g = int(c1[1] + (c2[1] - c1[1]) * t)
-        b = int(c1[2] + (c2[2] - c1[2]) * t)
-        mask = Image.new("L", (S, S), 0)
-        ImageDraw.Draw(mask).rounded_rectangle([0, 0, S - 1, S - 1], radius=R, fill=255)
-        line = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-        ImageDraw.Draw(line).line([(0, y), (S, y)], fill=(r, g, b, 255), width=1)
-        img.paste(line, (0, 0), mask)
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle([0, 0, S - 1, S - 1], radius=R, outline=(255, 255, 255, 90), width=max(1, int(S * 0.012)))
-    bw, bh = S * 0.62, S * 0.42
-    bx, by = (S - bw) / 2 - S * 0.02, (S - bh) / 2 - S * 0.03
-    d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=bh * 0.35, fill=(255, 255, 255, 255))
-    tx, ty = bx + bw * 0.22, by + bh - 1
-    d.polygon([(tx, ty - 1), (tx + S * 0.055, ty + S * 0.075), (tx + S * 0.09, ty)], fill=(255, 255, 255, 255))
-    lx0 = bx + bw * 0.16
-    lw = bw * 0.68
-    ly0 = by + bh * 0.30
-    line_h = bh * 0.12
-    gap = bh * 0.22
-    lc = (140, 120, 245)
-    for i in range(3):
-        y = ly0 + i * gap
-        ln = lw * (1.0 - i * 0.22)
-        d.rounded_rectangle([lx0, y - line_h / 2, lx0 + ln, y + line_h / 2], radius=line_h * 0.6, fill=lc)
-    img = img.resize((size, size), Image.LANCZOS)
-    img.save(path)
-    print("saved", path, size)
+⚠️ 这里**不再自己画图标**。老版本用 PIL 画"渐变圆角 + 聊天气泡"，
+   实际画出来是**白底 + 三条紫色横线**（气泡轮廓在缩放后完全糊掉），
+   而飞牛桌面/应用中心用的就是这套 —— 客户看到的是个"三横线"而不是小智 IM。
+   更坑的是 build.sh 只在 ICON.PNG 不存在时才调本脚本，所以这套错图标
+   从 2026-09-09 起一直躺在包里，谁也没发现。
+
+现在只有一个源头：client/tools/icon_master_1024.png（1024×1024 品牌母版）。
+所有尺寸都是它的等比缩放 —— 图标不可能再和 App/客户端不一致。
+
+用法：python deploy/fpk-build/gen_icons.py
+"""
+import os
+import sys
+
+try:
+    from PIL import Image
+except ImportError:
+    sys.exit("需要 Pillow：pip install pillow")
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(BASE, "..", ".."))
+MASTER = os.path.join(ROOT, "client", "tools", "icon_master_1024.png")
+
+# 输出清单：(尺寸, 目标路径)
+TARGETS = [
+    (512, os.path.join(BASE, "ICON.PNG")),                       # fpk 包根图标
+    (256, os.path.join(BASE, "ICON_256.PNG")),                   # fnpack 清单用
+    (256, os.path.join(BASE, "app", "ui", "images", "icon-256.png")),  # 飞牛桌面大图标
+    (64, os.path.join(BASE, "app", "ui", "images", "icon-64.png")),    # 飞牛列表小图标
+]
+
+
+def main():
+    if not os.path.isfile(MASTER):
+        # 硬失败，不退化成"随便画一个"。历史上就是因为有兜底，错图标才混进包里的。
+        sys.exit("品牌母版不存在：%s\n"
+                 "（图标必须从这个文件缩放，不要另画一套。）" % MASTER)
+
+    src = Image.open(MASTER)
+    src.load()
+    if src.width != src.height or src.width < 512:
+        sys.exit("母版必须是正方形且 >= 512px，实际 %dx%d" % (src.width, src.height))
+    src = src.convert("RGBA")
+    print("母版: %s  %dx%d" % (MASTER, src.width, src.height))
+
+    for size, dst in TARGETS:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        img = src.resize((size, size), Image.LANCZOS)
+        img.save(dst)
+        print("  -> %-52s %dx%d  %d bytes" % (
+            os.path.relpath(dst, ROOT).replace("\\", "/"), size, size,
+            os.path.getsize(dst)))
+    print("图标全部由母版缩放生成（4 个）")
+
 
 if __name__ == "__main__":
-    base = os.path.dirname(os.path.abspath(__file__))
-    draw_icon(512, os.path.join(base, "ICON.PNG"))
-    draw_icon(256, os.path.join(base, "ICON_256.PNG"))
-    draw_icon(256, os.path.join(base, "app", "ui", "images", "icon-256.png"))
-    draw_icon(64, os.path.join(base, "app", "ui", "images", "icon-64.png"))
+    main()

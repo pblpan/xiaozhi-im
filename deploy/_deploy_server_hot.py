@@ -68,20 +68,35 @@ FILES = [
     'src/routes/inventory.js',
     'src/routes/training.js',
     'public/index.html',
-    # 🔴 只传 index.html 实际引用的那个 bundle（0.21.3 管理台：应用中心
-    #    排序列 + ↑↓ 调序、编辑按钮 primary plain —— vite 构建产物）。
-    'public/assets/index-Ca21U-Yx.js',
+    # 🔴 只传 index.html 实际引用的那两个 bundle（管理台菜单分类折叠 + 品牌
+    #    favicon —— vite 构建产物）。
+    #    ⚠️ 这里必须**逐个列出 index.html 里引用的真实文件名**，不能"传整个
+    #    public/assets"：vite 每次构建的产物名带哈希（index-XXXX.js），
+    #    只换 index.html 不换 assets → 浏览器拿到新 html 却请求不存在的 js，
+    #    白屏且控制台一片 404；只传 js 不改 index.html 同理。两者必须同批。
+    'public/assets/index-Vr1E8L_l.js',
+    'public/assets/index-CL1_w9iP.css',
 ]
 
 
 def describe_remote(c):
     """远端现在到底是个什么状态 —— 每次动手前先看一眼，别按想象做事。"""
     out = []
-    out.append('容器状态: ' + run(c, "docker ps --filter name=%s --format '{{.Status}}'"
-                                 % CONTAINER))
+    # ⚠️ 注意 bind mount 的对应关系：宿主机 /vol1/@appcenter/xiaozhi-im/src
+    #    整个挂进容器 /app，而容器里是 `node src/index.js`。
+    #    所以宿主机上一律是 **REMOTE_ROOT/src/...**（多一层），下面的
+    #    describe_remote 曾经漏了这层，报"deduct.js 没有"其实是假报警 ——
+    #    文件好好的，别被它骗着去重复上传。
+    out.append('容器状态: ' + run(c, "docker ps -a --filter 'name=xiaozhi'"
+                                 " --format '{{.Names}}|{{.Status}}'"))
     out.append('远端有无 deduct.js: ' + run(c, 'test -f %s/src/routes/deduct.js'
                                             ' && echo 有 || echo 没有'))
     out.append('远端 src 最后改动: ' + run(c, "stat -c '%%y' %s" % REMOTE_ROOT))
+    out.append('线上 index.html 引用的 bundle: ' + run(c,
+               "grep -oE 'assets/index-[A-Za-z0-9_-]+\\.(js|css)'"
+               " %s/public/index.html || echo '(无)'" % REMOTE_ROOT))
+    out.append('线上 assets 实际内容: ' + run(c,
+               'ls -1 %s/public/assets/ || echo "(空目录)"' % REMOTE_ROOT))
     return '\n'.join(out)
 
 

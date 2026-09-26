@@ -58,10 +58,12 @@ cp "$ROOT/deploy/coturn/turnserver.conf" "$ROOT/deploy/coturn/entrypoint.sh" \
 chmod 755 "$FN/app/docker/coturn/entrypoint.sh"
 echo "      coturn 配置就绪"
 
-echo "[2/4] 生成图标（若未生成）..."
-if [ ! -f "$FN/ICON.PNG" ]; then
-  "$PY" "$FN/gen_icons.py"
-fi
+echo "[2/4] 生成品牌图标（每次重生成，不复用旧文件）..."
+# ⚠️ 这里原来是 `if [ ! -f ICON.PNG ]` —— 只在文件不存在时才生成。
+#    后果：2026-09-09 生成的那套错图标（gen_icons.py 当年画出来是"白底三条横线"，
+#    不是品牌图标）在之后每一次重打包里都被原样复用，一路带进 0.21.3 的包里，
+#    而飞牛桌面/应用中心显示的就是它。生成是毫秒级的，**没有理由复用**。
+"$PY" "$FN/gen_icons.py"
 
 echo "[2.5/4] 校验 manifest（版本号一致性 / 每行 key=value）..."
 # ⚠️ 必须先校验再打包：fnpack 对不含 '=' 的行只会甩一句

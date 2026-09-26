@@ -43,27 +43,55 @@
   <el-container v-else style="height:100vh">
     <el-aside width="200px" class="aside">
       <div class="logo">{{ brand }}</div>
-      <el-menu :default-active="tab" @select="tab = $event" background-color="#0F2620" text-color="#c0c4cc" active-text-color="#10B981">
-        <el-menu-item index="dashboard">仪表盘</el-menu-item>
-        <el-menu-item index="users">用户管理</el-menu-item>
-        <el-menu-item index="groups">群组管理</el-menu-item>
-        <el-menu-item index="friends">好友关系</el-menu-item>
-        <el-menu-item index="orgs">组织机构</el-menu-item>
-        <el-menu-item index="attendance">考勤管理</el-menu-item>
-        <el-menu-item index="files">文件管理</el-menu-item>
-        <el-menu-item index="messages">消息管理</el-menu-item>
-        <el-menu-item index="integrations">集成对接</el-menu-item>
-        <el-menu-item index="clientconfig">客户端配置</el-menu-item>
-        <el-menu-item index="modules">动态模块</el-menu-item>
-        <el-menu-item index="upstreams">上游接口</el-menu-item>
-        <el-menu-item index="master">商品档案</el-menu-item>
-        <el-menu-item index="deduct">库房减货</el-menu-item>
-        <el-menu-item index="training">培训中心</el-menu-item>
-        <el-menu-item index="push">消息推送</el-menu-item>
-        <el-menu-item index="settings">系统设置</el-menu-item>
-        <el-menu-item index="license">授权管理</el-menu-item>
-        <el-menu-item index="help">系统帮助</el-menu-item>
-      </el-menu>
+      <!-- 菜单区独立滚动：分类展开后总高仍可能超过视口，没有这层就是"点不到"。 -->
+      <div class="aside-menu">
+        <el-menu ref="menuRef" :default-active="tab" :default-openeds="openedGroups" unique-opened
+                 @select="tab = $event"
+                 background-color="#0F2620" text-color="#c0c4cc" active-text-color="#10B981">
+          <el-menu-item index="dashboard">
+            <el-icon><Odometer /></el-icon><span>仪表盘</span>
+          </el-menu-item>
+
+          <!-- 分类顺序按"管理员一天里的使用频度"排：先人、再日常、再对接、再业务、最后系统。 -->
+          <el-sub-menu index="g-org">
+            <template #title><el-icon><User /></el-icon><span>组织与用户</span></template>
+            <el-menu-item index="users">用户管理</el-menu-item>
+            <el-menu-item index="groups">群组管理</el-menu-item>
+            <el-menu-item index="friends">好友关系</el-menu-item>
+            <el-menu-item index="orgs">组织机构</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="g-office">
+            <template #title><el-icon><Calendar /></el-icon><span>日常办公</span></template>
+            <el-menu-item index="attendance">考勤管理</el-menu-item>
+            <el-menu-item index="files">文件管理</el-menu-item>
+            <el-menu-item index="messages">消息管理</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="g-link">
+            <template #title><el-icon><Connection /></el-icon><span>对外对接</span></template>
+            <el-menu-item index="integrations">集成对接</el-menu-item>
+            <el-menu-item index="upstreams">上游接口</el-menu-item>
+            <el-menu-item index="clientconfig">客户端配置</el-menu-item>
+            <el-menu-item index="push">消息推送</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="g-biz">
+            <template #title><el-icon><Goods /></el-icon><span>业务模块</span></template>
+            <el-menu-item index="master">商品档案</el-menu-item>
+            <el-menu-item index="deduct">库房减货</el-menu-item>
+            <el-menu-item index="modules">动态模块</el-menu-item>
+            <el-menu-item index="training">培训中心</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="g-sys">
+            <template #title><el-icon><Setting /></el-icon><span>系统</span></template>
+            <el-menu-item index="settings">系统设置</el-menu-item>
+            <el-menu-item index="license">授权管理</el-menu-item>
+            <el-menu-item index="help">系统帮助</el-menu-item>
+          </el-sub-menu>
+        </el-menu>
+      </div>
       <div class="aside-foot">
         <span class="aside-status"><i class="dot"></i>服务端运行中</span>
         <el-button text size="small" class="aside-out" @click="logout">退出</el-button>
@@ -4655,6 +4683,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
 <script setup>
 import { ref, reactive, computed, onMounted, watch, h } from 'vue';
 import { ElMessage, ElMessageBox, ElPagination } from 'element-plus';
+// 侧栏分类标题的图标。照工厂管理系统 V2 的做法：**只有一级分类标题带图标，
+// 二级叶项纯文字** —— 叶项加图标会让 19 行的小图标互相打架，反而更难扫读。
+import { Odometer, User, Calendar, Connection, Goods, Setting } from '@element-plus/icons-vue';
 import api from './api';
 
 const token = ref(localStorage.getItem('xz_token') || '');
@@ -4676,6 +4707,38 @@ const PW_RE = /^[A-Za-z0-9._@!*+?-]{6,64}$/;
 const tab = ref('dashboard');
 const stats = ref({});
 const info = ref({});
+
+/* ====== 侧栏菜单：分类折叠（对齐工厂管理系统 V2 的菜单逻辑）======
+   原来 19 个菜单项平铺，实测总高约 1170px，比一般笔记本可视区还高；
+   而 .aside 是 flex column、菜单区没有 overflow，超出部分**既看不见也滚不到**
+   —— 底部那几项（系统设置/授权管理/系统帮助）等于不存在。
+   现在拆成「1 个平铺首页 + 5 个分类折叠」，配 unique-opened 保证同时只展开一组，
+   侧栏常态只有 6 行；菜单区再补一层滚动兜底，屏幕再矮也点得到。
+
+   ⚠️ 两个 Element Plus 的坑（都踩过）：
+   ① `default-openeds` 只在 el-menu 初始化时读一次，之后改它**不会**展开分组；
+      所以 tab 变化后要手动调菜单实例的 `open()` 把父分组撑开 —— 否则从仪表盘
+      点「授权管理 →」跳过去，高亮对了、分组却是收着的，看起来就像"没反应"。
+   ② `:default-active` 是响应式的（el-menu 内部 watch 了它），高亮会自己跟；
+      只有"展开"需要手动补。别为了展开给 el-menu 加 :key 重挂，那会丢动画。 */
+const menuRef = ref(null);
+// 每个 tab 归属哪个分类。首页（dashboard）是平铺项，不属于任何分类。
+const MENU_SUB_OF = {
+  users: 'g-org', groups: 'g-org', friends: 'g-org', orgs: 'g-org',
+  attendance: 'g-office', files: 'g-office', messages: 'g-office',
+  integrations: 'g-link', upstreams: 'g-link', clientconfig: 'g-link', push: 'g-link',
+  master: 'g-biz', deduct: 'g-biz', modules: 'g-biz', training: 'g-biz',
+  settings: 'g-sys', license: 'g-sys', help: 'g-sys',
+};
+// 首屏不进任何分组：默认全收起，侧栏一眼看完。要看什么再展开。
+const openedGroups = ref([]);
+function syncMenuGroup(v) {
+  const g = MENU_SUB_OF[v];
+  if (g && typeof menuRef.value?.open === 'function') {
+    try { menuRef.value.open(g); } catch (e) { /* 菜单还没挂载，忽略 */ }
+  }
+}
+watch(tab, syncMenuGroup);
 
 /* ====== 仪表盘指标分组（v0.15.0 重做）======
    原来这里是 13 个一模一样的「大绿数字 + 灰标签」平铺四行 —— 数字之间没有关系，
@@ -8195,7 +8258,21 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 /* 向导那张卡文字多（说明 + 字符集提示 + 两个输入框），340px 里要折四行，太挤 */
 .login-card-wide { width: 400px; }
 .aside { background: #0F2620; display: flex; flex-direction: column; }
-.logo { color: #fff; font-size: 20px; font-weight: 700; text-align: center; padding: 18px 0; }
+/* min-height:0 是必须的：flex item 默认 min-height:auto，不加这行它宁可撑破也不滚动。
+   没有这一层的时候，19 个平铺菜单项在 900px 高的屏幕上，最后 3 项直接人间蒸发。 */
+.aside-menu { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.aside-menu::-webkit-scrollbar { width: 6px; }
+.aside-menu::-webkit-scrollbar-track { background: transparent; }
+.aside-menu::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
+.aside-menu::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.3); }
+.logo { flex: none; color: #fff; font-size: 20px; font-weight: 700; text-align: center; padding: 18px 0; }
+/* 展开的分类标题：底色比菜单底稍亮一点，一眼能看出"这行是个可展开的分组"而不是页面。 */
+.aside .el-sub-menu__title:hover { background-color: #16342C !important; }
+.aside .el-menu-item:hover { background-color: #16342C !important; }
+/* 二级叶项缩进 14px，跟分类标题的图标对齐出层级感。 */
+.aside .el-sub-menu .el-menu-item { padding-left: 40px !important; }
+/* 分类标题的文字窄一点，防止「组织与用户」在 200px 侧栏里挤到箭头。 */
+.aside .el-sub-menu__title > span { font-size: 13.5px; }
 .aside-foot { margin-top: auto; padding: 11px 14px; color: #8a8f99; font-size: 12px;
   display: flex; justify-content: space-between; align-items: center;
   border-top: 1px solid rgba(255,255,255,.08); }
