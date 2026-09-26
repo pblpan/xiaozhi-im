@@ -12,6 +12,23 @@ import 'package:xiaozhi_im_client/core/price_tag.dart'
 /// ⚠️ 每条断言都要能回答"什么坏情况会让我失败"。
 ///    光看 `expect(bytes, isNotEmpty)` 等于没写。
 void main() {
+  // 🔴 List.contains(x) 只查"有没有一个元素等于 x"，不做子序列匹配 ——
+  //    a.contains([0x1D, 0x21]) 永远 false（在找"等于这个 List 对象"的元素）。
+  //    查指令序列必须自己逐字节比。
+  bool hasSeq(List<int> hay, List<int> needle) {
+    for (var i = 0; i + needle.length <= hay.length; i++) {
+      var m = true;
+      for (var j = 0; j < needle.length; j++) {
+        if (hay[i + j] != needle[j]) {
+          m = false;
+          break;
+        }
+      }
+      if (m) return true;
+    }
+    return false;
+  }
+
   group('GBK 编码', () {
     test('中文按 GBK 双字节出，不是把一个汉字拆成两个问号', () {
       // 「中」= 0xD6D0、「文」= 0xCEC4 —— 这是 GBK 标准码，也是打印机的期待。
@@ -126,7 +143,8 @@ void main() {
           reason: '商品名必须真的在字节流里（GBK 解得回来）');
       expect(s.indexOf('有机鸡蛋'), lessThan(s.indexOf('￥9.90')));
       expect(s.indexOf('￥9.90'), lessThan(s.indexOf('6901234567890', 10)));
-      expect(a.contains(<int>[0x1D, 0x21]), isTrue, reason: '价格那一段必须放大');
+      expect(hasSeq(a, const <int>[0x1D, 0x21]), isTrue,
+          reason: '价格那一段必须放大');
     });
 
     test('放大完必须复位，否则条码也被放大', () {
