@@ -444,20 +444,27 @@ void main() {
     group('参照数（上一轮盘点 → 剩多少）', () {
       late ApiStub stub;
 
-      /// 起一个真本地服务端，专门回 `/api/deduct/reference` 这一个接口。
-      ///
-      /// 🔴 为什么不起假 HTTP、偏要真端口：参照数这一块的全部价值就是"服务端
-      ///    回什么、界面就显示什么"。mock 掉的 http 会把 `barcode=` 拼错、
-      ///    字段名读错、401 当 200 这些事**全都能通过** —— 而它们正好是
-      ///    这一版最容易出错的地方（字段名 `countedQty` / `remaining` 全是新的）。
-      Future<void> stubRef(Object? Function(StubCall) h) async {
+      // 🔴 ApiStub 必须在 setUp（真实时钟）里起，不能放在 testWidgets 体内：
+      //    体内是 FakeAsync 假时钟，HttpServer 的 idleTimeout 周期定时器会变成
+      //    fake timer，body 结束即查 pending timer 报红。其它页面测试
+      //    （inventory_upload / training / inventory_grant ...）一律这么写，证明可行。
+      setUp(() async {
         stub = await ApiStub.start();
-        stub.on('GET', '/api/deduct/reference', h);
         Config.currentUrl = stub.baseUrl;
         addTearDown(() {
           HttpOverrides.global = null;
           return stub.stop();
         });
+      });
+
+      /// 给这一个接口挂一个处理函数（每次测试只挂自己的，覆盖上一个测试的）。
+      ///
+      /// 🔴 为什么不起假 HTTP、偏要真端口：参照数这一块的全部价值就是"服务端
+      ///    回什么、界面就显示什么"。mock 掉的 http 会把 `barcode=` 拼错、
+      ///    字段名读错、401 当 200 这些事**全都能通过** —— 而它们正好是
+      ///    这一版最容易出错的地方（字段名 `countedQty` / `remaining` 全是新的）。
+      void stubRef(Object? Function(StubCall) h) {
+        stub.on('GET', '/api/deduct/reference', h);
       }
 
       String refText(WidgetTester tester, String key) {
@@ -488,7 +495,7 @@ void main() {
       testWidgets('🔴 查不到参照 → 卡片整块消失，不留灰字、更不拦人', (tester) async {
         // 500：模拟"服务端炸了"，和 404 区分开 ——
         // 用 404 的话测试会因为"路由没注册"而假通过。
-        await stubRef((c) => StubResponse(500,
+        stubRef((c) => StubResponse(500,
             <String, dynamic>{'error': 'boom'}));
         await pumpPage(tester);
         expect(find.byKey(const Key('deduct-flow-hint')), findsOneWidget,
@@ -508,7 +515,7 @@ void main() {
       });
 
       testWidgets('扫完之后带出参照：上一轮盘点 / 已减 / 减完剩', (tester) async {
-        await stubRef((c) => <String, dynamic>{
+        stubRef((c) => <String, dynamic>{
           'ok': true,
           'hasRef': true,
           'barcode': c.query['barcode'],
@@ -524,6 +531,10 @@ void main() {
         });
         await pumpPage(tester);
         await scan(tester, barcode: '6901234567890', qty: '10');
+
+        // 🔴 等请求真的发出 + 回包（真实时间）再断言：FakeAsync 下直接断言
+        //    会早于请求到达（"Expected >0, Actual 0"）。waitRefBack 先等 hits>0。
+        await waitRefBack(tester);
 
         // 🔴 顺手钉一下"条码确实带过去了"。参照是按码查的，参数名写错
         //    （比如 `barcode` 写成 `code`）会永远查空，界面上还看不出异常。
@@ -561,7 +572,7 @@ void main() {
       });
 
       testWidgets('没盘过、也没减过 → hasRef=false，卡片不画但能照常减', (tester) async {
-        await stubRef((c) => <String, dynamic>{
+        stubRef((c) => <String, dynamic>{
           'ok': true, 'hasRef': false, 'barcode': c.query['barcode'],
           'countedQty': null, 'deductedQty': 0,
           'deductedSheets': 0, 'remaining': null, 'windowDays': 30,
@@ -581,7 +592,7 @@ void main() {
         // 龙哥 2026-09-26：「商档我已经存到商品档案了，这个要打通共用」。
         // 没盘过的货，账面数也要从商品档案来 —— 否则员工扫完只看到"—"，
         // 连自己扫没扫错码都不知道。
-        await stubRef((c) => <String, dynamic>{
+        stubRef((c) => <String, dynamic>{
           'ok': true, 'hasRef': true, 'barcode': c.query['barcode'],
           'name': '德芙兰洗衣伴侣300ml', 'spec': '1×12', 'unit': '瓶',
           'countedQty': null, 'countedAt': null, 'countedSheet': null,

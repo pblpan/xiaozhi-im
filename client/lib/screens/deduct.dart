@@ -270,6 +270,19 @@ class _DeductPageState extends State<DeductPage> {
     setState(() { _ref = null; _refBarcode = ''; _refLoading = false; });
   }
 
+  /// 是否"真的有参照数可显示"。
+  ///
+  /// 🔴 服务端 [`hasRef`] 为 false（且没带出商档账面数兜底）时，**不算有参照** ——
+  /// 否则"没盘过、没减过"的码也会摊一张全是"—"的卡片，现场会被误读成
+  /// "系统说这货有据可查"。判据：以服务端 `hasRef` 为主；当服务端**明确**
+  /// `hasRef:false` 且连商档账面数 (`accountQty`) 都没有，才算"真没有"。
+  bool get _hasRef {
+    final ref = _ref;
+    if (ref == null) return false;
+    if (ref['hasRef'] == false && ref['accountQty'] == null) return false;
+    return true;
+  }
+
   Future<void> _addRow() async {
     final barcode = _scanCtl.text.trim();
     if (barcode.isEmpty) {
@@ -733,7 +746,7 @@ class _DeductPageState extends State<DeductPage> {
           // 龙哥 2026-09-26 的原话："库房减货不是盘点的一个流程吗？怎么独立成一个
           // 单独的功能了？" —— 它确实是分开的功能，但**依据来自盘点**。这里把那层
           // 关系写死在页面上（只在没有参照数时占一行），免得每次都得解释一遍。
-          if (_ref == null && !_loading)
+          if (!_hasRef && !_loading)
             const Padding(
               padding: EdgeInsets.only(top: 2),
               child: Text(
@@ -761,8 +774,11 @@ class _DeductPageState extends State<DeductPage> {
   ///    库房里没网是常态，留一块灰字会让人以为"这页坏了"。
   Widget _refCard() {
     final ref = _ref;
-    if (ref == null) {
+    if (ref == null || !_hasRef) {
       // 返回一个空盒子但**保住 key**：测试靠它断言"查不到时确实没画卡片"。
+      // 🔴 `ref == null || !_hasRef`：① 请求失败（_ref=null）② 服务端
+      //    `hasRef:false`（没盘过、没减过，但请求成功、_ref 不为 null 的"假有"）
+      //    这两种都整块消失 —— 只判 null 会漏掉第二种，把全是"—"的卡片摊给现场看。
       return const SizedBox(width: double.infinity, height: 0, key: Key('deduct-ref-slot'));
     }
 
