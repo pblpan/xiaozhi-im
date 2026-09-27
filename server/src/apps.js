@@ -39,11 +39,31 @@
  */
 
 /**
- * 分组：客户端工作台按此分区显示。
+ * 分组：**出厂定义 + 可配覆盖**。
+ *
  * work   工作 —— 与"上班"直接相关（考勤、申请、组织）
  * custom 自定义 —— 动态模块（管理台拼的）
+ *
+ * 🔴 v0.22.0 起 GROUPS 不再是简单的字符串数组，而是"出厂默认"。
+ *    原因：钉钉 / 企业微信 / 飞书的工作台分组名是**企业自己改的**
+ *    （"办公协同""人事管理""门店作业"……）。写死在最底下的源码里，
+ *    管理员就永远改不了组名，只能改应用名 —— 那工作台看着就像个半成品。
+ *
+ * 覆盖存在 app_groups 表（见 appgroups.js），这里只是**出厂值**：
+ *    · 改名（label）      → 组头显示什么字
+ *    · 调序（sort）       → 组与组谁在上面
+ *    · 隐藏（hidden）     → 整个组收起来（组里最后一个应用被移走前别用）
+ *    · 新增自定义组       → 管理台加（加完把某些应用挪进去）
+ *
+ * ⚠️ 分组 key 一旦有应用在用就**别删**：删了那些应用会集体消失（它们找不到组）。
  */
-const GROUPS = ['work', 'custom'];
+const DEFAULT_GROUPS = [
+  { key: 'work', label: '工作', sort: 10 },
+  { key: 'custom', label: '自定义应用', sort: 20 },
+];
+
+/** 出厂分组 key（兼容旧引用；不要直接当"当前分组"用，当前分组要问 appgroups.list()） */
+const GROUPS = DEFAULT_GROUPS.map((g) => g.key);
 
 const BUILTIN_APPS = [
   {
@@ -51,6 +71,10 @@ const BUILTIN_APPS = [
     title: '考勤打卡',
     icon: 'schedule',
     group: 'work',
+    // 工作台图标底色（出厂品牌色）。钉钉/企微/飞书的应用图标**不是**一个模子
+    // 里出来的灰方块，是每个应用自己的颜色 —— 一排同色图标员工扫一眼分不出
+    // 哪个是打卡、哪个是盘点。管理台可在应用抽屉里覆盖（见 appoverrides 的 color）。
+    color: '#2B6FE0',
     desc: '上下班打卡、我的考勤与统计',
     // 打卡是"员工对组织"的行为：必须有组织归属，且管理员账号不参与考勤
     // （管理员是系统角色，不在员工名册里；让管理员也打卡只会污染统计）
@@ -61,6 +85,7 @@ const BUILTIN_APPS = [
     title: '我的申请',
     icon: 'task',
     group: 'work',
+    color: '#12A594',
     desc: '请假、补卡、外出、加班的申请与进度',
     need: { workMode: true, attendance: true, orgMember: true, role: 'employee' },
   },
@@ -69,6 +94,7 @@ const BUILTIN_APPS = [
     title: '组织通讯录',
     icon: 'people',
     group: 'work',
+    color: '#475569',
     desc: '按部门查看同事、工号与岗位',
     // 管理员也能看（他要看全员），所以不限定 role
     need: { workMode: true, orgMember: true },
@@ -78,6 +104,7 @@ const BUILTIN_APPS = [
     title: '考勤记录',
     icon: 'assessment',
     group: 'work',
+    color: '#0E7490',
     desc: '查看今日出勤与缺卡，可代为补卡',
     // 管理员的考勤入口 —— **不是"我自己打卡"，而是"看别人打了没"**。
     //
@@ -105,6 +132,7 @@ const BUILTIN_APPS = [
     // 两处都有测试钉着（server/test/apps_icon_test.js）。
     icon: 'barcode',
     group: 'work',
+    color: '#F0821E',
     desc: '扫码采集，离线可用，导出文档/表格 + 生成盈亏表',
 
     // 为什么只要求工作模式，不像考勤那样还要求 orgMember：
@@ -124,6 +152,9 @@ const BUILTIN_APPS = [
     title: '盘点',
     icon: 'inventory',
     group: 'work',
+    // 砖红不是"好看"，是**语义**：盘点最终看的是差异与盈亏，红色一进来就有
+    // "这里要出数了"的暗示。和旁边的扫码枪（橙）、简易盘点（琥珀）也拉得开。
+    color: '#C0392B',
     desc: '按盘点位与货架位清点：初盘、复盘、抽盘，自动算差异与失误笔数',
     // 和扫码枪同样的道理（见上一条）：盘点是**门店现场作业**，
     // 跟"这个人有没有被录进组织名册"是两回事 —— 老板、临时帮忙的人都要能盘。
@@ -148,6 +179,7 @@ const BUILTIN_APPS = [
     title: '简易盘点',
     icon: 'list',
     group: 'work',
+    color: '#A9761A',
     desc: '导入要盘的清单，一趟趟扫，最后导出全量（没盘到的记 0）',
     need: { workMode: true },
   },
@@ -168,6 +200,7 @@ const BUILTIN_APPS = [
     // （server/test/apps_icon_test.js 两边都钉着）。
     icon: 'shopping_cart',
     group: 'work',
+    color: '#1F7A3D',
     desc: '库房那一趟活：扫码减货、单据留痕、导出对账',
     // 和扫码枪/盘点/培训同一条口径：**门店现场作业，不加 orgMember**。
     // 加了会造出"装了却看不到入口"这种最难查的问题（考勤上真踩过）。
@@ -191,6 +224,7 @@ const BUILTIN_APPS = [
     // `shopping_cart` 撞脸 —— 两个都是"货"的活，图标一样分不清。
     icon: 'local_shipping',
     group: 'work',
+    color: '#2E8BC0',
     desc: '补货单：生鲜按公斤、杂百按最小单位，导出带转换公斤',
     need: { workMode: true },
   },
@@ -214,6 +248,7 @@ const BUILTIN_APPS = [
     // 且要与补货的 local_shipping、减货的 shopping_cart 一眼分得开。
     icon: 'receipt_long',
     group: 'work',
+    color: '#C2185B',
     desc: '扫商品码改售价，用蓝牙价签机打印（经典蓝牙，不绑型号）',
     // 和扫码枪/盘点同一条口径：**门店现场作业，不加 orgMember**。
     need: { workMode: true },
@@ -225,6 +260,7 @@ const BUILTIN_APPS = [
     title: '培训中心',
     icon: 'school',
     group: 'work',
+    color: '#8250DF',
     desc: '看课程视频、记学习进度、参加章节考试',
     // 和扫码枪/盘点同样的道理：**门店现场的人都要能学**，
     // 包括还没录进组织名册的临促、新来的店长。加 orgMember 会造出
@@ -242,8 +278,11 @@ const BUILTIN_APPS = [
  * 覆盖层同理：`overrides` 是一个普通对象（`{ [id]: {title,icon,sort,disabled,params} }`），
  * 由调用方从 appoverrides.map() 取来传进来，本文件不 require 那个模块
  * （否则 apps.js 就会依赖 db，纯函数测试也就无从谈起了）。
+ *
+ * 第三参 `groupOverrides` 同理（appgroups.map()）：分组的改名/调序/隐藏在这里
+ * 一起并进 `group` 字段一起下发，客户端不用再算一次"这个组现在叫什么"。
  */
-function listFor({ friendMode, attendanceEnabled, hasOrg, role } = {}, overrides) {
+function listFor({ friendMode, attendanceEnabled, hasOrg, role } = {}, overrides, groupOverrides) {
   const isAdmin = role === 'admin';
   const ovs = overrides || {};
   return BUILTIN_APPS
@@ -256,6 +295,11 @@ function listFor({ friendMode, attendanceEnabled, hasOrg, role } = {}, overrides
         disabled: !!(ov && ov.disabled),
         title: (ov && ov.title) || a.title,
         icon: (ov && ov.icon) || a.icon,
+        // 🔴 分组与配色也必须是**合并后**的值，不是出厂值。
+        //    （曾经这里漏了，结果是"管理台把盘点挪到门店作业组、工作台一动不动"，
+        //     而且不报错 —— 只会让人以为分组功能坏了。）
+        group: (ov && ov.group) || a.group,
+        color: (ov && ov.color) || a.color || null,
         params: (ov && ov.params) || {},
       };
     })
@@ -278,33 +322,46 @@ function listFor({ friendMode, attendanceEnabled, hasOrg, role } = {}, overrides
       if (n.adminOnly && !isAdmin) return false;
       return true;
     })
-    .sort((a, b) => (a.sort - b.sort) || a.def.id.localeCompare(b.def.id))
+    .sort((p, q) => (p.sort - q.sort) || p.def.id.localeCompare(q.def.id))
     .map((x) => ({
       id: x.def.id,
       title: x.title,
       icon: x.icon,
-      group: x.def.group,
+      // x.group / x.color 是合并后的（见上一步），x.def 只是出厂定义
+      group: x.group,
+      // 分组的改名/调序在这里并进来：客户端直接显示，不用自己查分组表
+      groupLabel: (groupOverrides && groupOverrides[x.group]?.label) || groupOf(x.group).label,
       desc: x.def.desc,
       sort: x.sort,
       kind: 'builtin',
+      // 品牌色：客户端拿它画图标底色，没给就用通用渐变（见客户端 workbench 的兜底）
+      color: x.color,
       // 参数随清单一起下发：客户端不装新包也能读到管理台改的值
       // （哪些参数客户端真的读，见 appoverrides.js 的 enforced 标注）
       params: x.params,
     }));
 }
 
+/** 取某个分组的出厂定义（分组 key 是出厂就定好的，本文件不需要查库） */
+function groupOf(key) {
+  return DEFAULT_GROUPS.find((g) => g.key === key) || { key, label: key, sort: 999 };
+}
+
 /** 全部内置应用的元信息（供管理台"应用中心"页展示只读清单） */
-function catalog(overrides) {
+function catalog(overrides, groupOverrides) {
   const ovs = overrides || {};
   return BUILTIN_APPS.map((a, idx) => {
     const ov = ovs[a.id];
     return {
       id: a.id, title: a.title, icon: a.icon, group: a.group, desc: a.desc, need: a.need,
+      color: a.color || null,
       defaultSort: idx * 10,
       // 生效值（管理台的列表列直接显示这个，不用自己再合一次）
       effective: {
         title: (ov && ov.title) || a.title,
         icon: (ov && ov.icon) || a.icon,
+        group: (ov && ov.group) || a.group,
+        color: (ov && ov.color) || a.color || null,
         sort: ov && ov.sort != null ? ov.sort : idx * 10,
         disabled: !!(ov && ov.disabled),
       },
@@ -312,4 +369,7 @@ function catalog(overrides) {
   });
 }
 
-module.exports = { GROUPS, BUILTIN_APPS, listFor, catalog };
+module.exports = {
+  GROUPS, DEFAULT_GROUPS, groupOf,
+  BUILTIN_APPS, listFor, catalog,
+};

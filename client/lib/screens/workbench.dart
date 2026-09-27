@@ -10,15 +10,83 @@ import 'module_page.dart';
 
 /// 工作台（应用中心）。
 ///
-/// 这是模型的"统一入口面"：钉钉/企微/飞书都把它叫工作台。它把两类应用放在一起：
+/// 对齐钉钉 / 企业微信 / 飞书的地方，以及**这里刻意不改的地方**：
 ///
-///   「工作」分组   内置应用（考勤打卡 / 我的申请 / 组织通讯录）—— 随安装包发布
-///   「自定义」分组 动态模块（管理台拼 JSON 下发）—— 不重装就能长出功能
+///   ① **顶部公告位** —— 那三家的公告都在工作台第一眼。它是"必须读到"的位置，
+///      不是群消息的副本。服务端下几条、显示哪几条由管理台决定（见 appnotice.js）。
+///   ② **搜索框** —— 应用一多，"翻格子"就变成体力活。搜索只匹配名称，
+///      够用了：按 desc 全文搜会让"搜一个字跳出五个看不懂的东西"。
+///   ③ **一排彩色圆形图标** —— 那三家的图标都不是同一个灰方块，每个应用自己的
+///      颜色。一排同色图标，员工扫一眼分不出哪个是打卡、哪个是盘点。
+///      颜色来自服务端下发的 `color`（管理台可改，出厂色在 server/src/apps.js）。
+///   ④ **分组标题由服务端给** —— 组名写死在客户端会让管理员改不了，
+///      于是工作台永远像别人家的默认模板。
 ///
-/// **列表本身完全由服务端决定**：哪些应用可见、什么顺序、带不带角标，
-/// 服务端算好再下发（SPEC 拍板项 1）。客户端只做两件事：
+/// ⚠️ **列表本身完全由服务端决定**：哪些应用可见、什么顺序、带不带角标，
+/// 服务端算好再下发。客户端只做两件事：
 ///   ① 认识的内置应用 → 打开对应页面；
 ///   ② 不认识的 id → 不显示（服务端上了新应用而客户端还没升级时，少一个图标而已）。
+///
+/// 🔴 布局约定：所有分组**一律走同一套网格**。曾经「工作」是网格、「自定义应用」
+/// 是列表行，两种排版并存 —— 结果管理员把某个动态模块挪进「工作」组后，
+/// 它在手机上的样子和隔壁的考勤完全不一样，像两套产品。
+/// 按关键词过滤应用。**只匹配名称，不匹配 desc** ——
+/// desc 是"起疑心"的短句，按它搜会跳出一堆看不懂的结果。
+/// 关键词为空时原样返回（不是返回一个空列表）。
+List<Map<String, dynamic>> workbenchFilter(
+  List<Map<String, dynamic>> apps,
+  String kw,
+) {
+  if (kw.isEmpty) return apps;
+  return apps
+      .where((a) => (a['title']?.toString() ?? '').toLowerCase().contains(kw))
+      .toList();
+}
+
+/// 把应用按分组归堆，组序**按服务端下发的 sort**（管理员在管理台拖的顺序）。
+/// 返回 `[{'label': 组名, '_items': [...], '_sort': 序号}]`。
+///
+/// 两条刻意的行为：
+///   · 空组（管理员把最后一个应用挪走了）不显示 —— 留一个空标题最像坏掉；
+///   · 应用里出现、但分组清单里没有的 key（管理员刚建的组，这个客户端还没刷新到）
+///     也兜底显示，组名先用 key 本身 —— 比整个消失好。
+List<Map<String, Object?>> workbenchSections({
+  required List<Map<String, dynamic>> apps,
+  required List<dynamic> groups,
+  String fallbackGroup = 'work',
+}) {
+  final out = <Map<String, Object?>>[];
+  final used = <String>{};
+  for (final g in groups) {
+    if (g is! Map) continue;
+    final key = (g['key'] ?? '').toString();
+    final items = apps
+        .where((a) => (a['group'] ?? fallbackGroup) == key)
+        .toList();
+    if (items.isEmpty) continue;
+    used.add(key);
+    out.add({
+      'label': g['label']?.toString() ?? key,
+      '_items': items,
+      '_sort': groups.indexOf(g),
+    });
+  }
+  // 组外应用兜底
+  for (final a in apps) {
+    final key = (a['group'] ?? fallbackGroup).toString();
+    if (used.contains(key)) continue;
+    out.add({
+      'label': key,
+      '_items': apps
+          .where((x) => (x['group'] ?? fallbackGroup) == key)
+          .toList(),
+      '_sort': 999,
+    });
+  }
+  out.sort((x, y) => (x['_sort'] as int).compareTo(y['_sort'] as int));
+  return out;
+}
+
 class WorkbenchPage extends StatefulWidget {
   const WorkbenchPage({super.key});
 
@@ -26,15 +94,57 @@ class WorkbenchPage extends StatefulWidget {
   State<WorkbenchPage> createState() => _WorkbenchPageState();
 }
 
+/// 工作台网格的列数。
+///
+/// 手机上一律 **4 列** —— 3 列格子大得像卡片、2 列又太宽，
+/// 4 列才是企微/飞书那个"一排四个、一眼扫完"的感觉。
+/// 宽屏（桌面）跟着放宽，但**绝不少于 4**（窄的时候收窄格子，不要收列数）。
+int workbenchColumns(double width) {
+  if (width >= 1100) return 8;
+  if (width >= 820) return 6;
+  if (width >= 600) return 5;
+  return 4;
+}
+
+/// 应用图标底色：优先服务端下发的 `color`（出厂色在 server/src/apps.js，
+/// 管理台可覆盖）；没有就用品牌色 —— 注意是"所有应用一个色"，
+/// 而不是"所有应用一个色块 + 一个图标"，后者还是分不清谁是谁。
+Color workbenchAppColor(Map<String, dynamic> app) {
+  final s = app['color']?.toString() ?? '';
+  if (s.length == 7 && s.startsWith('#')) {
+    try {
+      // #RRGGBB → Color(0xFFRRGGBB)（int.parse 认不了带 # 的串，先截掉）
+      return Color(int.parse(s.substring(1), radix: 16) + 0xFF000000);
+    } catch (_) {
+      // 解析不了就走品牌色 —— 比"图标变成一个黑色方块"强
+    }
+  }
+  return AppColors.brand;
+}
+
 class _WorkbenchPageState extends State<WorkbenchPage> {
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _apps = const [];
+  List<Map<String, dynamic>> _groups = const [];
+  List<Map<String, dynamic>> _notices = const [];
+  final TextEditingController _q = TextEditingController();
+  String _kw = '';
 
   @override
   void initState() {
     super.initState();
+    _q.addListener(() {
+      final v = _q.text.trim().toLowerCase();
+      if (v != _kw) setState(() => _kw = v);
+    });
     _load();
+  }
+
+  @override
+  void dispose() {
+    _q.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -69,6 +179,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       if (!mounted) return;
       setState(() {
         _apps = list;
+        // 分组清单跟着下发，客户端不写死组名（管理员可以在管理台改）
+        _groups = ((r['groups'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        // 公告：没配就是空列表，客户端不编一条默认的出来
+        _notices = ((r['notices'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
         _loading = false;
       });
     } catch (e) {
@@ -80,8 +200,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
-  List<Map<String, dynamic>> _group(String g) =>
-      _apps.where((a) => (a['group'] ?? 'work') == g).toList();
+  List<Map<String, dynamic>> get _shown => workbenchFilter(_apps, _kw);
+
+  List<Map<String, Object?>> get _sections => workbenchSections(
+        apps: _shown,
+        groups: _groups,
+      );
 
   Future<void> _open(Map<String, dynamic> app) async {
     final kind = app['kind'] as String;
@@ -157,58 +281,144 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       );
     }
 
-    final work = _group('work');
-    final custom = _group('custom');
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 28),
-      children: [
-        if (work.isNotEmpty) ...[
-          _sectionTitle('工作'),
-          _grid(work),
+    final sections = _sections;
+    return CustomScrollView(
+      slivers: [
+        // 顶部公告位
+        if (_notices.isNotEmpty) _noticeSliver(),
+        // 搜索框（应用多的时候"翻格子"是体力活，企微/飞书都有这一条）
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+            child: TextField(
+              controller: _q,
+              style: const TextStyle(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: '搜索应用',
+                prefixIcon: const Icon(Icons.search, size: 20),
+                isDense: true,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadii.md)),
+                enabledBorder:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadii.md)),
+                focusedBorder:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadii.md)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+            ),
+          ),
+        ),
+        if (_kw.isNotEmpty) ...[
+          // 搜到什么直接平铺出来，不再显示分组标题 ——
+          // "刚搜到的是哪个组的"在这个时刻是干扰，不是信息。
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
+              child: Text(
+                '搜到 ${_shown.length} 个应用（"$_kw"）',
+                style: TextStyle(fontSize: 12.5, color: AppSemantic.of(context).muted),
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(child: _grid(_shown)),
+        ] else ...[
+          ...sections.map(
+            (s) => SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                child: _sectionTitle(s['label']?.toString() ?? ''),
+              ),
+            ),
+          ),
+          ...sections.map((s) => SliverToBoxAdapter(child: _grid(s['_items'] as List))),
         ],
-        if (custom.isNotEmpty) ...[
-          SizedBox(height: work.isNotEmpty ? 22 : 0),
-          _sectionTitle('自定义应用'),
-          ...custom.map(_row),
-        ],
+        const SliverToBoxAdapter(child: SizedBox(height: 28)),
       ],
+    );
+  }
+
+  /// 顶部公告：横滑的一条卡片。没配公告时这段整体不出现。
+  Widget _noticeSliver() {
+    final sem = AppSemantic.of(context);
+    return SliverToBoxAdapter(
+      child: SizedBox(
+        height: 78,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+          itemCount: _notices.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 10),
+          itemBuilder: (ctx, i) {
+            final n = _notices[i];
+            final text = n['text']?.toString() ?? '';
+            return Container(
+              width: 300,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                // 公告底色用品牌色的浅调，不用"红底白字"——那是在报警，不是在通知
+                color: sem.cardBg,
+                borderRadius: BorderRadius.circular(AppRadii.md),
+                border: Border.all(color: sem.cardBorder),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.campaign_outlined, size: 18, color: AppColors.brand),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      text,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13.5, height: 1.5),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 
   Widget _sectionTitle(String t) {
     final sem = AppSemantic.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10, left: 2),
-      child: Text(t,
-          style: TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: sem.muted, letterSpacing: 0.5)),
-    );
+    return Text(t,
+        style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: sem.muted,
+            letterSpacing: 0.5));
   }
 
-  Widget _grid(List<Map<String, dynamic>> apps) {
+  /// 统一的彩色图标网格。
+  Widget _grid(List list) {
     return LayoutBuilder(builder: (ctx, c) {
-      final w = c.maxWidth;
-      final cols = w >= 940 ? 4 : (w >= 660 ? 3 : 2);
       return GridView.count(
-        crossAxisCount: cols,
+        key: ValueKey('grid_$_kw'),
+        crossAxisCount: workbenchColumns(c.maxWidth),
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 1.25,
-        children: apps.map(_card).toList(),
+        mainAxisSpacing: 14,
+        crossAxisSpacing: 14,
+        childAspectRatio: 1 / 1.15,
+        children: list.map((a) => _card(a as Map<String, dynamic>)).toList(),
       );
     });
   }
 
+  /// 一个应用格子：彩色圆底图标 + 名称 + 角标。
+  /// desc 不在这里显示 —— 一排四列带两行小字的格子，图标就被挤扁了，
+  /// 而 desc 的作用是"起疑心"，不是"解释"（点击就进去了）。
   Widget _card(Map<String, dynamic> app) {
     final sem = AppSemantic.of(context);
     final badge = (app['badge'] ?? '').toString();
+    final color = workbenchAppColor(app);
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadii.md),
       onTap: () => _open(app),
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
         decoration: BoxDecoration(
           color: sem.cardBg,
           borderRadius: BorderRadius.circular(AppRadii.md),
@@ -217,47 +427,49 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         child: Stack(
           children: [
             Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
+                // 彩色圆底：圆角比图标本身大一圈是刻意的，企微/飞书都是圆的
                 Container(
-                  width: 42,
-                  height: 42,
+                  width: 46,
+                  height: 46,
                   decoration: BoxDecoration(
-                    gradient: AppTheme.brandGradient,
-                    borderRadius: BorderRadius.circular(AppRadii.sm),
+                    color: color,
+                    borderRadius: BorderRadius.circular(23),
                   ),
-                  child: Icon(moduleIcon(app['icon']?.toString() ?? ''),
-                      color: Colors.white, size: 22),
+                  child: Icon(
+                    moduleIcon(app['icon']?.toString() ?? ''),
+                    color: Colors.white,
+                    size: 24,
+                  ),
                 ),
-                const Spacer(),
-                Text(app['title']?.toString() ?? '应用',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 3),
+                const SizedBox(height: 10),
                 Text(
-                  (app['desc']?.toString().isNotEmpty ?? false)
-                      ? app['desc'].toString()
-                      : '自定义应用',
-                  maxLines: 2,
+                  app['title']?.toString() ?? '应用',
+                  maxLines: 1,
+                  textAlign: TextAlign.center,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11.5, height: 1.4, color: sem.muted),
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
               ],
             ),
             if (badge.isNotEmpty)
               Positioned(
-                right: 0,
-                top: 0,
+                right: 6,
+                top: 6,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  constraints: const BoxConstraints(minWidth: 18),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                   decoration: BoxDecoration(
                     color: AppColors.danger,
                     borderRadius: BorderRadius.circular(AppRadii.pill),
                   ),
-                  child: Text(badge,
-                      style: const TextStyle(
-                          fontSize: 10.5, color: Colors.white, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    badge,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontSize: 10, color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
           ],
@@ -266,60 +478,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  Widget _row(Map<String, dynamic> app) {
-    final sem = AppSemantic.of(context);
-    final badge = (app['badge'] ?? '').toString();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppRadii.md),
-        onTap: () => _open(app),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-          decoration: BoxDecoration(
-            color: sem.cardBg,
-            borderRadius: BorderRadius.circular(AppRadii.md),
-            border: Border.all(color: sem.cardBorder),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  gradient: AppTheme.brandGradient,
-                  borderRadius: BorderRadius.circular(AppRadii.sm),
-                ),
-                child: Icon(moduleIcon(app['icon']?.toString() ?? ''),
-                    color: Colors.white, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(app['title']?.toString() ?? '应用',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-              ),
-              if (badge.isNotEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.danger,
-                    borderRadius: BorderRadius.circular(AppRadii.pill),
-                  ),
-                  child: Text(badge,
-                      style: const TextStyle(
-                          fontSize: 10.5, color: Colors.white, fontWeight: FontWeight.w600)),
-                ),
-                const SizedBox(width: 8),
-              ],
-              Icon(Icons.chevron_right, color: sem.muted),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 
   Widget _hint({
     required IconData icon,

@@ -1735,6 +1735,19 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 </template>
               </el-table-column>
               <el-table-column prop="desc" label="说明" min-width="220" show-overflow-tooltip />
+              <!-- 分组：改完这个应用就换一组显示（组名可在本页下方「工作台版式」里改） -->
+              <el-table-column label="分组" width="190">
+                <template #default="{ row }">
+                  <el-select :model-value="row.effective.group" size="small" style="width:100%"
+                    @change="(v) => appMoveGroup(row, v)">
+                    <el-option v-for="g in (appCatalog.groups || [])" :key="g.key" :label="g.label"
+                      :value="g.key">
+                      <span>{{ g.label }}</span>
+                      <span style="float:right;color:#909399;font-size:12px">{{ g.usedBy }} 个</span>
+                    </el-option>
+                  </el-select>
+                </template>
+              </el-table-column>
               <!-- 排序直接在这里调：客户端工作台从上到下就是这个顺序（小的在前）。
                    ↑↓ = 和相邻那行交换排序号，不用点进「管理」抽屉里填数字。 -->
               <el-table-column label="排序" width="120" align="center">
@@ -1783,10 +1796,131 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               （看今日全员出勤与缺卡、代员工补卡）—— 两类人看到的工作台本来就该不一样。
               下面拼出来的自定义模块和它们并列出现在同一个工作台里。
               <br />
-              点每行的<b>「管理」</b>可以给内置应用改名 / 换图标 / 调顺序 / 调参数 / <b>整应用停用</b>
+              点每行的<b>「管理」</b>可以给内置应用改名 / 换图标 / <b>换分组 / 换配色</b> / 调顺序 / 调参数 / <b>整应用停用</b>
               （停用会同时隐藏入口<b>并拦掉它的后端接口</b>，不是只藏图标）；<b>调顺序直接点排序列的 ↑↓</b> 更快，
               客户端工作台从上到下就是这里的顺序。自定义模块请到下方模块清单里编辑
               —— 两处都能改同一件事迟早对不上。
+              <br />
+              <b>分组</b>与<b>顶部公告</b>在下方「工作台版式」里统一改 —— 那两样是"整块工作台长什么样"，
+              不属于某一个应用。
+            </div>
+          </el-card>
+
+          <!-- ==================== 工作台版式：分组 + 公告（v0.22.0） ====================
+               从上面那张表拆出来单独一块，是因为它管的是**整块版式**而不是某一个应用：
+               组名、组序、收起、新增组，以及工作台顶部那条公告。
+               钉钉 / 企业微信 / 飞书的工作台都能改这两样，写死在这里就像别人家的默认模板。 -->
+          <el-card style="margin-bottom:16px">
+            <template #header>
+              <div class="card-hdr">
+                <span>工作台版式 —— 分组管理（客户端工作台按组分区显示）</span>
+                <el-button size="small" @click="loadWorkbenchView">刷新</el-button>
+              </div>
+            </template>
+
+            <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px"
+              title="组名、组序都可以改；「已隐藏」的组整个收起来（组里还有应用时收起等于那些应用一起消失，改前看一眼「组里应用」列）。出厂分组不能删除，自定义组空了才能删。" />
+
+            <!-- 新增分组 -->
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
+              <span class="hint">新增分组：</span>
+              <el-input v-model="wb.newKey" size="small" placeholder="组 key，如 store（小写字母开头）" style="width:230px" />
+              <el-input v-model="wb.newLabel" size="small" :placeholder="`组名，如 门店作业（最多 ${wb.labelMax || 8} 字）`" style="width:170px" />
+              <el-input-number v-model="wb.newSort" size="small" :min="0" :max="9999" />
+              <el-button size="small" type="primary" :loading="wb.busy" @click="addGroup">添加分组</el-button>
+            </div>
+
+            <el-table :data="wb.groups || []" border size="small">
+              <el-table-column label="组名" min-width="200">
+                <template #default="{ row }">
+                  <el-input v-model="row.label" size="small" @change="(v) => wbSaveGroup(row, { label: v })" />
+                </template>
+              </el-table-column>
+              <el-table-column label="key" width="130">
+                <template #default="{ row }"><code class="mono">{{ row.key }}</code></template>
+              </el-table-column>
+              <el-table-column label="排序" width="120" align="center">
+                <template #default="{ row }">
+                  <el-input-number v-model="row.sort" size="small" :min="0" :max="9999"
+                    @change="(v) => wbSaveGroup(row, { sort: v })" />
+                </template>
+              </el-table-column>
+              <el-table-column label="组里应用" width="110" align="center">
+                <template #default="{ row }">
+                  <span :style="row.usedBy ? '' : 'color:#c0c4cc'">{{ row.usedBy }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="显示" width="100" align="center">
+                <template #default="{ row }">
+                  <el-switch :model-value="!row.hidden" @change="(v) => wbSaveGroup(row, { hidden: !v })" />
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="110" align="center">
+                <template #default="{ row }">
+                  <el-button size="small" link type="danger" :disabled="!row.custom"
+                    @click="wbDelGroup(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="hint" style="margin-top:8px">
+              「显示」关掉 = 这个组整体收起（key 还留着，随时能放回来）；出厂分组没有删除按钮 ——
+              删掉会让挂在上面的应用集体消失，那是最难查的一类问题。
+            </div>
+          </el-card>
+
+          <!-- ==================== 工作台公告 ==================== -->
+          <el-card style="margin-bottom:16px">
+            <template #header>
+              <div class="card-hdr">
+                <span>工作台顶部公告（客户端打开工作台第一眼看到）</span>
+                <el-button size="small" @click="purgeNotices">清理已停用</el-button>
+                <el-button size="small" @click="loadWorkbenchView">刷新</el-button>
+              </div>
+            </template>
+
+            <el-alert type="warning" :closable="false" show-icon style="margin-bottom:12px"
+              :title="`公告最多 ${wb.textMax || 60} 个字，最多同时显示 ${wb.maxDownload || 3} 条（多了会把应用区顶下去）。停用的公告立刻从手机上消失，但列表里还留着 —— 想彻底清掉请用下面的「清理已停用」。`" />
+
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
+              <el-input v-model="wb.newNotice" size="small" :maxlength="wb.textMax || 60"
+                placeholder="要所有人看见的一句话，例如：明天盘点，全店 9 点前把货架归位" style="width:420px" />
+              <el-input-number v-model="wb.newNoticeSort" size="small" :min="0" :max="9999" />
+              <el-button size="small" type="primary" :loading="wb.busy" @click="addNotice">发布</el-button>
+            </div>
+
+            <el-table :data="wb.notices || []" border size="small">
+              <el-table-column label="内容" min-width="320">
+                <template #default="{ row }">
+                  <el-input v-model="row.text" size="small" @change="(v) => wbSaveNotice(row, { text: v })" />
+                </template>
+              </el-table-column>
+              <el-table-column label="排序" width="120" align="center">
+                <template #default="{ row }">
+                  <el-input-number v-model="row.sort" size="small" :min="0" :max="9999"
+                    @change="(v) => wbSaveNotice(row, { sort: v })" />
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="100" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="plain">
+                    {{ row.enabled ? '生效中' : '已停用' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="启用" width="90" align="center">
+                <template #default="{ row }">
+                  <el-switch :model-value="row.enabled" @change="(v) => wbSaveNotice(row, { enabled: v })" />
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="90" align="center">
+                <template #default="{ row }">
+                  <el-button size="small" link type="danger" @click="delNotice(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="hint" style="margin-top:8px">
+              这是"必须读到"的位置，不是群消息的副本 —— 群消息员工可以压根不看，
+              公告在他打开工作台的第一眼就在那儿。要发详情用群消息（那边有富文本）。
             </div>
           </el-card>
 
@@ -1818,6 +1952,28 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                         :placeholder="appAdm.data?.app?.factory?.icon" style="width:100%">
                         <el-option v-for="ic in (appAdm.data?.icons || [])" :key="ic" :label="ic" :value="ic" />
                       </el-select>
+                    </el-form-item>
+                    <el-form-item label="分组">
+                      <el-select v-model="appAdm.form.group" clearable filterable
+                        placeholder="留在当前分组" style="width:100%">
+                        <el-option v-for="g in (appCatalog.groups || [])" :key="g.key" :label="g.label"
+                          :value="g.key">
+                          <span>{{ g.label }}</span>
+                          <span style="float:right;color:#909399;font-size:12px">{{ g.usedBy }} 个</span>
+                        </el-option>
+                      </el-select>
+                      <span class="hint" style="margin-left:10px">
+                        出厂分组是 <code class="mono">{{ appAdm.data?.app?.factory?.group }}</code>；
+                        想换到别的组，得先在下方「工作台版式」里建好那个组
+                      </span>
+                    </el-form-item>
+                    <el-form-item :label="`图标底色（出厂：${appAdm.data?.app?.factory?.color || '无'}）`">
+                      <div style="display:flex;gap:10px;align-items:center">
+                        <el-color-picker v-model="appAdm.form.color" :predefine="WB_COLORS"
+                          :disabled="!appAdm.form.color" />
+                        <el-button v-if="appAdm.form.color" size="small" link @click="appAdm.form.color = ''">用出厂色</el-button>
+                        <span class="hint">客户端工作台的图标底色（#RRGGBB）。</span>
+                      </div>
                     </el-form-item>
                     <el-form-item label="排序号（越小越靠前）">
                       <el-input-number v-model="appAdm.form.sort" :min="0" :max="9999" :step="5" />
@@ -7907,8 +8063,151 @@ async function loadAppCatalog() {
     const map = {};
     for (const w of whys) if (w) map[w.id] = w;
     appWhy.value = map;
+    await loadWorkbenchView();
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '加载应用清单失败');
+  }
+}
+
+// ====== 工作台版式：分组 + 公告（v0.22.0） ======
+// 这两样管的是"整块工作台长什么样"，不属于任何一个应用，所以单独一块。
+// 和上面的应用总览共用 /admin/apps 一次请求拿到的 groups / notices。
+const wb = reactive({
+  groups: [], notices: [], textMax: 60, maxDownload: 3, labelMax: 8,
+  newKey: '', newLabel: '', newSort: 100,
+  newNotice: '', newNoticeSort: 100,
+  busy: false,
+});
+
+/** 表单都放空，免得下次打开抽屉留着上一次的输入 */
+function resetWorkbenchDraft() {
+  wb.newKey = ''; wb.newLabel = ''; wb.newSort = 100;
+  wb.newNotice = ''; wb.newNoticeSort = 100;
+}
+
+async function loadWorkbenchView() {
+  // 分组与公告顺路从 /admin/apps 取（那一个请求里就带齐了）；
+  // labelMax 只有分组接口给，单独取一次。
+  wb.groups = appCatalog.value.groups || [];
+  wb.notices = appCatalog.value.notices || [];
+  wb.textMax = appCatalog.value.noticeMax || 60;
+  try {
+    const { data } = await api.get('/admin/apps/groups');
+    wb.groups = data.groups || wb.groups;
+    wb.labelMax = data.labelMax || 8;
+  } catch { /* 分组接口挂了就用 /admin/apps 里那份 */ }
+}
+
+const wbToast = (data, fallback) => ElMessage.success((data && data.message) || fallback);
+
+/* ---------- 分组 ---------- */
+
+async function addGroup() {
+  if (!wb.newKey.trim() || !wb.newLabel.trim()) {
+    ElMessage.warning('组名和 key 都要填'); return;
+  }
+  wb.busy = true;
+  try {
+    const { data } = await api.post('/admin/apps/groups', {
+      key: wb.newKey.trim(), label: wb.newLabel.trim(), sort: wb.newSort,
+    });
+    wbToast(data, '已新增分组');
+    await Promise.all([loadWorkbenchView(), loadAppCatalog()]);
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '新增分组失败');
+  } finally {
+    wb.busy = false;
+    resetWorkbenchDraft();
+  }
+}
+
+/** 改一个组（改名 / 调序 / 收放）。inline 表格里直接改，不用点保存 */
+async function wbSaveGroup(row, patch) {
+  try {
+    const { data } = await api.patch('/admin/apps/groups/' + row.key, patch);
+    wbToast(data, '已保存');
+    await Promise.all([loadWorkbenchView(), loadAppCatalog()]);
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+    loadWorkbenchView();
+  }
+}
+
+async function wbDelGroup(row) {
+  try {
+    const { data } = await api.delete('/admin/apps/groups/' + row.key);
+    wbToast(data, '已删除');
+    await Promise.all([loadWorkbenchView(), loadAppCatalog()]);
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
+/** 总览表里直接把某个应用挪到别的组（下拉选一次就生效） */
+async function appMoveGroup(row, key) {
+  if (!key) return;
+  try {
+    await api.patch('/admin/apps/' + row.id, { group: key });
+    ElMessage.success(`已把「${row.effective.title}」挪到「${groupLabelOf(key)}」，客户端下次进工作台生效`);
+    await Promise.all([loadWorkbenchView(), loadAppCatalog()]);
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '挪分组失败');
+    loadAppCatalog();
+  }
+}
+
+function groupLabelOf(key) {
+  const g = (wb.groups || []).find((x) => x.key === key);
+  return g ? g.label : key;
+}
+
+/* ---------- 公告 ---------- */
+
+async function addNotice() {
+  const text = (wb.newNotice || '').trim();
+  if (!text) { ElMessage.warning('公告内容不能为空'); return; }
+  wb.busy = true;
+  try {
+    const { data } = await api.post('/admin/apps/notices', { text, sort: wb.newNoticeSort });
+    wbToast(data, '已发布');
+    await loadWorkbenchView();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '发布失败');
+  } finally {
+    wb.busy = false;
+    wb.newNotice = '';
+  }
+}
+
+async function wbSaveNotice(row, patch) {
+  try {
+    const { data } = await api.patch('/admin/apps/notices/' + row.id, patch);
+    wbToast(data, '已保存');
+    await loadWorkbenchView();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+    loadWorkbenchView();
+  }
+}
+
+async function delNotice(row) {
+  try {
+    const { data } = await api.delete('/admin/apps/notices/' + row.id);
+    wbToast(data, '已删除');
+    await loadWorkbenchView();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
+/** 只清已停用的，生效中的不动 */
+async function purgeNotices() {
+  try {
+    const { data } = await api.post('/admin/apps/notices/purge');
+    wbToast(data, '已清理');
+    await loadWorkbenchView();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '清理失败');
   }
 }
 
@@ -7922,7 +8221,7 @@ async function loadAppCatalog() {
 const appAdm = reactive({
   open: false, loading: false, error: '', id: '', title: '', tab: 'basic',
   data: null, saving: false,
-  form: { title: '', icon: '', sort: null },
+  form: { title: '', icon: '', sort: null, group: '', color: '' },
   src: '', q: '', range: null, allTime: true, page: 1, pageSize: 50,
   rows: [], cols: [], total: 0, rowsLoading: false, srcTimeFiltered: true,
   purgeSrc: '', purgePrev: null, purgeConfirm: 0, purgeBusy: false,
@@ -7945,8 +8244,20 @@ function needText(need) {
 
 function admFormOf(d) {
   const ov = d.app.override || {};
-  return { title: ov.title || '', icon: ov.icon || '', sort: ov.sort ?? null };
+  return {
+    title: ov.title || '', icon: ov.icon || '', sort: ov.sort ?? null,
+    group: ov.group || '', color: ov.color || '',
+  };
 }
+
+/**
+ * 图标底色的预设色块 —— 和 apps.js 里 BUILTIN_APPS 的出厂色对齐，
+ * 管理员不用猜 "#" 后面该填什么。
+ */
+const WB_COLORS = [
+  '#2B6FE0', '#12A594', '#475569', '#0E7490', '#F0821E', '#C0392B',
+  '#A9761A', '#1F7A3D', '#2E8BC0', '#C2185B', '#8250DF',
+];
 
 /** 只刷数据、不重置界面状态（保存完、清理完要留在原处，不能把抽屉弹回第一页） */
 async function refreshAppAdmin() {
@@ -7984,6 +8295,8 @@ async function saveAppAdm() {
     const { data } = await api.patch('/admin/apps/' + appAdm.id, {
       title: appAdm.form.title || '',
       icon: appAdm.form.icon || '',
+      group: appAdm.form.group || '',
+      color: appAdm.form.color || '',
       sort: appAdm.form.sort === null || appAdm.form.sort === undefined ? null : Number(appAdm.form.sort),
     });
     ElMessage.success(data.message || '已保存');

@@ -7,6 +7,8 @@ const { verifyToken, hashPassword, verifyPassword } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
 const appoverrides = require('../appoverrides');
+const appgroups = require('../appgroups');
+const appnotice = require('../appnotice');
 const appguard = require('../appguard');
 const appdata = require('../appdata');
 const upstream = require('../upstream');
@@ -1108,6 +1110,11 @@ router.get('/apps', (req, res) => {
       };
     }),
     dynamic: appmodules.list(),
+    // 分组与公告一并下发：管理台这个页面要三块内容（应用 / 分组 / 公告），
+    // 分开取就得发三次请求，而它们改的是同一件事（"工作台长什么样"）。
+    groups: appgroups.view(overrides),
+    notices: appnotice.listAll(),
+    noticeMax: appnotice.TEXT_MAX,
     context: {
       friendMode,
       attendanceEnabled: attEnabled,
@@ -1132,6 +1139,105 @@ router.get('/apps/why', (req, res) => {
   if (n.role === 'employee') reasons.push('管理员账号本身不参与考勤，属正常（管理员看的是「考勤记录」）');
   if (n.adminOnly) reasons.push('这是管理员专属入口（主管看板的入口，员工看不到是正常的）');
   res.json({ id, title: app.title, visible: reasons.length === 0, reasons });
+});
+
+/* ==================== 工作台分组（v0.22.0：组名/组序/收起/新增） ====================
+ *
+ * ⚠️ 路由注册顺序：下面这几个**必须**出现在 `/admin/apps/:id` 之前。
+ *    Express 按注册先后匹配，`:id` 会把 `/apps/groups` 当成一个 id 吃掉，
+ *    表现是"分组管理页永远 404，而且报的是'不是内置应用'"，很难往路由顺序上想。
+ *
+ * 设计口径见 appgroups.js 开头：
+ *    · 出厂组只改名 / 调序 / 收起，**不提供删除**（删了应用会集体消失）；
+ *    · 自定义组允许删，但组里还有应用时会拦下来。
+ */
+
+/** 当前分组清单（含每组挂了几个应用 —— 收起/删除前让人知道影响面） */
+router.get('/apps/groups', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const overrides = appoverrides.map();
+  res.json({
+    groups: appgroups.view(overrides),
+    factoryKeys: appregistry.DEFAULT_GROUPS.map((g) => g.key),
+    labelMax: appgroups.LABEL_MAX,
+  });
+});
+
+/** 新建分组 */
+router.post('/apps/groups', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const body = req.body || {};
+  const key = String(body.key || '').trim();
+  const r = appgroups.set(key, { label: body.label, sort: body.sort, hidden: false }, u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, groups: appgroups.view(appoverrides.map()), message: `已新增分组「${(body.label || '').trim()}」` });
+});
+
+/** 改一个组（改名 / 调序 / 收起） */
+router.patch('/apps/groups/:key', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const r = appgroups.set(req.params.key, req.body || {}, u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({
+    ok: true, groups: appgroups.view(appoverrides.map()), group: r.group,
+    message: r.message || `已保存：${r.group ? `「${r.group.label}」` : '已恢复出厂设置'}`,
+  });
+});
+
+/** 删一个组（只删管理台新建的；组里还有应用时会被 appgroups.remove 拦下） */
+router.delete('/apps/groups/:key', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  // 必须把应用覆盖带进去：管理员可能已经把应用挪进这个组了
+  const r = appgroups.remove(req.params.key, appoverrides.map());
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, groups: appgroups.view(appoverrides.map()), message: '已删除分组' });
+});
+
+/* ==================== 工作台公告（v0.22.0：管理台可配） ====================
+ * 与分组同族，也同样必须排在 `/admin/apps/:id` 之前。
+ */
+
+router.get('/apps/notices', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json({
+    notices: appnotice.listAll(),
+    textMax: appnotice.TEXT_MAX,
+    maxDownload: appnotice.MAX_DOWNLOAD,
+    enabled: appnotice.listEnabled(),
+  });
+});
+
+router.post('/apps/notices', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const body = req.body || {};
+  const r = appnotice.add(body.text, u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, notices: appnotice.listAll(), message: '公告已发布（客户端下次启动就能看到）' });
+});
+
+router.patch('/apps/notices/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const r = appnotice.update(req.params.id, req.body || {}, u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, notices: appnotice.listAll(), message: '已保存' });
+});
+
+router.delete('/apps/notices/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const r = appnotice.remove(req.params.id);
+  if (!r.removed) return res.status(404).json({ error: '公告不存在' });
+  res.json({ ok: true, notices: appnotice.listAll(), message: '已删除' });
+});
+
+/** 清理已停用的公告（生效中的不动） */
+router.post('/apps/notices/purge', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const r = appnotice.purgeDisabled();
+  res.json({ ok: true, notices: appnotice.listAll(), removed: r.removed, message: `已清理 ${r.removed} 条已停用的公告` });
 });
 
 /* ==================== 应用管理（v0.21.0：每个应用一个抽屉） ====================

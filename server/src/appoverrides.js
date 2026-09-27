@@ -35,6 +35,7 @@
 const db = require('./db');
 const appregistry = require('./apps');
 const appmodules = require('./appmodules');
+const appgroups = require('./appgroups');
 
 const TITLE_MAX = 12;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
@@ -150,6 +151,24 @@ CREATE TABLE IF NOT EXISTS app_overrides (
 );
 `);
 
+/**
+ * 分组 / 配色是 v0.22.0 才有的两列。老库没有它们，而 `CREATE TABLE IF NOT EXISTS`
+ * 对已经存在的表是**空操作**（一行都不补），所以这里必须自己 ALTER 兜住 ——
+ * 否则老库一启动，下面 `SELECT *` 读出来的行里就没有 group/color，
+ * 表现出来是"管理员配了颜色，工作台一点反应没有"，而且不报任何错。
+ * ⚠️ 只往后追加，别插到中间（SQLite 的 ALTER 追加列，位置动了会咬到别的迁移）。
+ */
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare('SELECT name FROM pragma_table_info(?)').all(table);
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    console.log(`[小智IM] 迁移：${table}.${column} 已添加`);
+  }
+}
+// ⚠️ `group` 是 SQLite 关键字，SQL 里必须加双引号，否则报 syntax error
+ensureColumn('app_overrides', 'group', '"group" TEXT');  // 挪到别的分组（也可以填自定义组名）
+ensureColumn('app_overrides', 'color', 'color TEXT');  // 图标底色 #RRGGBB；NULL = 用出厂色
+
 /* ---------------- 读 ---------------- */
 
 function rowToOverride(r) {
@@ -160,6 +179,8 @@ function rowToOverride(r) {
     title: r.title || null,
     icon: r.icon || null,
     sort: r.sort == null ? null : Number(r.sort),
+    group: r.group || null,
+    color: r.color || null,
     disabled: !!r.disabled,
     params: isObj(params) ? params : {},
     updatedAt: r.updated_at,
@@ -229,6 +250,8 @@ function applyTo(app, ov) {
     title: ov.title || app.title,
     icon: ov.icon || app.icon,
     sort: ov.sort == null ? app.sort : ov.sort,
+    group: ov.group || app.group,
+    color: ov.color || app.color || null,
     disabled: !!ov.disabled,
   };
 }
@@ -283,10 +306,12 @@ function set(appId, patch, by) {
   if (!factory) return { error: `不是内置应用：${id || '(空)'}` };
   if (!isObj(patch)) return { error: '提交内容必须是一个对象' };
 
-  const cur = get(id) || { title: null, icon: null, sort: null, disabled: false, params: {} };
+  const cur = get(id) || { title: null, icon: null, sort: null, group: null, color: null, disabled: false, params: {} };
   let title = cur.title;
   let icon = cur.icon;
   let sort = cur.sort;
+  let group = cur.group;
+  let color = cur.color;
   let disabled = !!cur.disabled;
   const params = { ...cur.params };
 
@@ -322,6 +347,31 @@ function set(appId, patch, by) {
     }
   }
 
+  // 挪分组：清空 = 回到出厂组；填了值就得是个能用的组名
+  // （自定义组由管理台先建，这里只校验"这个组存不存在"）。
+  // 不校验的话管理员会把应用挪到一个还没人用、也还没建的组里，
+  // 结果就是那个应用在工作台彻底消失、管理台列表里却还在 —— 最难查那种。
+  if ('group' in patch) {
+    if (patch.group === null || patch.group === '') group = null;
+    else {
+      const g = String(patch.group).trim();
+      if (!g) group = null;
+      else if (!appgroups.exists(g)) return { error: `分组 ${g} 不存在（请先到「分组管理」新建）` };
+      else group = g;
+    }
+  }
+
+  // 图标底色：必须是个颜色。写错了的表现是图标变成一片黑或透明，
+  // 不报错、也不难看，但就是"配了没效果" —— 所以在这里就挡住。
+  if ('color' in patch) {
+    if (patch.color === null || patch.color === '') color = null;
+    else {
+      const c = String(patch.color).trim();
+      if (!/^#[0-9A-Fa-f]{6}$/.test(c)) return { error: `配色需要是 #RRGGBB 格式（例：#2B6FE0），当前：${c}` };
+      color = c.toUpperCase();
+    }
+  }
+
   if ('disabled' in patch) disabled = !!patch.disabled;
 
   if ('params' in patch && patch.params !== null && patch.params !== undefined) {
@@ -346,14 +396,15 @@ function set(appId, patch, by) {
 
   const now = Date.now();
   db.prepare(`
-    INSERT INTO app_overrides (app_id, title, icon, sort, disabled, params, updated_at, updated_by)
-    VALUES (?,?,?,?,?,?,?,?)
+    INSERT INTO app_overrides (app_id, title, icon, sort, "group", color, disabled, params, updated_at, updated_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(app_id) DO UPDATE SET
       title=excluded.title, icon=excluded.icon, sort=excluded.sort,
+      "group"=excluded."group", color=excluded.color,
       disabled=excluded.disabled, params=excluded.params,
       updated_at=excluded.updated_at, updated_by=excluded.updated_by
   `).run(
-    id, title, icon, sort, disabled ? 1 : 0, JSON.stringify(params),
+    id, title, icon, sort, group, color, disabled ? 1 : 0, JSON.stringify(params),
     now, String(by || 'admin').slice(0, 60),
   );
 
@@ -368,7 +419,7 @@ function set(appId, patch, by) {
 
 /** 这一行是不是跟出厂完全一样（用来决定要不要保留这行） */
 function isPristine(ov) {
-  return !ov.title && !ov.icon && ov.sort == null && !ov.disabled
+  return !ov.title && !ov.icon && ov.sort == null && !ov.group && !ov.color && !ov.disabled
     && (!ov.params || Object.keys(ov.params).length === 0);
 }
 
@@ -406,15 +457,17 @@ function view(appId, ctx) {
     id: factory.id,
     factory: {
       title: factory.title, icon: factory.icon, group: factory.group,
+      color: factory.color || null,
       desc: factory.desc, sort: null, need: factory.need || null,
     },
     override: ov ? {
-      title: ov.title, icon: ov.icon, sort: ov.sort,
+      title: ov.title, icon: ov.icon, sort: ov.sort, group: ov.group, color: ov.color,
       disabled: ov.disabled, params: ov.params,
       updatedAt: ov.updatedAt, updatedBy: ov.updatedBy,
     } : null,
     effective: {
       title: merged.title, icon: merged.icon, group: merged.group,
+      color: merged.color || null,
       desc: merged.desc, sort: merged.sort, disabled: merged.disabled,
     },
     changed: !!ov,
@@ -430,6 +483,12 @@ function changedFieldsOf(factory, ov) {
   if (ov.title && ov.title !== factory.title) out.push({ key: 'title', label: '名称', from: factory.title, to: ov.title });
   if (ov.icon && ov.icon !== factory.icon) out.push({ key: 'icon', label: '图标', from: factory.icon, to: ov.icon });
   if (ov.sort != null) out.push({ key: 'sort', label: '排序', from: null, to: ov.sort });
+  if (ov.group && ov.group !== factory.group) {
+    out.push({ key: 'group', label: '分组', from: factory.group, to: ov.group });
+  }
+  if (ov.color && ov.color !== (factory.color || null)) {
+    out.push({ key: 'color', label: '配色', from: factory.color || null, to: ov.color });
+  }
   if (ov.disabled) out.push({ key: 'disabled', label: '停用', from: false, to: true });
   for (const [k, v] of Object.entries(ov.params || {})) {
     const def = paramDefOf(factory.id, k);

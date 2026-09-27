@@ -12,6 +12,8 @@ const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
 const appregistry = require('../apps');
 const appoverrides = require('../appoverrides');
+const appgroups = require('../appgroups');
+const appnotice = require('../appnotice');
 const attendance = require('../attendance');
 const settings = require('../settings');
 const push = require('../push');
@@ -97,9 +99,11 @@ router.get('/apps', (req, res) => {
   const hasOrg = !!org && (me.org_id === org.id || me.role === 'admin');
 
   const cv = String(req.query.clientVersion || '');
+  const groupOverrides = appgroups.map();
   let builtin = appregistry.listFor(
     { friendMode, attendanceEnabled: attEnabled, hasOrg, role: me.role },
     appoverrides.map(),
+    groupOverrides,
   );
 
   // 生效参数（出厂默认 + 覆盖）替换掉清单里的"覆盖增量"：
@@ -155,9 +159,12 @@ router.get('/apps', (req, res) => {
     }
   }
 
+  // 动态模块固定在 custom 组：它有自己的编辑器，不跟着分组管理走
+  // （否则"改一个模块属于哪个组"会同时有两个入口，改完不知道以哪个为准）。
   const dynamic = appmodules.listVisible({ userId: uid, role: me.role, clientVersion: cv })
     .map((m) => ({
       id: m.moduleId, title: m.title, icon: m.icon, group: 'custom',
+      groupLabel: groupOverrides['custom']?.label || '自定义应用',
       desc: '', kind: 'dynamic', sort: m.sort,
       // 把最低版本要求一起下发：服务端已经按 cv 过滤过，客户端仍会**再卡一次**
       // （老客户端连 `?clientVersion=` 都可能没带，那时 cv 为空、这里全部被过滤掉，
@@ -165,9 +172,21 @@ router.get('/apps', (req, res) => {
       minVersion: m.minClientVersion || '',
     }));
 
+  // 分组清单：应用里真的用到的 key 一律补齐（管理员新建的组也在里面），
+  // 免得客户端查不到组名、把组头显示成英文 key。
+  // 🔴 收起的组不下发 —— 客户端本来也不该知道"隐藏了什么"，
+  //    知道了反而要写一套"看见了但故意不显示"的逻辑，纯属自找麻烦。
+  const usedKeys = new Set([
+    ...builtin.map((a) => a.group),
+    ...dynamic.map((a) => a.group),
+  ]);
+  const groups = appgroups.forClient(usedKeys).filter((g) => !g.hidden);
+
   res.json({
     apps: [...builtin, ...dynamic],
-    groups: appregistry.GROUPS,
+    groups,
+    // 工作台顶部公告（最多 3 条，见 appnotice.js 的说明）
+    notices: appnotice.listEnabled(),
     workMode: friendMode,
     ts: now,
   });
