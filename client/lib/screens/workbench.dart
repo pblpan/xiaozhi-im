@@ -68,7 +68,12 @@ List<Map<String, Object?>> workbenchSections({
     out.add({
       'label': g['label']?.toString() ?? key,
       '_items': items,
-      '_sort': groups.indexOf(g),
+      // 🔴 组序真正的判据是**服务端下发的 sort**，不是清单里的下标。
+      //    用 indexOf 的话，只要服务端下发顺序没跟 sort 走一遍（比如某个
+      //    中间层重新排序、或者将来管理台的排序存丢了），管理员拖的顺序就
+      //    悄悄失效 —— 而且怎么测都"对"，因为两边的顺序恰好一致。
+      //    只有真的下发了一个 sort 与位置不符的数据，才会暴露。
+      '_sort': (g['sort'] is int) ? g['sort'] as int : groups.indexOf(g),
     });
   }
   // 组外应用兜底

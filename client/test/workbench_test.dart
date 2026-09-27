@@ -11,7 +11,7 @@ import 'support/api_stub.dart';
 ///
 /// 这一页最容易出的错不是崩溃，而是"配了没反应"：组名写死在客户端、
 /// 图标底色没接服务端下发、公告压根没渲染。这三样在 `flutter analyze`
-///  단계 全都是绿的，只有真的渲染一遍才看得见。
+/// 阶段全都是绿的，只有真的渲染一遍才看得见。
 ///
 /// 所以这里用**真 HTTP 桩**（不起真服务器进程，但请求真的发出去、真的解析），
 /// 而不是把 http 换成 mock：字段名读错一个字母，mock 会照旧"通过"。
@@ -55,8 +55,15 @@ void main() {
 
   /// 手机宽度（4 列的那一档）。桌面宽屏走的是同一套代码、更多列，不用重复测。
   Future<void> pumpPhone(WidgetTester t, Map<String, Object?> body) async {
-    t.binding.setSurfaceSize(const Size(400, 800));
-    addTearDown(() => t.binding.setSurfaceSize(null));
+    // 🔴 `setSurfaceSize` 返回的是 Future（受 TestAsyncUtils 保护）。
+    //    不加 await 就接着调 pumpWidget，报的是
+    //    "Guarded function conflict / You must use await with all Future-returning
+    //    test APIs" —— **指向的是这一行，但真正的错是漏了 await**。
+    //    这轮的 7 条测试全挂在这上面，一条都没走到断言。
+    await t.binding.setSurfaceSize(const Size(400, 800));
+    addTearDown(() async {
+      await t.binding.setSurfaceSize(null);
+    });
     stub.on('GET', '/api/client/apps', (r) => body);
     await t.pumpWidget(const MaterialApp(home: Scaffold(body: WorkbenchPage())));
     // runAsync：把真实时间借给 HTTP（真 socket），假时钟下永远等不到回包
@@ -65,7 +72,19 @@ void main() {
       await t.pump(const Duration(milliseconds: 20));
       if (find.byType(GridView).evaluate().isNotEmpty) return;
     }
-    fail('等待工作台渲染超时：服务端没回，或 apps 全被客户端跳过了');
+    // 🔴 超时时把"此刻页面上到底有什么"打出来。
+    //    不然报错只有一句"等待超时"，下一轮排查还是靠猜：
+    //    到底是请求没发出去（桩 404）、apps 全被客户端跳过（字段读错），
+    //    还是根本渲染到另一棵树上。
+    final texts = find
+        .byType(Text)
+        .evaluate()
+        .map((e) => (e.widget as Text).data ?? '')
+        .where((s) => s.isNotEmpty)
+        .toList();
+    fail('等待工作台渲染超时（服务端没回，或 apps 全被客户端跳过）\n'
+        '  桩收到过的请求：${stub.calls.map((c) => '${c.method} ${c.path}').toList()}\n'
+        '  此刻页面上的文字：$texts');
   }
 
   setUp(() async {
