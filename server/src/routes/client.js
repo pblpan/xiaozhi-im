@@ -11,6 +11,7 @@ const { verifyToken } = require('../auth');
 const clientconfig = require('../clientconfig');
 const appmodules = require('../appmodules');
 const appregistry = require('../apps');
+const { moduleColorOf } = require('../apps');
 const appoverrides = require('../appoverrides');
 const appgroups = require('../appgroups');
 const appnotice = require('../appnotice');
@@ -165,6 +166,9 @@ router.get('/apps', (req, res) => {
     .map((m) => ({
       id: m.moduleId, title: m.title, icon: m.icon, group: 'custom',
       groupLabel: groupOverrides['custom']?.label || '自定义应用',
+      // 🔴 动态模块**必须带 color**：客户端没有 color 就退回品牌色，于是
+      //    "所有没配色的模块长一个样"。管理台不强制填色，这里兜底（见 apps.js）。
+      color: moduleColorOf(m.color, m.moduleId),
       desc: '', kind: 'dynamic', sort: m.sort,
       // 把最低版本要求一起下发：服务端已经按 cv 过滤过，客户端仍会**再卡一次**
       // （老客户端连 `?clientVersion=` 都可能没带，那时 cv 为空、这里全部被过滤掉，

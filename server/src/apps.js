@@ -369,7 +369,44 @@ function catalog(overrides, groupOverrides) {
   });
 }
 
+/**
+ * 动态模块（自定义应用）的图标底色。
+ *
+ * 🔴 背景（2026-09-27 线上实测抓到的）：`daily_sales` 这种动态模块**没有 color**，
+ *    客户端 `workbenchAppColor` 会退回品牌色 —— 于是"所有没配色的模块长得一模一样"，
+ *    正是这一轮要消灭的"一排同色图标"。管理台又不强制填色（填了才好看），
+ *    所以得有个不依赖人去填的兜底。
+ *
+ * 三条规则，按优先级：
+ *   ① 模块自己写了 `#RRGGBB`（管理台编辑器的语义枚举之外的自由填色）→ 用它；
+ *   ② 模块写了语义色（primary / danger / success / warning …）→ 映射到对应的十六进制；
+ *   ③ 都没写 → 按 moduleId **稳定地**取色板里一个（同一个模块每次都是同一个颜色，
+ *      不会刷新一次变一个色 —— 变色的图标比没有图标更让人找不到）。
+ */
+const MODULE_COLOR_PALETTE = [
+  '#2E8BC0', '#8250DF', '#C2185B', '#1F7A3D',
+  '#E07B00', '#0E7490', '#7A4FD1', '#B4332E',
+];
+
+const SEMANTIC_COLORS = {
+  primary: '#10B981', muted: '#64748B', danger: '#F4685E',
+  success: '#14B8A6', warning: '#E8A33D', default: '#475569',
+};
+
+function moduleColorOf(raw, moduleId) {
+  const v = String(raw == null ? '' : raw).trim();
+  if (/^#[0-9A-Fa-f]{6}$/.test(v)) return v;
+  if (SEMANTIC_COLORS[v]) return SEMANTIC_COLORS[v];
+  // ③ 稳定散列：别用随机，也不要用数组下标（模块一排序颜色就跟着跳）
+  let h = 0;
+  for (let i = 0; i < String(moduleId || '').length; i++) {
+    h = (h * 31 + String(moduleId).charCodeAt(i)) >>> 0;
+  }
+  return MODULE_COLOR_PALETTE[h % MODULE_COLOR_PALETTE.length];
+}
+
 module.exports = {
   GROUPS, DEFAULT_GROUPS, groupOf,
   BUILTIN_APPS, listFor, catalog,
+  MODULE_COLOR_PALETTE, moduleColorOf,
 };

@@ -84,6 +84,27 @@ ok('清回出厂后不留覆盖行', s5.override === null, s5);
 const r9 = appgroups.remove('custom');
 ok('出厂组 custom 删不掉', !!r9.error, r9);
 
+console.log('— 动态模块配色（管理台没填也不能全一个色）—');
+{
+  const { moduleColorOf, MODULE_COLOR_PALETTE } = appregistry;
+  // 🔴 这是线上实测抓到的：`daily_sales` 没配 color，客户端会退回品牌色，
+  //    于是"所有没配色的模块长得一模一样"。
+  const c = moduleColorOf(undefined, 'daily_sales');
+  ok('没填配色也有颜色', /^#[0-9A-Fa-f]{6}$/.test(c), c);
+  ok('同一个模块每次都是同一个色（刷新一次变一个色比没有更糟）',
+     moduleColorOf(undefined, 'daily_sales') === c);
+  ok('不同模块尽量分开色（一排同色就白做了）',
+     new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((k) => moduleColorOf(undefined, k))).size >= 6,
+     [...new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((k) => moduleColorOf(undefined, k)))]);
+  ok('色板不是只有一个色', MODULE_COLOR_PALETTE.length >= 4, MODULE_COLOR_PALETTE.length + ' 色');
+  // 管理台的语义枚举（primary/danger/success/…）也要能落到十六进制，
+  // 否则模块"选了红色"在工作台上还是显示成品牌色。
+  ok('语义色 danger → 十六进制', moduleColorOf('danger', 'x') !== moduleColorOf(undefined, 'x')
+     || /^#[0-9A-Fa-f]{6}$/.test(moduleColorOf('danger', 'x')), moduleColorOf('danger', 'x'));
+  ok('自由填的 #RRGGBB 原样用', moduleColorOf('#ABCDEF', 'x') === '#ABCDEF');
+  ok('脏值（red）也能给个合法色', /^#[0-9A-Fa-f]{6}$/.test(moduleColorOf('red', 'x')));
+}
+
 console.log('— 公告 —');
 ok('初始为空', appnotice.listEnabled().length === 0);
 const n1 = appnotice.add('明天盘点，9 点前归位', 'tester');

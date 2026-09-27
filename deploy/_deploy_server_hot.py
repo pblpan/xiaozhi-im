@@ -63,6 +63,13 @@ FILES = [
     'src/appguard.js',
     'src/appoverrides.js',
     'src/apps.js',
+    # 🔴 2026-09-27 工作台那轮新增/改动的六个（漏一个的后果都是"代码推了、
+    #    功能没上线"，而且不报错：文件不在就 404，文件是旧版就走老逻辑）。
+    #    apps.js 这里早就有了；补的是下面这五个：
+    'src/appgroups.js',       # 新：分组可配 app_groups 表
+    'src/appnotice.js',       # 新：工作台公告 workbench_notices 表
+    'src/routes/admin.js',    # 9 条管理台路由（插在 /admin/apps/:id 之前）
+    'src/routes/client.js',   # /api/client/apps 下发 groups + notices
     'src/db.js',
     'src/index.js',
     'src/routes/deduct.js',
