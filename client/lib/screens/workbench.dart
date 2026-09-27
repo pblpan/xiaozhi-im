@@ -326,15 +326,26 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           ),
           SliverToBoxAdapter(child: _grid(_shown)),
         ] else ...[
-          ...sections.map(
-            (s) => SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-                child: _sectionTitle(s['label']?.toString() ?? ''),
+          // 🔴 必须是**一个循环里「标题 + 它自己的网格」交替出**，不能写成
+          //    两次 sections.map（先把所有标题铺完、再铺所有网格）。
+          //
+          // 2026-09-27 真机踩到的坑：写成了
+          //     ...sections.map(标题)
+          //     ...sections.map(网格)
+          // 手机上的样子是「考勤管理」「超市应用」两个标题**叠在顶上**，
+          // 底下跟着一整片网格 —— 于是「组织通讯录 / 考勤记录」明明是考勤组
+          // 的，却被压在「超市应用」标题下面，看着就像两组重叠、也没分开。
+          // 分组数据、组序（都是服务端下发的 sort）其实一直是对的，
+          // **错的只有渲染顺序**。
+          for (final s in sections) ...[
+            SliverToBoxAdapter(
+              child: _sectionTitleBar(
+                s['label']?.toString() ?? '',
+                count: (s['_items'] as List).length,
               ),
             ),
-          ),
-          ...sections.map((s) => SliverToBoxAdapter(child: _grid(s['_items'] as List))),
+            SliverToBoxAdapter(child: _grid(s['_items'] as List)),
+          ],
         ],
         const SliverToBoxAdapter(child: SizedBox(height: 28)),
       ],
@@ -386,24 +397,48 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  Widget _sectionTitle(String t) {
+  /// 分组标题栏：组名 + 右侧该组的应用数。
+  ///
+  /// 带上数量是为了让"这一组的边界在哪"一眼可辨 —— 只有一行小标题贴着
+  /// 下一组的网格时，管理员很难判断上排那两个格子到底归谁。
+  /// 标题上方留 20 的间距，避免两组贴在一起看不出分段。
+  Widget _sectionTitleBar(String t, {int count = 0}) {
     final sem = AppSemantic.of(context);
-    return Text(t,
-        style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: sem.muted,
-            letterSpacing: 0.5));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 20, 14, 10),
+      child: Row(
+        children: [
+          Text(t,
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: sem.muted,
+                  letterSpacing: 0.5)),
+          if (count > 0) ...[
+            const SizedBox(width: 8),
+            Text('$count',
+                style: TextStyle(fontSize: 12, color: sem.muted.withOpacity(0.65))),
+          ],
+        ],
+      ),
+    );
   }
 
   /// 统一的彩色图标网格。
+  /// 统一的彩色图标网格。
+  ///
+  /// 🔴 列数要按**扣掉左右边距之后**的宽度算。不扣的话，宽屏刚好卡在阈值上
+  /// 会出现"格子被挤出屏幕边缘"的半列。
   Widget _grid(List list) {
     return LayoutBuilder(builder: (ctx, c) {
+      // 网格自带左右 14 的边距（格子不再贴着屏幕边，那也是"排版乱"的一部分）
+      final inner = (c.maxWidth - 28).clamp(0.0, double.infinity);
       return GridView.count(
         key: ValueKey('grid_$_kw'),
-        crossAxisCount: workbenchColumns(c.maxWidth),
+        crossAxisCount: workbenchColumns(inner),
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
         mainAxisSpacing: 14,
         crossAxisSpacing: 14,
         childAspectRatio: 1 / 1.15,
@@ -423,16 +458,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       borderRadius: BorderRadius.circular(AppRadii.md),
       onTap: () => _open(app),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         decoration: BoxDecoration(
           color: sem.cardBg,
           borderRadius: BorderRadius.circular(AppRadii.md),
           border: Border.all(color: sem.cardBorder),
         ),
-        child: Stack(
+        child: // 🔴 这里必须写 StackFit.expand + Alignment.center。
+            //
+            // Stack 默认 fit=loose、alignment=topStart：它的尺寸是"最大非定位
+            // 子件"的尺寸，而子件 Column 的宽度又只跟**文字本身的宽度**走。
+            // 于是格子一宽（宽屏 8 列）、标题一短（"盘点"两个字），
+            // Stack 就比格子窄，被 Container 按默认摆到左上 ——
+            // 图标就"偏左、看着不居中"；带上角标时更明显（部分定位的子件
+            // 会参与撑尺寸，Stack 又被撑成另一个大小，图标位置跟着跳）。
+            // 改成 expand + center 之后：Stack 严格铺满格子，Column 在里头
+            // 上下左右都居中，跟标题长短、有没有角标都无关。
+            Stack(
+          fit: StackFit.expand,
+          alignment: Alignment.center,
           children: [
             Column(
               mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 // 彩色圆底：圆角比图标本身大一圈是刻意的，企微/飞书都是圆的
                 Container(

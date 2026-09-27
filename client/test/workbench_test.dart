@@ -185,6 +185,48 @@ void main() {
     expect(titles, ['自建', '办公协同']);
   });
 
+  // 🔴 这条钉的是**渲染顺序**，不是分组数据。
+  //
+  // 2026-09-27 真机反馈：「考勤管理和超市应用没有分开」「正常在考勤管理里的
+  // 图标跟超市应用的图标重叠」。查下来数据完全对 —— 组序（按服务端 sort）、
+  // 每组的应用都对，错的只有渲染：build 里写成了
+  //     ...sections.map(标题)          ← 两个标题先后出来
+  //     ...sections.map(网格)          ← 两个网格再先后出来
+  // 于是「考勤管理」「超市应用」两行标题叠在顶上，下面跟着一整片网格，
+  // 「组织通讯录 / 考勤记录」被压在「超市应用」标题下面 —— 改管理台怎么调
+  // 都没用，因为**根本不是数据问题**。
+  //
+  // 上面那条「分组顺序按 sort」的测试**抓不到这个 bug**（标题顺序本来就是对的），
+  // 所以必须有一条比对「标题和网格在屏幕上的前后关系」的。
+  testWidgets('每个分组的标题紧跟它自己的网格（标题不许全挤在顶上）', (t) async {
+    await pumpPhone(t, payload());
+    final t1 = t.getTopLeft(find.text('办公协同')).dy;
+    final t2 = t.getTopLeft(find.text('自建')).dy;
+    expect(find.byType(GridView), findsNWidgets(2), reason: '两个分组各有一个网格');
+    final g1 = t.getTopLeft(find.byType(GridView).at(0)).dy;
+    final g2 = t.getTopLeft(find.byType(GridView).at(1)).dy;
+
+    // 必须交错：标题1 < 网格1 < 标题2 < 网格2
+    expect(t1 < g1, isTrue, reason: '第一组标题应在第一组网格之上');
+    expect(g1 < t2, isTrue, reason: '第一组网格应在第二组标题之上（否则两组标题全挤在顶上）');
+    expect(t2 < g2, isTrue, reason: '第二组标题应在第二组网格之上');
+  });
+
+  testWidgets('格子里的 Stack 铺满并居中（图标不随标题长短左右漂）', (t) async {
+    await pumpPhone(t, payload());
+    final stacks = find
+        .descendant(of: find.byType(GridView).first, matching: find.byType(Stack))
+        .evaluate()
+        .map((e) => e.widget as Stack)
+        .toList();
+    expect(stacks, isNotEmpty, reason: '格子应当用 Stack 叠角标');
+    for (final s in stacks) {
+      // Stack 默认 loose + topStart：宽度只跟文字走，格子一宽图标就偏左上
+      expect(s.fit, StackFit.expand, reason: '格子里的 Stack 必须 expand 铺满');
+      expect(s.alignment, Alignment.center, reason: '格子里的 Stack 必须居中对齐');
+    }
+  });
+
   testWidgets('顶部公告显示服务端下发的文字', (t) async {
     await pumpPhone(t, payload());
     expect(find.text('明天盘点，全店 9 点前把货架归位'), findsOneWidget);
