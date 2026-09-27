@@ -27,6 +27,7 @@ import argparse
 import os
 import re
 import shlex
+import subprocess
 import sys
 import time
 
@@ -75,6 +76,15 @@ FILES = [
     'src/routes/deduct.js',
     'src/routes/inventory.js',
     'src/routes/training.js',
+    # 🔴 2026-09-27 晚「远程协助默认控制码」那轮补的：
+    #    settings.js 加 remoteDefaultCodeId 键、remote.js 加三个默认码函数。
+    #    第一次推的时候**这两个都不在清单里** —— 结果 admin.js 上去了、
+    #    它 require 的 remote.js 还是旧的，接口直接 500（返回 HTML 错误页）。
+    #    症状很坑：未登录访问照样 401（看着像"上线了"），只有带上管理员
+    #    token 才 500。别只看 401 就报成功。
+    'src/settings.js',
+    'src/remote.js',
+    'src/routes/remote.js',
     'public/index.html',
     # 🔴 管理台的 bundle 名**不再写死在这里**（2026-09-27 改）。
     #    原因：vite 每次构建产物的文件名都带新哈希（index-XXXX.js），
@@ -87,6 +97,38 @@ FILES = [
     # ⚠️ 唯一要守的规矩还是那条：index.html 与它引用的 assets **必须同批上传**。
     #    asset_files() 保证了两者同源，天然满足。
 ]
+
+
+def unlisted_changed(files):
+    """server 目录下**有改动却不在 FILES 清单里**的文件。
+
+    FILES 是手工清单，漏一个的后果是"代码推了、功能没上线"而且不报错 ——
+    所以每次都拿 git 兜一遍。只看 server/（客户端与管理台源码不进这个容器）。
+    """
+    try:
+        out = subprocess.run(
+            ['git', '-C', REPO, 'status', '--porcelain', '--', 'server'],
+            capture_output=True, text=True, timeout=20,
+        ).stdout
+    except Exception:
+        return []          # git 不可用/不是仓库时静默跳过，不阻断部署
+
+    listed = {f.replace('\\', '/') for f in files}
+    changed = []
+    for line in out.splitlines():
+        if len(line) < 4:
+            continue
+        p = line[3:].strip().replace('\\', '/')
+        if p.startswith('server/'):
+            p = p[len('server/'):]
+        if not p.startswith('src/') and not p.startswith('public/'):
+            continue
+        # 新产物（带哈希的 assets）由 asset_files() 现读，不算漏
+        if p.startswith('public/assets/'):
+            continue
+        if p not in listed:
+            changed.append(p)
+    return changed
 
 
 def asset_files():
@@ -303,6 +345,19 @@ def main():
     if missing:
         print('本地缺文件，不传：', missing)
         return 2
+
+    # 🔴 护栏：这个 FILES 清单是**手工维护**的，"靠人记得同步"早晚会漏 ——
+    #    2026-09-27 就漏了 settings.js / remote.js，结果 admin.js 推上去了、
+    #    它 require 的模块还是旧的，接口直接 500。
+    #    所以每次部署都拿 git 比对一次：server 目录下有改动却不在清单里的，
+    #    在这里喊出来（不阻断，但很难看不见）。
+    unlisted = unlisted_changed(files)
+    if unlisted:
+        print('\n⚠️⚠️ 下面这些文件**改过但不在上传清单里**，线上还是旧的：')
+        for f in unlisted:
+            print('     - ' + f)
+        print('   确认故意不传就忽略；否则把它们加进上面的 FILES 再跑一次。')
+        print('   （漏传的文件不报错：require 到旧版本就走老逻辑，功能"看着上了其实没上"）')
 
     print('\n=== 将上传 %d 个文件 ===' % len(files))
     for f in files:

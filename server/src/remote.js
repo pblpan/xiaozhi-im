@@ -26,6 +26,7 @@
 const crypto = require('crypto');
 const db = require('./db');
 const hub = require('./hub');
+const settings = require('./settings');
 
 /** 有人值守：敲门后多久没人理就算超时（可用 REMOTE_RING_TIMEOUT_MS 覆盖，方便测试） */
 const RING_TIMEOUT_MS = Number(process.env.REMOTE_RING_TIMEOUT_MS || 45 * 1000);
@@ -515,6 +516,92 @@ function revokeCode({ userId, id }) {
   return { ok: r.changes > 0 };
 }
 
+// ---- 默认控制码（管理台维护，给管理员做远程维护用）----
+//
+// 它**不是**一种新的码，就是一枚普通的访问码，只是被 settings 记住了 id：
+//   · 明文同样只在生成的那一秒回一次，之后只能"吊销重发"；
+//   · 同样走访问码的哈希校验 + 兑换限流 + 10 秒撤销窗口；
+//   · 「默认」二字只表示"管理台统一维护的那一把"，不表示权限更大。
+// 之所以要它：员工自己生成的码是**他个人**的钥匙，管理员要维护门店/前台那台
+// 常开的机器时，不可能每次都让人家跑一趟去点"生成访问码"。
+
+function defaultCodeId() {
+  const v = settings.get('remoteDefaultCodeId');
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** 默认控制码的元信息（**永不含明文**）。没设过返回 { code: null }。 */
+function defaultCodeMeta() {
+  const id = defaultCodeId();
+  if (!id) return { code: null };
+  const r = db.prepare(`
+    SELECT id, user_id, label, single_use, expires_at, use_count, last_used_at,
+           created_at, revoked
+    FROM remote_access_codes WHERE id=?
+  `).get(id);
+  if (!r) return { code: null };   // 记录被清了老数据，按"没设过"处理
+  return {
+    code: {
+      id: r.id,
+      hostId: r.user_id,
+      hostName: nameOf(r.user_id),
+      label: r.label,
+      singleUse: !!r.single_use,
+      expiresAt: r.expires_at,
+      useCount: r.use_count,
+      lastUsedAt: r.last_used_at,
+      createdAt: r.created_at,
+      revoked: !!r.revoked,
+    },
+  };
+}
+
+/**
+ * 生成（或轮换）默认控制码。
+ *
+ * 换码 = 先把旧的吊销，再发新的 —— **不是**改旧记录：
+ * 旧码可能已经发出去被人存着了，吊销才让它立刻失效；改记录等于"换锁不换钥匙"。
+ *
+ * @param {number} hostId 被维护的那台机器归属的账号
+ * @param {string} label  备注
+ * @param {number|null} ttlMinutes 有效期（分钟）；null = 长期
+ */
+function setDefaultCode({ hostId, label, ttlMinutes, by }) {
+  const host = Number(hostId);
+  if (!Number.isInteger(host) || host <= 0) return { error: '请选择被维护的账号' };
+  if (!db.prepare('SELECT id FROM users WHERE id=?').get(host)) {
+    return { error: '该账号不存在' };
+  }
+  // 换码前先撤旧的（旧码可能已泄漏或已发给别人，撤了才真的失效）
+  const oldId = defaultCodeId();
+  if (oldId) {
+    db.prepare('UPDATE remote_access_codes SET revoked=1 WHERE id=?').run(oldId);
+  }
+  const r = createCode({
+    userId: host,
+    label: String(label || '').trim() || '管理台默认维护码',
+    singleUse: false,   // 维护是反复做的事，一次性码第二天就没了
+    ttlMinutes,
+  });
+  if (r.error) return r;
+  const w = settings.setRaw('remoteDefaultCodeId', r.id, by);
+  if (w.error) return w;
+  // ⚠️ 元信息必须放在 **meta** 下，不能直接 `{...defaultCodeMeta()}` 铺开 —
+  //    那样 `code` 会被元信息对象盖掉，调用方拿到的就不是明文了
+  //    （第一次写就是这么错的：管理台显示成 [object Object]）。
+  return { ...r, meta: defaultCodeMeta().code };
+}
+
+/** 吊销默认控制码。怀疑泄漏时的唯一止损手段。 */
+function clearDefaultCode({ by }) {
+  const id = defaultCodeId();
+  if (!id) return { ok: true, revoked: false };
+  db.prepare('UPDATE remote_access_codes SET revoked=1 WHERE id=?').run(id);
+  settings.setRaw('remoteDefaultCodeId', null, by);
+  return { ok: true, revoked: true };
+}
+
 /** 会话历史（审计口径）：我参与过的所有会话，被控与控制都算 */
 function history(userId, limit = 50) {
   const lim = Math.min(200, Math.max(1, Number(limit) || 50));
@@ -567,5 +654,7 @@ module.exports = {
   request, accept, reject, cancel, end, markActive, relay,
   handleOffline, handleOnline, currentOf, publicInfo,
   redeem, createCode, listCodes, revokeCode, history, stats,
+  // 默认控制码（管理台维护）
+  defaultCodeMeta, setDefaultCode, clearDefaultCode,
   _reset,
 };

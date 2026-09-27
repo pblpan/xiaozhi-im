@@ -82,17 +82,87 @@ class _ConnectTab extends StatefulWidget {
   State<_ConnectTab> createState() => _ConnectTabState();
 }
 
+/// 好友显示名：**备注 > 昵称 > 账号**。
+/// 通讯录里我给同事起的备注才是"我叫得出口的名字"，昵称次之。
+String friendDisplayName(Map<String, dynamic> f) {
+  final remark = (f['remark'] ?? '').toString().trim();
+  if (remark.isNotEmpty) return remark;
+  final nick = (f['nickname'] ?? '').toString().trim();
+  if (nick.isNotEmpty) return nick;
+  return (f['username'] ?? '').toString();
+}
+
 class _ConnectTabState extends State<_ConnectTab> {
   final _code = TextEditingController();
   final _target = TextEditingController();
   String? _msg;
   bool _busy = false;
 
+  /// 通讯录好友（选人来发起协助）。
+  ///
+  /// 🔴 之前这一页只能手填**数字账号 ID** —— 而 ID 在界面上根本不显示，
+  ///    员工得先去别处查出自己的 ID 再回来敲，等于"功能有、没人用得起"。
+  ///    工作模式下同事本来就已经互为好友，直接从通讯录里点一个人就够了。
+  List<Map<String, dynamic>> _friends = const [];
+  bool _friendsLoading = false;
+  String? _friendsErr;
+  int? _pickedId;
+  String? _pickedName;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFriends();
+  }
+
   @override
   void dispose() {
     _code.dispose();
     _target.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadFriends() async {
+    setState(() {
+      _friendsLoading = true;
+      _friendsErr = null;
+    });
+    try {
+      final r = await ImApi().friends();
+      final list = (r['friends'] as List? ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _friends = list;
+        _friendsLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _friendsLoading = false;
+        _friendsErr = e.toString();
+      });
+    }
+  }
+
+  Future<void> _pickFriend() async {
+    if (_friends.isEmpty && !_friendsLoading) await _loadFriends();
+    if (!mounted) return;
+    final picked = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.bgElevated,
+      builder: (ctx) => _FriendPickerSheet(friends: _friends),
+    );
+    if (!mounted || picked == null) return;
+    setState(() {
+      _pickedId = (picked['id'] is int) ? picked['id'] as int : int.tryParse('${picked['id']}');
+      _pickedName = friendDisplayName(picked);
+      _target.clear(); // 选了人就别再留着旧的手动 ID，避免"到底发给谁"说不清
+      _msg = null;
+    });
   }
 
   Future<void> _redeem() async {
@@ -112,9 +182,10 @@ class _ConnectTabState extends State<_ConnectTab> {
   }
 
   Future<void> _invite() async {
-    final id = int.tryParse(_target.text.trim());
+    // 选了人就以选的为准；没选才退回手填 ID（管理员连非好友的机器时用）
+    final id = _pickedId ?? int.tryParse(_target.text.trim());
     if (id == null) {
-      setState(() => _msg = '请输入对方的账号 ID（纯数字）');
+      setState(() => _msg = '先从通讯录里选一位同事（或填写对方账号 ID）');
       return;
     }
     final err = await RemoteAssistService.instance.requestFrom(id);
@@ -123,7 +194,7 @@ class _ConnectTabState extends State<_ConnectTab> {
       setState(() => _msg = err);
       return;
     }
-    setState(() => _msg = '已发起请求，等待对方同意…');
+    setState(() => _msg = '已发起请求，等待 ${_pickedName ?? '对方'} 同意…');
   }
 
   Future<void> _openControl() async {
@@ -181,25 +252,79 @@ class _ConnectTabState extends State<_ConnectTab> {
               const Text('请求对方协助', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
               const Text(
-                '对方必须在线并点「同意」才开始。适合临时帮同事处理问题。',
+                '从通讯录里选一位同事，对方点「同意」就开始。适合临时帮同事处理问题。',
                 style: TextStyle(fontSize: 12.5, color: AppColors.textSub, height: 1.5),
               ),
               const SizedBox(height: 12),
+              // 选人：点一下弹通讯录，选完这里显示名字
+              InkWell(
+                onTap: _pickFriend,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: AppColors.border),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(_pickedId == null
+                          ? Icons.person_add_alt_1_rounded
+                          : Icons.person_rounded,
+                          size: 20, color: AppColors.textSub),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _pickedName ?? '从通讯录选择同事…',
+                          style: TextStyle(
+                            fontSize: 15,
+                            color: _pickedName == null
+                                ? AppColors.textWeak
+                                : AppColors.text,
+                          ),
+                        ),
+                      ),
+                      if (_friendsLoading)
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else
+                        const Icon(Icons.chevron_right_rounded,
+                            size: 20, color: AppColors.textWeak),
+                    ],
+                  ),
+                ),
+              ),
+              if (_friendsErr != null) ...[
+                const SizedBox(height: 6),
+                Row(children: [
+                  Expanded(
+                    child: Text('通讯录加载失败：$_friendsErr',
+                        style: const TextStyle(
+                            fontSize: 11.5, color: AppColors.danger)),
+                  ),
+                  TextButton(onPressed: _loadFriends, child: const Text('重试')),
+                ]),
+              ],
+              const SizedBox(height: 10),
               Row(children: [
                 Expanded(
                   child: TextField(
                     controller: _target,
                     keyboardType: TextInputType.number,
                     style: const TextStyle(fontSize: 15),
-                    decoration: const InputDecoration(hintText: '对方账号 ID', isDense: true),
+                    decoration: const InputDecoration(
+                        hintText: '或直接填账号 ID（非好友时用）', isDense: true),
                   ),
                 ),
                 const SizedBox(width: 10),
-                OutlinedButton(onPressed: _invite, child: const Text('发起')),
+                FilledButton(onPressed: _invite, child: const Text('发起')),
               ]),
               const SizedBox(height: 8),
               const Text(
-                '暂时用账号 ID 指定对方。后续会把通讯录好友直接做成选择列表。',
+                '对方必须在线，并在弹出提示里点「同意」才会开始 —— 不会在你不知道的情况下被控。',
                 style: TextStyle(fontSize: 11.5, color: AppColors.textWeak),
               ),
             ],
@@ -237,6 +362,124 @@ class _ConnectTabState extends State<_ConnectTab> {
           },
         ),
       ],
+    );
+  }
+}
+
+/// 选同事的半屏列表（带搜索）。
+///
+/// 通讯录可能有几十上百人，没有搜索就得一路划到底 —— 而"找个人"这件事
+/// 用户心里是有明确目标的，搜索框比分页/分组有用得多。
+class _FriendPickerSheet extends StatefulWidget {
+  final List<Map<String, dynamic>> friends;
+  const _FriendPickerSheet({required this.friends});
+
+  @override
+  State<_FriendPickerSheet> createState() => _FriendPickerSheetState();
+}
+
+class _FriendPickerSheetState extends State<_FriendPickerSheet> {
+  final _q = TextEditingController();
+  String _kw = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _q.addListener(() => setState(() => _kw = _q.text.trim().toLowerCase()));
+  }
+
+  @override
+  void dispose() {
+    _q.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final all = widget.friends;
+    final shown = _kw.isEmpty
+        ? all
+        : all.where((f) {
+            final n = friendDisplayName(f).toLowerCase();
+            final u = (f['username'] ?? '').toString().toLowerCase();
+            return n.contains(_kw) || u.contains(_kw);
+          }).toList();
+
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: Column(
+          children: [
+            const SizedBox(height: 10),
+            const Text('选择同事',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: TextField(
+                controller: _q,
+                style: const TextStyle(fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: '搜名字 / 账号',
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  isDense: true,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.md)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.md)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.md)),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            if (all.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(28),
+                child: Text('通讯录里还没有好友',
+                    style: TextStyle(fontSize: 13, color: AppColors.textSub)),
+              )
+            else if (shown.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(28),
+                child: Text('没找到匹配的人',
+                    style: TextStyle(fontSize: 13, color: AppColors.textSub)),
+              )
+            else
+              Expanded(
+                child: ListView.separated(
+                  itemCount: shown.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final f = shown[i];
+                    final name = friendDisplayName(f);
+                    final uname = (f['username'] ?? '').toString();
+                    return ListTile(
+                      leading: CircleAvatar(
+                        radius: 18,
+                        backgroundColor: AppColors.brand.withValues(alpha: 0.14),
+                        child: Text(
+                          name.isEmpty ? '?' : name.characters.first,
+                          style: const TextStyle(
+                              fontSize: 15, color: AppColors.brand),
+                        ),
+                      ),
+                      title: Text(name, style: const TextStyle(fontSize: 14.5)),
+                      subtitle: uname.isEmpty || uname == name
+                          ? null
+                          : Text(uname,
+                              style: const TextStyle(
+                                  fontSize: 12, color: AppColors.textWeak)),
+                      onTap: () => Navigator.of(context).pop(f),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -36,6 +36,12 @@ const KEYS = Object.freeze({
   // 工厂/门店周末也上班，所以做成可配；节假日不做统一表（各厂不同），
   // 需要放假的日期用「请假/调休」或管理台手工修正处理。
   attWorkdays: { key: 'att_workdays', def: [1, 2, 3, 4, 5] },
+
+  // 🔴 远程协助的「默认控制码」：管理台统一维护、给管理员做远程维护用。
+  //    这里**只存访问码的 id**，不是明文 —— 明文一旦写进 settings 表，
+  //    数据库备份 / 导出 / 任何人查 settings 都能拿到一把能控机器的钥匙。
+  //    明文只在生成的那一秒回给管理台一次，之后只能"吊销重发"。
+  remoteDefaultCodeId: { key: 'remote_default_code_id', def: null },
 });
 
 const COMPANY_MAX = 20;
@@ -91,6 +97,11 @@ function all() {
     attendanceEnabled: get('attendanceEnabled'),
     attDefaultShift: get('attDefaultShift'),
     attWorkdays: get('attWorkdays'),
+    // ⚠️ remoteDefaultCodeId **故意不放进 all()**：all() 会被
+    //    /api/client/bootstrap 铺开出去，而那个接口是**免鉴权**的
+    //    （App 冷启动还没登录就得拿公司名/好友模式）。
+    //    默认控制码是这个服务器的"维护钥匙"，哪怕只漏 id 也越了 §6.1
+    //    的免鉴权硬边界。它只走 /api/admin/remote/default-code。
   };
 }
 
@@ -220,4 +231,6 @@ function update(input, by) {
   return { ok: true, settings: all() };
 }
 
-module.exports = { all, update, cleanCompany, cleanShift, cleanWorkdays, cleanTime, get, KEYS };
+// setRaw 一并导出：远程协助的默认控制码要自己写一项（它没有走 update 的
+// 那套"公司名/好友模式"表单校验），但仍然要落同一张 settings 表。
+module.exports = { all, update, cleanCompany, cleanShift, cleanWorkdays, cleanTime, get, setRaw, KEYS };

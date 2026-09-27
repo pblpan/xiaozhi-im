@@ -14,6 +14,7 @@ const appdata = require('../appdata');
 const upstream = require('../upstream');
 const appregistry = require('../apps');
 const settings = require('../settings');
+const remote = require('../remote');
 const hub = require('../hub');
 const orgs = require('./orgs');
 const paging = require('../paging');
@@ -216,6 +217,40 @@ router.put('/settings', (req, res) => {
     friendMode: r.settings.friendMode,
   });
   res.json(r.settings);
+});
+
+/* ============ 远程协助：默认控制码（管理员远程维护用） ============ */
+//
+// 语义：这把码**就是一枚普通的访问码**，只是由管理台统一生成/轮换/吊销，
+// 并把它的 id 记在 settings 里。明文同样只在生成那一秒回一次。
+// 用途：员工自己生成的码是"他个人的钥匙"；管理员要维护门店/前台那台常开的
+// 机器时，不能每次都让人家跑过去点一次"生成访问码"。
+//
+// ⚠️ 明文绝不进 settings 表 —— settings 会被免鉴权的 /api/client/bootstrap
+//    铺开出去（App 冷启动还没登录就得拿公司名）。这里只回元信息。
+
+router.get('/remote/default-code', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json(remote.defaultCodeMeta());
+});
+
+router.post('/remote/default-code', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const b = req.body || {};
+  const r = remote.setDefaultCode({
+    hostId: b.hostId,
+    label: b.label,
+    ttlMinutes: b.ttlMinutes,
+    by: uid,
+  });
+  if (r.error) return res.status(400).json({ error: r.error });
+  // code 是**唯一一次**能看到明文的机会，前端必须提示当场复制
+  res.json(r);
+});
+
+router.delete('/remote/default-code', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json(remote.clearDefaultCode({ by: uid }));
 });
 
 /* ==================== Users ==================== */

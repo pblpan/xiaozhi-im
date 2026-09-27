@@ -4417,6 +4417,70 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               </el-popconfirm>
             </div>
           </el-card>
+
+          <!-- 远程协助 · 默认控制码 -->
+          <el-card style="margin-top:16px">
+            <template #header>
+              <div class="card-hdr">
+                <span>远程协助 · 默认控制码（管理员远程维护用）</span>
+                <el-button size="small" @click="loadRdc">刷新</el-button>
+              </div>
+            </template>
+
+            <el-alert type="info" :closable="false" style="margin-bottom:14px">
+              <template #title>
+                管理员在客户端输入这把码，就能连上<b>被维护账号</b>那台机器，员工自己不必跑去点「生成访问码」。
+                它<b>就是一枚普通访问码</b> —— 同样只存哈希、同样有 <b>10 秒撤销窗口</b>、同样受撞码限流；
+                「默认」只表示<b>由管理台统一维护</b>，权限并不更大。
+              </template>
+            </el-alert>
+
+            <el-form label-width="120px" style="max-width:680px">
+              <el-form-item label="被维护的账号">
+                <el-select v-model="rdcForm.hostId" filterable placeholder="选这台机器归谁（被控端）" style="width:360px">
+                  <el-option v-for="u in userOptions" :key="u.id"
+                    :label="`${u.username}（${u.nickname || '—'}）`" :value="u.id" />
+                </el-select>
+                <div class="hint">选的是<b>被控那台机器</b>的归属账号，不是管理员自己。</div>
+              </el-form-item>
+              <el-form-item label="备注">
+                <el-input v-model="rdcForm.label" maxlength="60" placeholder="如：前台收银机 / 库房盘点机" style="width:360px" />
+              </el-form-item>
+              <el-form-item label="有效期">
+                <el-radio-group v-model="rdcForm.ttlMinutes">
+                  <el-radio :value="null">长期有效</el-radio>
+                  <el-radio :value="1440">24 小时</el-radio>
+                  <el-radio :value="43200">30 天</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label=" ">
+                <el-button type="primary" :loading="rdcBusy" @click="genRdc">
+                  {{ rdc.code ? '换一把（旧码立刻失效）' : '生成默认控制码' }}
+                </el-button>
+                <el-button v-if="rdc.code" type="danger" plain :loading="rdcBusy" @click="clearRdc">吊销</el-button>
+              </el-form-item>
+            </el-form>
+
+            <el-alert v-if="rdcNewCode" type="success" :closable="false" style="margin-bottom:14px">
+              <template #title>
+                <div>新控制码 —— <b>只显示这一次</b>，之后连管理台也查不到，请当场复制给管理员：</div>
+                <div class="mono" style="font-size:22px;letter-spacing:4px;margin-top:6px">{{ rdcNewCode }}</div>
+              </template>
+            </el-alert>
+
+            <el-descriptions v-if="rdc.code" :column="2" border size="small">
+              <el-descriptions-item label="被维护账号">{{ rdc.code.hostName || rdc.code.hostId }}</el-descriptions-item>
+              <el-descriptions-item label="备注">{{ rdc.code.label || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="状态">
+                <el-tag v-if="rdc.code.revoked" type="danger" size="small">已吊销</el-tag>
+                <el-tag v-else type="success" size="small">有效</el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="有效期">{{ rdc.code.expiresAt ? fmtTime(rdc.code.expiresAt) : '长期' }}</el-descriptions-item>
+              <el-descriptions-item label="已使用次数">{{ rdc.code.useCount }}</el-descriptions-item>
+              <el-descriptions-item label="最近使用">{{ rdc.code.lastUsedAt ? fmtTime(rdc.code.lastUsedAt) : '—' }}</el-descriptions-item>
+            </el-descriptions>
+            <div v-else class="hint">还没设置默认控制码。</div>
+          </el-card>
         </div>
       </el-main>
     </el-container>
@@ -5507,7 +5571,8 @@ async function loadTab() {
   else if (tab.value === 'master') await loadMaster();
   else if (tab.value === 'training') { await loadTrCourses(); await loadTrSheets(); }
   else if (tab.value === 'license') await loadLicense();
-  else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); }
+  // 默认控制码要选账号 → 顺手把用户选项也拉上，避免下拉是空的
+  else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); await loadRdc(); await loadUserOptions(); }
   else if (tab.value === 'deduct') await reloadDeduct();
   else if (tab.value === 'push') await loadPush();
 }
@@ -7971,6 +8036,73 @@ async function changePassword() {
     ElMessage.error(e.response?.data?.error || '修改失败');
   } finally {
     pwdBusy.value = false;
+  }
+}
+
+/* ====== Settings: 远程协助 · 默认控制码 ======
+ *
+ * 为什么要有它：员工自己生成的访问码是**他个人**的钥匙。管理员要维护门店/
+ * 前台那台常开的机器时，不可能每次都让人家跑过去点一次「生成访问码」。
+ * 所以由管理台统一保管一把 —— 「默认」二字只表示**由管理台统一维护**，
+ * 它**就是一枚普通访问码**：同样只存哈希、同样有 10 秒撤销窗口、同样撞码限流，
+ * 权限一点都不更大。
+ *
+ * ⚠️ 明文只在生成的那一秒回一次，之后连管理台也查不到（库里只有哈希），
+ *    所以界面必须当场提示复制；要换只能"吊销重发"。
+ */
+const rdc = ref({ code: null });              // 元信息，永不含明文
+const rdcForm = ref({ hostId: null, label: '', ttlMinutes: null });
+const rdcBusy = ref(false);
+const rdcNewCode = ref('');                   // 刚生成的明文，仅这一次可见
+
+async function loadRdc() {
+  try {
+    const { data } = await api.get('/admin/remote/default-code');
+    rdc.value = data || { code: null };
+    if (rdc.value.code) {
+      rdcForm.value.hostId = rdc.value.code.hostId;
+      rdcForm.value.label = rdc.value.code.label || '';
+    }
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '读取默认控制码失败');
+  }
+}
+
+async function genRdc() {
+  if (!rdcForm.value.hostId) return ElMessage.warning('请先选择「被维护的账号」');
+  rdcBusy.value = true;
+  try {
+    const { data } = await api.post('/admin/remote/default-code', {
+      hostId: rdcForm.value.hostId,
+      label: rdcForm.value.label,
+      ttlMinutes: rdcForm.value.ttlMinutes,
+    });
+    rdcNewCode.value = data.code || '';
+    await loadRdc();
+    ElMessage.success('已生成，请当场复制保存（之后查不到）');
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '生成失败');
+  } finally {
+    rdcBusy.value = false;
+  }
+}
+
+async function clearRdc() {
+  try {
+    await ElMessageBox.confirm(
+      '吊销后这把码立刻失效，已拿到它的人将无法再连接。确定吊销？',
+      '吊销默认控制码', { type: 'warning' });
+  } catch { return; }
+  rdcBusy.value = true;
+  try {
+    await api.delete('/admin/remote/default-code');
+    rdcNewCode.value = '';
+    await loadRdc();
+    ElMessage.success('已吊销');
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '吊销失败');
+  } finally {
+    rdcBusy.value = false;
   }
 }
 

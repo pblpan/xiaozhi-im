@@ -410,6 +410,56 @@ async function main() {
   ok('被控端掉线，控制端收到结束', off.reason === 'offline', `实际 ${off.reason}`);
   b2.close();
 
+  console.log('\n[11] 默认控制码（管理台统一维护，给管理员远程维护用）');
+  // 语义：它就是一枚**普通访问码**，只是由管理台生成/轮换/吊销并把 id 记在
+  // settings 里。所以这里钉的是三件事：
+  //   ① 只有管理员能碰（这是"能控别人电脑"的钥匙，不能谁都能改）
+  //   ② 明文只回一次、settings 里**绝不能出现明文**（会被免鉴权的 bootstrap 带出去）
+  //   ③ 换码 = 旧码立刻失效（不是"改记录"，否则等于换锁不换钥匙）
+  const admLg = await api('POST', '/api/auth/login',
+    { body: { username: 'admin', password: 'admin-test-pw' } });
+  const admTok = admLg.body?.token;
+  ok('管理员能登录', !!admTok);
+
+  const EP = '/api/admin/remote/default-code';
+  ok('未登录 GET → 401', (await api('GET', EP)).status === 401);
+  ok('普通用户 GET → 403（不是管理员碰不了）',
+    (await api('GET', EP, { token: A.token })).status === 403);
+  const empty = await api('GET', EP, { token: admTok });
+  ok('初始没设过 → code 为 null', empty.body?.code === null, `实际 ${JSON.stringify(empty.body)}`);
+
+  const dcmk1 = await api('POST', EP, { token: admTok, body: { hostId: A.id, label: '前台收银机' } });
+  const dc1 = dcmk1.body?.code;
+  ok('生成成功并返回 9 位数字码', /^\d{9}$/.test(dc1 || ''), `实际 ${dc1}`);
+  // 明文在 `code`，元信息在 `meta` —— 两者不能同名，历史上因为同名被盖掉过
+  ok('元信息里回的是被维护账号', dcmk1.body?.meta?.hostId === A.id);
+  ok('元信息**不含明文**', JSON.stringify(dcmk1.body?.meta || {}).indexOf(dc1) < 0);
+
+  const dcmeta = await api('GET', EP, { token: admTok });
+  ok('再查只看得到元信息，没有明文',
+    JSON.stringify(dcmeta.body || {}).indexOf(dc1) < 0);
+  ok('元信息里有被维护账号名', !!dcmeta.body?.code?.hostName);
+
+  // 🔴 settings 表会被免鉴权的 /api/client/bootstrap 铺开出去 ——
+  //    明文一旦落到那里，等于任何人冷启 App 就能拿到一把能控机器的钥匙。
+  const settingRow = readDb("SELECT value FROM settings WHERE key='remote_default_code_id'");
+  ok('settings 里只存了 id，没有明文',
+    settingRow && String(settingRow.value).indexOf(dc1) < 0,
+    `实际 ${settingRow && settingRow.value}`);
+
+  // 换码：旧码必须立刻失效（吊销，不是改记录）
+  const dcmk2 = await api('POST', EP, { token: admTok, body: { hostId: A.id, label: '前台收银机 v2' } });
+  const dc2 = dcmk2.body?.code;
+  ok('换码拿到的是新码', !!dc2 && dc2 !== dc1);
+  const oldRow = readDb('SELECT revoked FROM remote_access_codes WHERE user_id=? ORDER BY id DESC LIMIT 1 OFFSET 1', A.id);
+  ok('换码后旧码被吊销（换锁也换钥匙）', oldRow && oldRow.revoked === 1, `实际 ${oldRow && oldRow.revoked}`);
+
+  // 吊销
+  const del = await api('DELETE', EP, { token: admTok });
+  ok('吊销返回 revoked=true', del.body?.revoked === true);
+  const after = await api('GET', EP, { token: admTok });
+  ok('吊销后查不到默认码', after.body?.code === null);
+
   // ---- 汇总 ----
   console.log('\n============================================================');
   if (failed === 0) {
