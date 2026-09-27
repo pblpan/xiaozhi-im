@@ -1,8 +1,14 @@
+import 'dart:io';
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+
 import 'package:xiaozhi_im_client/core/emoji.dart';
+import 'package:xiaozhi_im_client/core/file_io.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/core/voice.dart';
@@ -35,6 +41,13 @@ class MessageBubble extends StatelessWidget {
   /// 文件消息：下载进度 0~1（非 null 表示正在下载，卡片上显示进度）
   final double? fileProgress;
 
+  /// 本会话里**所有可看的图片**（绝对路径，已拼好 baseUrl）+ 当前这张的下标。
+  ///
+  /// 有它，点开大图才能左右滑着看下一张（微信/企微都是这个手势）；
+  /// 不传就退回"只看这一张"。
+  final List<String> imageUrls;
+  final int imageIndex;
+
   const MessageBubble({
     super.key,
     required this.msg,
@@ -48,6 +61,8 @@ class MessageBubble extends StatelessWidget {
     this.onFileOpen,
     this.onFileSaveAs,
     this.fileProgress,
+    this.imageUrls = const [],
+    this.imageIndex = 0,
   });
 
   String get _displayName => msg.displayFileName;
@@ -501,9 +516,15 @@ class MessageBubble extends StatelessWidget {
     return RichText(text: TextSpan(children: spans));
   }
 
-  Widget _image(BuildContext context, String url) => GestureDetector(
+  Widget _image(BuildContext context, String url) {
+    // 画廊 = 会话里所有图片；万一调用方没传，就至少看这一张
+    final urls = imageUrls.isNotEmpty ? imageUrls : <String>[url];
+    final idx = (imageIndex >= 0 && imageIndex < urls.length) ? imageIndex : 0;
+    return GestureDetector(
         onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => FullScreenImage(url: url)),
+          MaterialPageRoute(
+            builder: (_) => FullScreenImage(urls: urls, initialIndex: idx),
+          ),
         ),
         onLongPress: onLongPress ?? () => _copy(context),
         child: Hero(
@@ -552,6 +573,7 @@ class MessageBubble extends StatelessWidget {
           ),
         ),
       );
+  }
 
   /// 语音气泡：时长决定宽度，播放时波形跳动
   Widget _voiceBubble(BuildContext context) {
@@ -790,27 +812,187 @@ class DayDivider extends StatelessWidget {
       );
 }
 
-/// 全屏看图（双指缩放）
-class FullScreenImage extends StatelessWidget {
-  final String url;
-  const FullScreenImage({super.key, required this.url});
+/// 全屏看图：左右滑看下一张、双指缩放、双击放大、可另存为。
+///
+/// 🔴 2026-09-27 修的"不支持大图浏览"：原来这里只是把图片丢进 InteractiveViewer，
+///    **没给它任何尺寸约束**。Flutter 的 Image 不给宽高就按**原始像素**渲染
+///    （fit 只在有约束时才起作用），而 InteractiveViewer 的初始缩放是 1 ——
+///    于是一张 3000px 的手机照片打开就是"巨图左上角那一块"，既看不到全貌，
+///    也没有任何"可以缩放"的提示，看着就是"打不开大图 / 不支持"。
+///
+/// 修法是两步：
+///   ① 先用 `SizedBox(视口大小) + BoxFit.contain` 把图片**约束成一屏**，
+///      进来就正好看到整张；
+///   ② 再让它可缩放，且 `constrained: false` —— 默认的 constrained:true
+///      会把子件撑成视口大小并**禁掉平移**，放大后拖不动，同样像坏掉。
+class FullScreenImage extends StatefulWidget {
+  /// 一会话里所有可看的图片（绝对路径，已拼好 baseUrl）
+  final List<String> urls;
+
+  /// 从哪一张打开
+  final int initialIndex;
+
+  const FullScreenImage({
+    super.key,
+    required this.urls,
+    this.initialIndex = 0,
+  });
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  State<FullScreenImage> createState() => _FullScreenImageState();
+}
+
+class _FullScreenImageState extends State<FullScreenImage> {
+  late final PageController _page;
+  late int _index;
+  bool _saving = false;
+
+  /// 每一页一个缩放控制器 —— 不能共用：共用的话滑到下一张会带着上一张的
+  /// 缩放/位移，第一眼就是"放大后的某一块"。
+  final Map<int, TransformationController> _zoom = {};
+
+  @override
+  void initState() {
+    super.initState();
+    final n = widget.urls.length;
+    _index = (n == 0) ? 0 : widget.initialIndex.clamp(0, n - 1);
+    _page = PageController(initialPage: _index);
+  }
+
+  @override
+  void dispose() {
+    for (final c in _zoom.values) {
+      c.dispose();
+    }
+    _page.dispose();
+    super.dispose();
+  }
+
+  TransformationController _zoomOf(int i) =>
+      _zoom.putIfAbsent(i, TransformationController.new);
+
+  /// 双击：1 倍 ↔ 2.5 倍，以**屏幕中心**为锚点（不是左上角，否则图会飞出去）。
+  void _toggleZoom(int i, double w, double h) {
+    final c = _zoomOf(i);
+    if (c.value.getMaxScaleOnAxis() > 1.01) {
+      c.value = Matrix4.identity();
+      return;
+    }
+    // T(c) · S · T(-c)：中心那一点缩放前后不动。
+    // 展开后就是 p → s·p + c·(1-s)，直接按列主序填矩阵 ——
+    // 不用 Matrix4.translate/scale（那两个方法已经废弃，静态检查会报 info）。
+    //   [s  0  cx(1-s)]
+    //   [0  s  cy(1-s)]
+    //   [0  0     1   ]
+    const s = 2.5;
+    final m = Matrix4.identity();
+    m.setEntry(0, 0, s);
+    m.setEntry(1, 1, s);
+    m.setEntry(0, 3, w / 2 * (1 - s));
+    m.setEntry(1, 3, h / 2 * (1 - s));
+    c.value = m;
+  }
+
+  /// 另存为当前这张。
+  ///
+  /// `/files` 是 express.static，不带鉴权，所以这里直接 http.get 就能拿到原图，
+  /// 不必走带 token 的 Api。
+  Future<void> _saveCurrent() async {
+    if (_saving || _index >= widget.urls.length) return;
+    final url = widget.urls[_index];
+    setState(() => _saving = true);
+    String? where;
+    String? err;
+    try {
+      final uri = Uri.parse(url);
+      final seg = uri.pathSegments;
+      final name = seg.isEmpty ? 'image.jpg' : seg.last;
+      final r = await http.get(uri);
+      if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
+      final dir = await getTemporaryDirectory();
+      final f = File('${dir.path}${Platform.pathSeparator}$name');
+      await f.writeAsBytes(r.bodyBytes);
+      where = await FileIo.saveAs(f, name);
+    } catch (e) {
+      err = e.toString();
+    }
+    if (!mounted) return;
+    setState(() => _saving = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(err != null
+            ? '保存失败：$err'
+            : (where == null ? '已取消保存' : '已保存到 $where')),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final urls = widget.urls;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
         backgroundColor: Colors.black,
-        appBar: AppBar(
-          backgroundColor: Colors.black,
-          surfaceTintColor: Colors.transparent,
-          iconTheme: const IconThemeData(color: Colors.white),
-        ),
-        body: Center(
-          child: Hero(
-            tag: url,
-            child: InteractiveViewer(
-              maxScale: 6,
+        surfaceTintColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: urls.length > 1
+            ? Text('${_index + 1} / ${urls.length}',
+                style: const TextStyle(color: Colors.white70, fontSize: 14))
+            : null,
+        actions: [
+          IconButton(
+            tooltip: '保存图片',
+            onPressed: _saving ? null : _saveCurrent,
+            icon: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.download_outlined, color: Colors.white),
+          ),
+        ],
+      ),
+      body: urls.isEmpty
+          ? const Center(
+              child: Text('没有可显示的图片',
+                  style: TextStyle(color: Colors.white70)))
+          : PageView.builder(
+              controller: _page,
+              itemCount: urls.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (_, i) => _viewer(urls[i], i),
+            ),
+    );
+  }
+
+  Widget _viewer(String url, int i) => LayoutBuilder(builder: (ctx, c) {
+        return Hero(
+          tag: url,
+          child: InteractiveViewer(
+          transformationController: _zoomOf(i),
+          minScale: 1,
+          maxScale: 6,
+          // 🔴 见类注释 ②：默认 constrained:true 会禁掉平移，放大后拖不动
+          constrained: false,
+          child: GestureDetector(
+            onDoubleTap: () => _toggleZoom(i, c.maxWidth, c.maxHeight),
+            child: SizedBox(
+              width: c.maxWidth,
+              height: c.maxHeight,
               child: XzCachedImage(
                 url: url,
                 fit: BoxFit.contain,
+                progressIndicatorBuilder: (_, __, ___) => const Center(
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white54),
+                  ),
+                ),
                 errorWidget: (_, __, ___) => const Center(
                   child: Text('图片加载失败',
                       style: TextStyle(color: Colors.white70)),
@@ -818,6 +1000,7 @@ class FullScreenImage extends StatelessWidget {
               ),
             ),
           ),
-        ),
-      );
+          ),
+        );
+      });
 }

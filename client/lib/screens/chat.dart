@@ -1170,6 +1170,16 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     }
+    // 会话里所有可看的图片（绝对路径）—— 点开大图后要能左右滑着看下一张，
+    // 这是微信/企微都有的手势。只收图片消息，且撤回的（imagePath 为 null）不算。
+    final gallery = <String>[];
+    final galleryIdx = <int, int>{}; // 消息下标 -> 它在画廊里的下标
+    for (var i = 0; i < _msgs.length; i++) {
+      final p = _msgs[i].imagePath;
+      if (p == null) continue;
+      galleryIdx[i] = gallery.length;
+      gallery.add('${Config.baseUrl}$p');
+    }
     return ListView.builder(
       controller: _scrollC,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
@@ -1192,6 +1202,8 @@ class _ChatScreenState extends State<ChatScreen> {
               onFileOpen: m.kind == 'file' ? () => _openFileMsg(m) : null,
               onFileSaveAs: m.kind == 'file' ? () => _saveFileAs(m) : null,
               fileProgress: _fileProgress[m.id],
+              imageUrls: gallery,
+              imageIndex: galleryIdx[i] ?? 0,
             ),
           ],
         );
