@@ -544,6 +544,10 @@ void main() {
             '6901234567890',
             reason: '查参照时条码没带上（服务端只能回空）');
 
+        // 🔴 扫完一笔后输入框数量会被重置回 1（为下一件快速连扫，见 _addRow），
+        //    所以这里把数量重新填回 10，让"减完剩"按 剩余 38 - 本次 10 = 28 验证。
+        await tester.enterText(find.byKey(const Key('deduct-qty-field')), '10');
+
         await pumpUntil(
           tester,
           () => find.byKey(const Key('deduct-ref-card')).evaluate().isNotEmpty,
