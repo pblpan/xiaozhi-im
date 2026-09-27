@@ -208,15 +208,23 @@ jobs:
           #    `platformBuildVersionName='13'`，名字里**含** "VersionName"，
           #    去掉锚就会被它抢走（大小写不同但 `.*` 贪婪，配合得掉）。
           #    中间用 `.*` 而不是 `[^']*` —— versionCode='58' 里带引号，
-          #    `[^']*` 走不到 versionName 那儿，第一版就是这么"解析不出来"的。
-          VN=$(printf '%s\n' "$BADGING" \
+          #    `[^']*` 走不到那儿，第一版就是这么"解析不出来"的。
+          GOT_NAME=$(printf '%s\n' "$BADGING" \
             | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" | head -1) || true
-          echo "APK 里实际的 versionName: '${VN:-<解析不出来>}'"
-          if [ "$WANT" != "$VN" ] || [ -z "$VN" ]; then
-            echo "::error::APK 版本 '${VN:-<空>}' 与 pubspec 的 '$WANT' 不一致 —— 拒绝交付"
+          GOT_CODE=$(printf '%s\n' "$BADGING" \
+            | sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" | head -1) || true
+          # pubspec 的 `0.20.0+58` 会被 flutter **拆开**：`+` 前面进 versionName、
+          # 后面进 versionCode。第三版护栏就是死在拿整串去比 versionName 上：
+          # 报的是 `APK 版本 '0.20.0' 与 pubspec 的 '0.20.0+58' 不一致`。
+          NAME=${WANT%%+*}
+          CODE=${WANT##*+}
+          echo "pubspec 拆开后 → name='$NAME' code='$CODE'"
+          echo "APK 里实际的   → name='${GOT_NAME:-<解析不出来>}' code='${GOT_CODE:-<解析不出来>}'"
+          if [ "$NAME" != "$GOT_NAME" ] || [ "$CODE" != "$GOT_CODE" ]; then
+            echo "::error::APK 的版本号/构建号与 pubspec 的 '$WANT' 不一致 —— 拒绝交付"
             exit 1
           fi
-          echo "✅ APK 版本与 pubspec 一致：$VN"
+          echo "✅ APK 版本与 pubspec 一致：$NAME+$CODE"
 
       # 🔴 这一步必须能**红**，而且**红的原因必须写在日志里**（2026-09-25 两次返工）
       #
