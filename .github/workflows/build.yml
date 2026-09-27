@@ -158,38 +158,39 @@ jobs:
       # **是可以装着旧版本的**。文件名和包里版本各说各话，比干脆不改名更危险 ——
       # 前者让人以为"已经升过了"。
       #
-      # 判据不用猜 APK 内部：flutter 打包时会顺手写一份
-      # `output-metadata.json`，里面就是真正打进 APK 的 versionName/versionCode。
-      # 它拿不到 → 直接红（宁可拒绝交付，也不要"验不出来当验过了"）。
+      # 判据：pubspec 里写的版本串，必须能在 APK 字节流里**搜到**。
+      #
+      # 先试过更"正统"的做法 —— 用 flutter 打包时顺手写的 `output-metadata.json`
+      # （里头是真正打进 APK 的 versionName）。结果 Flutter 3.47.2 的 runner 上
+      # 那份文件**压根不存在**：build/app/outputs/flutter-apk/ 里只有
+      # `app-release.apk` 和 `app-release.apk.sha1`。这道护栏第一次上线就红在
+      # "清单找不到"上 —— 好在它是**真红**，红的是"证明不了版本"，不是装饰。
+      #
+      # 字节流判据为什么够用：versionName 一定会写进 manifest / dex 的字符串池，
+      # 实测 0.19.1+57 的包里搜不到 `0.20.0+58`，反向也成立。
+      # 命中时 grep 回显的就是它找到的串，等于**自带证据**写进日志。
+      # 用 grep 而不是 python，是为了不引入 Python 依赖（runner 上未必有）。
       - name: 断言 APK 版本 = pubspec 版本
         working-directory: ${{ env.CLIENT_DIR }}
         run: |
           set -uo pipefail
           set +e                       # 同 Verify 那步：Actions 的 -e 是命令行参数
-          MD=$(ls build/app/outputs/flutter-apk/output-metadata.json 2>/dev/null | head -1) || true
-          echo "版本清单: '${MD:-<没找到>}'"
-          if [ -z "$MD" ]; then
-            echo "::error::找不到 output-metadata.json —— 无法证明这个 APK 是哪个版本"
-            ls -la build/app/outputs/flutter-apk/ 2>&1 || true
+          APK=$(ls build/app/outputs/flutter-apk/*.apk 2>/dev/null | head -1) || true
+          echo "APK: '${APK:-<没找到>}'"
+          if [ -z "$APK" ]; then
+            echo "::error::没有 APK 产物"
             exit 1
           fi
-          cat "$MD"
           WANT=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -1 | tr -d '\r')
           echo "pubspec 里写的: '$WANT'"
-          # 🔴 这里刻意用单行 `-c`，不套 heredoc 进 `$()`：
-          #    `GOT=$(python3 - "$MD" <<'PY' … PY\n)` 这种写法会**把 YAML 块标量的
-          #    结构破坏掉**，报错信息还很误导：
-          #        while scanning a simple key … could not find expected ':'
-          #    指向的是 heredoc 体里的某一行，看着像"少了个冒号"，
-          #    实际是外层 run 块被提前结束了。本地拿 .sh 单测是**测不出来**的，
-          #    因为 .sh 里没有 YAML。所以抽 workflow 原文本地跑的那一步不能省。
-          GOT=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version']['versionName'])" "$MD" 2>/dev/null || true)
-          echo "APK 里实际打进去的: '${GOT:-<解析不出来>}'"
-          if [ -z "$GOT" ] || [ "$WANT" != "$GOT" ]; then
-            echo "::error::APK 版本 '${GOT:-<空>}' 与 pubspec 的 '$WANT' 不一致 —— 拒绝交付"
+          echo "APK 字节数: $(stat -c%s "$APK" 2>/dev/null || echo '<stat 拿不到>')"
+          HIT=$(grep -a -F -o -m1 -- "$WANT" "$APK" 2>/dev/null || true)
+          echo "在 APK 里搜到的版本串: '$HIT'"
+          if [ -z "$HIT" ] || [ "$WANT" != "$HIT" ]; then
+            echo "::error::APK 里搜不到 pubspec 写的版本串 '$WANT' —— 这包不是该版本构建的，拒绝交付"
             exit 1
           fi
-          echo "✅ APK 版本与 pubspec 一致：$GOT"
+          echo "✅ APK 版本与 pubspec 一致：$HIT"
 
       # 🔴 这一步必须能**红**，而且**红的原因必须写在日志里**（2026-09-25 两次返工）
       #
