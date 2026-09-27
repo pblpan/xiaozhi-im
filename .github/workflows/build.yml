@@ -176,11 +176,14 @@ jobs:
           cat "$MD"
           WANT=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -1 | tr -d '\r')
           echo "pubspec 里写的: '$WANT'"
-          GOT=$(python3 - "$MD" <<'PY' 2>/dev/null || true
-import json, sys
-print(json.load(open(sys.argv[1]))['version']['versionName'])
-PY
-          )
+          # 🔴 这里刻意用单行 `-c`，不套 heredoc 进 `$()`：
+          #    `GOT=$(python3 - "$MD" <<'PY' … PY\n)` 这种写法会**把 YAML 块标量的
+          #    结构破坏掉**，报错信息还很误导：
+          #        while scanning a simple key … could not find expected ':'
+          #    指向的是 heredoc 体里的某一行，看着像"少了个冒号"，
+          #    实际是外层 run 块被提前结束了。本地拿 .sh 单测是**测不出来**的，
+          #    因为 .sh 里没有 YAML。所以抽 workflow 原文本地跑的那一步不能省。
+          GOT=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version']['versionName'])" "$MD" 2>/dev/null || true)
           echo "APK 里实际打进去的: '${GOT:-<解析不出来>}'"
           if [ -z "$GOT" ] || [ "$WANT" != "$GOT" ]; then
             echo "::error::APK 版本 '${GOT:-<空>}' 与 pubspec 的 '$WANT' 不一致 —— 拒绝交付"
