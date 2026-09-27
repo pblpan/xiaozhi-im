@@ -158,18 +158,21 @@ jobs:
       # **是可以装着旧版本的**。文件名和包里版本各说各话，比干脆不改名更危险 ——
       # 前者让人以为"已经升过了"。
       #
-      # 判据：pubspec 里写的版本串，必须能在 APK 字节流里**搜到**。
+      # 判据：用 aapt2 直接读出 APK 的 versionName（Android SDK 自带，
+      # runner 的 build-tools 37.0.0 里有），与 pubspec 写的比对。
       #
-      # 先试过更"正统"的做法 —— 用 flutter 打包时顺手写的 `output-metadata.json`
-      # （里头是真正打进 APK 的 versionName）。结果 Flutter 3.47.2 的 runner 上
-      # 那份文件**压根不存在**：build/app/outputs/flutter-apk/ 里只有
-      # `app-release.apk` 和 `app-release.apk.sha1`。这道护栏第一次上线就红在
-      # "清单找不到"上 —— 好在它是**真红**，红的是"证明不了版本"，不是装饰。
+      # 这中间换过两次判据，两次都红了，原因都记在这儿免得再绕：
       #
-      # 字节流判据为什么够用：versionName 一定会写进 manifest / dex 的字符串池，
-      # 实测 0.19.1+57 的包里搜不到 `0.20.0+58`，反向也成立。
-      # 命中时 grep 回显的就是它找到的串，等于**自带证据**写进日志。
-      # 用 grep 而不是 python，是为了不引入 Python 依赖（runner 上未必有）。
+      # ① `output-metadata.json` —— flutter 打包据说会顺手写一份，里头是真正
+      #    打进 APK 的 versionName。**这份文件在 3.47.2 的 runner 上不存在**：
+      #    build/app/outputs/flutter-apk/ 里只有 app-release.apk 和 .sha1。
+      #
+      # ② 在 APK 字节流里 grep `0.20.0+58` —— 也拿不到结果。
+      #    版本串在 APK 内部是**拆开存**的（manifest 的字符串池 + dex 各存一段），
+      #    完整串搜不到；`0.19.1+57` 的包里反而能搜到 `+58` 这种碎片，
+      #    所以"搜得到"既不能证明对、也证明不了错。
+      #
+      # 结论：**别猜 APK 内部结构，问工具**。aapt2 是专门干这个的。
       - name: 断言 APK 版本 = pubspec 版本
         working-directory: ${{ env.CLIENT_DIR }}
         run: |
@@ -183,14 +186,37 @@ jobs:
           fi
           WANT=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -1 | tr -d '\r')
           echo "pubspec 里写的: '$WANT'"
-          echo "APK 字节数: $(stat -c%s "$APK" 2>/dev/null || echo '<stat 拿不到>')"
-          HIT=$(grep -a -F -o -m1 -- "$WANT" "$APK" 2>/dev/null || true)
-          echo "在 APK 里搜到的版本串: '$HIT'"
-          if [ -z "$HIT" ] || [ "$WANT" != "$HIT" ]; then
-            echo "::error::APK 里搜不到 pubspec 写的版本串 '$WANT' —— 这包不是该版本构建的，拒绝交付"
+
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          AAPT2=$(find "${SDK:-/nonexistent}/build-tools" -maxdepth 2 -type f -name 'aapt2' 2>/dev/null | sort -V | tail -1) || true
+          if [ -z "$AAPT2" ]; then
+            AAPT2=$(find /usr/local/lib/android /opt /home/runner -maxdepth 6 -type f -name 'aapt2' 2>/dev/null | sort -V | tail -1) || true
+          fi
+          echo "aapt2: ${AAPT2:-<没找到>}"
+          if [ -z "$AAPT2" ]; then
+            echo "::error::找不到 aapt2 —— 读不出 APK 的真实版本，拒绝放行"
+            echo "  SDK root: '${SDK:-<环境变量为空>}'"
+            ls -1 "${SDK:-/nonexistent}/build-tools" 2>&1 | head -20
             exit 1
           fi
-          echo "✅ APK 版本与 pubspec 一致：$HIT"
+
+          BADGING=$("$AAPT2" dump badging "$APK" 2>&1 || true)
+          echo "--- aapt2 dump badging 前 5 行 ---"
+          printf '%s\n' "$BADGING" | head -5
+          echo "-----------------------------------"
+          # 🔴 `^package:` 这个锚不能省：badging 输出里还有一行
+          #    `platformBuildVersionName='13'`，名字里**含** "VersionName"，
+          #    去掉锚就会被它抢走（大小写不同但 `.*` 贪婪，配合得掉）。
+          #    中间用 `.*` 而不是 `[^']*` —— versionCode='58' 里带引号，
+          #    `[^']*` 走不到 versionName 那儿，第一版就是这么"解析不出来"的。
+          VN=$(printf '%s\n' "$BADGING" \
+            | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" | head -1) || true
+          echo "APK 里实际的 versionName: '${VN:-<解析不出来>}'"
+          if [ "$WANT" != "$VN" ] || [ -z "$VN" ]; then
+            echo "::error::APK 版本 '${VN:-<空>}' 与 pubspec 的 '$WANT' 不一致 —— 拒绝交付"
+            exit 1
+          fi
+          echo "✅ APK 版本与 pubspec 一致：$VN"
 
       # 🔴 这一步必须能**红**，而且**红的原因必须写在日志里**（2026-09-25 两次返工）
       #
@@ -300,8 +326,17 @@ jobs:
                  --title "CI 最新产物（滚动，勿直接分发）" \
                  --notes "每次 push 到 main 覆盖同名附件。这里是流水线中间产物；正式安装包另行交付。" \
                  --prerelease || true
-          gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" \
-            ${CLIENT_DIR}/build/app/outputs/flutter-apk/*.apk --clobber
+          # 🔴 上传的文件名**由机器拼**（`小智IM-Android-v<pubspec 版本>.apk`），
+          #    不留给"下载下来再改名"。改名这一步是纯手工的，手滑写成上一个版本的
+          #    名字，一个长得完全正常的包就装着旧版本 —— 而且桌面现在就有一个
+          #    这样的包：叫「小智IM-Android-v0.19.1.apk」，里面却搜不到 0.20.0。
+          WANT=$(sed -n 's/^version:[[:space:]]*//p' "${CLIENT_DIR}/pubspec.yaml" | head -1 | tr -d '\r')
+          OUTDIR="${CLIENT_DIR}/build/app/outputs/flutter-apk"
+          OUT="${OUTDIR}/xiaozhi-im-Android-${WANT}.apk"
+          cp "${OUTDIR}/app-release.apk" "$OUT"
+          echo "发布文件名: $(basename "$OUT")"
+          echo "发布文件 sha256: $(sha256sum "$OUT" | cut -d' ' -f1)"
+          gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" "$OUT" --clobber
 
   build-windows:
     name: Windows EXE
@@ -351,5 +386,12 @@ jobs:
                  --title "CI 最新产物（滚动，勿直接分发）" \
                  --notes "每次 push 到 main 覆盖同名附件。这里是流水线中间产物；正式安装包另行交付。" \
                  --prerelease || true
-          gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" \
-            xiaozhi-im-windows-exe.zip --clobber
+          # 同 Android 那侧：文件名由机器拼上版本号，不留给人手写。
+          # Windows 侧没有 aapt2 可问版本（exe 的版本资源要读 PE），所以这里
+          # **不假装验版本** —— 只保证"名字里那个版本是 pubspec 的，不是我敲的"。
+          WANT=$(sed -n 's/^version:[[:space:]]*//p' "${CLIENT_DIR}/pubspec.yaml" | head -1 | tr -d '\r')
+          OUT="xiaozhi-im-windows-${WANT}.zip"
+          mv xiaozhi-im-windows-exe.zip "$OUT"
+          echo "发布文件名: $OUT"
+          echo "发布文件 sha256: $(sha256sum "$OUT" | cut -d' ' -f1)"
+          gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" "$OUT" --clobber
