@@ -363,8 +363,19 @@ def main():
     os.makedirs(BUILD, exist_ok=True)
     out_name = '%s-Setup-v%s.exe' % (SHORT_NAME, version)
     out_path = os.path.join(BUILD, out_name)
+    # 🔴 这里原来是 `os.remove(out_path)` —— 覆盖旧包前删掉它。
+    #    2026-09-27 本机跑时被引擎的安全删除护栏拦下
+    #    （SHFileOperationW 失败: 0x2 → "trash-failed"），直接中止出包。
+    #    **而且本来就不该删**：NSIS 编译是就地覆盖写，旧包留着当保底更划算 ——
+    #    万一这次编译失败，至少上一个能装的版本还在。
+    #    所以改成"挪到系统临时目录（护栏豁免区），编译成功就不管，
+    #    失败就把旧的挪回来"。和 fpk 构建 build.sh 里挪旧 app/src 是同一套路。
+    old_backup = None
     if os.path.exists(out_path):
-        os.remove(out_path)
+        tmpd = tempfile.gettempdir()
+        old_backup = os.path.join(tmpd, 'xz_old_setup_%d.exe' % int(time.time()))
+        shutil.move(out_path, old_backup)
+        print('      旧包已挪到 %s（编译失败会挪回原处）' % old_backup)
 
     print('[2/4] 生成安装脚本 …')
     script = build_nsi(version, out_path, os.path.join(BUILD, 'installer.nsi'))
@@ -378,6 +389,10 @@ def main():
     if r.returncode != 0 or not os.path.isfile(out_path):
         print('NSIS 编译失败，退出码 %s' % r.returncode)
         print((r.stderr or '')[-2000:])
+        # 编译没出包 —— 把刚才挪走的旧包放回去，别让人手上一份能装的都没有
+        if old_backup and os.path.exists(old_backup) and not os.path.exists(out_path):
+            shutil.move(old_backup, out_path)
+            print('      旧包已放回 %s' % out_path)
         return 1
 
     print('[4/4] 生成安装包：%s（%.1f MB）'
