@@ -8086,16 +8086,33 @@ function resetWorkbenchDraft() {
 }
 
 async function loadWorkbenchView() {
-  // 分组与公告顺路从 /admin/apps 取（那一个请求里就带齐了）；
-  // labelMax 只有分组接口给，单独取一次。
-  wb.groups = appCatalog.value.groups || [];
-  wb.notices = appCatalog.value.notices || [];
-  wb.textMax = appCatalog.value.noticeMax || 60;
-  try {
-    const { data } = await api.get('/admin/apps/groups');
-    wb.groups = data.groups || wb.groups;
-    wb.labelMax = data.labelMax || 8;
-  } catch { /* 分组接口挂了就用 /admin/apps 里那份 */ }
+  // ⚠️ 分组和公告都**当场向各自的接口要**，不要从 appCatalog 那份快照里读。
+  //
+  // 2026-09-27 实测踩到的坑：发布公告后列表**永远是空的**（No Data），
+  // 得整页刷新才看得见。原因就是这里原来写的是
+  //     wb.notices = appCatalog.value.notices || [];
+  // 而 appCatalog 是**上一次 loadAppCatalog() 留下的旧快照** ——
+  // addNotice() 发布成功后只调了这个函数，没人去重新拉 /admin/apps，
+  // 于是刚发的那条根本不在 wb.notices 里。改名 / 调序 / 停用 / 删除
+  // 之后也一样显示的是改之前的状态。
+  // 顺带修掉：wb.maxDownload 原来从没被赋过值，一直写死 3。
+  const [g, n] = await Promise.allSettled([
+    api.get('/admin/apps/groups'),
+    api.get('/admin/apps/notices'),
+  ]);
+  if (g.status === 'fulfilled') {
+    wb.groups = g.value.data.groups || wb.groups;
+    wb.labelMax = g.value.data.labelMax || 8;
+  } else {
+    wb.groups = appCatalog.value.groups || wb.groups;   // 接口挂了退回快照
+  }
+  if (n.status === 'fulfilled') {
+    wb.notices = n.value.data.notices || [];
+    wb.textMax = n.value.data.textMax || 60;
+    wb.maxDownload = n.value.data.maxDownload || 3;
+  } else {
+    wb.notices = appCatalog.value.notices || [];
+  }
 }
 
 const wbToast = (data, fallback) => ElMessage.success((data && data.message) || fallback);
