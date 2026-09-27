@@ -149,6 +149,45 @@ jobs:
         working-directory: ${{ env.CLIENT_DIR }}
         run: flutter build apk --release --dart-define=BASE_URL=${{ env.BASE_URL }} --dart-define=WAN_URL=${{ env.WAN_URL }}
 
+      # 🔴 断言 APK 里**真正打进去的版本** = pubspec 写的版本。
+      #
+      # 为什么必须有这一步：发布用的是 `softprops/action-gh-release ... *.apk --clobber`，
+      # 它是把 `app-release.apk` **原样**推上滚动 release 的，不带版本号。
+      # 于是交付到桌面时给文件改名（"小智IM-Android-v0.20.0.apk"）这一步是**人手写**的。
+      # 手写一个版本号太容易写成上一个版本的名字，而一个长得完全正常的包
+      # **是可以装着旧版本的**。文件名和包里版本各说各话，比干脆不改名更危险 ——
+      # 前者让人以为"已经升过了"。
+      #
+      # 判据不用猜 APK 内部：flutter 打包时会顺手写一份
+      # `output-metadata.json`，里面就是真正打进 APK 的 versionName/versionCode。
+      # 它拿不到 → 直接红（宁可拒绝交付，也不要"验不出来当验过了"）。
+      - name: 断言 APK 版本 = pubspec 版本
+        working-directory: ${{ env.CLIENT_DIR }}
+        run: |
+          set -uo pipefail
+          set +e                       # 同 Verify 那步：Actions 的 -e 是命令行参数
+          MD=$(ls build/app/outputs/flutter-apk/output-metadata.json 2>/dev/null | head -1) || true
+          echo "版本清单: '${MD:-<没找到>}'"
+          if [ -z "$MD" ]; then
+            echo "::error::找不到 output-metadata.json —— 无法证明这个 APK 是哪个版本"
+            ls -la build/app/outputs/flutter-apk/ 2>&1 || true
+            exit 1
+          fi
+          cat "$MD"
+          WANT=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -1 | tr -d '\r')
+          echo "pubspec 里写的: '$WANT'"
+          GOT=$(python3 - "$MD" <<'PY' 2>/dev/null || true
+import json, sys
+print(json.load(open(sys.argv[1]))['version']['versionName'])
+PY
+          )
+          echo "APK 里实际打进去的: '${GOT:-<解析不出来>}'"
+          if [ -z "$GOT" ] || [ "$WANT" != "$GOT" ]; then
+            echo "::error::APK 版本 '${GOT:-<空>}' 与 pubspec 的 '$WANT' 不一致 —— 拒绝交付"
+            exit 1
+          fi
+          echo "✅ APK 版本与 pubspec 一致：$GOT"
+
       # 🔴 这一步必须能**红**，而且**红的原因必须写在日志里**（2026-09-25 两次返工）
       #
       # 三种错法都踩过一遍，记在这儿免得再犯：
