@@ -970,6 +970,33 @@ router.get('/friendships', (req, res) => {
   res.json(paging.envelope(list, items, total));
 });
 
+/**
+ * GET /admin/friendships/tree
+ * 好友关系按"用户"聚合，方便管理台用树状结构查看（用户 → 他的好友列表）。
+ * 扁平表在好友多的时候根本看不出"谁是谁的好友"，树一眼就清楚。
+ */
+router.get('/friendships/tree', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const rows = db.prepare(`SELECT fs.id, fs.user_id, fs.friend_id, fs.status, fs.created_at,
+    ua.username user_name, ub.username friend_name
+    FROM friendships fs
+    LEFT JOIN users ua ON ua.id = fs.user_id
+    LEFT JOIN users ub ON ub.id = fs.friend_id
+    ORDER BY fs.user_id, fs.id`).all();
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.user_id)) {
+      map.set(r.user_id, {
+        userId: r.user_id,
+        userName: r.user_name || ('用户#' + r.user_id),
+        friends: [],
+      });
+    }
+    map.get(r.user_id).friends.push(r);
+  }
+  res.json({ tree: [...map.values()], total: rows.length });
+});
+
 router.delete('/friendships/:id', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
   const id = Number(req.params.id);
@@ -1248,7 +1275,7 @@ router.post('/apps/notices', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
   const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
   const body = req.body || {};
-  const r = appnotice.add(body.text, u?.username || 'admin');
+  const r = appnotice.add(body.text, u?.username || 'admin', body.bgFileId);
   if (r.error) return res.status(400).json({ error: r.error });
   res.json({ ok: true, notices: appnotice.listAll(), message: '公告已发布（客户端下次启动就能看到）' });
 });

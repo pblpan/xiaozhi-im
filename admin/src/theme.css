@@ -8,12 +8,17 @@
   --el-color-primary: #10B981;
   --el-color-primary-rgb: 16, 185, 129;
 
-  /* 与白色混合（light-N 表示主色占比 N0%） */
-  --el-color-primary-light-3: #B7EAD9;
+  /* 与白色混合。
+     🔴 light-N 里 N 是**白色占比**（N0% 白 + (100-N)0% 主色）—— 数字越大越浅。
+        这里必须"越大越浅"，不能反：Element Plus 的 plain 按钮/plain 标签
+        拿 light-9 当**底色**、primary 当**文字色**，一旦 light-9 比 primary 还深
+        就是"绿底绿字"，看着像整块实心绿、字看不清，只有 hover（底色换 primary、
+        字变白）才读得出来 —— 2026-09-29 实测就是这个坑。 */
+  --el-color-primary-light-3: #58CEA7;
   --el-color-primary-light-5: #88DCC0;
-  --el-color-primary-light-7: #58CEA7;
-  --el-color-primary-light-8: #40C79A;
-  --el-color-primary-light-9: #28C08E;
+  --el-color-primary-light-7: #B7EAD9;
+  --el-color-primary-light-8: #CFF1E6;
+  --el-color-primary-light-9: #E7F8F2;
 
   /* 与黑色混合 */
   --el-color-primary-dark-2: #0D9467;

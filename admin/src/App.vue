@@ -78,8 +78,12 @@
 
           <el-sub-menu index="g-biz">
             <template #title><el-icon><Goods /></el-icon><span>业务模块</span></template>
-            <el-menu-item index="master">商品档案</el-menu-item>
-            <el-menu-item index="deduct">库房减货</el-menu-item>
+            <!-- 盘点分组：库房减货是盘点的子功能，收在"盘点"下，不再是并列入口 -->
+            <el-sub-menu index="g-inv">
+              <template #title><span>盘点</span></template>
+              <el-menu-item index="master">商品档案</el-menu-item>
+              <el-menu-item index="deduct">库房减货</el-menu-item>
+            </el-sub-menu>
             <el-menu-item index="modules">动态模块</el-menu-item>
             <el-menu-item index="training">培训中心</el-menu-item>
           </el-sub-menu>
@@ -965,31 +969,36 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <PagerBar :pager="groupPager" />
         </div>
 
-        <!-- 好友关系 -->
+        <!-- 好友关系：按用户分组的树状结构，方便看"谁的好友" -->
         <div v-else-if="tab === 'friends'">
           <div class="page-bar">
             <el-button @click="loadFriends">刷新</el-button>
-            <span class="hint">共 {{ friendPager.p.total }} 条好友关系</span>
+            <el-input v-model="friendQ" placeholder="搜用户名 / 好友名 / 状态" clearable size="small"
+                      style="width:220px" />
+            <span class="hint">共 {{ friendTotal }} 条好友关系，分布在 {{ friendTreeFiltered.length }} 位用户下（默认折叠，点左侧三角展开；搜索时自动展开命中项）</span>
           </div>
-          <el-table :data="friendPager.p.items" border stripe v-loading="friendPager.p.loading">
-            <el-table-column prop="id" label="ID" width="70" />
-            <el-table-column prop="user_name" label="用户" />
-            <el-table-column prop="friend_name" label="好友" />
-            <el-table-column prop="status" label="状态" width="100">
-              <template #default="{ row }">
-                <el-tag :type="row.status === 'accepted' ? 'success' : 'warning'">{{ row.status }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="created_at" label="创建时间" width="180">
-              <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="120">
-              <template #default="{ row }">
-                <el-button size="small" type="danger" @click="delFriend(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-          <PagerBar :pager="friendPager" />
+          <el-tree :data="friendTreeFiltered" node-key="key" :props="{ label: 'label', children: 'children' }"
+                   :expand-on-click-node="false" :default-expanded-keys="friendSearchExpanded"
+                   v-loading="friendLoading">
+            <template #default="{ data }">
+              <div style="display:flex;align-items:center;width:100%">
+                <template v-if="data.isUser">
+                  <el-icon><User /></el-icon>
+                  <strong style="margin-left:6px">{{ data.label }}</strong>
+                  <span class="hint" style="margin-left:8px">（{{ data.children?.length || 0 }} 个好友）</span>
+                </template>
+                <template v-else>
+                  <el-tag :type="data.row.status === 'accepted' ? 'success' : 'warning'" size="small" effect="plain">
+                    {{ data.row.status }}
+                  </el-tag>
+                  <span style="margin:0 8px">{{ data.row.friend_name }}</span>
+                  <span class="hint">{{ fmtTime(data.row.created_at) }}</span>
+                  <el-button size="small" type="danger" link style="margin-left:auto"
+                             @click.stop="delFriend(data.row)">删除</el-button>
+                </template>
+              </div>
+            </template>
+          </el-tree>
         </div>
 
         <!-- 文件管理 -->
@@ -1886,6 +1895,30 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 placeholder="要所有人看见的一句话，例如：明天盘点，全店 9 点前把货架归位" style="width:420px" />
               <el-input-number v-model="wb.newNoticeSort" size="small" :min="0" :max="9999" />
               <el-button size="small" type="primary" :loading="wb.busy" @click="addNotice">发布</el-button>
+              <el-button size="small" @click="wbBgTarget = 'new'; wbBgEl?.click()">背景图</el-button>
+              <img v-if="wb.newNoticeBgUrl" :src="wb.newNoticeBgUrl" style="height:34px;border-radius:4px;object-fit:cover" />
+              <el-button v-if="wb.newNoticeBgUrl" size="small" text type="danger" @click="clearWbBg">清除</el-button>
+              <input ref="wbBgEl" type="file" accept="image/*" style="display:none" @change="onWbBg" />
+            </div>
+
+            <!-- 宽屏 / 窄屏预览：先在管理台看清楚客户端实际效果再发布 -->
+            <div style="display:flex;gap:18px;margin-bottom:14px;flex-wrap:wrap">
+              <div>
+                <div class="hint" style="margin-bottom:4px">宽屏预览（桌面端工作台）</div>
+                <div :style="wbPreviewStyle" style="position:relative;display:flex;align-items:center;gap:8px;width:440px;height:78px;padding:0 14px;border-radius:8px;border:1px solid var(--el-border-color);overflow:hidden;color:#fff;box-sizing:border-box">
+                  <div style="position:absolute;inset:0;background:rgba(0,0,0,.38)"></div>
+                  <el-icon style="position:relative;z-index:1"><Bell /></el-icon>
+                  <span style="position:relative;z-index:1;font-size:13.5px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ wb.newNotice || '（公告内容预览）' }}</span>
+                </div>
+              </div>
+              <div>
+                <div class="hint" style="margin-bottom:4px">窄屏预览（手机端工作台）</div>
+                <div :style="wbPreviewStyle" style="position:relative;display:flex;align-items:center;gap:8px;width:240px;height:78px;padding:0 14px;border-radius:8px;border:1px solid var(--el-border-color);overflow:hidden;color:#fff;box-sizing:border-box">
+                  <div style="position:absolute;inset:0;background:rgba(0,0,0,.38)"></div>
+                  <el-icon style="position:relative;z-index:1"><Bell /></el-icon>
+                  <span style="position:relative;z-index:1;font-size:13.5px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ wb.newNotice || '（公告内容预览）' }}</span>
+                </div>
+              </div>
             </div>
 
             <el-table :data="wb.notices || []" border size="small">
@@ -1910,6 +1943,16 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <el-table-column label="启用" width="90" align="center">
                 <template #default="{ row }">
                   <el-switch :model-value="row.enabled" @change="(v) => wbSaveNotice(row, { enabled: v })" />
+                </template>
+              </el-table-column>
+              <el-table-column label="背景图" width="120">
+                <template #default="{ row }">
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <img v-if="row.bgUrl" :src="row.bgUrl" style="height:26px;width:26px;object-fit:cover;border-radius:4px" />
+                    <span v-else class="hint">无</span>
+                    <el-button size="small" link type="primary" @click="wbBgTarget = { row }; wbBgEl?.click()">换</el-button>
+                    <el-button v-if="row.bgUrl" size="small" link type="danger" @click="clearWbRowBg(row)">清</el-button>
+                  </div>
                 </template>
               </el-table-column>
               <el-table-column label="操作" width="90" align="center">
@@ -3895,6 +3938,57 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-button :disabled="tr.sheets.length < tr.sheetSize" @click="tr.sheetPage++; loadTrSheets()">下一页</el-button>
               </div>
             </el-tab-pane>
+
+            <!-- ---------------- 培训文件 ---------------- -->
+            <el-tab-pane label="培训文件" name="files">
+              <el-alert type="info" :closable="false" style="margin-bottom:12px">
+                <template #title>这里只列出"被培训课程/课时引用过"的文件</template>
+                <template #default>
+                  课件 PDF、视频、课程封面图都归到这里统一管理，不用再去通用文件管理里翻。
+                  被引用的文件不能删（先去课程结构里解绑）；没被引用的可以清理掉。
+                </template>
+              </el-alert>
+              <div class="page-bar wrap">
+                <el-button @click="loadTrFiles()">刷新</el-button>
+                <span class="hint">共 {{ tr.files.length }} 个培训文件</span>
+              </div>
+              <el-table :data="tr.files" v-loading="tr.filesLoading" border stripe>
+                <el-table-column label="文件" min-width="240">
+                  <template #default="{ row }">
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <img v-if="isImage(row.mime)" :src="'/files/' + row.path" style="height:28px;width:28px;object-fit:cover;border-radius:4px" />
+                      <el-icon v-else><Document /></el-icon>
+                      <span>{{ row.name }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="类型" width="120">
+                  <template #default="{ row }">{{ row.mime || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="大小" width="110">
+                  <template #default="{ row }">{{ fmtBytes(row.size) }}</template>
+                </el-table-column>
+                <el-table-column label="引用" width="120" align="center">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="row.refs > 0 ? 'warning' : 'info'">{{ row.refs }} 处</el-tag>
+                    <div class="hint" style="line-height:1.2">
+                      课时 {{ row.lessonRefs }} · 封面 {{ row.coverRefs }}
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="上传时间" width="170">
+                  <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="140">
+                  <template #default="{ row }">
+                    <el-button size="small" link type="primary" @click="trFileOpen(row)">下载</el-button>
+                    <el-button size="small" link type="danger" :disabled="row.refs > 0"
+                      @click="delTrFile(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="!tr.filesLoading && !tr.files.length" description="还没有培训文件。" />
+            </el-tab-pane>
           </el-tabs>
 
           <!-- 课程信息 -->
@@ -5559,7 +5653,7 @@ async function loadTab() {
     await loadTurn();
   } else if (tab.value === 'users') await userPager.reset();
   else if (tab.value === 'groups') await groupPager.reset();
-  else if (tab.value === 'friends') await friendPager.reset();
+  else if (tab.value === 'friends') await loadFriends();
   else if (tab.value === 'orgs') await loadOrgs();
   else if (tab.value === 'attendance') await loadAttendance();
   else if (tab.value === 'files') await loadFiles();
@@ -5569,7 +5663,7 @@ async function loadTab() {
   else if (tab.value === 'modules') { await loadMm(); await loadAppCatalog(); await loadUserOptions(); }
   else if (tab.value === 'upstreams') await loadUs();
   else if (tab.value === 'master') await loadMaster();
-  else if (tab.value === 'training') { await loadTrCourses(); await loadTrSheets(); }
+  else if (tab.value === 'training') { await loadTrCourses(); await loadTrSheets(); await loadTrFiles(); }
   else if (tab.value === 'license') await loadLicense();
   // 默认控制码要选账号 → 顺手把用户选项也拉上，避免下拉是空的
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); await loadRdc(); await loadUserOptions(); }
@@ -5773,11 +5867,51 @@ async function loadUserOptions() { userOptions.value = (await api.get('/admin/us
 /* ====== 群组 / 好友 ====== */
 const groupPager = usePager(async ({ page, pageSize }) =>
   (await api.get(`/admin/groups?page=${page}&pageSize=${pageSize}`)).data);
-const friendPager = usePager(async ({ page, pageSize }) =>
-  (await api.get(`/admin/friendships?page=${page}&pageSize=${pageSize}`)).data);
+const friendTree = ref([]);
+const friendTotal = ref(0);
+const friendLoading = ref(false);
+/* 搜索：命中"用户名"保留整组；只命中某个好友/状态则只留命中的好友行 */
+const friendQ = ref('');
+const friendTreeFiltered = computed(() => {
+  const q = friendQ.value.trim().toLowerCase();
+  if (!q) return friendTree.value;
+  return friendTree.value
+    .map((u) => {
+      if ((u.label || '').toLowerCase().includes(q)) return u;
+      const kids = (u.children || []).filter((c) =>
+        (c.label || '').toLowerCase().includes(q) ||
+        ((c.row?.status || '')).toLowerCase().includes(q));
+      return kids.length ? { ...u, children: kids } : null;
+    })
+    .filter(Boolean);
+});
+/* 过滤后的树是全新节点，default-expanded-keys 对它们生效 —— 搜索时全部展开，方便直接看到命中行 */
+const friendSearchExpanded = computed(() =>
+  friendQ.value.trim() ? friendTreeFiltered.value.map((u) => u.key) : []);
 
 async function loadGroups() { return groupPager.reset(); }
-async function loadFriends() { return friendPager.reset(); }
+async function loadFriends() {
+  friendLoading.value = true;
+  try {
+    const { data } = await api.get('/admin/friendships/tree');
+    friendTree.value = (data.tree || []).map((u) => ({
+      key: 'u-' + u.userId,
+      label: u.userName,
+      isUser: true,
+      children: (u.friends || []).map((f) => ({
+        key: 'f-' + f.id,
+        label: f.friend_name,
+        isUser: false,
+        row: f,
+      })),
+    }));
+    friendTotal.value = data.total || 0;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载好友关系失败');
+  } finally {
+    friendLoading.value = false;
+  }
+}
 
 /* ====== 文件管理 ====== */
 
@@ -6761,6 +6895,7 @@ const trTab = ref('courses');
 const tr = ref({
   loading: false, saving: false, uploading: false,
   courses: [],
+  files: [], filesLoading: false,
   sheets: [], sheetLoading: false, sheetTotal: 0,
   sheetPage: 1, sheetSize: 50, sheetCourse: null, onlyPassed: false,
   courseDlg: false,
@@ -7059,8 +7194,33 @@ async function onTrFile(e) {
       tr.value.lessonForm.title = String(data.name || '').replace(/\.[^.]+$/, '');
     }
     ElMessage.success(`已上传：${data.name}（file#${data.id}）`);
-  } catch (err) { trErr(err, '上传失败'); }
+  }   catch (err) { trErr(err, '上传失败'); }
   finally { tr.value.uploading = false; }
+}
+
+/** 培训文件：列出被课程/课时引用过的文件（独立于通用文件管理） */
+async function loadTrFiles() {
+  tr.value.filesLoading = true;
+  try {
+    const { data } = await api.get('/training/admin/files');
+    tr.value.files = data.files || [];
+  } catch (e) { trErr(e, '读取培训文件失败'); }
+  finally { tr.value.filesLoading = false; }
+}
+
+function trFileOpen(row) {
+  window.open('/files/' + row.path, '_blank', 'noopener');
+}
+
+async function delTrFile(row) {
+  try {
+    await ElMessageBox.confirm(`删除培训文件「${row.name}」？`, '警告', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/training/admin/files/${row.id}`);
+    ElMessage.success('已删除');
+    await loadTrFiles();
+  } catch (e) { trErr(e, '删除失败'); }
 }
 
 // ---- 考试 ----
@@ -8208,13 +8368,22 @@ const wb = reactive({
   groups: [], notices: [], textMax: 60, maxDownload: 3, labelMax: 8,
   newKey: '', newLabel: '', newSort: 100,
   newNotice: '', newNoticeSort: 100,
+  newNoticeBg: null, newNoticeBgUrl: '',
   busy: false,
 });
+
+// 公告背景图：上传后回填到草稿；wbBgTarget 区分"新建草稿"还是"改某条已有公告"
+const wbBgTarget = ref(null);
+const wbBgEl = ref(null);
+const wbPreviewStyle = computed(() => wb.newNoticeBgUrl
+  ? { backgroundImage: `url(${wb.newNoticeBgUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+  : {});
 
 /** 表单都放空，免得下次打开抽屉留着上一次的输入 */
 function resetWorkbenchDraft() {
   wb.newKey = ''; wb.newLabel = ''; wb.newSort = 100;
   wb.newNotice = ''; wb.newNoticeSort = 100;
+  wb.newNoticeBg = null; wb.newNoticeBgUrl = '';
 }
 
 async function loadWorkbenchView() {
@@ -8317,7 +8486,9 @@ async function addNotice() {
   if (!text) { ElMessage.warning('公告内容不能为空'); return; }
   wb.busy = true;
   try {
-    const { data } = await api.post('/admin/apps/notices', { text, sort: wb.newNoticeSort });
+    const { data } = await api.post('/admin/apps/notices', {
+      text, sort: wb.newNoticeSort, bgFileId: wb.newNoticeBg || undefined,
+    });
     wbToast(data, '已发布');
     await loadWorkbenchView();
   } catch (e) {
@@ -8326,6 +8497,43 @@ async function addNotice() {
     wb.busy = false;
     wb.newNotice = '';
   }
+}
+
+/** 公告背景图上传：wbBgTarget 决定填到"草稿"还是"某条已有公告" */
+async function onWbBg(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  const target = wbBgTarget.value;
+  wbBgTarget.value = null;
+  if (!file) return;
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const { data } = await api.post('/files/upload', fd);
+    if (target === 'new') {
+      wb.newNoticeBg = data.id;
+      wb.newNoticeBgUrl = data.url;
+    } else if (target && target.row) {
+      const row = target.row;
+      row.bgFileId = data.id;
+      row.bgUrl = data.url;
+      await wbSaveNotice(row, { bgFileId: data.id });
+    }
+    ElMessage.success('背景图已上传');
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error || '上传失败');
+  }
+}
+
+function clearWbBg() {
+  wb.newNoticeBg = null;
+  wb.newNoticeBgUrl = '';
+}
+
+async function clearWbRowBg(row) {
+  row.bgFileId = 0;
+  row.bgUrl = '';
+  await wbSaveNotice(row, { bgFileId: null });
 }
 
 async function wbSaveNotice(row, patch) {

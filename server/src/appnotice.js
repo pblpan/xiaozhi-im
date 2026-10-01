@@ -46,14 +46,25 @@ CREATE TABLE IF NOT EXISTS workbench_notices (
 );
 `);
 
+// 背景图（本轮新增）：老库没有这一列，首次启动补上。
+// 幂等：列已存在时 ALTER 会报 "duplicate column"，忽略即可。
+try { db.exec('ALTER TABLE workbench_notices ADD COLUMN bg_file_id INTEGER'); } catch {}
+
 /* ---------------- 读 ---------------- */
+
+/** 拼出背景图可访问地址；没有背景图返回 ''（客户端据此判断是否叠背景） */
+function bgUrl(row) {
+  if (!row || !row.bg_file_id) return '';
+  const f = db.prepare('SELECT path FROM files WHERE id=?').get(row.bg_file_id);
+  return f && f.path ? `/files/${f.path}` : '';
+}
 
 /** 当前生效的公告（管理台"预览客户端看到什么"用） */
 function listEnabled(limit) {
   const n = limit == null ? MAX_DOWNLOAD : Math.max(1, Math.min(MAX_DOWNLOAD, Number(limit) || 1));
   return db.prepare(
-    'SELECT id, text, sort FROM workbench_notices WHERE enabled=1 ORDER BY sort ASC, id ASC LIMIT ?',
-  ).all(n).map((r) => ({ id: r.id, text: r.text, sort: r.sort }));
+    'SELECT id, text, sort, bg_file_id FROM workbench_notices WHERE enabled=1 ORDER BY sort ASC, id ASC LIMIT ?',
+  ).all(n).map((r) => ({ id: r.id, text: r.text, sort: r.sort, bgUrl: bgUrl(r) }));
 }
 
 /** 全部公告（含已停用的，管理台列表要给"停用/启用"这个开关） */
@@ -61,6 +72,8 @@ function listAll() {
   return db.prepare('SELECT * FROM workbench_notices ORDER BY sort ASC, id ASC').all()
     .map((r) => ({
       id: r.id, text: r.text, sort: r.sort, enabled: !!r.enabled,
+      bgFileId: r.bg_file_id || 0,
+      bgUrl: bgUrl(r),
       updatedAt: r.updated_at, updatedBy: r.updated_by || '',
     }));
 }
@@ -80,16 +93,22 @@ function cleanSort(raw) {
   return { value: Math.max(0, Math.min(9999, Math.trunc(n))) };
 }
 
-/** 新增一条公告 */
-function add(raw, by) {
-  const t = cleanText(raw);
+/** 新增一条公告（可带背景图 fileId） */
+function add(text, by, bgFileId) {
+  const t = cleanText(text);
   if (t.error) return t;
   const s = cleanSort(100);
+  let bg = null;
+  if (bgFileId !== null && bgFileId !== undefined && bgFileId !== '') {
+    bg = Number(bgFileId);
+    if (!Number.isFinite(bg)) return { error: '背景图参数不合法' };
+  }
   const now = Date.now();
   const info = db.prepare(
-    'INSERT INTO workbench_notices (text, sort, enabled, updated_at, updated_by) VALUES (?,?,1,?,?)',
-  ).run(t.value, s.value, now, String(by || 'admin').slice(0, 60));
-  return { id: Number(info.lastInsertRowid), notice: { id: Number(info.lastInsertRowid), ...t, enabled: true } };
+    'INSERT INTO workbench_notices (text, sort, enabled, bg_file_id, updated_at, updated_by) VALUES (?,?,1,?,?,?)',
+  ).run(t.value, s.value, bg, now, String(by || 'admin').slice(0, 60));
+  const id = Number(info.lastInsertRowid);
+  return { id, notice: { id, text: t.value, sort: s.value, enabled: true, bgFileId: bg || 0, bgUrl: bgUrl({ bg_file_id: bg }) } };
 }
 
 /** 改一条（PATCH 语义） */
@@ -101,6 +120,7 @@ function update(id, patch, by) {
   let text = row.text;
   let sort = Number(row.sort);
   let enabled = !!row.enabled;
+  let bgFileId = row.bg_file_id || null;
 
   if ('text' in patch) {
     if (patch.text === null) text = row.text;
@@ -119,13 +139,18 @@ function update(id, patch, by) {
     }
   }
   if ('enabled' in patch) enabled = !!patch.enabled;
+  if ('bgFileId' in patch) {
+    const v = patch.bgFileId;
+    bgFileId = (v === null || v === undefined || v === '' || Number(v) === 0) ? null : Number(v);
+    if (bgFileId !== null && !Number.isFinite(bgFileId)) return { error: '背景图参数不合法' };
+  }
 
   db.prepare(`
     UPDATE workbench_notices
-       SET text=?, sort=?, enabled=?, updated_at=?, updated_by=?
+       SET text=?, sort=?, enabled=?, bg_file_id=?, updated_at=?, updated_by=?
      WHERE id=?
-  `).run(text, sort, enabled ? 1 : 0, Date.now(), String(by || 'admin').slice(0, 60), Number(id));
-  return { notice: { id: Number(id), text, sort, enabled } };
+  `).run(text, sort, enabled ? 1 : 0, bgFileId, Date.now(), String(by || 'admin').slice(0, 60), Number(id));
+  return { notice: { id: Number(id), text, sort, enabled, bgFileId: bgFileId || 0, bgUrl: bgUrl({ bg_file_id: bgFileId }) } };
 }
 
 /** 删一条（只删，不动别人 —— 这是"以后不再出现"的语义） */

@@ -5,6 +5,7 @@ import '../core/app_version.dart';
 import '../core/apps.dart';
 import '../core/module_schema.dart';
 import '../core/theme.dart';
+import '../core/config.dart';
 import '../widgets/module_renderer.dart';
 import 'module_page.dart';
 
@@ -366,26 +367,46 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           itemBuilder: (ctx, i) {
             final n = _notices[i];
             final text = n['text']?.toString() ?? '';
+            final bgRaw = n['bgUrl']?.toString() ?? '';
+            final hasBg = bgRaw.isNotEmpty;
+            // 背景图是相对路径（/files/...），拼上当前服务器地址才是可加载的绝对地址
+            final bgAbs = hasBg ? '${Config.baseUrl}$bgRaw' : '';
             return Container(
               width: 300,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
-                // 公告底色用品牌色的浅调，不用"红底白字"——那是在报警，不是在通知
-                color: sem.cardBg,
+                // 公告底色用品牌色的浅调，不用"红底白字"——那是在报警，不是在通知。
+                // 有背景图时改用图片 + 暗化滤镜，文字转白保证可读。
+                color: hasBg ? null : sem.cardBg,
+                image: hasBg
+                    ? DecorationImage(
+                        image: NetworkImage(bgAbs),
+                        fit: BoxFit.cover,
+                        colorFilter: const ColorFilter.mode(
+                          Color(0x66000000),
+                          BlendMode.darken,
+                        ),
+                      )
+                    : null,
                 borderRadius: BorderRadius.circular(AppRadii.md),
                 border: Border.all(color: sem.cardBorder),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.campaign_outlined, size: 18, color: AppColors.brand),
+                  Icon(Icons.campaign_outlined,
+                      size: 18, color: hasBg ? Colors.white : AppColors.brand),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       text,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13.5, height: 1.5),
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        height: 1.5,
+                        color: hasBg ? Colors.white : null,
+                      ),
                     ),
                   ),
                 ],

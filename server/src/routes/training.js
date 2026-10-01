@@ -31,6 +31,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db');
+const config = require('../config');
 const { verifyToken } = require('../auth');
 const { parseList, envelope } = require('../paging');
 const appoverrides = require('../appoverrides');
@@ -952,6 +953,47 @@ router.get('/admin/sheets', (req, res) => {
     ORDER BY s.started_at DESC, s.id DESC
     LIMIT ? OFFSET ?`).all(...params, list.pageSize, list.offset);
   res.json(envelope(list, rows, total));
+});
+
+/* ==================== 培训文件管理（独立的培训文件区） ====================
+ * 培训中心之前没有"独立的培训文件管理"——课件/封面图散落在通用文件管理里，
+ * 管理员想清理、想看哪些文件被哪些课程引用，得去翻全部文件。这里把
+ * "被培训模块引用过的文件"单独拎出来成一块，并支持删除（仅限无引用残留的）。
+ */
+
+/** GET /api/training/admin/files —— 列出被培训课程/课时引用的文件 */
+router.get('/admin/files', (req, res) => {
+  const u = auth(req, res, { needAdmin: true }); if (!u) return;
+  const files = db.prepare(`
+    SELECT f.id, f.name, f.mime, f.size, f.path, f.created_at,
+      (SELECT COUNT(*) FROM tr_lesson l WHERE l.file_id = f.id) lesson_refs,
+      (SELECT COUNT(*) FROM tr_course c WHERE c.cover_file_id = f.id) cover_refs
+    FROM files f
+    WHERE f.id IN (SELECT file_id FROM tr_lesson WHERE file_id IS NOT NULL)
+       OR f.id IN (SELECT cover_file_id FROM tr_course WHERE cover_file_id IS NOT NULL)
+    ORDER BY f.created_at DESC
+  `).all().map((f) => ({
+    id: f.id, name: f.name, mime: f.mime, size: f.size,
+    path: f.path, createdAt: f.created_at,
+    lessonRefs: f.lesson_refs, coverRefs: f.cover_refs,
+    refs: f.lesson_refs + f.cover_refs,
+  }));
+  res.json({ files });
+});
+
+/** DELETE /api/training/admin/files/:id —— 删培训文件（仅限已无任何引用的） */
+router.delete('/admin/files/:id', (req, res) => {
+  const u = auth(req, res, { needAdmin: true }); if (!u) return;
+  const id = Number(req.params.id);
+  const refs = db.prepare(`
+    SELECT (SELECT COUNT(*) FROM tr_lesson WHERE file_id=?) + (SELECT COUNT(*) FROM tr_course WHERE cover_file_id=?) n
+  `).get(id, id).n;
+  if (refs > 0) return res.status(400).json({ error: '该文件仍被培训课程引用，不能删除（先去课程结构里解绑）' });
+  const f = db.prepare('SELECT * FROM files WHERE id=?').get(id);
+  if (!f) return res.status(404).json({ error: '文件不存在' });
+  db.prepare('DELETE FROM files WHERE id=?').run(id);
+  try { fs.unlinkSync(path.join(config.FILES_DIR, f.path)); } catch {}
+  res.json({ ok: true });
 });
 
 module.exports = router;

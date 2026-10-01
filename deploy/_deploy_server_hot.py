@@ -76,6 +76,10 @@ FILES = [
     'src/routes/deduct.js',
     'src/routes/inventory.js',
     'src/routes/training.js',
+    # 🔴 2026-09-29 补：上传文件名乱码修复的 `fixFilename()` 就在这个文件里。
+    #    它一直不在清单里，所以线上传中文名课件照样乱码 —— 典型的
+    #    "代码改了、文件没推、功能没上线、还不报错"。
+    'src/routes/files.js',
     # 🔴 2026-09-27 晚「远程协助默认控制码」那轮补的：
     #    settings.js 加 remoteDefaultCodeId 键、remote.js 加三个默认码函数。
     #    第一次推的时候**这两个都不在清单里** —— 结果 admin.js 上去了、
