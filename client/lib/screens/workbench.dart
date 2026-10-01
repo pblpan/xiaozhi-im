@@ -499,33 +499,41 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           fit: StackFit.expand,
           alignment: Alignment.center,
           children: [
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // 彩色圆底：圆角比图标本身大一圈是刻意的，企微/飞书都是圆的
-                Container(
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(23),
+            // 🔴 必须包 FittedBox(scaleDown)：expand 之后 Stack 被钉成格子大小，
+            // 而图标46+间距10+文字≈19 ≈ 75px，宽屏 8 列时格子只有 ~69px 高 ——
+            // 裸 Column 直接溢出 6px（CI workbench_test 9 连红抓的就是它，
+            // 真机宽屏上会画出黄黑条纹）。scaleDown 只在放不下时等比缩，
+            // 空间够时零变化，居中语义不变。
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // 彩色圆底：圆角比图标本身大一圈是刻意的，企微/飞书都是圆的
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(23),
+                    ),
+                    child: Icon(
+                      moduleIcon(app['icon']?.toString() ?? ''),
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
-                  child: Icon(
-                    moduleIcon(app['icon']?.toString() ?? ''),
-                    color: Colors.white,
-                    size: 24,
+                  const SizedBox(height: 10),
+                  Text(
+                    app['title']?.toString() ?? '应用',
+                    maxLines: 1,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                   ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  app['title']?.toString() ?? '应用',
-                  maxLines: 1,
-                  textAlign: TextAlign.center,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-              ],
+                ],
+              ),
             ),
             if (badge.isNotEmpty)
               Positioned(
