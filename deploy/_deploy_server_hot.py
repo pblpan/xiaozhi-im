@@ -89,6 +89,23 @@ FILES = [
     'src/settings.js',
     'src/remote.js',
     'src/routes/remote.js',
+    # ── 🔴 2026-10-03「10 项全栈加固 + 数据体检页」这一轮 ──
+    # 审计找出的 10 个缺陷对应的实现全在这几个文件里，漏任何一个都是
+    # "代码推了、行为没变"（而且往往不报错：限流文件不推 = 登录照样无限流）。
+    #
+    # 新增的三个（**漏了直接 500**：index.js require 了、文件却不存在）：
+    'src/ratelimit.js',        # 新：通用滑动窗口限流（auth.js / setup.js 共用）
+    'src/tokens.js',           # 新：双令牌 access+refresh（登录返回 + /auth/refresh）
+    'src/routes/orphans.js',   # 新：数据体检（孤儿巡检 scan / purge）
+    # 改动的八个：
+    'src/routes/auth.js',      # 登录/注册限流 + /auth/refresh + 改密码作废 refresh
+    'src/routes/groups.js',    # 建群/加成员 4 处多步写入补事务
+    'src/routes/friends.js',   # 接受好友 4 步写入补事务（否则好友能看见却发不出消息）
+    'src/routes/orgs.js',      # 移除员工 2 步写入补事务 + adminOf 的 401/403 修正
+    'src/routes/admin.js',     # adminOf 的 401/403 修正（用户不存在该 401 不是 403）
+    'src/routes/setup.js',     # 限流改用 ratelimit.js 共享实现（去重）
+    #    db.js / index.js / package.json / public/index.html 已在上面
+    #    （db.js 加索引+触发器+refresh_tokens 表，index.js 加挂路由与优雅停机）
     'public/index.html',
     # 🔴 管理台的 bundle 名**不再写死在这里**（2026-09-27 改）。
     #    原因：vite 每次构建产物的文件名都带新哈希（index-XXXX.js），

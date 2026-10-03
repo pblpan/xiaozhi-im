@@ -12,7 +12,7 @@ import 'dart:typed_data';
 /// Windows/桌面机常见多网卡（以太网+WiFi+虚拟网卡），受限广播地址
 /// 不一定走对网卡；逐网卡定向广播保证"服务器在哪张网段都能问到"。
 class DiscoveredServer {
-  final String url; // http://192.168.31.44:3602
+  final String url; // 例如 http://192.168.1.100:3602（由局域网发现得出）
   final String ip;
   final String companyName;
   final String friendMode;
