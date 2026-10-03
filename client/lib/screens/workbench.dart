@@ -364,8 +364,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   /// 顶部公告：横滑的一条卡片。没配公告时这段整体不出现。
+  ///
+  /// 卡片宽度撑满可用宽度（左右各 14 内边距），避免窄屏上右侧空出一块、左右不对称。
+  /// 点卡片弹「公告详情」（标题 + 正文 + 背景图），正文在管理台「公告台」填写。
   Widget _noticeSliver() {
     final sem = AppSemantic.of(context);
+    // 横向 ListView 的左右内边距各 14，所以单卡宽度 = 屏宽 - 28，正好铺满、右侧不空。
+    final cardW = MediaQuery.of(context).size.width - 28;
     return SliverToBoxAdapter(
       child: SizedBox(
         height: 78,
@@ -377,12 +382,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           itemBuilder: (ctx, i) {
             final n = _notices[i];
             final text = n['text']?.toString() ?? '';
+            final content = n['content']?.toString() ?? '';
             final bgRaw = n['bgUrl']?.toString() ?? '';
             final hasBg = bgRaw.isNotEmpty;
             // 背景图是相对路径（/files/...），拼上当前服务器地址才是可加载的绝对地址
             final bgAbs = hasBg ? '${Config.baseUrl}$bgRaw' : '';
-            return Container(
-              width: 300,
+            final card = Container(
+              width: cardW,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 // 公告底色用品牌色的浅调，不用"红底白字"——那是在报警，不是在通知。
@@ -402,7 +408,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 border: Border.all(color: sem.cardBorder),
               ),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Icon(Icons.campaign_outlined,
                       size: 18, color: hasBg ? Colors.white : AppColors.brand),
@@ -415,14 +421,109 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       style: TextStyle(
                         fontSize: 13.5,
                         height: 1.5,
-                        color: hasBg ? Colors.white : null,
+                        color: hasBg ? Colors.white : AppColors.text,
                       ),
                     ),
                   ),
+                  // 有正文才给个">"暗示可点开看详情
+                  if (content.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Icon(Icons.chevron_right,
+                          size: 16, color: hasBg ? Colors.white70 : sem.muted),
+                    ),
                 ],
               ),
             );
+            // 整张卡可点：弹详情。即使没有正文也允许点（详情里只有标题）。
+            return Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(AppRadii.md),
+                onTap: () => _openNoticeDetail(text, content, hasBg ? bgAbs : ''),
+                child: card,
+              ),
+            );
           },
+        ),
+      ),
+    );
+  }
+
+  /// 公告详情弹窗：标题 + 正文（管理台填的「正文」）+ 背景图。
+  /// 背景图存在时当头图，没有则用品牌色小标 + 标题。
+  void _openNoticeDetail(String text, String content, String bgAbs) {
+    final sem = AppSemantic.of(context);
+    final hasBg = bgAbs.isNotEmpty;
+    showDialog(
+      context: context,
+      builder: (dctx) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.lg)),
+        clipBehavior: Clip.antiAlias,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 460,
+            maxHeight: MediaQuery.of(context).size.height * 0.82,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (hasBg)
+                Stack(
+                  children: [
+                    Image.network(bgAbs, height: 150, width: double.infinity, fit: BoxFit.cover),
+                    Container(height: 150, width: double.infinity, color: Colors.black.withOpacity(0.42)),
+                    Positioned(
+                      left: 16, right: 16, bottom: 14,
+                      child: Text(text,
+                          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: Colors.white)),
+                    ),
+                  ],
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.campaign_outlined, color: AppColors.brand, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(text,
+                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.text)),
+                      ),
+                    ],
+                  ),
+                ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 18, 6),
+                  child: Text(
+                    content.isNotEmpty ? content : '（该公告暂无正文）',
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      height: 1.75,
+                      color: content.isNotEmpty ? AppColors.text : sem.muted,
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(dctx).pop(),
+                      child: const Text('知道了'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

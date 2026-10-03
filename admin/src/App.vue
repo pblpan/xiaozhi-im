@@ -1906,6 +1906,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <el-button v-if="wb.newNoticeBgUrl" size="small" text type="danger" @click="clearWbBg">清除</el-button>
               <input ref="wbBgEl" type="file" accept="image/*" style="display:none" @change="onWbBg" />
             </div>
+            <div style="margin-bottom:12px;max-width:540px">
+              <div class="hint" style="margin-bottom:4px">正文（点开公告横幅看得到，可不填；最多 {{ wb.contentMax || 2000 }} 字）</div>
+              <el-input v-model="wb.newNoticeContent" type="textarea" :rows="3" :maxlength="wb.contentMax || 2000"
+                show-word-limit
+                placeholder="想多说几句就写这儿，例如活动细则、注意事项……手机端点击工作台公告横幅即可展开看详情。" />
+            </div>
 
             <!-- 宽屏 / 窄屏预览：先在管理台看清楚客户端实际效果再发布 -->
             <div style="display:flex;gap:18px;margin-bottom:14px;flex-wrap:wrap">
@@ -1928,9 +1934,15 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </div>
 
             <el-table :data="wb.notices || []" border size="small">
-              <el-table-column label="内容" min-width="320">
+              <el-table-column label="标题" min-width="280">
                 <template #default="{ row }">
-                  <el-input v-model="row.text" size="small" @change="(v) => wbSaveNotice(row, { text: v })" />
+                  <el-input v-model="row.text" size="small" :maxlength="wb.textMax || 60" @change="(v) => wbSaveNotice(row, { text: v })" />
+                </template>
+              </el-table-column>
+              <el-table-column label="正文" min-width="280">
+                <template #default="{ row }">
+                  <el-input v-model="row.content" type="textarea" :rows="2" :maxlength="wb.contentMax || 2000"
+                    @change="(v) => wbSaveNotice(row, { content: v })" placeholder="（空）点开公告可见" />
                 </template>
               </el-table-column>
               <el-table-column label="排序" width="120" align="center">
@@ -1969,7 +1981,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </el-table>
             <div class="hint" style="margin-top:8px">
               这是"必须读到"的位置，不是群消息的副本 —— 群消息员工可以压根不看，
-              公告在他打开工作台的第一眼就在那儿。要发详情用群消息（那边有富文本）。
+              公告在他打开工作台的第一眼就在那儿。横幅上那句话之外，可填「正文」，
+              手机端点击公告横幅会弹开应用内详情（标题 + 正文 + 背景图），不用再发群消息。
             </div>
           </el-card>
 
@@ -8603,9 +8616,9 @@ async function loadAppCatalog() {
 // 这两样管的是"整块工作台长什么样"，不属于任何一个应用，所以单独一块。
 // 和上面的应用总览共用 /admin/apps 一次请求拿到的 groups / notices。
 const wb = reactive({
-  groups: [], notices: [], textMax: 60, maxDownload: 3, labelMax: 8,
+  groups: [], notices: [], textMax: 60, contentMax: 2000, maxDownload: 3, labelMax: 8,
   newKey: '', newLabel: '', newSort: 100,
-  newNotice: '', newNoticeSort: 100,
+  newNotice: '', newNoticeSort: 100, newNoticeContent: '',
   newNoticeBg: null, newNoticeBgUrl: '',
   busy: false,
 });
@@ -8620,7 +8633,7 @@ const wbPreviewStyle = computed(() => wb.newNoticeBgUrl
 /** 表单都放空，免得下次打开抽屉留着上一次的输入 */
 function resetWorkbenchDraft() {
   wb.newKey = ''; wb.newLabel = ''; wb.newSort = 100;
-  wb.newNotice = ''; wb.newNoticeSort = 100;
+  wb.newNotice = ''; wb.newNoticeSort = 100; wb.newNoticeContent = '';
   wb.newNoticeBg = null; wb.newNoticeBgUrl = '';
 }
 
@@ -8648,6 +8661,7 @@ async function loadWorkbenchView() {
   if (n.status === 'fulfilled') {
     wb.notices = n.value.data.notices || [];
     wb.textMax = n.value.data.textMax || 60;
+    wb.contentMax = n.value.data.contentMax || 2000;
     wb.maxDownload = n.value.data.maxDownload || 3;
   } else {
     wb.notices = appCatalog.value.notices || [];
@@ -8721,11 +8735,11 @@ function groupLabelOf(key) {
 
 async function addNotice() {
   const text = (wb.newNotice || '').trim();
-  if (!text) { ElMessage.warning('公告内容不能为空'); return; }
+  if (!text) { ElMessage.warning('公告标题不能为空'); return; }
   wb.busy = true;
   try {
     const { data } = await api.post('/admin/apps/notices', {
-      text, sort: wb.newNoticeSort, bgFileId: wb.newNoticeBg || undefined,
+      text, content: wb.newNoticeContent || '', sort: wb.newNoticeSort, bgFileId: wb.newNoticeBg || undefined,
     });
     wbToast(data, '已发布');
     await loadWorkbenchView();
@@ -8734,6 +8748,7 @@ async function addNotice() {
   } finally {
     wb.busy = false;
     wb.newNotice = '';
+    wb.newNoticeContent = '';
   }
 }
 

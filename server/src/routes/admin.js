@@ -1274,6 +1274,7 @@ router.get('/apps/notices', (req, res) => {
   res.json({
     notices: appnotice.listAll(),
     textMax: appnotice.TEXT_MAX,
+    contentMax: appnotice.CONTENT_MAX,
     maxDownload: appnotice.MAX_DOWNLOAD,
     enabled: appnotice.listEnabled(),
   });
@@ -1283,7 +1284,7 @@ router.post('/apps/notices', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
   const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
   const body = req.body || {};
-  const r = appnotice.add(body.text, u?.username || 'admin', body.bgFileId);
+  const r = appnotice.add(body.text, u?.username || 'admin', body.bgFileId, body.content);
   if (r.error) return res.status(400).json({ error: r.error });
   res.json({ ok: true, notices: appnotice.listAll(), message: '公告已发布（客户端下次启动就能看到）' });
 });
