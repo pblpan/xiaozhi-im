@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/screens/inventory_grant.dart';
@@ -21,6 +22,15 @@ import 'support/api_stub.dart';
 /// ⑤ 拿不到服务端时**明说 + 给重试**，不是静默当成"没授权"。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  // 🔴 2026-10-03 补：shared_preferences mock（防 MultiEnterprise 改造后回退）。
+  //   ImApi._h 改为读激活档案 token 后，任何走 ImApi 的路径都会碰
+  //   SessionManager → SharedPreferences.getInstance()；单元测试里没有 plugin
+  //   实现，会抛 MissingPluginException，且是在测试**结束后**才抛
+  //   （"failed after test completion"），几个用例一起挂、看不出跟偏好有关。
+  //   修法是补 mock，而不是把 _h 改回去 —— 改回去等于把
+  //   「切企业后所有请求 401」那个 bug 请回来。
+  SharedPreferences.setMockInitialValues({});
 
   late ApiStub stub;
   const path = '/api/stocktake/zone/Z01/grant';

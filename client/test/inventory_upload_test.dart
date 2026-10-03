@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/local_db.dart';
@@ -39,6 +40,18 @@ import 'support/api_stub.dart';
 ///   收尾统一走 [drain]。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  // 🔴 2026-10-03 补：shared_preferences 的 mock。
+  //   多企业改造后 `ImApi._h` 改为**读激活档案的 token**（而不再读全局 `_token`），
+  //   于是任何走 ImApi 的路径都会碰到 SessionManager → SharedPreferences.getInstance()。
+  //   单元测试里没有 plugin 实现，会抛
+  //     MissingPluginException(No implementation found for method getAll
+  //                             on channel plugins.flutter.io/shared_preferences)
+  //   而且它是在**测试已经结束后**才抛的（报错是 "failed after test completion"），
+  //   8 个用例一起挂、且看不出跟偏好有关 —— 很容易误判成"页面坏了"。
+  //   修法是补上 mock（沿用 workspace_test / widget_test 的既有写法），
+  //   而不是把 _h 改回去 —— 改回去等于把"切企业后全 401"那个 bug 请回来。
+  SharedPreferences.setMockInitialValues({});
 
   const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
   final supportDir = '${Directory.systemTemp.path}/xz_inventory_upload_test';
