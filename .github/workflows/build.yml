@@ -52,15 +52,20 @@ env:
   HYD_MASTER_TAG: hyd-master-data
   HYD_MASTER_ASSET: builtin_master.csv
   # 钉死构建时该用哪一份。传错版本/传了半截文件都靠它红。
-  EXPECT_HYD_MASTER_SHA256: "c9189e2ec2cc66f1a98bef71a45cb5d49eaafb4468fc699ef79353bd80263df7"
+  # 🔴 换档就要换这里 —— 换完记得把上传脚本跑一遍（工作区根 `_ci_hyd_master.py`，
+  #    它会打出这一行）。忘了改的后果不是"用了旧的"而是 **CI 直接红**，
+  #    这正是我们要的：宁可不构建，也不能悄悄拿一份不对的商档出包。
+  # 2026-10-03 换成管理台那份**统一商档**（product_master 表，126793 条 7 列）：
+  #   序号/条码/商品名字/数量 那套 5 列的老 CSV 已作废。
+  EXPECT_HYD_MASTER_SHA256: "fb318eb95210b9d4c435728a0a8216dd9bd097bb5f0d63ce074aa4e99079bca7"
   # 打完包后断言"APK 里真的有这份档案，且体积对得上"。
-  # 🔴 下限为什么卡 5MB：gradle 放错资源目录**不报错也不打包**
+  # 🔴 下限为什么卡 7MB：gradle 放错资源目录**不报错也不打包**
   #    （scanner_app/tools/build_builtin_master.py 顶部记着这个坑：
   #     "2026-09-19 就踩了这个：APK 只大了 16KB"）。
   #    也就是说**少了这份档案的包一样能构建成功、签名也过、版本也对**，
-  #    唯一能认出它的办法就是量体积 —— 5MB 是 6.97MB 的安全下界，
-  #    留出余量又不会被"刚好少一大截"骗过去。
-  MIN_HYD_MASTER_BYTES: 5242880
+  #    唯一能认出它的办法就是量体积 —— 7MB 是 7.9MB 的安全下界。
+  #    ⚠️ 换商档时这个数也要跟着调（别只改 sha256）。
+  MIN_HYD_MASTER_BYTES: 7340032
 
 jobs:
   # 最先跑：编译错误 / 测试失败不该等到打完两个包才发现。
@@ -176,6 +181,27 @@ jobs:
       # hooks 会走 `default: sqlite3`（预编译库下载）—— CI 网络通得过；
       # 真跑不起来时这里的报错是 "Building assets for package:sqlite3 failed"，
       # 与"代码写错了"是两回事，别顺着代码方向排查。
+      # 🔴 商档要**在扫码枪 Test 之前**下载到工程里，原因：
+      #    `scanner_app/test/builtin_master_csv_test.dart` 会真解析那份 CSV，
+      #    断言「规格/单位/售价」没被静默丢弃（管理台界面上那段红字警告的正是这个）。
+      #    而 CSV 被 gitignore，runner 上默认没有 → 不先下载的话这条测试只会"跳过"，
+      #    等于 CI 里最该验的字段完整性**根本没验**。
+      - name: 下载内置商档（供扫码枪测试解析）
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DST="scanner_app/android/app/src/hyd/assets/${HYD_MASTER_ASSET}"
+          mkdir -p "$(dirname "$DST")"
+          gh release download "$HYD_MASTER_TAG" -R "$GITHUB_REPOSITORY" \
+             --pattern "$HYD_MASTER_ASSET" --dir "$(dirname "$DST")" --clobber
+          test -s "$DST" || { echo "::error::商档没下载下来"; exit 1; }
+          GOT=$(sha256sum "$DST" | cut -d' ' -f1)
+          [ "$GOT" = "$EXPECT_HYD_MASTER_SHA256" ] || {
+            echo "::error::商档指纹不符：$GOT"; exit 1; }
+          echo "✅ 商档就位（$(wc -l < "$DST") 行，指纹匹配）"
+
       - name: 扫码枪 Pub get
         working-directory: scanner_app
         run: flutter pub get
@@ -509,11 +535,13 @@ jobs:
             exit 1
           fi
 
-          # 行数量级：12 万行级别。低于 1000 行基本等于"传了个表头"。
+          # 行数量级：12.6 万行（统一商档 126793 条 + 表头）。低于 12 万基本等于
+          # "导出/传输截断"—— 那是个 4MB 的"正常"文件，员工扫到后半段全变未知商品，
+          # 而界面看不出任何异常。
           ROWS=$(wc -l < "$DST")
           echo "行数: $ROWS"
-          if [ "$ROWS" -lt 1000 ]; then
-            echo "::error::商档只有 $ROWS 行，明显不完整（正常 12 万+ 行）"
+          if [ "$ROWS" -lt 120000 ]; then
+            echo "::error::商档只有 $ROWS 行，明显不完整（正常 12.6 万+ 行）"
             exit 1
           fi
           echo "✅ 商档校验通过（指纹 + 行数）"
