@@ -6,6 +6,8 @@ import '../core/stock_master_repo.dart';
 import '../core/theme.dart';
 import 'deduct.dart';
 import 'inventory_approval.dart';
+import 'master_lookup.dart';
+import 'picking.dart';
 import 'inventory_collect.dart';
 import 'inventory_grant.dart';
 
@@ -361,6 +363,31 @@ class _InventoryPageState extends State<InventoryPage> {
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute<void>(builder: (_) => const DeductPage()),
+            ),
+          ),
+          // 自由拣货单：和盘点同属"库存作业"，但**不挂工作台图标**
+          // （龙哥 2026-10-03 要"放在盘点里面，不独立"）。入口放在这里，
+          // 复用扫码枪那套相机界面 + 同一张 scan_record 流水表（JK 前缀）。
+          IconButton(
+            key: const Key('open-picking'),
+            tooltip: '自由拣货单',
+            icon: const Icon(Icons.shopping_bag_outlined,
+                color: AppColors.textSub),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(builder: (_) => const PickingPage()),
+            ),
+          ),
+          // 商档查询：扫一下商品，跳出商档里该商品的所有信息（龙哥 2026-10-03）。
+          IconButton(
+            key: const Key('open-master-lookup'),
+            tooltip: '商档查询',
+            icon: const Icon(Icons.qr_code_2_outlined,
+                color: AppColors.textSub),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                  builder: (_) => const MasterLookupPage()),
             ),
           ),
           PopupMenuButton<String>(

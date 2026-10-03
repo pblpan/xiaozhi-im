@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/scan_dedup.dart';
 import '../core/scan_feedback.dart';
 import '../core/scan_sink.dart';
+import '../core/stock_master_repo.dart';
 import '../core/theme.dart';
 import '../widgets/qty_edit.dart' show fmtQty;
 
@@ -92,12 +93,18 @@ class _CameraScanPageState extends State<CameraScanPage> {
   double _camRatio = 0.36;
 
   int _sessionCount = 0;
-  Map<String, dynamic>? _lastHit;
   String? _lastMessage;
-  bool _lastAccepted = true;
   Map<String, dynamic> _sum = const {};
   List<Map<String, dynamic>> _recent = const <Map<String, dynamic>>[];
   String? _error;
+
+  /// 待确认的那一笔：确认制开着时，扫到先挂到这里等用户填数量，不立刻落库。
+  final TextEditingController _qtyCtl = TextEditingController(text: '1');
+  String? _pendingCode;
+  double _pendingQty = 1;
+  Map<String, dynamic>? _pendingMaster;
+  /// 这一笔被业务拒绝（如不属于本盘点位）：保持确认卡显示拒绝原因。
+  bool _pendingRejected = false;
 
   /// 扫码成功时取景框闪一下 —— 现场很吵、手机拿得远，没有这个反馈员工不确定扫上没有。
   /// **只有真的写进去了才闪**（被拒绝的扫码闪绿会训练出错误的直觉）。
@@ -114,6 +121,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
   @override
   void dispose() {
     _flashTimer?.cancel();
+    _qtyCtl.dispose();
     unawaited(_cam.dispose());
     super.dispose();
   }
@@ -183,18 +191,49 @@ class _CameraScanPageState extends State<CameraScanPage> {
     )) {
       return; // 相机还对着同一件
     }
-    await _record(code);
+    await _onScan(code);
   }
 
-  /// 「再记 1 件」：对刚扫过的那个码再加一件。
+  /// 扫到码后的统一入口。
   ///
-  /// 明确不参与冷却（手动动作不该被"手感"判据拦），
-  /// 并且**保持在确认卡上** —— 连扫三件就是连点三下，不用反复确认。
-  Future<void> _addAgain() async {
-    final code = _lastCode;
+  /// 确认制开着 → **先停、后确认**：不直接落库，把码先挂到确认卡上，
+  /// 让用户当场填数量（直接输 9，不用点 9 下、更不用点了再减）。
+  /// 确认制关着 → 直接落库 1 件（快速连扫模式，没有数量卡）。
+  Future<void> _onScan(String code) async {
+    if (_gate.confirmMode) {
+      // 同步关门：防止这一帧到商档查询完成之间又进来一帧（同码被当两件）。
+      final now = DateTime.now().millisecondsSinceEpoch;
+      setState(() {
+        _gate.onRecorded();
+        _pendingCode = code;
+        _pendingQty = 1;
+        _qtyCtl.text = '1';
+        _pendingMaster = null;
+        _pendingRejected = false;
+        _lastAcceptAt = now;
+      });
+      final master = await StockMasterRepo.instance.lookupLocal(code);
+      if (!mounted) return;
+      setState(() => _pendingMaster = master);
+    } else {
+      await _record(code, qty: 1);
+    }
+  }
+
+  /// 「确认录入」：把确认卡上用户填好的数量真正落库。
+  ///
+  /// 被业务拒绝（如不属于本盘点位）时**不**放行：保持确认卡、显示拒绝原因，
+  /// 等用户点「知道了」再继续 —— 否则他会以为记上了。
+  Future<void> _commit() async {
+    final code = _pendingCode;
     if (code == null) return;
-    _lastAcceptAt = 0; // 手动加不参与冷却
-    await _record(code);
+    final fb = await _record(code, qty: _pendingQty);
+    if (!mounted) return;
+    if (fb.accepted) {
+      _resume();
+    } else {
+      setState(() => _pendingRejected = true);
+    }
   }
 
   /// 「继续扫」：放行下一帧。
@@ -202,16 +241,21 @@ class _CameraScanPageState extends State<CameraScanPage> {
   /// ⚠️ 冷却锚点必须在这里刷新：否则物品还没移开的话，
   /// "继续"的那一瞬间相机就又上报同一个码，等于刚点完就又弹一次确认卡。
   void _resume() {
-    setState(() => _gate.resume());
+    setState(() {
+      _gate.resume();
+      _pendingRejected = false;
+    });
     _lastAcceptAt = DateTime.now().millisecondsSinceEpoch;
   }
 
-  Future<void> _record(String code) async {
-    if (_writing) return;
+  Future<ScanFeedback> _record(String code, {double qty = 1}) async {
+    if (_writing) {
+      return ScanFeedback(accepted: false, message: '正在写入上一笔');
+    }
     _writing = true;
     try {
-      final fb = await widget.sink.record(widget.sheetNo, code);
-      if (!mounted) return;
+      final fb = await widget.sink.record(widget.sheetNo, code, qty: qty);
+      if (!mounted) return fb;
 
       // 音反馈**先于界面**：声音是这条链路里延迟最低的一环，
       // 等 setState 把列表刷完再响，手感就"慢半拍"了。
@@ -219,7 +263,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
 
       final s = await widget.sink.summary(widget.sheetNo);
       final recent = await widget.sink.recent(widget.sheetNo);
-      if (!mounted) return;
+      if (!mounted) return fb;
       _lastCode = code;
       // ⚠️ 被拒绝的扫码**也要更新冷却锚点**：否则相机对着一个不该收的条码，
       //    每一帧都会重新走一次判定（连续弹同一条提示，界面像卡住了）。
@@ -229,21 +273,23 @@ class _CameraScanPageState extends State<CameraScanPage> {
         _sum = s;
         _recent = recent;
         _sessionCount += 1;
-        _lastAccepted = fb.accepted;
         _lastMessage = fb.message;
-        _lastHit = fb.hit;
-        // 🔴 确认制：扫到就关门，等人工放行。
+        // 🔴 确认制：这一笔记完关门（确认制关着时等于没关），等人工放行。
         _gate.onRecorded();
       });
-      if (!fb.accepted) return;
+      if (!fb.accepted) return fb;
       _flashTimer?.cancel();
       setState(() => _flash = true);
       _flashTimer = Timer(const Duration(milliseconds: 260), () {
         if (mounted) setState(() => _flash = false);
       });
+      return fb;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) {
+        return ScanFeedback(accepted: false, message: '写入失败：$e');
+      }
       setState(() => _error = '写入失败：$e');
+      return ScanFeedback(accepted: false, message: '写入失败：$e');
     } finally {
       _writing = false;
     }
@@ -513,49 +559,51 @@ class _CameraScanPageState extends State<CameraScanPage> {
         ),
       );
 
-  /// 确认卡：扫到一件之后就停在这里，等人工放行。
+  /// 确认卡：扫到一件之后就停在这里。
   ///
   /// ── 为什么必须有一个"停下来"的东西 ──────────────────────────
-  /// 相机每秒上报十几帧，它自己不知道你扫完了没有。只要没有一个人为的
-  /// "这件完了"信号，件数就只能靠猜 —— 猜错的表现就是龙哥说的
-  /// "不移开物品会直接自动重复扫描"。确认卡就是那个信号。
+  /// 相机每秒上报十几帧，它自己不知道你扫完了没有。确认卡就是那个人为的
+  /// "这件完了"信号（龙哥 2026-09-19 现场反馈）。
+  ///
+  /// ── 这一版改了什么（龙哥 2026-10-03）──────────────────────
+  /// 原来只有「再记 1 件」按钮（连点 +1），要录 9 件得点 9 下、且点了不能减。
+  /// 改成**直接输数量**：确认卡上给出一个数量步进器（可输入 / 可加减），
+  /// 填好点「确认录入」一次落库，不用连点、也不用"点了再减"。
   Widget _confirmCard() {
-    final hit = _lastHit;
-    final accepted = _lastAccepted;
-    final name = (hit?['name'] ?? '').toString();
-    final unknown = hit != null && name.isEmpty;
-    final qty = hit == null ? '0' : fmtQty(hit['qty']);
-    final code = (hit?['barcode'] ?? _lastCode ?? '').toString();
+    if (_pendingRejected) return _rejectedCard();
+    return _pendingCard();
+  }
 
-    final color = accepted
-        ? (unknown || _lastMessage != null ? AppColors.warn : AppColors.brand)
-        : AppColors.danger;
+  /// 待确认：显示商品 + 数量步进器，让用户直接填数量。
+  Widget _pendingCard() {
+    final code = _pendingCode ?? '';
+    final master = _pendingMaster;
+    final name = (master?['name'] ?? '').toString();
+    final unknown = name.trim().isEmpty;
+    final spec = (master?['spec'] ?? '').toString();
+    final unit = (master?['unit'] ?? '').toString();
+    final title = unknown ? '未知条码' : name;
+    final sub = unknown
+        ? '$code　（商档里没有，仍可按未知条码录入）'
+        : (spec.isNotEmpty ? '$code　$spec　$unit' : code);
 
-    final title = !accepted
-        ? '这一笔没记上'
-        : (unknown ? '未知条码 × $qty' : '$name × $qty');
-    final sub = !accepted
-        ? (_lastMessage ?? '请确认后再扫下一件')
-        : (unknown
-            ? '$code　（商档里没有，已按未知条码记下）'
-            : (_lastMessage == null ? code : '$code　·　$_lastMessage'));
-
+    final accent = unknown ? AppColors.warn : AppColors.brand;
     return Container(
       key: const Key('cam-confirm-card'),
       margin: const EdgeInsets.fromLTRB(14, 0, 14, 8),
       padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
+        color: accent.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(AppRadii.sm),
-        border: Border.all(color: color.withValues(alpha: 0.55)),
+        border: Border.all(color: accent.withValues(alpha: 0.55)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Row(
             children: <Widget>[
-              Icon(accepted ? Icons.check_circle_outline : Icons.block,
-                  size: 18, color: color),
+              Icon(unknown ? Icons.help_outline : Icons.check_circle_outline,
+                  size: 18, color: accent),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(title,
@@ -571,38 +619,156 @@ class _CameraScanPageState extends State<CameraScanPage> {
           Text(sub,
               style: const TextStyle(color: AppColors.textSub, fontSize: 12),
               overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Row(
             children: <Widget>[
-              // 「再记 1 件」是唯一不依赖手感的出口：同一个商品连扫第 N 件、
-              // 或者条码磨损读不出来时，都靠它。
-              if (accepted)
-                SizedBox(
-                  height: 36,
-                  child: FilledButton.tonal(
-                    key: const Key('cam-add-again'),
-                    onPressed: _addAgain,
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      backgroundColor: AppColors.brand.withValues(alpha: 0.18),
-                      foregroundColor: AppColors.brand,
-                    ),
-                    child: const Text('再记 1 件', style: TextStyle(fontSize: 13)),
-                  ),
-                ),
-              if (accepted) const SizedBox(width: 8),
+              const Text('数量',
+                  style: TextStyle(color: AppColors.text, fontSize: 14)),
+              const Spacer(),
+              _qtyStepper(),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: <Widget>[
               Expanded(
                 child: SizedBox(
-                  height: 36,
+                  height: 38,
                   child: FilledButton(
-                    key: const Key('cam-resume'),
-                    onPressed: _resume,
-                    child: Text(accepted ? '继续扫下一件' : '知道了，重新扫',
-                        style: const TextStyle(fontSize: 13)),
+                    key: const Key('cam-commit'),
+                    onPressed: _commit,
+                    child: const Text('确认录入', style: TextStyle(fontSize: 14)),
                   ),
                 ),
               ),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: 38,
+                child: FilledButton.tonal(
+                  key: const Key('cam-resume'),
+                  onPressed: _resume,
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    backgroundColor: AppColors.surfaceHi,
+                    foregroundColor: AppColors.textSub,
+                  ),
+                  child: const Text('重新扫', style: TextStyle(fontSize: 13)),
+                ),
+              ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 数量步进器：可输入、可加减（龙哥 2026-10-03 要的"直接输数量"）。
+  ///
+  /// ±1 调整、可手输小数；最小值保护（不能为 0，要删用列表里的删除按钮）。
+  Widget _qtyStepper() => Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(AppRadii.sm),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            IconButton(
+              key: const Key('cam-qty-dec'),
+              onPressed: _decQty,
+              icon: const Icon(Icons.remove, size: 18),
+              color: AppColors.textSub,
+              constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+              padding: EdgeInsets.zero,
+            ),
+            SizedBox(
+              width: 48,
+              child: TextField(
+                key: const Key('cam-qty-input'),
+                controller: _qtyCtl,
+                textAlign: TextAlign.center,
+                keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true, signed: false),
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.text),
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  isCollapsed: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+                onChanged: (v) {
+                  final d = double.tryParse(v.trim());
+                  if (d != null && d > 0) _pendingQty = d;
+                },
+              ),
+            ),
+            IconButton(
+              key: const Key('cam-qty-inc'),
+              onPressed: _incQty,
+              icon: const Icon(Icons.add, size: 18),
+              color: AppColors.textSub,
+              constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+              padding: EdgeInsets.zero,
+            ),
+          ],
+        ),
+      );
+
+  void _decQty() => _setQty((_pendingQty - 1).clamp(0.01, double.infinity));
+  void _incQty() => _setQty(_pendingQty + 1);
+
+  void _setQty(double v) {
+    _pendingQty = v;
+    _qtyCtl.text = fmtQty(v);
+    _qtyCtl.selection = TextSelection.fromPosition(
+        TextPosition(offset: _qtyCtl.text.length));
+    setState(() {});
+  }
+
+  /// 被业务拒绝时显示：说清原因，只给「知道了」放行。
+  Widget _rejectedCard() {
+    final message = _lastMessage ?? '这一笔没记上，请确认后再扫下一件';
+    return Container(
+      key: const Key('cam-confirm-card'),
+      margin: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: AppColors.danger.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppRadii.sm),
+        border: Border.all(color: AppColors.danger.withValues(alpha: 0.55)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              Icon(Icons.block, size: 18, color: AppColors.danger),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('这一笔没记上',
+                    style: TextStyle(
+                        color: AppColors.text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(message,
+              style: const TextStyle(color: AppColors.textSub, fontSize: 12),
+              overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 38,
+            child: FilledButton(
+              key: const Key('cam-resume'),
+              onPressed: _resume,
+              child: const Text('知道了，重新扫',
+                  style: TextStyle(fontSize: 14)),
+            ),
           ),
         ],
       ),

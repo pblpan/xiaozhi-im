@@ -289,6 +289,23 @@ class StockMasterRepo {
     final n = rows.first['n'];
     return n is int ? n : int.parse(n.toString());
   }
+
+  /// 本地查一个条码的商档（断网也能用）。查不到返回 null。
+  ///
+  /// 扫码确认卡、商档查询都用它当场回答"这是什么、规格单位是什么"。
+  Future<Map<String, dynamic>?> lookupLocal(String barcode) async {
+    final db = await LocalDb.I.db();
+    final rows = await db.query(
+      'stock_master',
+      where: 'barcode = ?',
+      whereArgs: [barcode.trim()],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// 全局单例：扫码页 / 拣货页等需要就地查商档时直接用，不用每次 new。
+  static final StockMasterRepo instance = StockMasterRepo();
 }
 
 /// 用一个明确的异常类型区分"业务上不该发生"，方便上层单独处理。

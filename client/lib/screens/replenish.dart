@@ -10,6 +10,8 @@ import '../core/replenish_export.dart';
 import '../core/replenish_repo.dart';
 import '../core/replenish_rules.dart';
 import '../core/theme.dart';
+import '../screens/camera_scan.dart';
+import '../core/scan_sink.dart';
 import '../widgets/export_flow.dart';
 
 /// 补货：把货补到货架上的作业单（生鲜 / 杂百分开）。
@@ -183,6 +185,26 @@ class _ReplenishPageState extends State<ReplenishPage> {
 
   void _focusScan() {
     FocusScope.of(context).requestFocus(_scanFocus);
+  }
+
+  /// 打开扫码枪那套相机界面（龙哥 2026-10-03 要的"带扫码窗口"）。
+  ///
+  /// 扫到的码由 [ReplenishSink] 直接落进当前补货单 —— 生鲜扫秤码自动取重量，
+  /// 普通商品在确认卡上填数量。从相机回来刷新列表。
+  Future<void> _openCamera() async {
+    if (!cameraScanSupported) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => CameraScanPage(
+          title: '补货扫码',
+          sheetNo: _sheetNo,
+          hint: '扫商品条码补货（生鲜扫秤码自动取重量）',
+          sink: ReplenishSink(_repo, _scene),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await _reload();
   }
 
   Future<void> _deleteRow(Map<String, dynamic> r) async {
@@ -639,6 +661,36 @@ class _ReplenishPageState extends State<ReplenishPage> {
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
       child: Row(
         children: [
+          // 手机端把「扫码」放最左、给足面积 —— 龙哥 2026-10-03 明确要
+          // 补货也走扫码枪那套相机界面（带扫码窗口、带确认制数量输入），
+          // 不再只靠手输条码。桌面端（摄像头不支持）自动隐藏，退回手输兜底。
+          if (cameraScanSupported) ...[
+            Material(
+              color: AppColors.brand.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(AppRadii.sm),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(AppRadii.sm),
+                onTap: (_editable && !_busy) ? _openCamera : null,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.qr_code_scanner,
+                          color: AppColors.brand, size: 20),
+                      SizedBox(width: 6),
+                      Text('扫码',
+                          style: TextStyle(
+                              color: AppColors.brand,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
           Expanded(
             flex: 3,
             child: TextField(
@@ -779,5 +831,66 @@ class _ReplenishPageState extends State<ReplenishPage> {
         ],
       ),
     );
+  }
+}
+
+/// 补货的扫码适配：把相机页扫到的码接到 [ReplenishRepo]。
+///
+/// 与扫码枪 / 盘点共用同一套相机机制（确认制、写入闸门、闪绿反馈，见
+/// [CameraScanPage]）。这一层只负责"码 → 补货行"：
+///   · 生鲜场景的**秤码**里编着重量，解出重量当数量（不用卡上的数量）；
+///   · 普通商品用确认卡上填的数量落库。
+class ReplenishSink implements ScanSink {
+  ReplenishSink(this.repo, this.scene);
+
+  final ReplenishRepo repo;
+
+  /// 补货场景（生鲜 / 杂百），决定单位口径与是否解秤码。
+  final String scene;
+
+  @override
+  Future<ScanFeedback> record(String sheetNo, String code, {double qty = 1}) async {
+    // 秤码（生鲜称重）：条码里编着重量，不必用卡上的数量。
+    var barcode = code;
+    double? scaleKg;
+    if (scene == ReplenishScene.fresh) {
+      final info = ScaleCode.parse(code, codeLen: AppParams.I.scaleCodeLen);
+      if (info != null) {
+        // 商档里存的是 PLU（秤上的商品号），不是整串秤码。
+        barcode = info.plu;
+        scaleKg = info.kg;
+      }
+    }
+    final d = await repo.addRow(
+      sheetNo: sheetNo,
+      barcode: barcode,
+      qtyRaw: scaleKg != null ? scaleKg.toString() : qty.toString(),
+    );
+    if (!d.accepted) {
+      return ScanFeedback(accepted: false, message: d.message);
+    }
+    final rows = await repo.listRows(sheetNo);
+    final hit = rows.cast<Map<String, dynamic>?>().firstWhere(
+          (r) => r != null && r['barcode'] == barcode,
+          orElse: () => null,
+        );
+    return ScanFeedback(
+      accepted: true,
+      // 秤码要**明说**解出了多少公斤，免得员工以为是数量填错了。
+      message: scaleKg != null ? '秤码 → ${scaleKg.toStringAsFixed(3)} 公斤' : null,
+      hit: hit ?? <String, dynamic>{'barcode': barcode, 'qty': qty},
+    );
+  }
+
+  @override
+  Future<Map<String, dynamic>> summary(String sheetNo) async {
+    final t = await repo.summary(sheetNo, scene);
+    return <String, dynamic>{'total_qty': t.totalQty, 'kinds': t.kinds};
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> recent(String sheetNo, {int limit = 40}) async {
+    final rows = await repo.listRows(sheetNo);
+    return rows.take(limit).toList();
   }
 }

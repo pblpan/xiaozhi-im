@@ -67,8 +67,8 @@ class _InventorySink implements ScanSink {
   final String? locCode;
 
   @override
-  Future<ScanFeedback> record(String sheetNo, String code) async {
-    final r = await repo.scan(sheetNo, code, locCode: locCode);
+  Future<ScanFeedback> record(String sheetNo, String code, {double qty = 1}) async {
+    final r = await repo.scan(sheetNo, code, locCode: locCode, qty: qty);
 
     // 被拒绝：把判定给的原因原样交出去（"本阶段只盘上一轮的差异商品"这种话
     // 必须一字不差地到员工眼前，界面不要自己另编一句）。

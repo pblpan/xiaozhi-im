@@ -22,12 +22,15 @@ class StocktakeRepo {
   /// 所以带日期时间，不单独维护流水表（手机上不值得）。
   static const String sheetPrefix = 'PD';
 
-  /// 生成扫码单号：PD + yyyyMMdd + HHmmss。
+  /// 生成扫码单号：[prefix] + yyyyMMdd + HHmmss。
   /// 同一秒开两张单的概率可以接受；真撞了就以库里已存在的为准（见 listSheets）。
-  static String newSheetNo([DateTime? now]) {
+  /// [prefix] 默认用本类的 [sheetPrefix]；拣货单等"共用一张流水表"的兄弟模块
+  /// 传自己的前缀（如 'JK'），保证各自单号段不串。
+  static String newSheetNo([DateTime? now, String? prefix]) {
+    final p = prefix ?? sheetPrefix;
     final d = now ?? DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
-    return '$sheetPrefix${d.year}${two(d.month)}${two(d.day)}'
+    return '$p${d.year}${two(d.month)}${two(d.day)}'
         '${two(d.hour)}${two(d.minute)}${two(d.second)}';
   }
 

@@ -39,6 +39,7 @@ import '../core/simple_scan_sink.dart';
 import '../core/theme.dart';
 import '../widgets/export_flow.dart';
 import 'camera_scan.dart';
+import 'master_lookup.dart';
 
 /// 导入时选定的场景与轮次名。
 class _RoundPick {
@@ -950,6 +951,18 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
             tooltip: '历史趟次',
             icon: const Icon(Icons.history, color: AppColors.textSub),
             onPressed: _busy ? null : _pickHistory,
+          ),
+          // 商档查询：扫一下商品，跳出商档里该商品的所有信息（龙哥 2026-10-03）。
+          IconButton(
+            key: const Key('open-master-lookup'),
+            tooltip: '商档查询',
+            icon: const Icon(Icons.qr_code_2_outlined,
+                color: AppColors.textSub),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                  builder: (_) => const MasterLookupPage()),
+            ),
           ),
           PopupMenuButton<String>(
             key: const Key('simple-menu'),

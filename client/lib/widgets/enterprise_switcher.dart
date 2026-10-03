@@ -139,21 +139,33 @@ class _EnterpriseHeaderState extends State<EnterpriseHeader> {
   Widget build(BuildContext context) {
     final active = _sm.active;
     final bg = _bgWithUnread;
-    return Column(
-      children: [
-        EnterpriseSwitcherBar(
-          name: active?.name ?? '未连接',
-          stateNotifier: active != null
-              ? _sm.linkStateOf(active.id)
-              : _idleNotifier,
-          onTap: _openSheet,
+    // ⚠️ 钉在首页顶部：必须用 SafeArea 把整条（含状态栏占位）顶到系统状态栏之下，
+    // 否则公司名条会压到手机状态栏（时间/电量）上 —— 龙哥 2026-10-03 真机截图反馈。
+    // 外层 Material 填 bgElevated，让状态栏占位区和切换条同色，顶部看起来是一整块深色。
+    return Material(
+      color: AppColors.bgElevated,
+      child: SafeArea(
+        top: true,
+        bottom: false,
+        left: false,
+        right: false,
+        child: Column(
+          children: [
+            EnterpriseSwitcherBar(
+              name: active?.name ?? '未连接',
+              stateNotifier: active != null
+                  ? _sm.linkStateOf(active.id)
+                  : _idleNotifier,
+              onTap: _openSheet,
+            ),
+            for (final p in bg)
+              BackgroundReminderBar(
+                profile: p,
+                onTap: () => SessionManager.instance.setActive(p.id),
+              ),
+          ],
         ),
-        for (final p in bg)
-          BackgroundReminderBar(
-            profile: p,
-            onTap: () => SessionManager.instance.setActive(p.id),
-          ),
-      ],
+      ),
     );
   }
 }

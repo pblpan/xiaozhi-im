@@ -29,8 +29,8 @@ class SimpleScanSink implements ScanSink {
   final Set<String>? allowedBarcodes;
 
   @override
-  Future<ScanFeedback> record(String sheetNo, String code) async {
-    final r = await repo.scan(sheetNo, code, allowedBarcodes: allowedBarcodes);
+  Future<ScanFeedback> record(String sheetNo, String code, {double qty = 1}) async {
+    final r = await repo.scan(sheetNo, code, qty: qty, allowedBarcodes: allowedBarcodes);
     return ScanFeedback(
       accepted: r.accepted,
       message: r.decision.message,
