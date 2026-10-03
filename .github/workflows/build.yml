@@ -33,6 +33,35 @@ env:
   # 取自 2026-09-25 实测：0.17.0 已交付包 与 CI 新包 指纹完全一致。
   EXPECT_APK_SHA256: "64d99000e061259a94c2a54cc408487c9461cf678f7f155f488293534e0ed6d5"
 
+  # ── hyd 版（好又多版）扫码枪的内置商档 ────────────────────────────
+  # 🔴 为什么 CI 要"下载"商档，而不是它就在仓库里（2026-10-03）
+  #   `scanner_app/.gitignore` 明确排除了 `android/app/src/hyd/assets/builtin_master.csv`
+  #   —— 那是**门店数据**，本仓库的规矩是"凭据与门店数据一律不入库"。
+  #   而它的源表（微信临时目录里的 `商品信息.txt`）**已被微信清掉**，
+  #   重跑 scanner_app/tools/build_builtin_master.py 也生成不出来。
+  #   → CI 上没有任何途径拿到这份档案。
+  #
+  #   不解决就直接出**哑包**：APK 装得上、扫得动，但点"恢复内置档案"报
+  #   「这个版本没有内置商品档案」，现场表现是"扫什么都显示未知商品"，
+  #   而且**从 APK 大小完全看不出来**（见下面 MIN 那个变量的注释）。
+  #
+  #   所以走 release 附件：私有仓库的 release 与仓库同一道访问门（不扩大暴露面），
+  #   不进 git 历史（git 一旦入库就洗不干净，且会被每个人 clone 走），
+  #   门店换档时重传附件即可、不用改代码也不用 force push。
+  #   上传脚本在工作区根：_ci_hyd_master.py
+  HYD_MASTER_TAG: hyd-master-data
+  HYD_MASTER_ASSET: builtin_master.csv
+  # 钉死构建时该用哪一份。传错版本/传了半截文件都靠它红。
+  EXPECT_HYD_MASTER_SHA256: "c9189e2ec2cc66f1a98bef71a45cb5d49eaafb4468fc699ef79353bd80263df7"
+  # 打完包后断言"APK 里真的有这份档案，且体积对得上"。
+  # 🔴 下限为什么卡 5MB：gradle 放错资源目录**不报错也不打包**
+  #    （scanner_app/tools/build_builtin_master.py 顶部记着这个坑：
+  #     "2026-09-19 就踩了这个：APK 只大了 16KB"）。
+  #    也就是说**少了这份档案的包一样能构建成功、签名也过、版本也对**，
+  #    唯一能认出它的办法就是量体积 —— 5MB 是 6.97MB 的安全下界，
+  #    留出余量又不会被"刚好少一大截"骗过去。
+  MIN_HYD_MASTER_BYTES: 5242880
+
 jobs:
   # 最先跑：编译错误 / 测试失败不该等到打完两个包才发现。
   #
@@ -132,6 +161,31 @@ jobs:
 
       - name: Test
         working-directory: ${{ env.CLIENT_DIR }}
+        run: flutter test
+
+      # ---------------------------------------------------------------
+      # 扫码枪（scanner_app）也要过闸门（2026-10-03 加）
+      #
+      # 🔴 为什么要单独跑，而不是"它简单应该没事"
+      #   它**从来没在这道闸门里出现过** —— 之前 0.19.x~0.22.0 几十次 push，
+      #   scanner_app 的代码一行都没被 analyze/test 过，改坏了没人知道。
+      #   它的 test 里正好钉着一批"坏了也不报错"的东西（GBK 表下标错一格、
+      #   表头别名没认出、`="..."` 没剥），是最需要闸门的那类。
+      #
+      # 它的 pubspec 依赖 sqlite3 ^3.6.0 + hooks。在 Linux runner 上
+      # hooks 会走 `default: sqlite3`（预编译库下载）—— CI 网络通得过；
+      # 真跑不起来时这里的报错是 "Building assets for package:sqlite3 failed"，
+      # 与"代码写错了"是两回事，别顺着代码方向排查。
+      - name: 扫码枪 Pub get
+        working-directory: scanner_app
+        run: flutter pub get
+
+      - name: 扫码枪 Analyze
+        working-directory: scanner_app
+        run: flutter analyze --no-fatal-infos
+
+      - name: 扫码枪 Test
+        working-directory: scanner_app
         run: flutter test
 
   build-android:
@@ -385,6 +439,301 @@ jobs:
           OUTDIR="${CLIENT_DIR}/build/app/outputs/flutter-apk"
           OUT="${OUTDIR}/xiaozhi-im-Android-${WANT}.apk"
           cp "${OUTDIR}/app-release.apk" "$OUT"
+          echo "发布文件名: $(basename "$OUT")"
+          echo "发布文件 sha256: $(sha256sum "$OUT" | cut -d' ' -f1)"
+          gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" "$OUT" --clobber
+
+  # ── 好又多版扫码枪（scanner_app 的 hyd flavor）────────────────────
+  #
+  # 只出 hyd 版，不出 std：好又多版才是要交付的那一个（带内置商档），
+  # 通用版没有内置档案、客户那边用不上，不产。
+  build-scanner-hyd:
+    name: Scanner 好又多版 APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        working-directory: scanner_app
+        run: flutter pub get
+
+      # ---------------------------------------------------------------
+      # 取内置商档 —— 这一步是"别出哑包"的根（2026-10-03）
+      #
+      # 放在 pub get 之后、构建之前：它是构建的**输入**，缺了就不该往下走，
+      # 早失败省时间。
+      #
+      # 三道判据，缺一不可：
+      #   ① 下载成功且非空（GitHub 上少了/改名了附件）
+      #   ② sha256 等于 env 里钉死的那份（传错了版本、或传了半截文件）
+      #   ③ 行数量级对得上（12 万行级别；不是 12 万字节）
+      # 只做 ① 的话，"传了个空壳文件"照样能过 —— 而空壳打进包里，
+      # 现场是"扫什么都未知商品"，从 APK 体积上完全看不出来。
+      - name: 下载内置商档
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DST="scanner_app/android/app/src/hyd/assets/${HYD_MASTER_ASSET}"
+          mkdir -p "$(dirname "$DST")"
+
+          gh release download "$HYD_MASTER_TAG" -R "$GITHUB_REPOSITORY" \
+             --pattern "$HYD_MASTER_ASSET" --dir "$(dirname "$DST")" --clobber
+
+          if [ ! -s "$DST" ]; then
+            echo "::error::商档没下载下来或为空：$DST"
+            exit 1
+          fi
+          echo "已下载：$(stat -c%s "$DST") 字节"
+
+          GOT=$(sha256sum "$DST" | cut -d' ' -f1)
+          echo "实际 sha256: $GOT"
+          echo "期望 sha256: $EXPECT_HYD_MASTER_SHA256"
+          if [ "$GOT" != "$EXPECT_HYD_MASTER_SHA256" ]; then
+            echo "::error::商档指纹与 env 里钉的不一致 —— 拒绝用未知来源的门店数据出包"
+            exit 1
+          fi
+
+          # 行数量级：12 万行级别。低于 1000 行基本等于"传了个表头"。
+          ROWS=$(wc -l < "$DST")
+          echo "行数: $ROWS"
+          if [ "$ROWS" -lt 1000 ]; then
+            echo "::error::商档只有 $ROWS 行，明显不完整（正常 12 万+ 行）"
+            exit 1
+          fi
+          echo "✅ 商档校验通过（指纹 + 行数）"
+
+      # 固定签名密钥：与主客户端同一把，否则 hyd 版装不上旧版（报 -7）。
+      - name: Decode release keystore (fixed signing key)
+        working-directory: scanner_app/android
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_STORE_PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_KEY_PW: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KS_B64:-}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 未配置 —— 拒绝产出签名不固定的安装包"
+            exit 1
+          fi
+          echo "$KS_B64" | base64 -d > app/xiaozhi-release.keystore
+          if [ ! -s app/xiaozhi-release.keystore ]; then
+            echo "::error::keystore 解码结果为空"
+            exit 1
+          fi
+          # ⚠️ 路径必须是 android/key.properties（不是 android/app/…）：
+          #    build.gradle.kts 里读的是 rootProject.file("key.properties")，
+          #    rootProject = android/。放错一层不会报错，只是悄悄退回 debug 签名。
+          cat > key.properties <<EOF
+          storeFile=$(pwd)/app/xiaozhi-release.keystore
+          storePassword=$KS_STORE_PW
+          keyPassword=$KS_KEY_PW
+          keyAlias=$KS_ALIAS
+          storeType=PKCS12
+          EOF
+          echo "keystore 就绪: $(stat -c%s app/xiaozhi-release.keystore) bytes"
+
+      # 🔴 --flavor hyd 不能漏：漏了编出来的是 std（通用版），
+      #    **没有内置商档**，而那正好是"构建全绿、版本对、签名对、就是不能用"。
+      - name: Build 好又多版 APK (release)
+        working-directory: scanner_app
+        run: flutter build apk --release --flavor hyd
+
+      # 断言 APK 里的版本 = pubspec 写的版本。判据与理由照抄 Android 主客户端那步
+      # （aapt2 读真实打进包的 versionName/versionCode，别去 grep APK 字节流）。
+      - name: 断言 APK 版本 = pubspec 版本
+        working-directory: scanner_app
+        run: |
+          set -uo pipefail
+          set +e
+          # 带 flavor 时产物叫 app-hyd-release.apk；先按 hyd 找，找不到再退回通配。
+          APK=$(ls build/app/outputs/flutter-apk/*hyd*.apk 2>/dev/null | head -1) || true
+          [ -n "$APK" ] || APK=$(ls build/app/outputs/flutter-apk/*.apk 2>/dev/null | head -1) || true
+          echo "APK: '${APK:-<没找到>}'"
+          if [ -z "$APK" ]; then
+            echo "::error::没有 APK 产物"
+            exit 1
+          fi
+          # 🔴 顺手确认拿到的确实是 hyd 产物：文件名/路径里要带 hyd。
+          #    拿到 std 的包而后面所有断言都过，是最难发现的一种交付事故。
+          case "$APK" in
+            *hyd*) echo "✅ 是 hyd 产物" ;;
+            *) echo "::error::拿到的不是 hyd flavor 产物：$APK"; exit 1 ;;
+          esac
+
+          WANT=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -1 | tr -d '\r')
+          echo "pubspec 里写的: '$WANT'"
+
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          AAPT2=$(find "${SDK:-/nonexistent}/build-tools" -maxdepth 2 -type f -name 'aapt2' 2>/dev/null | sort -V | tail -1) || true
+          if [ -z "$AAPT2" ]; then
+            AAPT2=$(find /usr/local/lib/android /opt /home/runner -maxdepth 6 -type f -name 'aapt2' 2>/dev/null | sort -V | tail -1) || true
+          fi
+          if [ -z "$AAPT2" ]; then
+            echo "::error::找不到 aapt2 —— 读不出 APK 的真实版本，拒绝放行"
+            exit 1
+          fi
+
+          BADGING=$("$AAPT2" dump badging "$APK" 2>&1 || true)
+          printf '%s\n' "$BADGING" | head -5
+          GOT_NAME=$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" | head -1) || true
+          GOT_CODE=$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" | head -1) || true
+          # applicationId 必须带 .hyd 后缀 —— 它是"好又多版能与通用版共存"的关键，
+          # 不带就说明 flavor 根本没生效。
+          GOT_PKG=$(printf '%s\n' "$BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -1) || true
+          NAME=${WANT%%+*}
+          CODE=${WANT##*+}
+          echo "pubspec 拆开后 → name='$NAME' code='$CODE'"
+          echo "APK 里实际的   → name='${GOT_NAME:-<解析不出来>}' code='${GOT_CODE:-<解析不出来>}'"
+          echo "applicationId   → '${GOT_PKG:-<解析不出来>}'"
+          if [ "$NAME" != "$GOT_NAME" ] || [ "$CODE" != "$GOT_CODE" ]; then
+            echo "::error::APK 的版本号/构建号与 pubspec 的 '$WANT' 不一致 —— 拒绝交付"
+            exit 1
+          fi
+          case "$GOT_PKG" in
+            *.hyd) echo "✅ applicationId 带 .hyd：与通用版可共存" ;;
+            *) echo "::error::applicationId 不带 .hyd 后缀（得到 '$GOT_PKG'）—— flavor 没生效"; exit 1 ;;
+          esac
+          echo "✅ APK 版本与 pubspec 一致：$NAME+$CODE"
+
+      # 🔴🔴 这一步是**本次新增 job 的核心断言**，没有它整个 job 等于白做
+      #
+      # 断言"APK 里真的有那份 6.97MB 的商档"。
+      #
+      # 为什么非做不可（这正是 hyd 版的全部价值所在）：
+      #   商档放在 `android/app/src/hyd/assets/`，由 build.gradle.kts 的
+      #   sourceSets 挂进 APK。而**放错目录 gradle 不报错也不打包**
+      #   （scanner_app/tools/build_builtin_master.py 顶部原话：
+      #    "放错一层的话 gradle 不报错、静默不打包 —— 2026-09-19 就踩了这个：
+      #     APK 只大了 16KB，核验才发现档案根本没进包"）。
+      #   也就是说：构建成功 ✅ 版本对 ✅ 签名对 ✅ 唯独没有档案 ——
+      #   前面所有断言一个都不会红，红的是客户在门店里扫码时。
+      #
+      # 为什么不能只比体积：APK 里没这个文件时，用"包比平时大 5MB"来判
+      # 会被别的东西骗（混淆、资源、so 体积波动）。**直接解包看文件在不在**，
+      # 唯一且可靠。
+      - name: 断言 APK 里含内置商档
+        working-directory: scanner_app
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          APK=$(ls build/app/outputs/flutter-apk/*hyd*.apk 2>/dev/null | head -1) || true
+          if [ -z "$APK" ]; then
+            echo "::error::没有 hyd APK 产物"
+            exit 1
+          fi
+
+          # aapt2 dump badging 不列 assets 条目，这里直接解 zip 的中央目录读。
+          # unzip -l 不解压内容，读 6.9MB 的条目也只是查目录，很快。
+          ENTRIES=$(unzip -l "$APK" 2>/dev/null | grep -i "builtin_master.csv" || true)
+          if [ -z "$ENTRIES" ]; then
+            echo "::error::APK 里找不到 builtin_master.csv —— 这是个哑包（能装能扫、但没商品档案）"
+            echo "  排查方向：① gradle sourceSets 挂的目录对不对"
+            echo "           ② 商档是否被 .gitignore 排除（它就是被排除的，只能靠下载那步放进来）"
+            echo "           ③ flavor 是不是漏了 --flavor hyd"
+            echo "--- APK 内 assets 前 20 条（看看到底打进了什么）---"
+            unzip -l "$APK" 2>/dev/null | awk '{print $4}' | grep -i '^assets/' | head -20
+            exit 1
+          fi
+          echo "$ENTRIES"
+
+          # 条目在，但体积要够 —— 防"文件在、内容空"（下载中断/传了表头）。
+          BYTES=$(printf '%s\n' "$ENTRIES" | head -1 | awk '{print $1}')
+          echo "APK 内该条目大小: ${BYTES:-<解析不出来>} 字节"
+          echo "下限:            $MIN_HYD_MASTER_BYTES 字节"
+          if [ -z "$BYTES" ] || [ "$BYTES" -lt "$MIN_HYD_MASTER_BYTES" ]; then
+            echo "::error::APK 里的商档只有 ${BYTES:-?} 字节，小于下限 $MIN_HYD_MASTER_BYTES —— 内容不完整"
+            exit 1
+          fi
+          echo "✅ APK 内含完整内置商档（$BYTES 字节）—— 不是哑包"
+
+      - name: Verify APK signing cert (断言签名证书)
+        working-directory: scanner_app
+        run: |
+          set -uo pipefail
+          set +e
+          APK=$(ls build/app/outputs/flutter-apk/*hyd*.apk 2>/dev/null | head -1) || true
+          echo "APK: ${APK:-<没找到>}"
+          if [ -z "$APK" ]; then
+            echo "::error::没有 APK 产物"
+            exit 1
+          fi
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          APKSIGNER=""
+          if [ -n "$SDK" ]; then
+            APKSIGNER=$(find "$SDK/build-tools" -maxdepth 2 -type f -name 'apksigner*' 2>/dev/null | sort -V | tail -1) || true
+          fi
+          [ -n "$APKSIGNER" ] || APKSIGNER=$(command -v apksigner 2>/dev/null || true)
+          if [ -z "$APKSIGNER" ]; then
+            APKSIGNER=$(find /usr/local/lib/android /opt /home/runner -maxdepth 6 -type f -name 'apksigner' 2>/dev/null | sort -V | tail -1) || true
+          fi
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::找不到 apksigner —— 无法断言签名，拒绝放行"
+            ls -1 "${SDK:-<空>}/build-tools" 2>&1 | head -20
+            exit 1
+          fi
+          echo "apksigner: $APKSIGNER"
+          RAW=$("$APKSIGNER" verify --print-certs "$APK" 2>&1 || true)
+          printf '%s\n' "$RAW" | head -20
+          # 只锚 'certificate SHA-256 digest'：build-tools 37 打成 `V2 Signer:`，
+          # 旧版是 `Signer #1 certificate ...`，锚死前缀会一条都匹配不到。
+          DIGEST=$(printf '%s\n' "$RAW" \
+            | grep -F 'certificate SHA-256 digest' | head -1 \
+            | sed 's/.*certificate SHA-256 digest:[[:space:]]*//' \
+            | tr -d ':' | tr 'A-Z' 'a-z') || true
+          if [ -z "$DIGEST" ]; then
+            echo "::error::解析不出签名指纹（APK 可能没签名，或输出格式变了）"
+            exit 1
+          fi
+          echo "实际 SHA-256: $DIGEST"
+          echo "期望 SHA-256: $EXPECT_APK_SHA256"
+          if [ "$DIGEST" != "$EXPECT_APK_SHA256" ]; then
+            echo "::error::签名指纹与已交付版本不一致 —— 这版装不到旧版上（报 -7），不许交付"
+            exit 1
+          fi
+          echo "✅ 签名断言通过：与已交付版本同源，可覆盖安装"
+          exit 0
+
+      # 见 Android 主客户端那边的长注释（500MB 配额 vs Release 附件）。
+      - name: Publish 好又多版 APK to rolling release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" \
+                 --title "CI 最新产物（滚动，勿直接分发）" \
+                 --notes "每次 push 到 main 覆盖同名附件。这里是流水线中间产物；正式安装包另行交付。" \
+                 --prerelease || true
+          # 文件名由机器拼上版本号，不留给人手写（手滑写成上一版名字，
+          # 一个长得完全正常的包就装着旧版本）。
+          WANT=$(sed -n 's/^version:[[:space:]]*//p' scanner_app/pubspec.yaml | head -1 | tr -d '\r')
+          OUTDIR="scanner_app/build/app/outputs/flutter-apk"
+          SRC=$(ls "$OUTDIR"/*hyd*.apk 2>/dev/null | head -1) || true
+          if [ -z "$SRC" ]; then
+            echo "::error::没有 hyd 产物可发布"
+            exit 1
+          fi
+          OUT="${OUTDIR}/xiaozhi-scanner-hyd-Android-${WANT}.apk"
+          cp "$SRC" "$OUT"
           echo "发布文件名: $(basename "$OUT")"
           echo "发布文件 sha256: $(sha256sum "$OUT" | cut -d' ' -f1)"
           gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" "$OUT" --clobber
