@@ -36,7 +36,7 @@ void main() {
     final r = MasterCsv.parse(text);
 
     // 数量级：管理台显示 126793 条
-    print('读入 $r.total 行 / 解析到 ${r.items.length} 条 / 跳过 ${r.skipped}');
+    print('读入 ${r.total} 行 / 解析到 ${r.items.length} 条 / 跳过 ${r.skipped}');
     expect(r.items.length, greaterThan(120000));
 
     // 🔴 关键：字段**真的在**。取值来自管理台线上库的真实样例。
@@ -48,6 +48,15 @@ void main() {
     }
     Map<String, dynamic>? find(String bc) => byCode[bc];
 
+    // 🔴 售价/进价是 **REAL**：SQLite 给 `2.0`、不是 `2`。
+    //    一律用**数值**比较（`double.tryParse`），别比字符串 ——
+    //    比字符串就得写死 '2' 还是 '2.0'，那是数据库驱动的表示细节、换平台就变。
+    //    2026-10-03 CI 第一次就死在这：Expected: '2'  Actual: '2.0'
+    double? priceOf(Map<String, dynamic>? m) =>
+        m == null ? null : double.tryParse(m['unit_price'].toString());
+    double? qtyOf(Map<String, dynamic>? m) =>
+        m == null ? null : double.tryParse(m['account_qty'].toString());
+
     final candy = find('10');
     expect(candy, isNotNull, reason: '条码 10 应存在');
     print('条码10 → $candy');
@@ -55,25 +64,33 @@ void main() {
     // 这三列就是"静默丢失"高发区，必须逐个钉住具体值
     expect(candy['spec'].toString(), '500g');
     expect(candy['unit'].toString(), '公斤');
-    expect(candy['unit_price'].toString(), '19.6');
-    // ⚠️ 数量（账面数）**故意不断言具体值**：它是库存、随盘点变。
+    expect(priceOf(candy), 19.6);
+    // 🔴 数量（账面数）**故意不断言具体值**：它是库存、随盘点变。
     //    换档时这条最容易变成"测试红了但代码没错"，那就白折腾。
     //    这里只断言它"有值"（证明这一列确实被解析到了）。
-    expect(candy['account_qty'], isNotNull);
+    expect(qtyOf(candy), isNotNull);
 
     final mantou = find('100');
     expect(mantou, isNotNull);
     expect(mantou!['name'].toString(), '馒头');
     expect(mantou['spec'].toString(), '袋');
     expect(mantou['unit'].toString(), '袋');
-    expect(mantou['unit_price'].toString(), '2');
+    expect(priceOf(mantou), 2.0);
 
-    // 13 位真实条码（截图里有 1000008800209）
-    final long = find('1000008800209');
-    expect(long, isNotNull, reason: '13 位条码应存在');
-    expect(long!['name'].toString(), '韩国每日鲜牛奶200ml*24');
-    expect(long['spec'].toString(), '200ml*24');
-    expect(long['unit'].toString(), '箱');
+    // 🔴 样本必须取自**真实档案**，别照着截图抄。
+    //    实测踩过：截图里那几行「韩国每日鲜牛奶200ml*24」是管理台的**演示数据**，
+    //    真实商档里一条都没有（grep 0 命中）—— 照抄就会写出一条
+    //    "条码 1000008800209 不存在"的假断言，红了还得回头查是不是代码坏了。
+    //    现在用的是真存在、且规格/单位/进价三列都有值的商品。
+    final real = find('1234567890104');
+    expect(real, isNotNull, reason: '13 位真实条码应存在');
+    expect(real!['name'].toString(), '积木K313');
+    expect(real['spec'].toString(), 'K313');
+    expect(real['unit'].toString(), '包');
+    expect(priceOf(real), 29.0);
+    // 长条码最关键：它是最容易在 Excel 里被变成科学计数法、也最容易在
+    // 解析时被截断的一类（见 skill gradle-assets-silent-drop 里的条码保护）。
+    expect(real['barcode'].toString().length, 13);
 
     // 字段覆盖率统计：spec/unit 只该有部分商品有，不能是 0。
     int withSpec = 0, withUnit = 0, withPrice = 0;
