@@ -18,37 +18,14 @@ const router = require('express').Router();
 const config = require('../config');
 const setup = require('../setup');
 const { signToken } = require('../auth');
+const { RateLimiter, ipOf } = require('../ratelimit');
 
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_TRIES = 20;
-const tries = new Map(); // ip -> 时间戳数组
-
-/**
- * 取来源 IP。
- * 信任 X-Forwarded-For 是**刻意**的：小智IM 常挂在 Cloudflare Tunnel / frp 后面，
- * 那时 req.socket.remoteAddress 是隧道进程自己（永远 127.0.0.1），限流会把所有
- * 人算成同一个人。代价是能伪造 XFF 绕限流 —— 但这里防的是"脚本刷"，不是精确审计；
- * 真正拦住攻击面的是"设完就关"。
- */
-function ipOf(req) {
-  const xff = req.headers['x-forwarded-for'];
-  const first = String(xff || '').split(',')[0].trim();
-  return first || req.socket.remoteAddress || '?';
-}
-
-function rateLimited(ip) {
-  const now = Date.now();
-  const list = (tries.get(ip) || []).filter((t) => now - t < WINDOW_MS);
-  list.push(now);
-  tries.set(ip, list);
-  // 顺手清掉过期条目，免得这张表跟着 IP 数量无限长（服务端可能常年不重启）
-  if (tries.size > 512) {
-    for (const [k, v] of tries) {
-      if (!v.some((t) => now - t < WINDOW_MS)) tries.delete(k);
-    }
-  }
-  return list.length > MAX_TRIES;
-}
+// 限流实现已抽到 src/ratelimit.js（登录接口也要用同一份，见该文件顶部说明）。
+// ipOf 与原来内联的完全一致，行为不变。
+const limiter = new RateLimiter({ windowMs: WINDOW_MS, max: MAX_TRIES });
+const rateLimited = (ip) => !limiter.allow(ip);
 
 router.get('/status', (req, res) => {
   res.json({

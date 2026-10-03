@@ -13,7 +13,10 @@ function uidOf(req, res) {
 function adminOf(req, res) {
   const uid = uidOf(req, res); if (uid === null) return null;
   const u = db.prepare('SELECT role FROM users WHERE id=?').get(uid);
-  if (!u || u.role !== 'admin') { res.status(403).json({ error: 'forbidden' }); return null; }
+  // 401/403 分清的理由见 admin.js 的 adminOf（同一处修正，两份实现原先不一致）：
+  // 账号已被删除属于"登录态失效"（401），不是"权限不足"（403）。
+  if (!u) { res.status(401).json({ error: 'unauthorized' }); return null; }
+  if (u.role !== 'admin') { res.status(403).json({ error: 'forbidden' }); return null; }
   return uid;
 }
 
@@ -251,9 +254,20 @@ router.delete('/:id/members/:uid', (req, res) => {
   // dept_id/position_id 必须一起清：只清 org_id 的话，部门删除护栏
   // （按 dept_id 统计人数）会把这名已移除的员工继续算作占用者 ——
   // 界面上看不到人，却永远提示"该部门下有 N 名员工"，部门删不掉。
-  db.prepare('UPDATE users SET org_id=NULL, employee_no=NULL, dept_id=NULL, position_id=NULL WHERE id=?').run(target);
-  db.prepare('DELETE FROM friendships WHERE (user_id=? AND friend_id IN (SELECT id FROM users WHERE org_id=? OR id=?)) OR (friend_id=? AND user_id IN (SELECT id FROM users WHERE org_id=? OR id=?))')
-    .run(target, orgId, org.created_by, target, orgId, org.created_by);
+  //
+  // 2 步写要原子（审计 P1-2）：清 users 与清 friendships 必须一起成功或一起失败。
+  // 不回滚的话，中间失败会留下"人已经移出组织、却仍和同事互为好友"的残留 ——
+  // 这个人已经不在组织里了，好友树里还挂着，点进去是个查不到任何信息的空账号。
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE users SET org_id=NULL, employee_no=NULL, dept_id=NULL, position_id=NULL WHERE id=?').run(target);
+    db.prepare('DELETE FROM friendships WHERE (user_id=? AND friend_id IN (SELECT id FROM users WHERE org_id=? OR id=?)) OR (friend_id=? AND user_id IN (SELECT id FROM users WHERE org_id=? OR id=?))')
+      .run(target, orgId, org.created_by, target, orgId, org.created_by);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: e.message });
+  }
   res.json({ ok: true });
 });
 

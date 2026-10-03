@@ -70,6 +70,39 @@ jobs:
         working-directory: admin
         run: node scripts/test_parse_master.cjs
 
+      # ---------------------------------------------------------------
+      # 服务端回归（2026-10-03 加，审计 P0）
+      #
+      # 🔴 为什么要补这一步
+      #   以前 test 闸门**只跑客户端的 flutter test**，服务端那 30 多个 e2e
+      #   一个都没跑过。它们只能靠人记着手动 `node server/test/xxx_e2e.js`。
+      #   后果不是"覆盖率低"，而是**改坏了没人知道** —— 审计就是在这时候
+      #   查出 4 处多步写入没有事务（能留下半成品脏数据）、登录接口无限流
+      #   （可爆破 + scryptSync 阻塞事件循环）却一直没人碰过。
+      #   测试写得再好，不跑等于没有。这一步把它变成**闸门**。
+      #
+      # 为什么排在 Flutter 相关步骤**之前**：
+      #   服务端测试只要 node，几分钟就跑完；装 Flutter SDK 慢得多。
+      #   服务端挂了就没必要再花时间装 SDK 打包了。
+      #
+      # 为什么显式钉 Node 22：
+      #   服务端用了 `node:sqlite`（DatabaseSync），**Node 22 才有**。
+      #   不钉版本的话，runner 哪天换了默认版本就会整体起不来，
+      #   而报错会是"Cannot find module 'node:sqlite'"这种看着像代码坏了的信息。
+      - name: Setup Node 22（服务端 sqlite 需要）
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # 变异测试（*_mutation.js）默认不跑：它会**临时把源码改成坏的**再还原，
+      # 用来验证"测试能不能抓出这个错"。要跑时把下面这行的 if 去掉即可。
+      # bash test/run_all.sh 是统一入口（server/test/run_all.sh 顶部有说明）：
+      #   · 串行而非并行 —— 这些测试占的是硬编码端口且大量重号，并行必然互相抢端口；
+      #   · 只看退出码不看日志里的 ✓ —— 有的脚本失败时仍会打印一堆 ✓。
+      - name: 服务端回归（30+ e2e）
+        working-directory: server
+        run: bash test/run_all.sh
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:

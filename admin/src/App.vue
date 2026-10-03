@@ -91,6 +91,7 @@
           <el-sub-menu index="g-sys">
             <template #title><el-icon><Setting /></el-icon><span>系统</span></template>
             <el-menu-item index="settings">系统设置</el-menu-item>
+            <el-menu-item index="health">数据体检</el-menu-item>
             <el-menu-item index="license">授权管理</el-menu-item>
             <el-menu-item index="help">系统帮助</el-menu-item>
           </el-sub-menu>
@@ -242,6 +243,11 @@
                       （部门 / 岗位 / 员工，支持 Excel 批量导入）与<b>考勤打卡</b>。</li>
                     <li><b>内容与存储</b>：消息检索与批量清理、文件查看与批量清理、
                       存储占用分析、孤儿文件巡检。</li>
+                    <li><b>数据体检</b>（系统 → 数据体检）：本库没有外键约束，
+                      页面会列出所有已知关联的孤儿行（指向已删除对象的残留记录），
+                      可安全清理的会标「可清理」，<b>产品刻意保留的</b>
+                      （离职员工的消息、考勤记录、审批留痕）标「保留」并说明原因，
+                      服务端也会拒绝清理它们。</li>
                     <li><b>集成与下发</b>：入站推送、事件订阅、公钥接入；客户端配置（含强制升级）、
                       动态模块按人下发。</li>
                     <li><b>总览</b>：仪表盘 —— 今日新增、近 7 天活跃、异常提醒、上手向导。</li>
@@ -4355,6 +4361,93 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <el-empty v-if="!push.logs.length" description="还没有投递记录" />
         </div>
 
+        <div v-else-if="tab === 'health'">
+          <el-card shadow="never">
+            <template #header>
+              <div class="card-hdr">
+                <span>数据体检</span>
+                <el-button size="small" :loading="orphanScan.loading" @click="loadOrphanScan"
+                           style="margin-left:auto">重新体检</el-button>
+              </div>
+            </template>
+
+            <el-alert type="info" :closable="false" style="margin-bottom:14px">
+              <template #title>
+                这个库<b>没有外键约束</b>，靠应用层维护一致性。历史上可能残留一些
+                「指向已删除对象的行」—— 它们不会自己消失，也不会报错，
+                只会让好友树出现空壳账号、让某些计数永远不对。
+                这里体检所有已知的关联。
+              </template>
+            </el-alert>
+
+            <!-- 体检结论 -->
+            <el-alert v-if="orphanScan.loaded && orphanScan.summary?.healthy"
+                      type="success" :closable="false" show-icon style="margin-bottom:14px">
+              <template #title>
+                未发现可清理的孤儿数据，{{ orphanScan.summary.checked }} 项关联全部正常。
+              </template>
+            </el-alert>
+            <el-alert v-else-if="orphanScan.loaded"
+                      :type="orphanScan.summary?.purgeable ? 'warning' : 'info'"
+                      :closable="false" show-icon style="margin-bottom:14px">
+              <template #title>
+                发现 <b>{{ orphanScan.summary?.purgeable || 0 }}</b> 行可清理的孤儿数据
+                <span v-if="orphanScan.summary?.kept">
+                  ；另有 <b>{{ orphanScan.summary.kept }}</b> 行属于产品刻意保留的历史数据，不建议清理。
+                </span>
+              </template>
+            </el-alert>
+
+            <div class="page-bar">
+              <el-button type="danger" plain
+                         :disabled="!orphanScanPurgeableCount"
+                         @click="openOrphanPurge">
+                清理孤儿数据（{{ orphanScanPurgeableCount }} 行）
+              </el-button>
+              <span class="hint">
+                清理前会自动导出备份到 <code>purge-backup/</code>；数量变化时会要求重新确认。
+              </span>
+            </div>
+
+            <div class="analysis-h">体检结果</div>
+            <el-table :data="orphanRows" border stripe size="small">
+              <el-table-column prop="label" label="关联关系" min-width="200" show-overflow-tooltip />
+              <el-table-column label="孤儿行数" width="110" align="center">
+                <template #default="{ row }">
+                  <b v-if="row.count > 0" :style="{ color: row.purgeable ? '#E6A23C' : '#909399' }">
+                    {{ row.count }}
+                  </b>
+                  <span v-else style="color:#67C23A">0</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="可否清理" width="120" align="center">
+                <template #default="{ row }">
+                  <el-tag v-if="row.purgeable" type="warning" size="small" effect="plain">可清理</el-tag>
+                  <el-tag v-else type="info" size="small" effect="plain">保留</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="说明" min-width="320">
+                <template #default="{ row }">
+                  <span v-if="row.purgeable" style="color:#606266">{{ row.impact }}</span>
+                  <span v-else style="color:#C0C4CC">{{ stripMd(row.why) }}</span>
+                </template>
+              </el-table-column>
+              <template #empty><div class="empty-tip">正在体检…</div></template>
+            </el-table>
+
+            <!-- 保留类为什么不能清：单独一块强调，避免有人只看数字就点清理 -->
+            <template v-if="orphanKeptRows.length">
+              <div class="analysis-h" style="margin-top:18px">以下为什么建议不要清理</div>
+              <el-alert v-for="r in orphanKeptRows" :key="r.key" type="info"
+                        :closable="false" show-icon style="margin-bottom:8px">
+                <template #title>
+                  <b>{{ r.label }}</b>（{{ r.count }} 行）—— {{ stripMd(r.why) }}
+                </template>
+              </el-alert>
+            </template>
+          </el-card>
+        </div>
+
         <div v-else-if="tab === 'settings'">
           <el-card style="margin-bottom:16px">
             <template #header>公司与好友模式（对全服务器生效，客户端登录页/扫描结果即时可见）</template>
@@ -4580,6 +4673,58 @@ docker compose up -d --force-recreate xiaozhi-im</div>
     </el-container>
 
         <!-- 批量清理确认（消息 / 文件 / 磁盘残留 共用；三步安全模型的第 2 步） -->
+        <el-dialog v-model="orphanDlg" width="620px" title="清理孤儿数据">
+          <el-alert type="warning" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              <b>此操作会直接删除数据库里的行，不可恢复</b>（但会先自动导出备份到
+              <code>purge-backup/</code>，万一删错了可以从那里捞回来）。
+            </template>
+          </el-alert>
+
+          <div class="purge-box">
+            <div class="purge-row">
+              <span>将要删除</span>
+              <b class="purge-num">{{ orphanDlgCount }}</b>
+            </div>
+            <div class="purge-row">
+              <span>涉及关联</span>
+              <b>{{ orphanDlgKeys.length }} 项</b>
+            </div>
+          </div>
+
+          <el-table :data="orphanDlgItems" size="small" border style="margin:12px 0">
+            <el-table-column prop="label" label="关联关系" min-width="180" show-overflow-tooltip />
+            <el-table-column prop="count" label="行数" width="80" align="center" />
+            <template #empty><div class="empty-tip">没有可清理的关联</div></template>
+          </el-table>
+
+          <el-alert type="error" :closable="false" style="margin:12px 0">
+            <template #title>
+              「消息→发送者」「审批单→提交人」「考勤/补卡」这些<b>不在清理范围内</b>
+              —— 它们是产品刻意保留的历史数据（离职员工的消息、考勤、审批留痕），
+              服务端也会拒绝清理这些类型。
+            </template>
+          </el-alert>
+
+          <template v-if="orphanDlgConfirmed">
+            <el-alert type="info" :closable="false" style="margin:12px 0">
+              <template #title>已确认。点「确认清理」执行。</template>
+            </el-alert>
+          </template>
+          <div v-else style="margin:12px 0">
+            <div style="margin-bottom:6px;font-size:13px;color:#606266">
+              请先勾选上面的确认框（防止手滑点掉）。
+            </div>
+            <el-checkbox v-model="orphanDlgAck">我已确认这些是废弃数据</el-checkbox>
+          </div>
+
+          <template #footer>
+            <el-button @click="orphanDlg = false">取消</el-button>
+            <el-button type="danger" :loading="orphanDlgBusy"
+                       :disabled="!orphanDlgAck" @click="doOrphanPurge">确认清理</el-button>
+          </template>
+        </el-dialog>
+
         <el-dialog v-model="purgeDlg" width="640px" :title="purgeKind === 'messages' ? '批量清理消息' : (purgeKind === 'orphan' ? '清理磁盘残留文件' : '批量清理文件')">
           <div v-if="!purgePreview" style="padding:24px;text-align:center;color:#909399">统计中…</div>
           <div v-else>
@@ -5665,6 +5810,8 @@ async function loadTab() {
   else if (tab.value === 'master') await loadMaster();
   else if (tab.value === 'training') { await loadTrCourses(); await loadTrSheets(); await loadTrFiles(); }
   else if (tab.value === 'license') await loadLicense();
+  // 数据体检：切进来就体检一次（只读，随手做一次不心疼）
+  else if (tab.value === 'health') await loadOrphanScan();
   // 默认控制码要选账号 → 顺手把用户选项也拉上，避免下拉是空的
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); await loadRdc(); await loadUserOptions(); }
   else if (tab.value === 'deduct') await reloadDeduct();
@@ -5944,6 +6091,97 @@ async function loadFiles() {
 async function loadOrphans() {
   try { fileOrphans.value = (await api.get('/admin/files/orphans')).data; }
   catch (e) { ElMessage.error('孤儿巡检失败：' + (e.response?.data?.error || e.message)); }
+}
+
+/* ====== 数据体检（孤儿巡检，2026-10-03 新增） ======
+ *
+ * ⚠️ 命名刻意和上面那个「文件孤儿巡检」区分开：
+ *   loadOrphans       → 文件维度的（断链文件 / 磁盘残留），2026-09-27 就有
+ *   loadOrphanScan    → 本页的「数据体检」（全库关联的孤儿行）
+ *   两个功能概念相近但对象不同，混用一个名字迟早会叫错接口。
+ */
+
+// 服务端 why/impact 里带了 ** 强调标记，这里渲染成纯文本（表格里不需要 markdown）
+function stripMd(s) {
+  return String(s || '').replace(/\*\*/g, '').replace(/\n/g, ' ');
+}
+
+const orphanScan = ref({ loaded: false, loading: false, items: [], summary: null, errors: [] });
+// 只展示"有问题"的关联 —— 全 healthy 时那 21 行 0 纯属噪音
+const orphanRows = computed(() =>
+  (orphanScan.value.items || []).filter((i) => i.count > 0 || i.error)
+);
+const orphanKeptRows = computed(() =>
+  (orphanScan.value.items || []).filter((i) => i.count > 0 && !i.purgeable)
+);
+const orphanScanPurgeable = computed(() =>
+  (orphanScan.value.items || []).filter((i) => i.purgeable && i.count > 0)
+);
+// 模板里用的"可清理总行数"
+const orphanScanPurgeableCount = computed(() =>
+  orphanScanPurgeable.value.reduce((s, i) => s + i.count, 0)
+);
+
+async function loadOrphanScan() {
+  orphanScan.value.loading = true;
+  try {
+    orphanScan.value = { ...orphanScan.value, ...(await api.get('/admin/orphans/scan')).data, loaded: true, loading: false };
+    const errs = orphanScan.value.errors || [];
+    if (errs.length) {
+      // 单条关联查不了（老库缺某张表）不该被静默吞掉 —— 那会让"体检通过"变成假象
+      ElMessage.warning(`有 ${errs.length} 项关联无法体检：${errs[0].error}`);
+    }
+  } catch (e) {
+    orphanScan.value.loading = false;
+    ElMessage.error('数据体检失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+const orphanDlg = ref(false);
+const orphanDlgBusy = ref(false);
+const orphanDlgAck = ref(false);
+const orphanDlgItems = ref([]);
+const orphanDlgCount = computed(() => orphanDlgItems.value.reduce((s, i) => s + i.count, 0));
+const orphanDlgKeys = computed(() => orphanDlgItems.value.map((i) => i.key));
+const orphanDlgConfirmed = computed(() => orphanDlgAck.value);
+
+function openOrphanPurge() {
+  if (!orphanScanPurgeable.value.length) return;
+  // 打开时重扫一次：弹窗里展示的行数必须是**当下**的，不能是进页面时那份快照
+  loadOrphanScan().then(() => {
+    orphanDlgItems.value = orphanScanPurgeable.value.map((i) => ({ key: i.key, label: i.label, count: i.count }));
+    orphanDlgAck.value = false;
+    orphanDlg.value = true;
+  });
+}
+
+async function doOrphanPurge() {
+  const keys = orphanDlgKeys.value;
+  const count = orphanDlgCount.value;
+  if (!keys.length) return;
+  orphanDlgBusy.value = true;
+  try {
+    const r = (await api.post('/admin/orphans/purge', { keys, confirm: count })).data;
+    // 有单条失败时 ok 会是 false，deleted 仍可信 —— 要如实告诉管理员"部分失败"
+    if (r.errors?.length) {
+      ElMessage.warning(`已清理 ${r.deleted} 行，但有 ${r.errors.length} 项出错：${r.errors[0].error}`);
+    } else {
+      ElMessage.success(`已清理 ${r.deleted} 行孤儿数据` + (r.backup?.name ? `，备份 ${r.backup.name}` : ''));
+    }
+    orphanDlg.value = false;
+    await loadOrphanScan();
+  } catch (e) {
+    // 409 = 数量变了。这是预期内的并发保护，要提示"重新体检"而不是当成报错
+    if (e.response?.status === 409) {
+      ElMessage.warning('数据已变化，请重新体检后再确认');
+      orphanDlg.value = false;
+      await loadOrphanScan();
+    } else {
+      ElMessage.error('清理失败：' + (e.response?.data?.error || e.message));
+    }
+  } finally {
+    orphanDlgBusy.value = false;
+  }
 }
 
 function resetFileFilter() {

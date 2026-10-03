@@ -4,6 +4,7 @@ import '../api.dart';
 import '../core/app_version.dart';
 import '../core/apps.dart';
 import '../core/module_schema.dart';
+import '../core/session_manager.dart';
 import '../core/theme.dart';
 import '../core/config.dart';
 import '../widgets/module_renderer.dart';
@@ -144,13 +145,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final v = _q.text.trim().toLowerCase();
       if (v != _kw) setState(() => _kw = v);
     });
+    // 切换企业（整域切换）→ 重新拉取这台服务器的应用/分组/公告
+    SessionManager.instance.domainVersion.addListener(_onDomain);
     _load();
   }
 
   @override
   void dispose() {
+    SessionManager.instance.domainVersion.removeListener(_onDomain);
     _q.dispose();
     super.dispose();
+  }
+
+  /// 切到另一家企业时，重新拉取工作台数据。
+  void _onDomain() {
+    if (!mounted) return;
+    _load();
   }
 
   Future<void> _load() async {

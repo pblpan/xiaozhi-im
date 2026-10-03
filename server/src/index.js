@@ -9,7 +9,78 @@ const dispatcher = require('./dispatcher');
 const license = require('./license');
 
 const app = express();
-app.use(cors());
+
+// ---------------------------------------------------------------------------
+// 安全头（2026-10-03 补，审计 P2）
+//
+// 为什么不全套 helmet：这里的服务形态是「内网 IM + 管理台静态页」，
+// 不对外提供 HTML 文档渲染，helmet 默认那套 CSP（禁 inline script）会
+// **把管理台自己的构建产物打死**（Vite 打包出来的 js/css 走的就是内联/外链混合）。
+// 所以这里只开确实有意义、且不会误伤的那几项，逐条说明理由：
+//
+//   · nosniff            —— 挡住「把 .txt 猜成 js 执行」这类老把戏
+//   · frame-ancestors     —— 防点击劫持。X-Frame-Options 已被现代浏览器忽略，
+//                           所以用 CSP 的 frame-ancestors（同时给老浏览器补 XFO）
+//   · referrer-policy    —— 管理台里的地址不该出现在别站 Referer 里
+//   · x-content-type     —— 呼应 nosniff，明确"我发的就是这类型"
+//   · HSTS               —— ⚠️ **仅在 HTTPS 下加**。这是内网/局域网部署，
+//                           绝大多数是 http，乱加 HSTS 会让浏览器把 http 永久
+//                           升级到 https —— 在没有 https 的部署里直接把网站搞坏。
+//                           所以按请求是否 https 来决定，代理后面也认 X-Forwarded-Proto。
+//   · 隐藏 x-powered-by   —— Express 默认会暴露框架名，纯信息泄露
+//
+// ⚠️ 关于 CORS：见下面 cors(...) 的注释。
+// ---------------------------------------------------------------------------
+app.disable('x-powered-by');
+
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'SAMEORIGIN');
+  res.set('Content-Security-Policy', "frame-ancestors 'self'");
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()
+    || (req.socket.encrypted ? 'https' : 'http');
+  if (proto === 'https') {
+    res.set('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
+
+// CORS 显式来源（2026-10-03 补，审计 P2）
+//
+// 🔴 原来这里是裸 `app.use(cors())` —— **等于允许任意来源**。
+//    配合"令牌存在客户端本地"这一点，风险在于：用户在小智IM 管理台登录后，
+//    访问的任意第三方网页都能用 fetch 带 cookie/头去打这台服务器的管理接口。
+//    （虽然 Bearer 令牌不在 Cookie 里、跨站读不到 localStorage，实际可利用性有限，
+//      但"生产环境任意源"这件事本身就该收紧。）
+//
+// 怎么收紧而不弄坏功能 —— 需要分清谁真的需要跨域：
+//   · **管理台**：和 API 同源（都走 :3602），**不需要 CORS**。
+//   · **Flutter 客户端**：原生 HTTP（dart:io），**不受 CORS 约束**（那是浏览器的东西）。
+//   · **管理台 Vite 开发服务器**（本地改前端时）：`npm run dev` 在 5173 端口，
+//     确实需要跨域 → 走下面的白名单。
+//   · **飞牛/frp/Cloudflare 隧道**：同源，不需要。
+// 所以白名单默认只放行开发端口，够用且不放开给任何陌生网站。
+//
+// 想再加来源用环境变量（逗号分隔）：CORS_ORIGINS=https://a.com,https://b.com
+const DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const EXTRA_ORIGINS = String(process.env.CORS_ORIGINS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+const ALLOWED_ORIGINS = new Set([...DEV_ORIGINS, ...EXTRA_ORIGINS]);
+
+app.use(cors({
+  // 白名单制：不在名单里就**不返回** Access-Control-Allow-Origin，
+  // 浏览器的同源策略自然会把响应拦掉。
+  // ⚠️ 刻意不用 origin: true（那等于"反射任意来源"，和不设一样）。
+  origin(origin, cb) {
+    // 没有 Origin 头的 = 同源请求、curl、服务端调用、WebSocket 握手 → 直接放行
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+    cb(null, false);
+  },
+  credentials: false, // 本项目令牌在 Authorization 头里，不依赖 Cookie
+}));
+
 // 保留原始请求体：入站 Webhook 的 HMAC 签名必须对「原始字节」计算，
 // 重新 JSON.stringify 会因键序/空格差异导致签名对不上。
 app.use(express.json({
@@ -61,6 +132,9 @@ app.use('/api/admin/integrations', require('./routes/integrations'));
 app.use('/api/admin/attendance', require('./routes/attendance').admin);
 // 推送管理端同理（配置 Apple 密钥 / 发测试推送 / 看投递日志）
 app.use('/api/admin/push', require('./routes/push').admin);
+// 数据体检（孤儿巡检）：全库 0 外键，靠触发器只挡住了"新的脏数据"，
+// 历史上遗留的孤儿行要靠这个页体检 + 清理。挂 /api/admin 之前（路径更长者优先）。
+app.use('/api/admin/orphans', require('./routes/orphans'));
 app.use('/api/admin', require('./routes/admin'));
 // 考勤（工作模式下随工作模式启用）：员工端打卡/我的考勤/申请
 app.use('/api/attendance', require('./routes/attendance'));
@@ -88,17 +162,40 @@ app.use('/api/training', require('./routes/training'));
 // （盘点走 /api/stocktake，减货走这里，两边互不干扰）。
 app.use('/api/deduct', require('./routes/deduct'));
 
+// 健康检查：进程活着就算活。
+//   /health 给「进程是否在跑」用 —— 容器编排、飞牛的界面探活都看它，
+//   所以它必须**不能依赖数据库**，否则数据库一坏就会把进程也判死、触发重启风暴。
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// 就绪检查：能不能**真的干活**。
+//   差别在 /ready 会碰一下数据库。数据库打不开时返回 503，
+//   让负载均衡/编排知道"别往我这发流量"，但进程本身不必重启。
+//   这对"容器起来了但库还没准备好"那种启动竞态很有用（SQLite 首次迁移时确实有窗口）。
+app.get('/api/ready', (req, res) => {
+  try {
+    // 真正查一次：SELECT 1 不会走索引但会打开文件、验证页可读，
+    // 库损坏/文件权限不对/磁盘挂掉都会在这里暴露出来。
+    require('./db').prepare('SELECT COUNT(*) c FROM users').get();
+    res.json({ ok: true, db: 'ready', ts: Date.now() });
+  } catch (e) {
+    res.status(503).json({ ok: false, db: 'unavailable', error: e.message, ts: Date.now() });
+  }
+});
+
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
 
 const server = http.createServer(app);
-initWs(server);
+const wss = initWs(server);
 // 局域网发现服务（UDP 广播应答，客户端首装自动找到服务器）
 require('./discover').start();
 // 出站 Webhook 失败重试巡检
 dispatcher.start();
 // 推送：每天清一次老日志；已配置时开机打一行自检结果
 require('./push').start();
+// refresh token 表清理：过期行没有任何用处，留着只会让表慢慢变大。
+// 每天一次即可（有效期 30 天，精度要求很低）。
+// 用 unref 让这个定时器**不阻止进程退出** —— 否则优雅停机时会卡在这儿等它。
+setInterval(() => require('./tokens').sweep(), 24 * 3600 * 1000).unref();
 
 server.listen(config.PORT, () => {
   console.log(`[小智IM] 服务端已启动: http://localhost:${config.PORT}`);
@@ -108,3 +205,76 @@ server.listen(config.PORT, () => {
   // 打印机器码与剩余天数，并起「授权失效即断开在线连接」的巡检
   license.init();
 });
+
+// ---------------------------------------------------------------------------
+// 优雅停机（2026-10-03 补，审计 P1-5）
+//
+// 🔴 为什么必须加
+//   `docker compose restart xiaozhi-im` 发的是 **SIGTERM**，不是 SIGKILL。
+//   以前没接 SIGTERM，Node 的默认行为是**直接退出进程**。于是每次重启/发版都会：
+//     · 正在处理中的请求被砍断（客户端收到 ECONNRESET，不是 502/超时）；
+//     · WebSocket 连接被硬断，客户端要等重连超时才发现断线（表现为"消息发不出去"）；
+//     · **SQLite 的 WAL 没做 checkpoint** —— 已提交的数据还在 -wal 文件里，
+//       极端情况下（下一次又是硬杀）可能丢最后几笔写入。
+//   换句话说，"重启一下服务"这个最平常的操作，本身就是一个数据风险点。
+//
+// 停机顺序是有讲究的，不能反：
+//   ① 停收新连接（server.close）—— 先把入口关上，别再接新请求进来；
+//   ② 关 WebSocket —— 让客户端**立刻**知道该重连，而不是等 TCP 超时；
+//   ③ 等存量请求做完（给一个上限）—— 不硬砍正在写库的请求；
+//   ④ 关数据库（close 会顺带 checkpoint WAL）—— 最后一步，确保数据落盘；
+//   ⑤ 兜底强杀 —— 上面的等待有上限，卡住也不能让容器永远停不下来
+//     （docker stop 超时后会 SIGKILL，那时再做一次也没意义了）。
+//
+// 为什么要在 shutdown 里 db.close()：node:sqlite 的 DatabaseSync 有 close()，
+// 它会把 WAL 落盘并合并。进程被硬杀时这一步不会执行，恰恰就是丢数据的原因。
+// ---------------------------------------------------------------------------
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return; // Docker 重启时会连发信号，重复执行会二次 close 抛错
+  shuttingDown = true;
+  const hard = setTimeout(() => {
+    console.error('[小智IM] 优雅停机超时，强制退出');
+    process.exit(1);
+  }, 10000);
+  hard.unref();
+
+  console.log(`[小智IM] 收到 ${signal}，开始优雅停机…`);
+
+  // ① 停收新 HTTP 连接
+  server.close(() => {
+    // server.close 的回调 = 所有存量请求都处理完了，走到这说明 ③ 完成
+    console.log('[小智IM] HTTP 连接已收干');
+  });
+
+  // ② 通知并关闭 WS（close 会触发各连接的 close 事件，客户端能立刻重连）
+  try {
+    for (const ws of wss.clients) {
+      try { ws.close(1001, 'server shutting down'); } catch (_) { /* 已经断了 */ }
+    }
+    wss.close();
+  } catch (e) {
+    console.warn('[小智IM] 关闭 WebSocket 出错（不影响停机）:', e.message);
+  }
+
+  // ③④ 给存量请求一点时间，然后关库；server.getConnections 用来判断是否真的收干了
+  setTimeout(() => {
+    server.getConnections((err, n) => {
+      if (err) console.warn('[小智IM] 统计连接数失败:', err.message);
+      else if (n > 0) console.warn(`[小智IM] 仍有 ${n} 个连接未结束，继续等`);
+    });
+    try {
+      // db.js 直接导出 DatabaseSync 实例，close() 会把 WAL checkpoint 落盘
+      require('./db').close();
+      console.log('[小智IM] 数据库已关闭（WAL 已落盘）');
+    } catch (e) {
+      console.warn('[小智IM] 关闭数据库出错:', e.message);
+    }
+    clearTimeout(hard);
+    console.log('[小智IM] 已退出');
+    process.exit(0);
+  }, 2000);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

@@ -34,7 +34,15 @@ function adminOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
   if (!c) { res.status(401).json({ error: 'unauthorized' }); return null; }
   const u = db.prepare('SELECT role FROM users WHERE id=?').get(c.uid);
-  if (!u || u.role !== 'admin') { res.status(403).json({ error: 'forbidden' }); return null; }
+  // 🔴 401 与 403 要分清（2026-10-03 修，审计 P2「鉴权行为漂移」）：
+  //   · 401 = 你的登录态本身不成立（没令牌 / 令牌无效 / **账号已被删掉**）
+  //   · 403 = 登录态没问题，但你没这个权限（是登录用户但不是管理员）
+  // 以前这里把"用户不存在"和"不是管理员"合并成 403，后果是：账号被管理员删掉后，
+  // 那个人的客户端收到 403 会被理解成"我没权限"，于是**不会跳登录页**，
+  // 只能一直对着 403 干瞪眼 —— 看起来像程序坏了。
+  // 令牌签名有效但查不到人，说明的是"这个人已经不该存在了"，属于登录态失效 → 401。
+  if (!u) { res.status(401).json({ error: 'unauthorized' }); return null; }
+  if (u.role !== 'admin') { res.status(403).json({ error: 'forbidden' }); return null; }
   return c.uid;
 }
 

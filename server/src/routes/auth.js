@@ -3,6 +3,59 @@ const db = require('../db');
 const hub = require('../hub');
 const { hashPassword, verifyPassword, signToken, verifyToken } = require('../auth');
 const settings = require('../settings');
+const tokens = require('../tokens');
+const { RateLimiter, ipOf } = require('../ratelimit');
+
+// ---------------------------------------------------------------------------
+// 登录/注册限流（2026-10-03 补，审计 P1-1）
+//
+// 🔴 为什么登录必须限流（它同时是爆破面和 DoS 面）
+//   1. 爆破：登录是全系统唯一"可以无限次重试"的写接口，弱口令能被慢慢磨出来。
+//   2. DoS：密码校验走 `crypto.scryptSync` —— **同步、CPU 密集**，
+//      单次约几十到上百毫秒，而且**它不让出事件循环**。
+//      所以几十个并发登录请求就能把整个 Node 进程占死，
+//      表现是**所有接口一起超时**（连 /api/health 都响应不了）——
+//      攻击者不需要账号，用一个脚本就能让服务器"看起来宕机"。
+//   setup.js 早就有限流了（防脚本刷设置密码），唯独登录这个最该有的没有。
+//
+// 两条维度，缺一不可：
+//   · IP 维度 → 挡"一个来源换着账号刷"
+//   · 账号维度 → 挡"多个来源盯着同一个账号爆破"（分布式也躲不过）
+// 只做 IP 维度的话，换个 IP 就能继续猜；只做账号维度的话，
+// 攻击者随便填个不存在的账号名就能把受害者锁在门外（DoS 变成互相伤害）。
+//
+// 阈值为什么这么定：
+//   · 登录 10 次 / 15 分钟：正常人一天也就登录几次（换设备、重连）；
+//     连续输错 10 次基本就是记错密码或有人在猜。给到 10 次是留足余量。
+//   · 账号锁定 5 次 / 15 分钟：比 IP 维度更严。5 次错密码就该让本人
+//     停手并走"忘记密码"了（自助注册开着的话重置更简单）。
+//   · 注册 5 次 / 小时：注册一次只多一条用户记录，危害远小于登录爆破，
+//     但批量灌账号是刷数据的常见手段，所以也要有。
+// 判据：成功登录**清零**该账号的失败计数（本人输对了就不该再被锁），
+// 但不清 IP 计数（不然攻击者拿一个账号成功一次就能重置自己的爆破额度）。
+// ---------------------------------------------------------------------------
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_PER_IP = 10;
+const LOGIN_MAX_PER_ACCOUNT = 5;
+const REGISTER_WINDOW_MS = 60 * 60 * 1000;
+const REGISTER_MAX = 5;
+
+const loginByIp = new RateLimiter({ windowMs: LOGIN_WINDOW_MS, max: LOGIN_MAX_PER_IP });
+const loginByAccount = new RateLimiter({ windowMs: LOGIN_WINDOW_MS, max: LOGIN_MAX_PER_ACCOUNT });
+const registerByIp = new RateLimiter({ windowMs: REGISTER_WINDOW_MS, max: REGISTER_MAX });
+
+/** 账号维度的键：加盐哈希，避免明文账号名留在内存 Map 里 */
+function accountKey(username) {
+  return require('crypto').createHash('sha256')
+    .update(String(username || '').toLowerCase())
+    .digest('base64url');
+}
+
+/** 429 的统一口径。附带 Retry-After，方便客户端自己退避 */
+function tooMany(res, seconds, msg) {
+  res.set('Retry-After', String(seconds));
+  return res.status(429).json({ error: msg, retryAfter: seconds });
+}
 
 function uidOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -130,18 +183,66 @@ router.post('/register', (req, res) => {
   const { username, password, nickname } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
   if (username.length < 3) return res.status(400).json({ error: 'username too short' });
+  // 注册限流：批量灌账号是刷数据的常见手段（审计 P1-1 顺带覆盖）。
+  if (registerByIp.isBlocked(ipOf(req))) {
+    return tooMany(res, Math.ceil(REGISTER_WINDOW_MS / 1000), '注册过于频繁，请稍后再试');
+  }
+  registerByIp.allow(ipOf(req));
   if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) return res.status(409).json({ error: 'username taken' });
   const info = db.prepare('INSERT INTO users (username, password_hash, nickname, role, created_at) VALUES (?,?,?,?,?)')
     .run(username, hashPassword(password), nickname || username, 'user', Date.now());
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
-  res.json({ token: signToken({ uid: user.id, role: user.role }), user: publicUser(user) });
+  res.json({ ...tokens.issuePair(user), user: publicUser(user) });
+});
+
+// 换新 access/refresh（客户端支持刷新后调它）
+// 🔴 旧客户端不会调这个端点 —— 它是**纯新增**，用来平滑引入短时效令牌。
+//    不配刷新逻辑的老版本继续用 30 天的 token，不会被踢（见 src/tokens.js 顶部说明）。
+router.post('/refresh', (req, res) => {
+  // 刷新端点也要限流：它接受一个不可撤销的凭据反复换令牌，
+  // 不限流就成了"无限续期"的漏洞（拿到 refresh 就能一直保持登录态）。
+  if (loginByIp.isBlocked(ipOf(req))) {
+    return tooMany(res, Math.ceil(LOGIN_WINDOW_MS / 1000), '刷新过于频繁，请稍后再试');
+  }
+  loginByIp.allow(ipOf(req));
+
+  const r = tokens.rotate((req.body || {}).refreshToken);
+  if (r.error) return res.status(r.status).json({ error: r.error });
+  res.json({ ...r.pair, user: publicUser(r.user) });
 });
 
 router.post('/login', (req, res) => {
-  const { username, password } = req.body || {};
+  const ip = ipOf(req);
+  const username = String((req.body || {}).username || '').trim();
+  const akey = accountKey(username);
+
+  // 先查后记：**已经超限的请求直接拒，不再走 scrypt**。
+  // 顺序很关键 —— 如果先 allow 再校验，超限的那次仍然要付一次 scrypt 的
+  // CPU 代价，限流就挡不住 DoS 了。
+  if (loginByIp.isBlocked(ip)) {
+    return tooMany(res, Math.ceil(LOGIN_WINDOW_MS / 1000), '尝试过于频繁，请过几分钟再试');
+  }
+  if (username && loginByAccount.isBlocked(akey)) {
+    // 账号维度超限：可能是本人记错密码反复试，也可能是别人在爆破。
+    // 两种情况的处理是一样的 —— 都不放行，且**不说"这个账号存在"**
+    // （那句话本身就是个信息泄露：能被用来枚举账号）。
+    return tooMany(res, Math.ceil(LOGIN_WINDOW_MS / 1000), '该账号尝试过于频繁，请稍后再试');
+  }
+
+  loginByIp.allow(ip);
+  if (username) loginByAccount.allow(akey);
+
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-  if (!user || !verifyPassword(password || '', user.password_hash)) return res.status(401).json({ error: 'invalid credentials' });
-  res.json({ token: signToken({ uid: user.id, role: user.role }), user: publicUser(user) });
+  if (!user || !verifyPassword((req.body || {}).password || '', user.password_hash)) {
+    return res.status(401).json({ error: 'invalid credentials' });
+  }
+  // 登上了：清掉该账号的失败计数（本人输对了就不该再被锁）。
+  // IP 计数**故意不清** —— 否则攻击者用一个能登的账号成功一次，
+  // 就能把自己这一轮的爆破额度重置掉。
+  loginByAccount.clearFails(akey);
+  // token 字段保持原样（access，30 天）—— 旧客户端靠它，行为不能变；
+  // refreshToken 是新增字段，旧客户端会忽略它，新客户端用它续期。
+  res.json({ ...tokens.issuePair(user), user: publicUser(user) });
 });
 
 router.get('/me', (req, res) => {
@@ -195,6 +296,11 @@ router.post('/password', (req, res) => {
     return res.status(400).json({ error: '新密码不能与旧密码相同' });
   }
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(np), uid);
+  // 改密码后**作废该用户全部 refresh token**（2026-10-03 补，审计 P2）。
+  // 这是双令牌机制最实际的安全收益：改密码的本意是"把拿到旧凭证的人挡在外面"，
+  // 不作废 refresh 的话，对方手上的 refresh 还能继续换出新令牌 —— 改密码等于白改。
+  // access token 因为无状态做不到即时作废（最多再撑到过期，见 src/tokens.js）。
+  tokens.revokeAll(uid);
   res.json({ ok: true });
 });
 

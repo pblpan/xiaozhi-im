@@ -26,6 +26,23 @@ CREATE TABLE IF NOT EXISTS friendships (
   created_at INTEGER NOT NULL,
   UNIQUE(user_id, friend_id)
 );
+-- 🔴 friendships 的反查方向索引（2026-10-03 补，审计 P1-4）
+--
+-- 为什么必须补：上面的 UNIQUE(user_id, friend_id) **只覆盖 user_id 一个方向**。
+-- 实测 EXPLAIN QUERY PLAN：
+--   WHERE user_id=?  → SEARCH ... USING INDEX sqlite_autoindex_friendships_1   ✅
+--   WHERE friend_id=? → SCAN friendships（全表扫）                                ❌
+--
+-- 而"以 friend_id 为条件的反查"在业务里恰恰是高频的，且全都在最热的路径上：
+--   friends.js:41  好友申请列表（status='pending' 也要用）
+--   friends.js:198 同意申请   friends.js:213 拒绝申请
+--   admin.js:393  删用户时清理   orgs.js:255  移除员工时清理
+-- 好友量上千后这些接口会随 friend_id 线性变慢。
+--
+-- 列顺序 (friend_id, status)：好友申请列表固定带 status='pending'，
+-- 让 status 跟在 friend_id 后面可以一起走索引，不必回表过滤。
+-- 单列 (friend_id) 也够用，但贴合上面那条查询的形状更划算。
+CREATE INDEX IF NOT EXISTS idx_friendships_friend ON friendships (friend_id, status);
 CREATE TABLE IF NOT EXISTS groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -177,10 +194,10 @@ ensureColumn('conversations', 'pinned_message_id', 'pinned_message_id INTEGER');
 ensureColumn('conversation_members', 'muted', 'muted INTEGER NOT NULL DEFAULT 0');
 // 机器人：特殊用户，不可登录、可被拉进群、可发消息（password_hash 存 '!' 使其永远验证失败）
 ensureColumn('users', 'is_bot', 'is_bot INTEGER NOT NULL DEFAULT 0');
-// 工号（好友"工作模式"下：工号=登录账号）；普通模式下为空
-ensureColumn('users', 'employee_no', 'employee_no TEXT');
-// 所属部门 id（工作模式组织机构用）；NULL = 不属于任何部门
-ensureColumn('users', 'org_id', 'org_id INTEGER');
+// ⚠️ employee_no / org_id 这两列的迁移在**下方「组织机构」段**里（跟着 orgs 建表一起）。
+//    以前这里也写了一份，两处完全相同 —— ensureColumn 幂等所以不会出错，
+//    但重复代码会让"这列到底在哪加的"变得难查（改了一处忘了另一处也很自然）。
+//    既然下方那份紧挨着 orgs / org_depts 的建表、注释更能说明用途，就只留那一处。
 
 // ---- 实例级设置（键值）----
 // 与 client_configs（版本化快照+灰度）的区别：公司名/好友模式是"服务器身份与策略"，
@@ -983,6 +1000,114 @@ ensureColumn('tr_progress', 'watched_sec', 'watched_sec INTEGER NOT NULL DEFAULT
 // 老库的 tr_lesson 没有外链列（0.21.5 之前课件只能挂系统文件），在线的库补一列。
 // ⚠️ 和上面同一条规则：**只能往下追加**，别往上挪。
 ensureColumn('tr_lesson', 'link_url', "link_url TEXT NOT NULL DEFAULT ''");
+
+// ---------------------------------------------------------------------------
+// 引用完整性：用**触发器**实现外键效果（2026-10-03 补，审计 P1-3）
+//
+// 【为什么加】
+//   这个库原来 55 张表**一个外键都没有**（`REFERENCES` 命中 0 次），
+//   全部靠每个端点自己手工维护一致性。审计发现 `admin.js:388` 删用户时要
+//   手工清 friendships、orgs.js:254` 移除员工时要手工清 friendships……
+//   这类"手工清理"漏一处就留一行永久孤儿，而孤儿行不会自己消失：
+//   它会在好友树里显示成一个点进去什么都没有的账号，或让某个计数永远不对。
+//   P1-2 给关键写入包了事务，但事务只能防"中途失败"，防不了"某处代码忘了清"。
+//
+// 【为什么用触发器而不是 ALTER TABLE ADD CONSTRAINT】
+//   SQLite 不支持给已有表加外键，只能**重建表**（建新表→拷数据→删旧表→改名）。
+//   55 张表、且这个库是在线上跑着的（飞牛 192.168.31.44:3602）——
+//   重建表意味着：① 要拷全量数据，服务启动时间变长；② 中途失败可能把表弄坏；
+//   ③ 万一拷漏行，数据就没了。**为了加一个约束去动生产数据，代价太大。**
+//   触发器是**增量**的：只新建几个小对象，不碰任何表结构、不动任何现有行。
+//
+// 【为什么不直接开 PRAGMA foreign_keys=ON + 在建表语句里写 REFERENCES】
+//   两个原因：
+//   ① 建表语句带 REFERENCES 只对**以后新建的库**生效，线上这个库是老的，
+//      早建好了，永远不会重新跑一遍建表 —— 等于什么都没做。
+//   ② 即便补上，`PRAGMA foreign_keys` 默认是 **OFF**，而打开它会让
+//      全库所有删除/更新立刻受约束（以前能删的现在可能报 FOREIGN KEY 失败）。
+//      在一个没有配套清理逻辑的历史库里贸然打开，是很容易让服务起不来的。
+//   所以这里走触发器：**默认拦住"写入不存在的父行"这个方向**（脏数据的主要来源），
+//   删除方向仍由各端点自己的事务 + 手工清理负责（那部分 P1-2 已经补了事务）。
+//
+// 【覆盖范围与取舍，勿当成"全库都有外键了"】
+//   这里覆盖的是**成员关系类**的表，也就是最容易出孤儿的那几张。
+//   刻意**没有**给 messages / files / 考勤 / 培训 这些表加约束：
+//     · messages.sender_id 允许"用户被删后消息仍留着"是**产品要的行为**
+//       （历史消息不能因为发消息的人离职就消失），加约束会逼出一堆额外逻辑；
+//     · 覆盖面铺太大反而会让某天一个正常操作突然报 FOREIGN KEY 失败，
+//       那时候排查成本远高于现在。
+//   选这几个的标准：**孤儿行一定会导致界面出错或数据不一致**，
+//   且**父行不存在时写入没有合理理由**。
+//
+// 【上线前已体检】
+//   2026-10-03 在现网库（server/data）实测 21 项关联，孤儿数全为 0，
+//   所以启用这些约束不会让任何现存数据突然"写不动"。
+// ---------------------------------------------------------------------------
+
+// 父行不存在时阻止写入。RAISE(ABORT) 会让整个语句回滚（不是忽略），
+// 因为静默忽略会让调用方以为"插成功了"，然后在别处报一个莫名其妙的错。
+const FK_GUARD = (childTable, childCol, parentTable, parentCol) => `
+CREATE TRIGGER IF NOT EXISTS trg_fk_${childTable}_${childCol}
+BEFORE INSERT ON ${childTable}
+FOR EACH ROW
+WHEN NOT EXISTS (SELECT 1 FROM ${parentTable} WHERE ${parentCol} = NEW.${childCol})
+BEGIN
+  SELECT RAISE(ABORT, '${childTable}.${childCol} 指向不存在的 ${parentTable}.${parentCol}');
+END;`;
+
+// 更新时同样要挡：改父键造成孤儿，和插入孤儿一样是脏数据。
+const FK_GUARD_UPDATE = (childTable, childCol, parentTable, parentCol) => `
+CREATE TRIGGER IF NOT EXISTS trg_fku_${childTable}_${childCol}
+BEFORE UPDATE OF ${childCol} ON ${childTable}
+FOR EACH ROW
+WHEN NOT EXISTS (SELECT 1 FROM ${parentTable} WHERE ${parentCol} = NEW.${childCol})
+BEGIN
+  SELECT RAISE(ABORT, '${childTable}.${childCol} 指向不存在的 ${parentTable}.${parentCol}');
+END;`;
+
+// 覆盖的关联（表.列 → 表.列）：
+//   会话成员、群成员、好友关系 —— 孤儿行会让好友树/群成员列表出现空壳条目
+const FK_RELATIONS = [
+  ['conversation_members', 'conversation_id', 'conversations', 'id'],
+  ['conversation_members', 'user_id', 'users', 'id'],
+  ['group_members', 'group_id', 'groups', 'id'],
+  ['group_members', 'user_id', 'users', 'id'],
+  ['friendships', 'user_id', 'users', 'id'],
+  ['friendships', 'friend_id', 'users', 'id'],
+  ['groups', 'conversation_id', 'conversations', 'id'],
+];
+
+for (const [child, childCol, parent, parentCol] of FK_RELATIONS) {
+  db.exec(FK_GUARD(child, childCol, parent, parentCol));
+  db.exec(FK_GUARD_UPDATE(child, childCol, parent, parentCol));
+}
+
+// ---------------------------------------------------------------------------
+// refresh token 存储（2026-10-03 补，审计 P2）
+//
+// 为什么单独一张表而不是塞进 settings：它是一行一令牌、要频繁增删的流水数据，
+// 放 settings 会变成"每次刷新都改一行 JSON"，并发下互相覆盖。
+//
+// 只存**哈希**不存明文：库被拖走（备份文件落到别人手里、NAS 被格式化）时，
+// 攻击者拿到的是一列 sha256，无法直接当令牌用。
+//
+// 不加外键：这里刻意用应用层维护（tokens.js 的 rotate/revokeAll）。
+// 原因见上方触发器注释 —— 加外键要重建表，线上库不值得为这个冒险；
+// 而且这张表的行本来就随令牌自然增删，孤儿行的影响是零。
+//
+// ⚠️ 注意这几条是包在 db.exec() 里的裸 SQL —— 和文件里其他 CREATE TABLE 一样，
+//    写在 exec 外面会直接语法报错（db.js 是顺序执行的脚本，不是模块）。
+db.exec(`
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens (user_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_exp ON refresh_tokens (expires_at);
+`);
 
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);

@@ -9,7 +9,7 @@ import 'dart:io';
 ///   - auto：启动时并发探测两个地址，谁先连通用谁；探测结果缓存 5 分钟
 ///   - lan / wan：强制用某个地址（探测被跳过；适合已知环境）
 ///
-/// 启动时 Settings.load() 把 lan/wan/mode 全部读出来；
+/// 启动时 [SessionManager.load] 把激活档案的 lan/wan/mode 镜像进来；
 /// `Config.pickUrl()` 在 main() 启动或 api 调用前决定当前实际地址。
 class Config {
   // ============================================================
@@ -82,6 +82,10 @@ class Config {
   static String get wsUrl =>
       currentUrl.replaceFirst(RegExp(r'^http'), 'ws');
 
+  /// 由 http(s) 地址推出对应的 ws(s) 地址（用于任意档案，不依赖全局）。
+  static String wsFrom(String url) =>
+      url.replaceFirst(RegExp(r'^http'), 'ws');
+
   // ============================================================
   // 探测结果缓存（5 分钟内不重复探测）
   // ============================================================
@@ -150,9 +154,26 @@ class Config {
       return currentUrl;
     }
     // 两个都存在：并发探测，先到先用
-    final winner = await _raceProbe(lan!, wan!);
+    final winner = await pickFor(lan!, wan!, mode);
     _markProbe(winner);
     return currentUrl;
+  }
+
+  /// 给定一组 lan/wan/mode，**不触碰全局状态**地算出该用哪个地址。
+  ///
+  /// 抽出这一层是为了让多企业后台连接（[BackgroundLinkService]）能独立探测
+  /// 每个档案的地址，而不污染全局 `currentUrl`（那是激活企业的）。
+  static Future<String> pickFor(String lan, String wan, String mode) async {
+    final L = lan.trim().isEmpty ? null : normalize(lan);
+    final W = wan.trim().isEmpty ? null : normalize(wan);
+    if (mode == modeLan && L != null) return L;
+    if (mode == modeWan && W != null) return W;
+    if (mode == modeLan && W != null) return W; // 强制内网但没有内网 → 退外网
+    if (mode == modeWan && L != null) return L; // 强制外网但没有外网 → 退内网
+    if (L == null && W == null) return '';
+    if (L != null && W == null) return L;
+    if (W != null && L == null) return W;
+    return _raceProbe(L!, W!); // 自动：并发探测，先到先用
   }
 
   /// 并发探测，返回先连通的（任一成功即可）；都不通 fallback 到 LAN
@@ -169,6 +190,14 @@ class Config {
     } catch (_) {
       return a; // 超时 fallback 到 LAN
     }
+  }
+
+  /// 单独探测一个地址是否可达（**不污染全局** `currentUrl`）。
+  /// 供企业切换器显示"两个服务器地址都在链接状态"——每个档案的内网/外网各探一次。
+  static Future<bool> isReachable(String url) async {
+    final u = normalize(url);
+    if (u.isEmpty) return false;
+    return (await _probe(u)).ok;
   }
 
   static Future<_ProbeResult> _probe(String url) async {

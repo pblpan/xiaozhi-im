@@ -12,10 +12,11 @@ import 'core/integrity.dart';
 import 'core/remote_config.dart';
 import 'core/scan_feedback.dart';
 import 'screens/remote.dart';
-import 'core/settings.dart';
 import 'core/share_intake.dart';
 import 'core/sound_service.dart';
 import 'core/storage.dart';
+import 'core/session_manager.dart';
+import 'core/background_link.dart';
 import 'core/theme.dart';
 import 'core/tray_service.dart';
 import 'core/workspace.dart';
@@ -43,7 +44,8 @@ void main() async {
   //    跟 ShareIntake 那次一启动就崩是同一个坑），又在任何网络请求之前。
   await Integrity.check();
 
-  await Settings.load(); // 载入用户自定义的服务器地址
+  await SessionManager.instance.load(); // 载入多企业档案（含旧单服务器迁移 + 首启局域网发现）
+  BackgroundLinkService.instance.start(); // 非激活企业的后台长连接（收推送 + 未读数）
   // 好友模式（普通/工作）+ 公司名：主界面靠它决定导航形态（工作模式才有
   // 工作台/组织通讯录的一级入口）。先吃本地缓存保证离线也能定形态，
   // 网络那次在后台拉，不阻塞启动。

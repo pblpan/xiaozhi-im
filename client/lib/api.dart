@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'core/app_version.dart';
 import 'core/config.dart';
 import 'core/remote_models.dart';
+import 'core/session_manager.dart';
 import 'core/storage.dart';
 
 /// REST 异常（带 HTTP 状态码）。
@@ -44,21 +45,57 @@ class ImApi {
   ImApi._();
 
   String? _token;
-  void setToken(String t) => _token = t;
 
-  bool get hasToken => _token != null && _token!.isNotEmpty;
-
-  /// App 冷启动时从本地存储恢复登录态，否则后续请求都会 401。
-  Future<void> restore() async {
-    _token = await Storage.getToken();
+  /// 写 token：同时更新激活企业档案（多企业各自账号），
+  /// 这样切换企业后每个档案都带着自己的登录态。
+  void setToken(String t) {
+    _token = t;
+    final id = SessionManager.instance.activeId;
+    if (id != null) {
+      // 不 await：落盘失败不影响本次会话；失败也只在下次启动体现
+      SessionManager.instance.updateToken(id, t);
+    }
   }
 
-  void clearToken() => _token = null;
+  bool get hasToken {
+    final a = SessionManager.instance.active;
+    if (a?.token != null && a!.token!.isNotEmpty) return true;
+    return _token != null && _token!.isNotEmpty;
+  }
 
-  Map<String, String> get _h => {
-        'Content-Type': 'application/json',
-        if (_token != null) 'Authorization': 'Bearer $_token',
-      };
+  /// App 冷启动时恢复登录态：优先激活档案自带的 token，回退到旧 Storage 镜像。
+  Future<void> restore() async {
+    final a = SessionManager.instance.active;
+    _token = a?.token ?? await Storage.getToken();
+  }
+
+  void clearToken() {
+    _token = null;
+    final id = SessionManager.instance.activeId;
+    if (id != null) SessionManager.instance.updateToken(id, '');
+    Storage.clear();
+  }
+
+  /// 鉴权头：**始终取「当前激活企业」的 token**。
+  ///
+  /// 🔴 多企业（2026-10-01）关键修正：以前 `_token` 是单租户时代的全局量，切换
+  /// 企业后它不会跟着变，于是 REST 还拿旧企业的 token 去打新服务器 → 一片 401。
+  /// 现在 token 的真源是 [SessionManager.active]（每个档案各自存一份），这里直接读它，
+  /// 切换企业后所有 REST 自动命中新服务器的登录态，无需手动同步 `_token`。
+  Map<String, String> get _h {
+    final t = SessionManager.instance.active?.token ?? _token;
+    return {
+      'Content-Type': 'application/json',
+      if (t != null && t.isNotEmpty) 'Authorization': 'Bearer $t',
+    };
+  }
+
+  /// 不带鉴权头的 POST（登录/注册专用）。
+  /// 多企业"添加企业"登录新服务器时，绝不能把**当前激活企业**的 token 捎带给它。
+  Future<dynamic> _postNoAuth(String p, Map<String, dynamic> b) async =>
+      _handle(await _send(() => http.post(Uri.parse('${Config.baseUrl}/api$p'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(b))));
 
   /// 包一层 http 调用，统一把底层网络异常包装成 ApiException(status: null)
   Future<http.Response> _send(Future<http.Response> Function() fn) async {
@@ -149,20 +186,28 @@ class ImApi {
   }
 
   // ---- 认证 ----
+  /// 登录：带 setToken（写激活档案 + 全局）。普通登录/注册走这条。
   Future<Map<String, dynamic>> login(String u, String p) async {
-    final d = await _post('/auth/login', {'username': u, 'password': p});
-    _token = d['token'];
-    await Storage.saveToken(_token!);
+    final d = await _postNoAuth('/auth/login', {'username': u, 'password': p});
+    setToken(d['token'] as String);
     return d;
   }
 
   Future<Map<String, dynamic>> register(String u, String p, String n) async {
-    final d = await _post('/auth/register',
+    final d = await _postNoAuth('/auth/register',
         {'username': u, 'password': p, 'nickname': n});
-    _token = d['token'];
-    await Storage.saveToken(_token!);
+    setToken(d['token'] as String);
     return d;
   }
+
+  /// 不写任何 token 的登录/注册（多企业"添加企业"专用）：
+  /// 在目标服务器上拿回 token 后，由调用方落成独立档案，**绝不污染当前激活企业**。
+  Future<Map<String, dynamic>> loginRaw(String u, String p) async =>
+      await _postNoAuth('/auth/login', {'username': u, 'password': p});
+
+  Future<Map<String, dynamic>> registerRaw(String u, String p, String n) async =>
+      await _postNoAuth('/auth/register',
+          {'username': u, 'password': p, 'nickname': n});
 
   Future<Map<String, dynamic>> me() async => await _get('/auth/me');
 
@@ -759,9 +804,11 @@ class ImApi {
   String lessonMediaUrl(int lessonId) =>
       '${Config.baseUrl}/api/training/lessons/$lessonId/media';
 
-  /// 下载课件用的鉴权头
-  Map<String, String> get authHeaders =>
-      _token == null ? const {} : {'Authorization': 'Bearer $_token'};
+  /// 下载课件用的鉴权头（同样取激活企业的 token）
+  Map<String, String> get authHeaders {
+    final t = SessionManager.instance.active?.token ?? _token;
+    return t == null ? const {} : {'Authorization': 'Bearer $t'};
+  }
 
   // ---- 文件 ----
   /// 上传文件。语音等临时录音文件没有规范扩展名时，用 filename 指定（如 voice.m4a）。

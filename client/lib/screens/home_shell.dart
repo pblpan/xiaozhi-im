@@ -5,6 +5,7 @@ import '../core/share_intake.dart';
 import '../core/theme.dart';
 import '../core/workspace.dart';
 import '../models.dart';
+import '../widgets/enterprise_switcher.dart';
 import 'conversations.dart';
 import 'friends_new.dart';
 import 'org_screen.dart';
@@ -264,7 +265,12 @@ class _HomeShellState extends State<HomeShell> {
 
           if (!wide) {
             return Scaffold(
-              body: body,
+              body: Column(
+                children: [
+                  const EnterpriseHeader(),
+                  Expanded(child: body),
+                ],
+              ),
               bottomNavigationBar: NavigationBar(
                 height: 62,
                 backgroundColor: AppColors.bgElevated,
@@ -312,7 +318,14 @@ class _HomeShellState extends State<HomeShell> {
                   ],
                 ),
                 const VerticalDivider(width: 1, color: AppColors.divider),
-                Expanded(child: body),
+                Expanded(
+                  child: Column(
+                    children: [
+                      const EnterpriseHeader(),
+                      Expanded(child: body),
+                    ],
+                  ),
+                ),
               ],
             ),
           );

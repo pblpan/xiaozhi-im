@@ -197,10 +197,25 @@ router.post('/accept', (req, res) => {
   if (!Number.isInteger(friendId) || friendId <= 0) return res.status(400).json({ error: '好友 id 不合法' });
   const row = db.prepare("SELECT id FROM friendships WHERE user_id=? AND friend_id=? AND status='pending'").get(friendId, uid);
   if (!row) return res.status(404).json({ error: '申请不存在或已处理' });
-  db.prepare("UPDATE friendships SET status='accepted' WHERE user_id=? AND friend_id=?").run(friendId, uid);
-  if (!db.prepare('SELECT id FROM friendships WHERE user_id=? AND friend_id=?').get(uid, friendId))
-    db.prepare("INSERT INTO friendships (user_id,friend_id,status,created_at) VALUES (?,?,?,?)").run(uid, friendId, 'accepted', Date.now());
-  createDM(uid, friendId);
+  // 4 步写入必须原子（审计 P1-2）：这是全项目最脆的一处多步写。
+  //   UPDATE 对方那条 pending → accepted
+  //   INSERT 我方那条 accepted（好友是双向关系，只改一条会出现"单边好友"）
+  //   createDM 建单聊会话（内部 2 条 INSERT）
+  // 中途失败若不回滚，最典型的结果是：申请已置为 accepted、但双方没建出会话 ——
+  // 于是两人在好友列表里互相看得见，却**永远发不出第一条消息**，且没有任何报错。
+  // 本库 0 外键（见 db.js），数据库不会兜底，只能靠事务。
+  db.exec('BEGIN');
+  try {
+    db.prepare("UPDATE friendships SET status='accepted' WHERE user_id=? AND friend_id=?").run(friendId, uid);
+    if (!db.prepare('SELECT id FROM friendships WHERE user_id=? AND friend_id=?').get(uid, friendId))
+      db.prepare("INSERT INTO friendships (user_id,friend_id,status,created_at) VALUES (?,?,?,?)").run(uid, friendId, 'accepted', Date.now());
+    createDM(uid, friendId);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: e.message });
+  }
+  // 广播放在 COMMIT 之后：对方收到通知时数据已落库，刷新即可看到。
   hub.broadcastToUser(friendId, { type: 'friend:accepted', from: uid, user: brief(uid) });
   res.json({ ok: true });
 });

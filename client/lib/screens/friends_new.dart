@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
+import 'package:xiaozhi_im_client/core/session_manager.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/models.dart';
@@ -32,6 +33,20 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
   @override
   void initState() {
     super.initState();
+    // 切换企业（整域切换）→ 重新拉取这台服务器的好友 / 待处理申请
+    SessionManager.instance.domainVersion.addListener(_onDomain);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    SessionManager.instance.domainVersion.removeListener(_onDomain);
+    super.dispose();
+  }
+
+  /// 切到另一家企业时，重新拉取好友列表。
+  void _onDomain() {
+    if (!mounted) return;
     _load();
   }
 

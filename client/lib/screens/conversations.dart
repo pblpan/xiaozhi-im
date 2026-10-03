@@ -4,6 +4,7 @@ import 'package:xiaozhi_im_client/core/badges.dart';
 import 'package:xiaozhi_im_client/core/call_service.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
 import 'package:xiaozhi_im_client/core/remote_config.dart';
+import 'package:xiaozhi_im_client/core/session_manager.dart';
 import 'package:xiaozhi_im_client/core/sound_service.dart';
 import 'package:xiaozhi_im_client/core/storage.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
@@ -47,13 +48,22 @@ class ConversationsScreenState extends State<ConversationsScreen> {
   @override
   void initState() {
     super.initState();
+    // 切换企业（整域切换）→ 重新拉取当前激活服务器的会话 / 我 / 待处理
+    SessionManager.instance.domainVersion.addListener(_onDomain);
     _init();
   }
 
   @override
   void dispose() {
+    SessionManager.instance.domainVersion.removeListener(_onDomain);
     _qCtrl.dispose();
     super.dispose();
+  }
+
+  /// 数据域切换（切到另一家企业）时，只重拉数据、不重连/不重复订阅 WS。
+  void _onDomain() {
+    if (!mounted) return;
+    _refreshData();
   }
 
   Future<void> _init() async {
@@ -95,6 +105,20 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       }
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// 只重拉数据（切企业后调用）：重新取「我」+ 会话 + 待处理好友申请。
+  /// 不重连 / 不重复订阅 WS（那些由 SessionManager.setActive 与 _init 负责）。
+  Future<void> _refreshData() async {
+    try {
+      final me = await ImApi().me();
+      _myId = me['user']['id'];
+      SoundService().myId = _myId;
+      await _load();
+      _refreshPendingCount();
+    } catch (_) {
+      // 切换过程里偶发的瞬断忽略，下次刷新会纠正，不弹错误打断用户
     }
   }
 

@@ -31,13 +31,27 @@ router.post('/', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const name = (req.body?.name || '').trim();
   if (!name) return res.status(400).json({ error: 'name required' });
-  const cinfo = db.prepare("INSERT INTO conversations (type,created_at) VALUES ('group',?)").run(Date.now());
-  const cid = cinfo.lastInsertRowid;
-  const ginfo = db.prepare('INSERT INTO groups (name,owner_id,conversation_id,created_at) VALUES (?,?,?,?)')
-    .run(name, uid, cid, Date.now());
-  const gid = ginfo.lastInsertRowid;
-  db.prepare('INSERT INTO group_members (group_id,user_id,role,joined_at) VALUES (?,?,?,?)').run(gid, uid, 'owner', Date.now());
-  db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)').run(cid, uid);
+  // 4 步写入必须原子（审计 P1-2）：conversations / groups / group_members /
+  // conversation_members 缺一不可。中途失败若不回滚，会留下
+  // "群建好了但建群者不在群里"（loadGroup 直接 403）或"会话建了没群"的孤儿会话。
+  // 本库 0 外键（见 db.js），数据库不会帮你拦，只能靠事务。
+  db.exec('BEGIN');
+  let cid, gid;
+  try {
+    const cinfo = db.prepare("INSERT INTO conversations (type,created_at) VALUES ('group',?)").run(Date.now());
+    cid = cinfo.lastInsertRowid;
+    const ginfo = db.prepare('INSERT INTO groups (name,owner_id,conversation_id,created_at) VALUES (?,?,?,?)')
+      .run(name, uid, cid, Date.now());
+    gid = ginfo.lastInsertRowid;
+    db.prepare('INSERT INTO group_members (group_id,user_id,role,joined_at) VALUES (?,?,?,?)').run(gid, uid, 'owner', Date.now());
+    db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)').run(cid, uid);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: e.message });
+  }
+  // 事件放在 COMMIT 之后：广播出去之后对方就该能查到这个群了，
+  // 在事务内 emit 有可能让对端先收到通知、回头却查不到（读不到已回滚的中间态）。
   events.emit('conversation.created', {
     conversationId: cid,
     selfId: uid,
@@ -209,12 +223,23 @@ router.post('/:groupId/members', (req, res) => {
   const ctx = loadGroup(gid, uid, res); if (!ctx) return;
   const userId = Number(req.body?.userId);
   if (!db.prepare('SELECT id FROM users WHERE id=?').get(userId)) return res.status(404).json({ error: 'user not found' });
-  if (!db.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id=?').get(gid, userId)) {
-    db.prepare('INSERT INTO group_members (group_id,user_id,role,joined_at) VALUES (?,?,?,?)').run(gid, userId, 'member', Date.now());
+  // 2 步写入要原子（审计 P1-2）：group_members 与 conversation_members 必须在同一事务。
+  // 只插前者的话，这人能在"群成员列表"里看到群，却收不到任何群消息
+  // （发消息是按 conversation_members 投递的），而界面不会给任何提示 —— 极难排查。
+  db.exec('BEGIN');
+  try {
+    if (!db.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id=?').get(gid, userId)) {
+      db.prepare('INSERT INTO group_members (group_id,user_id,role,joined_at) VALUES (?,?,?,?)').run(gid, userId, 'member', Date.now());
+    }
+    if (!db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id=? AND user_id=?').get(ctx.g.conversation_id, userId)) {
+      db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)').run(ctx.g.conversation_id, userId);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: e.message });
   }
-  if (!db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id=? AND user_id=?').get(ctx.g.conversation_id, userId)) {
-    db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)').run(ctx.g.conversation_id, userId);
-  }
+  // 广播放在 COMMIT 之后：通知出去时数据已经落库，对端刷新就能看到。
   notifyGroup(ctx.g.conversation_id, gid, 'member');
   hub.broadcastToUser(userId, { type: 'group:invited', groupId: gid, conversationId: ctx.g.conversation_id });
   events.emit('member.joined', {
