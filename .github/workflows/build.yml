@@ -94,6 +94,16 @@ jobs:
         with:
           node-version: "22"
 
+      # 🔴 2026-10-03：这一步是**补漏**，第一版闸门漏了它，CI 直接红。
+      #   症状是一屏 "Cannot find module 'express' / 'jsonwebtoken' / 'ws'"，
+      #   每个 e2e 都在 "服务端启动超时" —— 看着像代码坏了，其实是**依赖没装**。
+      #   为什么本机发现不了：本机 server/node_modules 早就装好了，本地跑全绿；
+      #   而 CI runner 是干净环境，没有 node_modules。
+      #   这就是"本地绿 ≠ CI 绿"的典型案例，也正是加这道闸门的意义。
+      - name: 安装服务端依赖
+        working-directory: server
+        run: npm ci --no-audit --no-fund
+
       # 变异测试（*_mutation.js）默认不跑：它会**临时把源码改成坏的**再还原，
       # 用来验证"测试能不能抓出这个错"。要跑时把下面这行的 if 去掉即可。
       # bash test/run_all.sh 是统一入口（server/test/run_all.sh 顶部有说明）：
