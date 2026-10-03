@@ -10,7 +10,7 @@ import 'package:xiaozhi_scanner/core/gbk.dart';
 import 'package:xiaozhi_scanner/core/stock_master_repo.dart';
 
 void main() {
-  test('统一商档（管理台 7 列）能完整解析出字段', () {
+  test('统一商档（管理台 7 列）能完整解析出字段', () async {
     const p = 'android/app/src/hyd/assets/builtin_master.csv';
     final f = File(p);
     // 🔴 这份 CSV 被 .gitignore 排除（门店数据不入库），**CI runner 上没有它** ——
@@ -25,32 +25,41 @@ void main() {
           'CI 侧把关见 build.yml 的 build-scanner-hyd job');
       return;
     }
-    final bytes = f.readAsBytes();
+    // 🔴 `readAsBytes()` 是**异步**的（返回 Future<Uint8List>），
+    //    而 `Gbk.decodeSmart(List<int>)` 要同步字节 —— 必须 await，
+    //    漏了就是 `Future<Uint8List> can't be assigned to List<int>`
+    //    （2026-10-03 CI 第一次就死在这行；本机类型检查对 scanner_app 不可用，
+    //     所以只能靠 CI 抓 —— 见 skill dart-inprocess-analyzer-typecheck 坑 15）。
+    final bytes = await f.readAsBytes();
     // Gbk.decodeSmart 会自动处理 UTF-8 BOM —— 这份就是 BOM + UTF-8。
     final text = Gbk.decodeSmart(bytes);
     final r = MasterCsv.parse(text);
 
     // 数量级：管理台显示 126793 条
-    print('解析到 ${r.items.length} 条 / 读入 ${r.total} 行 / 跳过 ${r.skipped}');
+    print('读入 $r.total 行 / 解析到 ${r.items.length} 条 / 跳过 ${r.skipped}');
     expect(r.items.length, greaterThan(120000));
 
     // 🔴 关键：字段**真的在**。取值来自管理台线上库的真实样例。
-    Map<String, dynamic>? find(String bc) {
-      for (final it in r.items) {
-        if (it['barcode'].toString() == bc) return it;
-      }
-      return null;
+    //    先建索引再查 —— 12.6 万条线性扫 3 次是 40 万次比较，测着慢；
+    //    顺带保证拿到的是"最后一条同码"，与 SQLite upsert 的语义一致。
+    final byCode = <String, Map<String, dynamic>>{};
+    for (final it in r.items) {
+      byCode[it['barcode'].toString()] = it;
     }
+    Map<String, dynamic>? find(String bc) => byCode[bc];
 
     final candy = find('10');
     expect(candy, isNotNull, reason: '条码 10 应存在');
-    print('条码10 → ${candy}');
+    print('条码10 → $candy');
     expect(candy!['name'].toString(), '椰丝软糖[芒果]');
     // 这三列就是"静默丢失"高发区，必须逐个钉住具体值
     expect(candy['spec'].toString(), '500g');
     expect(candy['unit'].toString(), '公斤');
     expect(candy['unit_price'].toString(), '19.6');
-    expect(candy['account_qty'].toString(), '1');
+    // ⚠️ 数量（账面数）**故意不断言具体值**：它是库存、随盘点变。
+    //    换档时这条最容易变成"测试红了但代码没错"，那就白折腾。
+    //    这里只断言它"有值"（证明这一列确实被解析到了）。
+    expect(candy['account_qty'], isNotNull);
 
     final mantou = find('100');
     expect(mantou, isNotNull);
