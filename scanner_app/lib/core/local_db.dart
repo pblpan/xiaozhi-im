@@ -40,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 2;
+  static const int schemaVersion = 3;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -156,6 +156,21 @@ class LocalDb {
       // 按 (单号, 阶段) 取流水是最热的查询：界面每扫一次都要重算。
       await db.execute(
           'CREATE INDEX idx_scan_record_sheet_phase ON scan_record(sheet_no, phase)');
+    },
+
+    // v3：扫码单命名（龙哥 2026-10-04）。
+    // 单据一多，光看 PD+时间戳的单号分不清哪张单里是什么；
+    // 新建时弹窗起名，列表/顶栏优先显示名字。
+    // 为什么单独一张 meta 表而不是给 scan_record 加列：名字是**单据级**属性，
+    // 加到流水行上要么冗余十几万倍、要么只有每单第一行有值（读的时候还要挑）。
+    (Database db) async {
+      await db.execute('''
+        CREATE TABLE sheet_meta (
+          sheet_no   TEXT PRIMARY KEY,
+          name       TEXT,
+          created_at INTEGER
+        )
+      ''');
     },
   ];
 

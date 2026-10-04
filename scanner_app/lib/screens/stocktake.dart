@@ -55,6 +55,10 @@ class _StocktakePageState extends State<StocktakePage> {
   final FocusNode _focus = FocusNode();
 
   String _sheetNo = '';
+
+  /// 当前单的名字（没起过名为空串，顶栏/列表回退显示单号）。
+  /// 龙哥 2026-10-04：单据一多，光看 PD+时间戳分不清哪张单里是什么。
+  String _sheetName = '';
   List<Map<String, dynamic>> _rows = const [];
   Map<String, dynamic> _summary = const {};
   int _masterCount = 0;
@@ -100,6 +104,7 @@ class _StocktakePageState extends State<StocktakePage> {
       final hasBuiltin = await BuiltinMaster.hasBuiltin();
       if (!mounted) return;
       _sheetNo = no;
+      _sheetName = await _repo.sheetName(no);
       _masterCount = masterCount;
       _hasBuiltin = hasBuiltin;
       await _reload();
@@ -326,25 +331,36 @@ class _StocktakePageState extends State<StocktakePage> {
   }
 
   Future<void> _newSheet() async {
+    final no = StocktakeRepo.newSheetNo();
+    // 🔴 先弹窗起名（龙哥 2026-10-04）：单据一多，光看 PD+时间戳分不清
+    // 哪张单里是什么。名字可空 —— 空着就直接用单号，不强求。
+    final name = await _askSheetName(hint: no);
+    if (name == null) return; // 取消 = 不开新单，保持当前单不动
+    if (name.isNotEmpty) await _repo.setSheetName(no, name);
+    if (!mounted) return;
     setState(() {
-      _sheetNo = StocktakeRepo.newSheetNo();
+      _sheetNo = no;
+      _sheetName = name;
       _lastHit = null;
       _rows = const [];
       _summary = const {};
     });
     await _reload();
-    _snack('已新建扫码单 $_sheetNo');
+    _snack(name.isEmpty ? '已新建扫码单 $no' : '已新建扫码单「$name」');
   }
 
   Future<void> _pickSheet() async {
     final sheets = await _repo.listSheets(prefix: StocktakeRepo.sheetPrefix);
     if (!mounted) return;
+
+    // 长按改名：关弹层 → 改名窗 → 改完重开弹层，员工立刻看到新名字。
+    String? renameTarget;
     final picked = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: AppColors.bgElevated,
       builder: (ctx) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
               leading: const Icon(Icons.add, color: AppColors.brand),
@@ -352,26 +368,111 @@ class _StocktakePageState extends State<StocktakePage> {
                   style: TextStyle(color: AppColors.text)),
               onTap: () => Navigator.pop(ctx, '__new__'),
             ),
-            ...sheets.map((s) => ListTile(
-                  leading: const Icon(Icons.receipt_long,
-                      color: AppColors.textWeak),
-                  title: Text(s['sheet_no'].toString(),
-                      style: const TextStyle(color: AppColors.text)),
-                  subtitle: Text('${s['kinds']} 个品种',
-                      style: const TextStyle(color: AppColors.textWeak)),
-                  onTap: () => Navigator.pop(ctx, s['sheet_no'].toString()),
-                )),
+            const Divider(height: 1, color: AppColors.divider),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('长按单据可改名',
+                    style:
+                        TextStyle(color: AppColors.textWeak, fontSize: 11)),
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: sheets.length,
+                itemBuilder: (ctx, i) {
+                  final s = sheets[i];
+                  final no = s['sheet_no'].toString();
+                  final name = (s['name'] ?? '').toString().trim();
+                  return ListTile(
+                    leading: const Icon(Icons.receipt_long,
+                        color: AppColors.textWeak),
+                    // 🔴 有名字显示名字（龙哥 2026-10-04 的核心诉求）：
+                    // 单据多了以后，PD+时间戳谁也记不住是哪张单。
+                    title: Text(name.isEmpty ? no : name,
+                        style: const TextStyle(color: AppColors.text)),
+                    subtitle: Text(
+                        name.isEmpty
+                            ? '${s['kinds']} 个品种'
+                            : '$no · ${s['kinds']} 个品种',
+                        style: const TextStyle(color: AppColors.textWeak)),
+                    onTap: () => Navigator.pop(ctx, no),
+                    onLongPress: () {
+                      renameTarget = no;
+                      Navigator.pop(ctx);
+                    },
+                  );
+                },
+              ),
+            ),
           ],
         ),
       ),
     );
-    if (picked == null) return;
     if (picked == '__new__') return _newSheet();
+    if (renameTarget != null) {
+      await _renameSheet(renameTarget!);
+      if (!mounted) return;
+      return _pickSheet(); // 重开列表，改完马上能看到
+    }
+    if (picked == null) return;
     setState(() {
       _sheetNo = picked;
       _lastHit = null;
     });
+    _sheetName = await _repo.sheetName(picked);
+    if (!mounted) return;
+    setState(() {});
     await _reload();
+  }
+
+  /// 弹窗收一个单据名字。返回 null = 取消；空串 = 不起名（用单号）。
+  ///
+  /// 新建和改名共用这一个窗：同一个动作（给单起名）不该长出两种界面，
+  /// 员工学会一次就会用第二次。输入框样式走主题（inputDecorationTheme），
+  /// 这里只给 hint，不自己描边。
+  Future<String?> _askSheetName({String? initial, String? hint}) {
+    final ctl = TextEditingController(text: initial ?? '');
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgElevated,
+        title: const Text('单据名称', style: TextStyle(color: AppColors.text)),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          maxLength: 30,
+          decoration: InputDecoration(
+            hintText: hint ?? '例如：日配 9 月底盘点',
+            counterText: '',
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
+              child: const Text('确定')),
+        ],
+      ),
+    );
+  }
+
+  /// 长按已有单改名。清空名字 = 回退用单号。
+  Future<void> _renameSheet(String no) async {
+    final cur = await _repo.sheetName(no);
+    if (!mounted) return;
+    final name = await _askSheetName(initial: cur, hint: no);
+    if (name == null) return;
+    await _repo.setSheetName(no, name);
+    if (!mounted) return;
+    setState(() {
+      if (no == _sheetNo) _sheetName = name;
+    });
+    _snack(name.isEmpty ? '已清除 $no 的名称' : '已改名「$name」');
   }
 
   Future<void> _clearSheet() async {
@@ -650,9 +751,13 @@ class _StocktakePageState extends State<StocktakePage> {
           children: [
             const Icon(Icons.numbers, size: 16, color: AppColors.textWeak),
             const SizedBox(width: 6),
-            Text(_sheetNo,
-                style: const TextStyle(color: AppColors.text, fontSize: 13)),
-            const Spacer(),
+            Expanded(
+              child: Text(
+                _sheetName.isEmpty ? _sheetNo : '$_sheetName（$_sheetNo）',
+                style: const TextStyle(color: AppColors.text, fontSize: 13),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             _chip('${_summary['kinds'] ?? 0} 品种'),
             const SizedBox(width: 6),
             _chip('合计 ${StocktakeExport.fmtNum(_summary['total_qty'])}'),

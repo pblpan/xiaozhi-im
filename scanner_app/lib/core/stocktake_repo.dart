@@ -116,6 +116,31 @@ class StocktakeRepo {
     return db.delete('scan_record', where: 'id = ?', whereArgs: [id]);
   }
 
+  /// 单据改名/起名（龙哥 2026-10-04：单多了分不清哪张是哪张）。
+  ///
+  /// [name] 传空串 = 清掉名字（列表回退显示单号）。
+  /// upsert 写 `sheet_meta`：没有这行就插，有就覆盖。
+  Future<void> setSheetName(String sheetNo, String name) async {
+    final db = await LocalDb.I.db();
+    // INSERT OR REPLACE 而不是 ConflictAlgorithm.replace：
+    // 本文件只 import local_db.dart，拿不到 sqflite_common 的枚举，
+    // 为一个 upsert 引整包不值得 —— 原生 SQL 一行且两端（FFI/移动）行为一致。
+    await db.rawInsert(
+      'INSERT OR REPLACE INTO sheet_meta (sheet_no, name, created_at)'
+      ' VALUES (?, ?, ?)',
+      <Object?>[sheetNo, name.trim(), DateTime.now().millisecondsSinceEpoch],
+    );
+  }
+
+  /// 某张单的名字；没起过名返回空串（界面回退显示单号）。
+  Future<String> sheetName(String sheetNo) async {
+    final db = await LocalDb.I.db();
+    final rows = await db.query('sheet_meta',
+        where: 'sheet_no = ?', whereArgs: <Object?>[sheetNo], limit: 1);
+    if (rows.isEmpty) return '';
+    return (rows.first['name'] ?? '').toString().trim();
+  }
+
   /// 某张单的扫码流水，最近的排最前。
   Future<List<Map<String, dynamic>>> listScans(String sheetNo) async {
     final db = await LocalDb.I.db();
@@ -192,18 +217,25 @@ class StocktakeRepo {
   /// 盘点（inventory 模块）的单号是 `INV-...`，两者共用 `scan_record` 这张表，
   /// 不筛的话盘点单会出现在扫码枪的"继续上次没扫完的单"里，
   /// 员工点进去发现是一堆盘点数据（表头都是扫码的列），只会以为是坏了。
+  ///
+  /// 单名来自 LEFT JOIN `sheet_meta`：没起过名的老单 name 为 null，界面按
+  /// 空串处理（回退显示单号）。不能用 INNER JOIN —— 会把没起名的单整个吃掉，
+  /// 员工的老单"消失"比难看严重得多。
   Future<List<Map<String, dynamic>>> listSheets({String? prefix}) async {
     final db = await LocalDb.I.db();
-    final where = prefix == null || prefix.isEmpty ? '' : 'where sheet_no like ?';
+    final where =
+        prefix == null || prefix.isEmpty ? '' : 'where s.sheet_no like ?';
     return db.rawQuery(
       '''
-      select sheet_no,
-             count(*)               as kinds,
-             coalesce(sum(qty), 0)  as total_qty,
-             max(scanned_at)        as last_at
-        from scan_record
+      select s.sheet_no              as sheet_no,
+             count(*)                as kinds,
+             coalesce(sum(s.qty), 0) as total_qty,
+             max(s.scanned_at)       as last_at,
+             m.name                  as name
+        from scan_record s
+        left join sheet_meta m on m.sheet_no = s.sheet_no
        $where
-       group by sheet_no
+       group by s.sheet_no
        order by last_at DESC
       ''',
       prefix == null || prefix.isEmpty ? null : <Object?>['$prefix%'],
@@ -211,8 +243,17 @@ class StocktakeRepo {
   }
 
   /// 整单删除（盘错了重来）。返回删除条数。
+  ///
+  /// 🔴 必须连带删掉 `sheet_meta`：流水没了名字还留着，
+  /// 之后再遇到同一单号（不会）是小事，主要是删除要删干净，
+  /// 别让列表缓存逻辑有机会读到孤儿 meta 行。
   Future<int> deleteSheet(String sheetNo) async {
     final db = await LocalDb.I.db();
-    return db.delete('scan_record', where: 'sheet_no = ?', whereArgs: [sheetNo]);
+    return db.transaction((txn) async {
+      await txn.delete('sheet_meta',
+          where: 'sheet_no = ?', whereArgs: [sheetNo]);
+      return txn
+          .delete('scan_record', where: 'sheet_no = ?', whereArgs: [sheetNo]);
+    });
   }
 }
