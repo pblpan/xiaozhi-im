@@ -28,10 +28,8 @@ import 'package:flutter/material.dart';
 import '../screens/attendance.dart';
 import '../screens/attendance_admin.dart';
 import '../screens/attendance_request.dart';
-import '../screens/deduct.dart';
 import '../screens/inventory.dart';
 import '../screens/org_screen.dart';
-import '../screens/replenish.dart';
 import '../screens/simple_stocktake.dart';
 import '../screens/stocktake.dart';
 import '../screens/training.dart';
@@ -75,8 +73,9 @@ const kBuiltinAppIds = {
   'stocktake',
   'inventory',
   'simple_stocktake',
-  'warehouse_deduct',
-  'replenish',
+  // 🔴 'warehouse_deduct' / 'replenish' 2026-10-04 起摘掉（龙哥定：工作台图标撤了，
+  //    功能从「盘点」页右上角的快捷入口进）。服务端也不再下发这两个 id；
+  //    这里留着就会在工作台上重新冒出图标。页面类还在，由 inventory.dart 直接推。
   'training',
   'price_tag',
 };
@@ -102,10 +101,8 @@ Widget? builtinAppPage(String id) {
       return const InventoryPage();
     case 'simple_stocktake':
       return const SimpleStocktakePage();
-    case 'warehouse_deduct':
-      return const DeductPage();
-    case 'replenish':
-      return const ReplenishPage();
+    // 'warehouse_deduct' / 'replenish' 已撤注册（见 kBuiltinAppIds 上的注释）。
+    // DeductPage / ReplenishPage 由盘点页的快捷入口直接推（inventory.dart）。
     case 'training':
       return const TrainingPage();
     case 'price_tag':

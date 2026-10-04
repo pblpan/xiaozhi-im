@@ -309,35 +309,13 @@ const APPS = {
     sources: [],
   },
 
-  /* ---------------- 库房减货 ---------------- */
-  //
-  // 🔴 2026-09-25 起**不再纯离线**：龙哥定"减货单要上传管理台，因为要对账"。
-  //    单据与明细从手机上传上来（POST /api/deduct/sheet/:no/upload），
-  //    管理台「库房减货」页能对账（按商品跨单累加）。
-  warehouse_deduct: {
-    metrics: [
-      { key: 'sheets', label: '减货单', sql: "SELECT COUNT(*) n FROM inv_sheets WHERE sheet_type = 'deduct'" },
-      { key: 'rows', label: '明细行', sql: "SELECT COUNT(*) n FROM inv_scans WHERE sheet_type = 'deduct'" },
-      { key: 'total_qty', label: '减货总数量', sql: "SELECT COALESCE(SUM(qty),0) n FROM inv_scans WHERE sheet_type = 'deduct'" },
-    ],
-    sources: [
-      { label: '减货单与明细', table: 'inv_sheets / inv_scans', note: "sheet_type = 'deduct'" },
-    ],
-  },
-
   /* ---------------- 补货（纯离线） ---------------- */
-  replenish: {
-    localOnly: true,
-    localOnlyNote: '「补货」是**纯离线**应用：补货单（分生鲜/杂百两个场景）、'
-      + '明细、导出全部在手机上完成，数据落在手机本地的 '
-      + 'stocktake_sheet / scan_record（sheet_type=replenish），'
-      + '服务端没有它的任何接口，也没有它的任何数据。'
-      + '所以这里没有可看的数据 —— 不是"数据丢了"，而是它本来就不往服务器传。'
-      + '（「库房减货」已经改成要上传了，补货要不要同样对账还没定；'
-      + '真要做，走减货那套 /api/deduct 的同构通道即可。）',
-    metrics: [],
-    sources: [],
-  },
+  //
+  // 🔴 2026-10-04：库房减货、补货都不再是独立内置应用（工作台图标撤了，
+  //    功能从「盘点」页进 —— 龙哥定的）。上面 warehouse_deduct 的数据登记
+  //    一并撤掉：减货单的对账本来就有管理台「盘点 → 库房减货」专页，
+  //    /api/deduct/* 接口归 inventory 名下（appguard.js）。
+  //    电子秤码参数 scaleCodeLen 挪到 inventory 名下（appoverrides.js，配置值已迁移）。
 
   /* ---------------- 价签打印（纯离线，且不留任何记录） ---------------- */
   //

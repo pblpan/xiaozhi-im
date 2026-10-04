@@ -1800,7 +1800,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               </el-table-column>
               <el-table-column label="操作" width="130" fixed="right">
                 <template #default="{ row }">
-                  <el-button size="small" type="primary" plain @click="openAppAdmin(row.id)">管理</el-button>
+                  <el-button size="small" type="primary" plain @click="openAppAdmin(row.id, row.effective?.title || row.title)">管理</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -8878,9 +8878,16 @@ async function refreshAppAdmin() {
   return data;
 }
 
-async function openAppAdmin(id) {
+/**
+ * 打开某个应用的「应用管理」抽屉。
+ * @param label 行内当前显示名 —— 标题在**打开瞬间**就用它设好。曾经只在加载成功
+ *              后才更新标题，结果加载失败时抽屉顶着上一个应用的名字（截图里
+ *              「补货 · 应用管理」实际点的是库房减货），排查的人先被带进沟里。
+ */
+async function openAppAdmin(id, label) {
   Object.assign(appAdm, {
     open: true, loading: true, error: '', id, tab: 'basic', data: null,
+    title: `${label || id} · 应用管理`,
     rows: [], cols: [], total: 0, q: '', range: null, allTime: true, page: 1,
     purgePrev: null, purgeConfirm: 0,
   });

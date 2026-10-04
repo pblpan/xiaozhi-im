@@ -8,6 +8,7 @@ import 'deduct.dart';
 import 'inventory_approval.dart';
 import 'master_lookup.dart';
 import 'picking.dart';
+import 'replenish.dart';
 import 'inventory_collect.dart';
 import 'inventory_grant.dart';
 
@@ -352,44 +353,6 @@ class _InventoryPageState extends State<InventoryPage> {
             icon: const Icon(Icons.sync, color: AppColors.textSub),
             onPressed: _syncMaster,
           ),
-          // 库房减货：和盘点同属"库存作业"，共用单据/明细两张表，
-          // 所以入口放在这里而不是让工作台再多一个应用图标
-          // （多一个内置应用要同时改客户端、服务端、两份测试的四处登记）。
-          IconButton(
-            key: const Key('open-deduct'),
-            tooltip: '库房减货',
-            icon: const Icon(Icons.remove_shopping_cart_outlined,
-                color: AppColors.textSub),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(builder: (_) => const DeductPage()),
-            ),
-          ),
-          // 自由拣货单：和盘点同属"库存作业"，但**不挂工作台图标**
-          // （龙哥 2026-10-03 要"放在盘点里面，不独立"）。入口放在这里，
-          // 复用扫码枪那套相机界面 + 同一张 scan_record 流水表（JK 前缀）。
-          IconButton(
-            key: const Key('open-picking'),
-            tooltip: '自由拣货单',
-            icon: const Icon(Icons.shopping_bag_outlined,
-                color: AppColors.textSub),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(builder: (_) => const PickingPage()),
-            ),
-          ),
-          // 商档查询：扫一下商品，跳出商档里该商品的所有信息（龙哥 2026-10-03）。
-          IconButton(
-            key: const Key('open-master-lookup'),
-            tooltip: '商档查询',
-            icon: const Icon(Icons.qr_code_2_outlined,
-                color: AppColors.textSub),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                  builder: (_) => const MasterLookupPage()),
-            ),
-          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: AppColors.textSub),
             onSelected: (v) {
@@ -422,10 +385,68 @@ class _InventoryPageState extends State<InventoryPage> {
                     '差异算不出来）。请先在有网的地方点右上角同步一次。',
                     AppColors.warn,
                   ),
+                _quickActions(),
                 Expanded(child: _zones.isEmpty ? _empty() : _list()),
               ],
             ),
     );
+  }
+
+  /// 库存作业的快捷入口（龙哥 2026-10-04：库房减货/补货不再占工作台图标，
+  /// 都收进盘点页）。**带文字**，不再是无名图标 —— 0.17.0 那次"我没找到
+  /// 功能在哪里"的教训就是入口光秃秃地摆在那里等于没有。
+  Widget _quickActions() {
+    const entries = [
+      ('open-deduct', Icons.remove_shopping_cart_outlined, '库房减货'),
+      ('open-replenish', Icons.add_shopping_cart_outlined, '补货'),
+      ('open-picking', Icons.shopping_bag_outlined, '自由拣货'),
+      ('open-master-lookup', Icons.qr_code_2_outlined, '商档查询'),
+    ];
+    return Container(
+      key: const Key('inventory-quick-actions'),
+      width: double.infinity,
+      color: AppColors.bgElevated,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(
+        children: [
+          for (final (key, icon, label) in entries) ...[
+            Expanded(
+              child: InkWell(
+                key: Key(key),
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => _openQuickEntry(key),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(icon, size: 22, color: AppColors.textSub),
+                      const SizedBox(height: 3),
+                      Text(label,
+                          style: const TextStyle(
+                              color: AppColors.textSub, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _openQuickEntry(String key) {
+    final page = switch (key) {
+      'open-deduct' => const DeductPage(),
+      'open-replenish' => const ReplenishPage(),
+      'open-picking' => const PickingPage(),
+      'open-master-lookup' => const MasterLookupPage(),
+      _ => null,
+    };
+    if (page == null) return;
+    Navigator.push(context,
+        MaterialPageRoute<void>(builder: (_) => page));
   }
 
   Widget _banner(String text, Color color) => Container(

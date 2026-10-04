@@ -102,14 +102,13 @@ const APP_PARAMS = {
       key: 'soundOnScan', label: '扫码音效', type: 'bool', def: true, enforced: 'client',
       desc: '扫到条码时播放提示音。',
     },
-  ],
-  //
-  // 电子秤码（生鲜称重码）的商品码位数。
-  // 🔴 各软件不一样（泰格是 5 位），写在**类别属性**里，所以必须做成参数：
-  //    写死 5 的话，换一套软件之后秤码会被解成别的商品、数量也跟着错，
-  //    而全程**不报错**（扫出来还是个正常的条码样子）。
-  //    谁读它：客户端 replenish 页（补货·生鲜），见 core/scale_code.dart。
-  replenish: [
+    //
+    // 电子秤码（生鲜称重码）的商品码位数。原挂在 replenish 名下，
+    // 🔴 2026-10-04 补货撤独立工作台图标（功能从盘点页进）后**跟过来**：
+    //    盘点页里的补货、减货、拣货、扫码枪解析秤码都走 core/scale_code.dart。
+    // 🔴 各软件不一样（泰格是 5 位），写在**类别属性**里，所以必须做成参数：
+    //    写死 5 的话，换一套软件之后秤码会被解成别的商品、数量也跟着错，
+    //    而全程**不报错**（扫出来还是个正常的条码样子）。
     {
       key: 'scaleCodeLen', label: '电子秤码的商品码位数', type: 'int', def: 5,
       min: 3, max: 8, enforced: 'client',
@@ -168,6 +167,41 @@ function ensureColumn(table, column, ddl) {
 // ⚠️ `group` 是 SQLite 关键字，SQL 里必须加双引号，否则报 syntax error
 ensureColumn('app_overrides', 'group', '"group" TEXT');  // 挪到别的分组（也可以填自定义组名）
 ensureColumn('app_overrides', 'color', 'color TEXT');  // 图标底色 #RRGGBB；NULL = 用出厂色
+
+/**
+ * 🔴 一次性迁移（幂等，2026-10-04）：补货（replenish）不再是独立内置应用，
+ * 它名下的参数配置要**跟着搬到 inventory 名下**——管理员配过的电子秤码位数
+ * 不能因为图标撤了就悄悄回到默认值（那表现是"秤码突然解错还不报错"）。
+ * 做法：replenish 行的 params 里 inventory 行没有的键并过去（inventory 已配的键
+ * 不覆盖），然后删掉 replenish 行。跑一次之后 replenish 行没了，再跑是空操作。
+ * 失败只打日志不拦启动：最坏退回"管理员重配一次"，不能为它起不来服务。
+ */
+try {
+  const legacy = db.prepare('SELECT params FROM app_overrides WHERE app_id = ?').get('replenish');
+  if (legacy) {
+    let legacyParams = {};
+    try { legacyParams = JSON.parse(legacy.params || '{}'); } catch { legacyParams = {}; }
+    if (!isObj(legacyParams)) legacyParams = {};
+    const cur = db.prepare('SELECT params FROM app_overrides WHERE app_id = ?').get('inventory');
+    let curParams = {};
+    try { curParams = JSON.parse(cur?.params || '{}'); } catch { curParams = {}; }
+    if (!isObj(curParams)) curParams = {};
+    let moved = 0;
+    for (const [k, v] of Object.entries(legacyParams)) {
+      if (!(k in curParams)) { curParams[k] = v; moved++; }
+    }
+    if (moved > 0) {
+      db.prepare(`INSERT INTO app_overrides (app_id, params, updated_at, updated_by)
+                  VALUES ('inventory', ?, strftime('%s','now') * 1000, 'migrate-replenish')
+                  ON CONFLICT(app_id) DO UPDATE SET params = excluded.params`)
+        .run(JSON.stringify(curParams));
+      console.log(`[小智IM] 迁移：replenish 的 ${moved} 项参数已并入 inventory`);
+    }
+    db.prepare('DELETE FROM app_overrides WHERE app_id = ?').run('replenish');
+  }
+} catch (e) {
+  console.log('[小智IM] replenish 参数迁移失败（不影响启动）：' + (e && e.message));
+}
 
 /* ---------------- 读 ---------------- */
 

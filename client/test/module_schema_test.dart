@@ -7,7 +7,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xiaozhi_im_client/core/apps.dart';
 import 'package:xiaozhi_im_client/core/module_schema.dart';
-import 'package:xiaozhi_im_client/screens/deduct.dart';
 import 'package:xiaozhi_im_client/screens/inventory.dart';
 import 'package:xiaozhi_im_client/screens/price_tag_print.dart';
 import 'package:xiaozhi_im_client/screens/simple_stocktake.dart';
@@ -186,10 +185,10 @@ void main() {
       // 2026-09-20 补上 'training'（**培训中心**，M4）。名字必须叫「培训中心」——
       // 是龙哥定的，不要改成"培训管理""学习中心"之类。
       //
-      // 2026-09-22 补上 'warehouse_deduct'（**库房减货**，M5 软件项）。
-      // 🔴 它一开始是塞在「盘点」页 AppBar 里的小图标，真机验收时龙哥说
-      //    "**我没找到你说的功能在哪里**" —— 一个每天要干的活，藏在别人页面
-      //    的图标里就是没有入口。所以 0.17.1 起它单独占一个工作台卡片。
+      // 2026-09-22 补上 'warehouse_deduct'（**库房减货**，M5 软件项）→
+      //    🔴 2026-10-04 摘掉：0.17.1 那会儿它单独占工作台卡片，后来减货/补货/
+      //      拣货/商档查询都收进「盘点」页的快捷入口（带文字，可发现性比
+      //      无名小图标好），工作台不再放这两个图标 —— 龙哥 2026-10-04 定。
       //
       // 2026-09-25 补上 'simple_stocktake'（**简易盘点**，S1）。
       // ⚠️ 它和 'inventory'（盘点）是两个应用，名字极容易看混：
@@ -206,10 +205,8 @@ void main() {
       //    kBuiltinAppIds / builtinAppPage / server 的 apps.js / appguard.js /
       //    appdata.js，再加上下面这份期望值。**加完请立刻跑 flutter test 和
       //    server/test/apps_admin_e2e.js**（服务端两处注册表都有自检拦着）。
-      // 2026-09-25 补上 'replenish'（**补货**，生鲜/杂百分列）。
-      // 单位口径是龙哥定的两套：生鲜按公斤、杂百按最小单位，**不做第三套**。
-      // 它与 'warehouse_deduct'（库房减货）方向相反（出库 vs 上架），
-      // 所以是两张单，不是一张单的两个按钮。
+      // 'replenish'（补货，生鲜/杂百分列，两套单位是龙哥定的：生鲜按公斤、
+      // 杂百按最小单位，不做第三套）同日随库房减货一起摘掉。
       expect(kBuiltinAppIds, {
         'attendance',
         'my_requests',
@@ -218,11 +215,19 @@ void main() {
         'stocktake',
         'inventory',
         'simple_stocktake',
-        'warehouse_deduct',
-        'replenish',
+        // 🔴 'warehouse_deduct' / 'replenish' 2026-10-04 摘掉（龙哥定：工作台
+        //    图标撤掉，功能收进盘点页的快捷入口）。别再加回来。
         'training',
         'price_tag',
       });
+    });
+
+    test('🔴 库房减货/补货已撤工作台注册（2026-10-04，功能收进盘点页）', () {
+      // 反向断言：注册加回来 = 工作台重新冒出独立图标，龙哥明确要去掉。
+      expect(isKnownBuiltinApp('warehouse_deduct'), isFalse);
+      expect(builtinAppPage('warehouse_deduct'), isNull);
+      expect(isKnownBuiltinApp('replenish'), isFalse);
+      expect(builtinAppPage('replenish'), isNull);
     });
 
     test('不认识的 id 返回 null，让调用方跳过而不是崩', () {
@@ -231,13 +236,6 @@ void main() {
       expect(builtinAppPage('some_future_app'), isNull);
       expect(isKnownBuiltinApp(''), isFalse);
       expect(builtinAppPage(''), isNull);
-    });
-
-    test('🔴 「库房减货」认得出来，且点进去就是那一页', () {
-      // 这个 id 只登记不路由的话，工作台上会出现一张**点了没反应**的卡片
-      // （比不显示更糟：员工会以为"这个功能坏了"）。
-      expect(isKnownBuiltinApp('warehouse_deduct'), isTrue);
-      expect(builtinAppPage('warehouse_deduct'), isA<DeductPage>());
     });
 
     test('🔴 「价签打印」认得出来，且点进去就是那一页', () {

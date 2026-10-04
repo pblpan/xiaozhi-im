@@ -355,27 +355,18 @@ async function main() {
   ok('  /api/location/* 同样被拦', r.status === 403, `实际 ${r.status}`);
   await api('DELETE', '/api/admin/apps/inventory', { token: admin });
 
-  // ── 停用「库房减货」：**纯离线应用没有接口可拦**，停用只作用于入口。
-  //    为什么不省掉这一段：LOCAL_ONLY / appdata 里那两段"它是纯离线的"注释
-  //    是**声明**，这里才是实证 —— 要能证明"停了之后工作台真的没有它了"。
-  //    这条判据的来历：0.17.0 第一版把它塞在「盘点」页 AppBar 的小图标里，
-  //    真机验收时龙哥说"**我没找到你说的功能在哪里**" —— 入口是入口、
-  //    接口是接口，纯离线不等于不该出现在工作台上。
+  // ── 「库房减货」「补货」不再下发（2026-10-04 龙哥定：工作台图标撤掉，
+  //    功能从「盘点」页右上角的快捷入口进）。这里反向断言：下发清单里
+  //    **不许再出现**这两个 id —— 谁要是把注册加回去（或老配置残留），
+  //    手机工作台就会重新冒出图标，测试当场拦下。
   apps = (await api('GET', '/api/client/apps?clientVersion=0.17.1', { token: empT })).body?.apps || [];
-  const wd = apps.find((a) => a.id === 'warehouse_deduct');
-  ok('🔴 库房减货出现在员工工作台清单里（纯离线也要下发入口）',
-    wd && wd.kind === 'builtin', apps.map((a) => a.id).join(','));
-  ok('  下发的是「库房减货」这个名字与 shopping_cart 图标',
-    wd?.title === '库房减货' && wd?.icon === 'shopping_cart', JSON.stringify(wd));
-
-  await api('PATCH', '/api/admin/apps/warehouse_deduct', { token: admin, body: { disabled: true } });
-  apps = (await api('GET', '/api/client/apps?clientVersion=0.17.1', { token: empT })).body?.apps || [];
-  ok('🔴 停用后它从工作台清单消失', !apps.some((a) => a.id === 'warehouse_deduct'),
-    apps.map((a) => a.id).join(','));
-  await api('DELETE', '/api/admin/apps/warehouse_deduct', { token: admin });
-  apps = (await api('GET', '/api/client/apps?clientVersion=0.17.1', { token: empT })).body?.apps || [];
-  ok('  恢复出厂（DELETE 覆盖层）后它又回来了', apps.some((a) => a.id === 'warehouse_deduct'),
-    apps.map((a) => a.id).join(','));
+  ok('🔴 库房减货不再下发（图标已撤，功能在盘点页里）',
+    !apps.some((a) => a.id === 'warehouse_deduct'), apps.map((a) => a.id).join(','));
+  ok('🔴 补货不再下发（图标已撤，功能在盘点页里）',
+    !apps.some((a) => a.id === 'replenish'), apps.map((a) => a.id).join(','));
+  ok('🔴 盘点下发的参数里带 scaleCodeLen（电子秤码位数，原属补货）',
+    (apps.find((a) => a.id === 'inventory')?.params || {}).scaleCodeLen === 5,
+    JSON.stringify(apps.find((a) => a.id === 'inventory')?.params));
 
   // ── 停用「简易盘点」：同样纯离线，停用只作用于入口。
   //
@@ -698,6 +689,21 @@ async function main() {
   ok('  且越权请求没有产生副作用（考勤打卡仍在）',
     r.body?.builtin?.find((a) => a.id === 'attendance')?.disabled === false,
     JSON.stringify(r.body?.builtin?.find((a) => a.id === 'attendance')?.disabled));
+
+  /* ---------------- 全量抽屉自检（防回归） ----------------
+   * 每个内置应用的「应用管理」抽屉接口都必须 200，且 data.sources 每条
+   * 都带 key + columns[]。这里曾经漏检 warehouse_deduct：它的 sources 条目
+   * 写成了自说明的 { label, table, note }，sourcesOf 里 s.columns.map 直接
+   * TypeError → 500（HTML 错误页），管理台抽屉只报一句"加载应用信息失败"，
+   * 2026-10-04 才被龙哥的截图抓到。形状错就在这里拦下，别等真机点开。 */
+  for (const a of BUILTIN_APPS) {
+    r = await api('GET', `/api/admin/apps/${a.id}`, { token: admin });
+    ok(`🔴 抽屉接口 GET /admin/apps/${a.id} → 200`, r.status === 200, `实际 ${r.status}`);
+    const srcs = r.body?.data?.sources || [];
+    const malformed = srcs.filter((s) => !s.key || !s.name || !Array.isArray(s.columns));
+    ok(`  ${a.id} 的 sources 条目形状正确（key/name/columns）`,
+      malformed.length === 0, JSON.stringify(malformed).slice(0, 160));
+  }
 
   /* ---------------- 收尾 ---------------- */
   console.log(`\n${failed ? '\u2717' : '\u2713'} 通过 ${passed} / ${passed + failed}`);

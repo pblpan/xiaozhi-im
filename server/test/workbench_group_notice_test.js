@@ -33,7 +33,8 @@ const ok = (name, cond, extra) => {
 
 console.log('— 出厂分组 —');
 ok('DEFAULT_GROUPS 两项', appregistry.DEFAULT_GROUPS.length === 2, appregistry.DEFAULT_GROUPS);
-ok('11 个内置应用都有出厂色', appregistry.BUILTIN_APPS.length === 11
+// 🔴 2026-10-04：库房减货/补货撤出工作台（功能收进盘点页）→ 11 - 2 = 9 个
+ok('9 个内置应用都有出厂色', appregistry.BUILTIN_APPS.length === 9
   && appregistry.BUILTIN_APPS.every((a) => a.color), appregistry.BUILTIN_APPS.filter((a) => !a.color).map((a) => a.id));
 const colors = appregistry.BUILTIN_APPS.map((a) => a.color);
 ok('颜色互不重复', new Set(colors).size === colors.length, colors);

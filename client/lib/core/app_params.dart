@@ -41,14 +41,23 @@ class AppParams {
       if (raw is! List) return;
       for (final a in raw) {
         if (a is! Map) continue;
-        if ((a['id'] ?? '').toString() != 'replenish') continue;
+        // 🔴 2026-10-04 起参数挂在 inventory 名下（补货撤独立图标，功能归盘点页，
+        //    服务端已把 scaleCodeLen 从 replenish 迁到 inventory —— 配置值一起迁）。
+        //    旧服务端还在 replenish 名下下发，两条都看：replenish 先垫底，
+        //    inventory 读到就定稿（新通道权威，立刻收口）。
+        final id = (a['id'] ?? '').toString();
+        if (id != 'inventory' && id != 'replenish') continue;
         final p = a['params'];
         if (p is! Map) continue;
         final n = p['scaleCodeLen'];
+        if (n == null) continue;
         // 管理台配出来的一定是 int（appoverrides.js 的 int 校验带 min/max），
         // 但旧服务端可能下发字符串 —— 宽松解析，配错了就退回默认 5。
         final v = n is num ? n.toInt() : int.tryParse(n.toString());
-        if (v != null && v >= 3 && v <= 8) _scaleCodeLen = v;
+        if (v != null && v >= 3 && v <= 8) {
+          _scaleCodeLen = v;
+          if (id == 'inventory') return;
+        }
       }
       _loaded = true;
     } catch (_) {
