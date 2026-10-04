@@ -170,7 +170,17 @@ class _EnterpriseHeaderState extends State<EnterpriseHeader> {
   }
 }
 
-/// 常驻顶部条：当前企业名 + 连接状态，点开切换面板。
+/// 常驻顶部条：**只剩一个连接状态点 + 在线状态**，点开切换面板。
+///
+/// ── 为什么把企业名去掉了（龙哥 2026-10-04 真机反馈）────────────────
+/// 原来这条写着「企业名」，可下面紧随其后的会话页顶栏已经有一行
+/// 「好又多小智」（服务端下发的公司名）——**同一个信息连着出现两遍**，
+/// 白占一行高，整块界面看起来"太靠下"。龙哥的要求是：
+///   ① 状态那里去掉"小智"，留一个点就行；
+///   ② 点 + 在线状态往上顶，紧贴系统状态栏，中间不留空；
+///   ③ 下面的主窗口跟着往上提，跟这个点挨在一起、不重叠。
+/// 所以这里把名字收成一个 Tooltip（长按仍能确认是哪家企业），
+/// 条高从 52 压到 34，SafeArea 之上不再留任何缝。
 /// [stateNotifier] 实时跟随激活企业的连接状态（连上/断线立刻变）。
 class EnterpriseSwitcherBar extends StatelessWidget {
   final String name;
@@ -187,40 +197,33 @@ class EnterpriseSwitcherBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Material(
         color: AppColors.bgElevated,
-        child: InkWell(
-          onTap: onTap,
-          child: Container(
-            height: 52,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(
-              children: [
-                ValueListenableBuilder<ConnState>(
-                  valueListenable: stateNotifier,
-                  builder: (_, state, __) => _StateDot(state: state, size: 9),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    name,
-                    style: const TextStyle(
-                      fontSize: 15.5,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.text,
+        child: Tooltip(
+          // 名字不再常驻显示，但别把这个信息弄丢：长按仍能确认是哪家企业。
+          message: name,
+          child: InkWell(
+            onTap: onTap,
+            child: Container(
+              height: 34,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                children: [
+                  ValueListenableBuilder<ConnState>(
+                    valueListenable: stateNotifier,
+                    builder: (_, state, __) => _StateDot(state: state, size: 9),
+                  ),
+                  const Spacer(),
+                  ValueListenableBuilder<ConnState>(
+                    valueListenable: stateNotifier,
+                    builder: (_, state, __) => Text(
+                      _connText(state),
+                      style: TextStyle(fontSize: 12, color: _stateColor(state)),
                     ),
-                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                ValueListenableBuilder<ConnState>(
-                  valueListenable: stateNotifier,
-                  builder: (_, state, __) => Text(
-                    _connText(state),
-                    style: TextStyle(fontSize: 12, color: _stateColor(state)),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                const Icon(Icons.expand_more_rounded,
-                    size: 20, color: AppColors.textSub),
-              ],
+                  const SizedBox(width: 4),
+                  const Icon(Icons.expand_more_rounded,
+                      size: 20, color: AppColors.textSub),
+                ],
+              ),
             ),
           ),
         ),

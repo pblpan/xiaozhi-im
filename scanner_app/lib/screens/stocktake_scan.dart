@@ -54,8 +54,8 @@ class _StocktakeSink implements ScanSink {
   final StocktakeRepo repo;
 
   @override
-  Future<ScanFeedback> record(String sheetNo, String code) async {
-    await repo.addScan(sheetNo, code);
+  Future<ScanFeedback> record(String sheetNo, String code, {double qty = 1}) async {
+    await repo.addScan(sheetNo, code, qty: qty);
     final rows = await repo.listWithMaster(sheetNo);
     return ScanFeedback(
       accepted: true,

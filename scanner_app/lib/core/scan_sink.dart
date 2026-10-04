@@ -40,12 +40,13 @@ class ScanFeedback {
 
 /// 采集终点：把"扫到了一个码"落到某个业务上。
 abstract class ScanSink {
-  /// 落一笔。[sheetNo] 是当前单据。
+  /// 落一笔。[sheetNo] 是当前单据；[qty] 是这一笔的数量（确认卡上填的，
+  /// 默认 1）——「记一件」改成"直接输数量"就是靠它传下来的（龙哥 2026-10-04）。
   ///
   /// 实现方**不允许抛异常来表示业务拒绝**（比如"该商品不属于本盘点位"）——
   /// 那是正常的判定结果，走 [ScanFeedback.accepted]。
   /// 抛异常只留给真正的故障（数据库写不进去）。
-  Future<ScanFeedback> record(String sheetNo, String code);
+  Future<ScanFeedback> record(String sheetNo, String code, {double qty = 1});
 
   /// 当前单据的小结，页面底部显示。
   ///

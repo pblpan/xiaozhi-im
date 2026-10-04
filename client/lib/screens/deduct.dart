@@ -10,8 +10,10 @@ import '../core/deduct_repo.dart';
 import '../core/deduct_rules.dart';
 import '../core/file_io.dart';
 import '../core/inventory_rules.dart';
+import '../core/scan_sink.dart';
 import '../core/theme.dart';
 import '../widgets/export_flow.dart';
+import 'camera_scan.dart';
 
 /// 库房减货：扫码 → 减货数量 → 确定减货。
 ///
@@ -281,6 +283,39 @@ class _DeductPageState extends State<DeductPage> {
     if (ref == null) return false;
     if (ref['hasRef'] == false && ref['accountQty'] == null) return false;
     return true;
+  }
+
+  /// 打开扫码枪那套相机界面。
+  ///
+  /// ── 为什么库房减货也要有它（龙哥 2026-10-04 硬性规则）────────────
+  /// "以后所有带扫码或者带输入数字的地方，都调取扫码枪的这种界面，
+  ///  让它带扫码功能。" 减货原来**只有一个手输框** —— 手机上是能用外接
+  /// 扫码枪，但摄像头摆在那就是没人用得着，等于少了一半入口。
+  ///
+  /// 这里刻意**复用** [CameraScanPage] 而不是另写一套：去重判据、写入闸门、
+  /// 确认制的数量输入、闪绿/音反馈都在那一份里，抄第二份就等于给
+  /// "连扫同款件数被静默丢掉"这类不报错的 bug 留了第二条复活的路。
+  ///
+  /// 扫到的码由 [_DeductSink] 落进当前减货单：**重复条码会被拒绝**并在
+  /// 确认卡上原样显示原因（减货"同码一行"是硬规则，不能静默吞掉）。
+  Future<void> _openCamera() async {
+    if (!cameraScanSupported) return;
+    if (!_editable || _sheetNo.isEmpty) {
+      _snack('这张减货单已提交，不能继续扫');
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => CameraScanPage(
+          title: '库房减货',
+          sheetNo: _sheetNo,
+          hint: '扫商品条码减货；重复条码请先到列表里处理',
+          sink: _DeductSink(_repo),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await _reload();
   }
 
   Future<void> _addRow() async {
@@ -916,6 +951,26 @@ class _DeductPageState extends State<DeductPage> {
         children: [
           Row(
             children: [
+              // 手机端把「扫码」放最左：库房减货也走扫码枪那套相机界面
+              // （带扫码窗口、带确认制的数量输入），不再只靠手输条码 ——
+              // 龙哥 2026-10-04 明确要求"所有要扫码的地方都带扫码功能"。
+              // 桌面端（摄像头不支持）自动隐藏，退回手输兜底。
+              if (cameraScanSupported) ...[
+                Material(
+                  color: AppColors.brand.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(AppRadii.sm),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(AppRadii.sm),
+                    onTap: (_editable && !_busy) ? _openCamera : null,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 11, vertical: 11),
+                      child: Icon(Icons.qr_code_scanner,
+                          key: Key('deduct-camera'), color: AppColors.brand, size: 21),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
               Expanded(
                 flex: 3,
                 child: TextField(
@@ -1050,5 +1105,55 @@ class _DeductPageState extends State<DeductPage> {
         ],
       ),
     );
+  }
+}
+
+/// 把库房减货的仓库适配成相机页认识的 [ScanSink]。
+///
+/// ── 和扫码枪那份的关键差别 ──────────────────────────────────────
+/// 扫码枪**不做任何准入判定**（它是把条码扫成一笔账的工具）；
+/// 减货有一条硬规则：**同一条码一张单里只能有一行**（见 `DeductRules.decide`）。
+/// 所以这里的 [record] 会真的返回 `accepted=false`，确认卡上原样显示原因 ——
+/// 员工必须看到"这个码已经减过了"，而不是以为记上了。
+class _DeductSink implements ScanSink {
+  _DeductSink(this.repo);
+
+  final DeductRepo repo;
+
+  @override
+  Future<ScanFeedback> record(String sheetNo, String code,
+      {double qty = 1}) async {
+    final d = await repo.addRow(
+      sheetNo: sheetNo,
+      barcode: code,
+      qtyRaw: DeductExport.fmtQty(qty),
+    );
+    if (!d.accepted) {
+      return ScanFeedback(accepted: false, message: d.message);
+    }
+    final rows = await repo.listRows(sheetNo);
+    return ScanFeedback(
+      accepted: true,
+      hit: rows.cast<Map<String, dynamic>?>().firstWhere(
+            (r) => r != null && r['barcode'] == code,
+            orElse: () => null,
+          ),
+    );
+  }
+
+  /// 相机页底部的小结。键名是 [ScanSink.summary] 的约定（total_qty / kinds）。
+  @override
+  Future<Map<String, dynamic>> summary(String sheetNo) async {
+    final t = await repo.summary(sheetNo);
+    return <String, dynamic>{'total_qty': t.totalQty, 'kinds': t.kinds};
+  }
+
+  /// 最近扫到的几条。相机页约定**新的在前**；减货的 listRows 是 id ASC
+  /// （早的在前），所以这里反过来。
+  @override
+  Future<List<Map<String, dynamic>>> recent(String sheetNo,
+      {int limit = 40}) async {
+    final rows = await repo.listRows(sheetNo);
+    return rows.reversed.take(limit).toList();
   }
 }

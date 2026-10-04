@@ -141,6 +141,23 @@ class StockMasterRepo {
     return n is int ? n : int.parse(n.toString());
   }
 
+  /// 查一个条码的档案（相机确认卡要显示品名/规格/单位）。
+  ///
+  /// 查不到返回 null —— **不用抛异常**：商档里没有的条码（新品、错码）
+  /// 恰恰是最需要照常记下来的那种行，界面按"未知条码"显示即可。
+  static Future<Map<String, dynamic>?> lookupLocal(String barcode) async {
+    final code = barcode.trim();
+    if (code.isEmpty) return null;
+    final db = await LocalDb.I.db();
+    final rows = await db.query(
+      'stock_master',
+      where: 'barcode = ?',
+      whereArgs: <Object?>[code],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
   /// 金额/库存统一转 double。
   ///
   /// mssql 的 decimal 经 CSV 会带成 `"83.00"` 这样的字符串；
