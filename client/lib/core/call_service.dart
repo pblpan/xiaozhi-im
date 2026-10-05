@@ -95,6 +95,15 @@ const List<Map<String, dynamic>> kIceServers = [
   {'urls': 'stun:stun.hitv.com:3478'},
 ];
 
+/// ICE 重启次数上限：超过后 1v1 直接放弃（判定网络确实不通），群通话只放弃该路。
+///
+/// 重连由 [CallService._attemptRestart] 与连接看门狗共同驱动，二者都受此上限约束，
+/// 避免「永远重连」把通话卡死在连接中。
+const int _kMaxIceRestarts = 5;
+
+/// 连接看门狗轮次上限：卡在「连接中」时每 8 秒触发一次 ICE 重启，超过则放弃。
+const int _kMaxConnectAttempts = 3;
+
 /// 单条 peer 连接的封装。
 ///
 /// 【为什么需要这个类】1v1 时代全服务只有一份 `_pc / _remote / _pendingIce /
@@ -116,12 +125,21 @@ class _PeerLink {
   bool remoteSet = false;
   bool rendererReady = false;
 
+  /// 已经触发过的 ICE 重启次数（上限见 [_kMaxIceRestarts]）。
+  /// 连接恢复正常（connected）会清零；超过上限则放弃该路。
+  int iceRestarts = 0;
+
+  /// 「断开后自愈」定时器：连接短暂 disconnected 时延迟触发 ICE 重启的兜底。
+  Timer? recoverTimer;
+
   _PeerLink({required this.userId, required this.videoOn});
 
   /// 是否有远端视频在推（决定界面渲染视频还是头像）
   bool get hasVideo => videoOn.value;
 
   Future<void> dispose() async {
+    recoverTimer?.cancel();
+    recoverTimer = null;
     try {
       await pc?.close();
     } catch (_) {
@@ -207,6 +225,10 @@ class CallService {
   Timer? _endTimer;
   DateTime? _answeredAt;
   bool _ending = false;
+
+  /// 连接看门狗：进入「连接中」后启动，卡住迟迟不通就周期性触发 ICE 重启。
+  Timer? _connectWatchdog;
+  int _connectAttempts = 0;
 
   /// 是否已经推过通话页（避免重复 push）
   bool _pushed = false;
@@ -402,6 +424,7 @@ class CallService {
     if (s == null || phase.value != CallPhase.incoming) return;
     phase.value = CallPhase.connecting;
     status.value = '正在连接…';
+    _armConnectWatchdog();
 
     final err = await _prepareLocal(s.video);
     if (err != null) {
@@ -675,6 +698,7 @@ class CallService {
       status.value = '正在连接…';
       _answeredAt ??= DateTime.now();
       _startTick();
+      _armConnectWatchdog();
     }
     _diag('已加入通话，房间内 ${list.length} 人');
   }
@@ -739,6 +763,7 @@ class CallService {
     status.value = '正在连接…';
     _answeredAt ??= DateTime.now();
     _startTick();
+    _armConnectWatchdog();
 
     final by = (raw['by'] as num?)?.toInt();
     if (by == null) return;
@@ -975,6 +1000,9 @@ class CallService {
     pc.onConnectionState = (st) {
       switch (st) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
+          link.iceRestarts = 0; // 连接恢复，重置重连计数
+          link.recoverTimer?.cancel();
+          _connectWatchdog?.cancel(); // 接通了，看门狗没用了
           _diag('连接已建立($userId)');
           // 兜底：万一平台没触发 onTrack，这里主动把已到达的轨道捞回来渲染
           unawaited(_sweepReceivers(link));
@@ -986,15 +1014,20 @@ class CallService {
           }
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-          // 群通话里某一路失败不该掐掉整通；1v1 就是整通失败
-          if (session.value?.group == true) {
-            _diag('$userId 连接失败');
-          } else {
-            _finish('连接失败，可能不在同一网络');
-          }
+          // ICE 协商彻底失败（对称 NAT / 无可用中继等）。**不直接掐断**，
+          // 先尝试 ICE 重启重协商；1v1 多次失败才放弃，群通话只放弃这一路。
+          link.recoverTimer?.cancel();
+          _attemptRestart(userId, link);
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
-          if (phase.value == CallPhase.active) status.value = '连接不稳定…';
+          if (phase.value == CallPhase.active) {
+            status.value = '连接不稳定，正在恢复…';
+            // 短暂抖动常常能自行恢复；4 秒后仍断开再触发 ICE 重启，
+            // 避免一有波动就重协商（重协商本身也会闪一下画面）。
+            link.recoverTimer?.cancel();
+            link.recoverTimer =
+                Timer(const Duration(seconds: 4), () => _attemptRestart(userId, link));
+          }
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
           break;
@@ -1045,6 +1078,94 @@ class CallService {
       'to': to,
       'data': data,
     });
+  }
+
+  /// 触发一次 ICE 重启（重协商）。
+  ///
+  /// 流程：`restartIce()` 让本端重新生成 ICE 凭据 → `createOffer()` 得到带新
+  /// 凭据的 offer（即 ICE-restart offer）→ 发给对端；对端的 `call:offer` 处理
+  /// 会照常 setRemoteDescription + 回 answer，连接据此重新打通。
+  ///
+  /// 为什么能提升接通率：原先 `failed` 状态直接 `_finish`，对称 NAT / 弱网下一
+  /// 次候选没凑成对的连接就彻底没救了；重启相当于「换个打洞姿势」再来一次，
+  /// 配合服务端已下发的 TURN 中继，绝大多数场景能兜回来。
+  Future<void> _restartIce(int userId) async {
+    final link = _links[userId];
+    final pc = link?.pc;
+    if (pc == null || _ending) return;
+    _diag('对 $userId 触发 ICE 重启（第 ${link!.iceRestarts} 次）');
+    try {
+      await pc.restartIce();
+      final offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      _sendTo('offer', userId, offer.toMap());
+    } catch (e) {
+      _diag('ICE 重启失败($userId): $e');
+    }
+  }
+
+  /// 尝试为某一路重连（受 [_kMaxIceRestarts] 上限约束）。
+  ///
+  /// · 群通话：超限只放弃这一路（其余人继续），不结束整通。
+  /// · 1v1：超限直接结束（判定为网络确实不通或不在同一网络）。
+  void _attemptRestart(int userId, _PeerLink link) {
+    final s = session.value;
+    if (s == null || link.pc == null || _ending) return;
+    if (link.iceRestarts >= _kMaxIceRestarts) {
+      if (s.group) {
+        _diag('$userId 重连次数过多，放弃该路');
+        unawaited(_dropLink(userId));
+      } else {
+        _finish('连接失败，可能网络较差或不在同一网络');
+      }
+      return;
+    }
+    link.iceRestarts++;
+    unawaited(_restartIce(userId));
+  }
+
+  /// 启动连接看门狗：进入「连接中」后调用，卡住迟迟不通就周期性重启 ICE。
+  ///
+  /// 解决的是「一直停在 connecting 不报 failed 也不 connected」这类最隐蔽的
+  /// 接通失败 —— 没有这个，用户只能干等直到服务端 45 秒振铃超时。
+  void _armConnectWatchdog() {
+    if (phase.value != CallPhase.connecting) return;
+    _connectWatchdog?.cancel();
+    _connectAttempts = 0;
+    _connectWatchdog =
+        Timer(const Duration(seconds: 8), _connectWatchdogTick);
+  }
+
+  void _connectWatchdogTick() {
+    final ph = phase.value;
+    // 已接通 / 已结束 / 空闲：看门狗使命完成
+    if (ph == CallPhase.active ||
+        ph == CallPhase.ended ||
+        ph == CallPhase.idle) {
+      _connectWatchdog?.cancel();
+      return;
+    }
+    if (_connectAttempts >= _kMaxConnectAttempts) {
+      final s = session.value;
+      if (s != null && !s.group) {
+        _finish('连接超时，可能网络较差或不在同一网络');
+      } else {
+        _diag('连接超时，放弃重连');
+        _connectWatchdog?.cancel();
+      }
+      return;
+    }
+    _connectAttempts++;
+    _diag('连接看门狗第 $_connectAttempts 次：尚未接通，触发 ICE 重启');
+    for (final uid in _links.keys.toList()) {
+      final l = _links[uid]!;
+      if (l.pc != null && l.iceRestarts < _kMaxIceRestarts) {
+        l.iceRestarts++;
+        unawaited(_restartIce(uid));
+      }
+    }
+    _connectWatchdog =
+        Timer(const Duration(seconds: 8), _connectWatchdogTick);
   }
 
   /// 记一条接收诊断（同时打到日志，release 包也能靠界面查看）
@@ -1210,6 +1331,8 @@ class CallService {
     _tick = null;
     _graceTimer?.cancel();
     _graceTimer = null;
+    _connectWatchdog?.cancel();
+    _connectWatchdog = null;
     _answeredAt = null;
 
     // 拆掉所有远端连接（群通话可能有多条）

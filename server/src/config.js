@@ -3,9 +3,127 @@ const fs = require('fs');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
-const FILES_DIR = path.join(DATA_DIR, 'files');
+
+// ---------------------------------------------------------------------------
+// 文件存储目录（可自定义）
+//
+// 默认 DATA_DIR/files；管理台「系统设置 → 服务器信息」可改，写进
+// DATA_DIR/paths.env 的 FILESDIR= 行（持久，容器重建/重启不丢），**重启生效**。
+// 启动时若发现默认目录里还有文件（改路径前留下的），自动搬过去 ——
+// 同盘 rename 一步到位；跨盘（如 C: → D:）copy + 删源，边搬边打日志。
+// ---------------------------------------------------------------------------
+const PATHS_ENV_FILE = path.join(DATA_DIR, 'paths.env');
+
+function readPathsEnv() {
+  try {
+    if (!fs.existsSync(PATHS_ENV_FILE)) return {};
+    const out = {};
+    for (const line of fs.readFileSync(PATHS_ENV_FILE, 'utf8').split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s || s.startsWith('#')) continue;
+      const i = s.indexOf('=');
+      if (i <= 0) continue;
+      const k = s.slice(0, i).trim();
+      if (k !== 'FILESDIR' && k !== 'PREVFILESDIR') continue;
+      const v = s.slice(i + 1).trim();
+      if (v) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 合并写回 paths.env（管理台调用）
+ *  · dir 非空：FILESDIR=dir（并清掉 PREVFILESDIR）
+ *  · dir 空：清除 FILESDIR；若之前自定义过，把旧目录记进 PREVFILESDIR ——
+ *    启动迁移据此把文件搬回默认目录（反向搬迁），搬完自动清掉该行。
+ */
+function writePathsEnv(dir) {
+  const prev = readPathsEnv();
+  const lines = [
+    '# 文件存储目录 —— 由管理台「系统设置 → 服务器信息」写入。',
+    '# FILESDIR 留空 = 用默认 <数据目录>/files。改完需要重启服务端生效。',
+  ];
+  const d = dir && String(dir).trim();
+  if (d) {
+    lines.push(`FILESDIR=${String(d).trim()}`);
+  } else if (prev.FILESDIR) {
+    lines.push(`PREVFILESDIR=${prev.FILESDIR}`);
+  }
+  fs.writeFileSync(PATHS_ENV_FILE, lines.join('\n') + '\n', 'utf8');
+}
+
+/** 把 src 目录里的文件搬到 dst（同盘 rename，跨盘 copy+删源），返回搬了几件 */
+function moveAllFiles(srcDir, dstDir) {
+  fs.mkdirSync(dstDir, { recursive: true });
+  const entries = fs.readdirSync(srcDir, { withFileTypes: true }).filter((e) => e.isFile());
+  let moved = 0;
+  for (const e of entries) {
+    const s = path.join(srcDir, e.name);
+    const t = path.join(dstDir, e.name);
+    try {
+      fs.renameSync(s, t);
+      moved++;
+      continue;
+    } catch { /* 跨盘 EXDEV，走复制 */ }
+    fs.copyFileSync(s, t);
+    fs.unlinkSync(s);
+    moved++;
+  }
+  return moved;
+}
+
+const DEFAULT_FILES_DIR = path.join(DATA_DIR, 'files');
+const _pathsEnvValue = readPathsEnv().FILESDIR;
+const FILES_DIR = _pathsEnvValue ? path.resolve(_pathsEnvValue) : DEFAULT_FILES_DIR;
+
+// 一次性搬迁（启动时执行）：
+//  · 自定义目录生效 → 把默认目录遗留文件搬过去
+//  · 回落默认（有 PREVFILESDIR）→ 把自定义目录里的文件搬回默认，然后清掉该行
+function migrateFilesIfNeeded() {
+  try {
+    const env = readPathsEnv();
+    if (path.resolve(FILES_DIR) !== path.resolve(DEFAULT_FILES_DIR)) {
+      // 正向：默认 → 自定义
+      if (!fs.existsSync(DEFAULT_FILES_DIR)) return;
+      const n = moveAllFiles(DEFAULT_FILES_DIR, FILES_DIR);
+      if (n > 0) {
+        console.log(`[小智IM] 文件存储迁移：把默认目录遗留的 ${n} 个文件搬到 ${FILES_DIR}`);
+      }
+      return;
+    }
+    // 反向：自定义 → 默认（PREVFILESDIR 存在时）
+    if (!env.PREVFILESDIR) return;
+    const prev = path.resolve(env.PREVFILESDIR);
+    if (prev === path.resolve(DEFAULT_FILES_DIR) || !fs.existsSync(prev)) {
+      writePathsEnvCleanupPrev();
+      return;
+    }
+    const n = moveAllFiles(prev, DEFAULT_FILES_DIR);
+    writePathsEnvCleanupPrev();
+    if (n > 0) {
+      console.log(`[小智IM] 文件存储迁移：把自定义目录 ${prev} 里的 ${n} 个文件搬回默认目录`);
+    }
+  } catch (e) {
+    console.warn(`[小智IM] 文件存储迁移失败（不影响启动）：${e.message}`);
+  }
+}
+
+/** 迁移完成后清掉 PREVFILESDIR 行（重写 paths.env，只保留 FILESDIR 或注释） */
+function writePathsEnvCleanupPrev() {
+  const cur = readPathsEnv();
+  const lines = [
+    '# 文件存储目录 —— 由管理台「系统设置 → 服务器信息」写入。',
+    '# FILESDIR 留空 = 用默认 <数据目录>/files。改完需要重启服务端生效。',
+  ];
+  if (cur.FILESDIR) lines.push(`FILESDIR=${cur.FILESDIR}`);
+  try { fs.writeFileSync(PATHS_ENV_FILE, lines.join('\n') + '\n', 'utf8'); } catch { /* ignore */ }
+}
 
 fs.mkdirSync(FILES_DIR, { recursive: true });
+migrateFilesIfNeeded();
 
 // ---------------------------------------------------------------------------
 // 初始密钥：宁可随机，也绝不留写死的弱默认值
@@ -442,6 +560,11 @@ module.exports = {
   turnEnvPath,
   readTurnEnv,
   writeTurnEnv,
+  // 文件存储目录自定义（管理台读写 paths.env；改完重启生效，启动自动搬遗留文件）
+  DEFAULT_FILES_DIR,
+  PATHS_ENV_FILE,
+  readPathsEnv,
+  writePathsEnv,
   // 注意：这是**函数**不是常量 —— 向导热加载后它的值会变，
   // 消费方必须每次调用，不能在模块顶层取值缓存。
   CF_TURN_ENABLED: cfEnabled,

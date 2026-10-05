@@ -186,6 +186,8 @@ router.get('/info', (req, res) => {
     db_path: config.DB_PATH,
     data_dir: config.DATA_DIR,
     files_dir: config.FILES_DIR,
+    files_dir_default: config.DEFAULT_FILES_DIR,
+    files_dir_custom: path.resolve(config.FILES_DIR) !== path.resolve(config.DEFAULT_FILES_DIR),
     max_file_mb: config.MAX_FILE_MB,
     files_disk_bytes: (() => {
       try {
@@ -199,6 +201,58 @@ router.get('/info', (req, res) => {
     node: process.version,
     version: pkg.version,
   });
+});
+
+/* ==================== 文件存储目录自定义 ====================
+ * POST /files-dir { dir }  写入 paths.env（重启生效，启动自动搬遗留文件）
+ *   · dir 为空字符串 = 清除自定义，回落默认 <数据目录>/files
+ * DELETE /files-dir        等价于 POST { dir: '' }
+ * 校验：目录必须可创建/可写；不能等于数据目录本身，也不能是它的祖先。
+ */
+function validateFilesDir(raw) {
+  const dir = String(raw || '').trim();
+  if (!dir) return { ok: true, dir: '' }; // 清除
+  let p;
+  try { p = path.resolve(dir); } catch { return { ok: false, error: '路径格式不正确' }; }
+  const data = path.resolve(config.DATA_DIR);
+  if (p === data) return { ok: false, error: '不能设成数据目录本身' };
+  if (data.startsWith(p + path.sep)) return { ok: false, error: '不能设成数据目录的上级目录' };
+  try {
+    fs.mkdirSync(p, { recursive: true });
+    const probe = path.join(p, `.xz_write_test_${Date.now()}`);
+    fs.writeFileSync(probe, 'ok');
+    fs.unlinkSync(probe);
+  } catch (e) {
+    return { ok: false, error: `目录不可写：${e.message}` };
+  }
+  return { ok: true, dir: p };
+}
+
+router.post('/files-dir', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const v = validateFilesDir(req.body && req.body.dir);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  try {
+    config.writePathsEnv(v.dir);
+  } catch (e) {
+    return res.status(500).json({ error: `写入配置失败：${e.message}` });
+  }
+  res.json({
+    ok: true,
+    dir: v.dir || config.DEFAULT_FILES_DIR,
+    needRestart: true,
+    message: v.dir
+      ? '已保存，重启服务端后生效（启动时会自动把旧目录里的文件搬过去）'
+      : '已恢复默认，重启服务端后生效（启动时会自动把自定义目录里的文件搬回来）',
+  });
+});
+
+router.delete('/files-dir', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  try { config.writePathsEnv(''); } catch (e) {
+    return res.status(500).json({ error: `写入配置失败：${e.message}` });
+  }
+  res.json({ ok: true, dir: config.DEFAULT_FILES_DIR, needRestart: true });
 });
 
 /* ==================== 实例级设置（公司名 / 好友模式） ==================== */

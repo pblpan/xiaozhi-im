@@ -1,6 +1,6 @@
 {
   "name": "xiaozhi-im-server",
-  "version": "0.22.2",
+  "version": "0.23.0",
   "private": true,
   "description": "小智 IM 服务端 (Node.js + WebSocket + SQLite)",
   "type": "commonjs",
@@ -14,6 +14,7 @@
     "express": "^5.0.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.3.0",
+    "ssh2": "^1.17.0",
     "ws": "^8.18.0"
   }
 }

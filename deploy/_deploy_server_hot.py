@@ -117,6 +117,13 @@ FILES = [
     #
     # ⚠️ 唯一要守的规矩还是那条：index.html 与它引用的 assets **必须同批上传**。
     #    asset_files() 保证了两者同源，天然满足。
+    # 🔴 2026-10-05 晚：管理台「部署向导」上线（换云服务器一键部署）。
+    #    新增 deploylib.js（SSH 执行层）+ routes/deploy_wizard.js（向导路由），
+    #    index.js 挂 /api/admin/deploy。**依赖 ssh2** —— 上线时要在容器里
+    #    npm i ssh2（package.json 已同步，下次 fpk 出包自动固化）。
+    'src/index.js',
+    'src/deploylib.js',
+    'src/routes/deploy_wizard.js',
 ]
 
 

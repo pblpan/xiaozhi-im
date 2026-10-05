@@ -42,8 +42,6 @@ class ConversationsScreenState extends State<ConversationsScreen> {
   bool _loading = true;
   String? _error;
   ApiException? _lastErr; // 最近一次错误的原始异常，UI 据此切换文案/按钮
-  String _q = '';
-  final _qCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -56,7 +54,6 @@ class ConversationsScreenState extends State<ConversationsScreen> {
   @override
   void dispose() {
     SessionManager.instance.domainVersion.removeListener(_onDomain);
-    _qCtrl.dispose();
     super.dispose();
   }
 
@@ -201,16 +198,6 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     } catch (_) {
       // 静默失败：这只是个数字提示，不该弹错误打扰用户
     }
-  }
-
-  List<Conversation> get _visible {
-    if (_q.trim().isEmpty) return _all;
-    final k = _q.trim().toLowerCase();
-    return _all
-        .where((c) =>
-            (c.title ?? '').toLowerCase().contains(k) ||
-            (c.lastContent ?? '').toLowerCase().contains(k))
-        .toList();
   }
 
   String _msg(Object e) =>
@@ -642,32 +629,6 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     return c;
   }
 
-  Widget _searchBox() => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-        child: TextField(
-          controller: _qCtrl,
-          onChanged: (v) => setState(() => _q = v),
-          style: const TextStyle(fontSize: 14),
-          decoration: InputDecoration(
-            hintText: '搜索会话',
-            isDense: true,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            prefixIcon: const Icon(Icons.search_rounded,
-                size: 19, color: AppColors.textWeak),
-            suffixIcon: _q.isEmpty
-                ? null
-                : IconButton(
-                    icon: const Icon(Icons.close_rounded, size: 17),
-                    onPressed: () {
-                      _qCtrl.clear();
-                      setState(() => _q = '');
-                    },
-                  ),
-          ),
-        ),
-      );
-
   Widget _tile(Conversation cv) {
     final name = cv.title ?? (cv.type == 'group' ? '群聊' : '会话');
     final selected = _sel?.id == cv.id;
@@ -878,23 +839,16 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       );
     }
 
-    final items = _visible;
+    final items = _all;
     return RefreshIndicator(
       color: AppColors.brand,
       backgroundColor: AppColors.surfaceHi,
       onRefresh: _load,
       child: Column(
         children: [
-          _searchBox(),
-          const Divider(height: 1),
           Expanded(
             child: items.isEmpty
-                ? (_q.isEmpty
-                    ? _empty()
-                    : const Center(
-                        child: Text('没有匹配的会话',
-                            style:
-                                TextStyle(color: AppColors.textWeak, fontSize: 13))))
+                ? _empty()
                 : ListView.builder(
                     padding: const EdgeInsets.only(top: 6, bottom: 12),
                     itemCount: items.length,
@@ -943,7 +897,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
               },
             ),
             IconButton(
-              tooltip: '搜索聊天记录',
+              tooltip: '搜索好友与聊天记录',
               onPressed: _openSearch,
               icon: const Icon(Icons.search_rounded),
             ),

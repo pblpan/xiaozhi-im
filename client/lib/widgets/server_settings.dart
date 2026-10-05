@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/discover.dart';
+import 'package:xiaozhi_im_client/core/remote_config.dart';
 import 'package:xiaozhi_im_client/core/settings.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/workspace.dart';
@@ -38,6 +39,10 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
   bool _scanning = false;
   List<DiscoveredServer> _scanned = const [];
   String? _scanNote; // 扫描结果说明（没扫到/失败原因）
+
+  // 「从服务器获取推荐地址」状态
+  bool _fetchingRec = false;
+  String? _recNote;
 
   @override
   void initState() {
@@ -111,6 +116,34 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
         _scanNote = '扫描失败，可直接手填内网地址';
       });
     }
+  }
+
+  /// 从服务器拿推荐地址（bootstrap 的 serverAddresses，管理台配的最新候选），
+  /// 填进两个输入框 —— 只填不存，用户看得见改了什么，点保存才生效。
+  /// 场景：老设备手动配过地址后不再跟随下发，服务器换地址（如外网隧道
+  /// 从 takin.cc 换成云服务器）时用它一键追平。
+  Future<void> _applyRecommended() async {
+    setState(() {
+      _fetchingRec = true;
+      _recNote = null;
+    });
+    final pub = await RemoteConfig.fetchPublic();
+    if (!mounted) return;
+    setState(() => _fetchingRec = false);
+    final pl = pub['payload'];
+    final raw = pl is Map ? pl['serverAddresses'] : null;
+    final list = raw is List
+        ? raw.whereType<String>().where((s) => s.trim().isNotEmpty).toList()
+        : const <String>[];
+    if (list.isEmpty) {
+      setState(() => _recNote = '没拿到推荐地址：请先连上任意一台服务器再试');
+      return;
+    }
+    setState(() {
+      _lanCtrl.text = list[0];
+      if (list.length > 1) _wanCtrl.text = list[1];
+      _recNote = '已填入服务端最新推荐（共 ${list.length} 条），确认后点保存';
+    });
   }
 
   Future<void> _save() async {
@@ -274,6 +307,33 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(_scanNote!,
+                        style: const TextStyle(
+                            fontSize: 11.5, color: AppColors.textWeak)),
+                  ),
+
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: _fetchingRec ? null : _applyRecommended,
+                  icon: _fetchingRec
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.cloud_download_rounded, size: 16),
+                  label: const Text('从服务器获取推荐地址',
+                      style: TextStyle(fontSize: 13)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.brand,
+                    side: const BorderSide(color: AppColors.border),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.sm)),
+                  ),
+                ),
+                if (_recNote != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(_recNote!,
                         style: const TextStyle(
                             fontSize: 11.5, color: AppColors.textWeak)),
                   ),

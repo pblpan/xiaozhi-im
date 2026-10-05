@@ -90,6 +90,7 @@
 
           <el-sub-menu index="g-sys">
             <template #title><el-icon><Setting /></el-icon><span>系统</span></template>
+            <el-menu-item index="deploywizard">部署向导</el-menu-item>
             <el-menu-item index="settings">系统设置</el-menu-item>
             <el-menu-item index="health">数据体检</el-menu-item>
             <el-menu-item index="license">授权管理</el-menu-item>
@@ -275,6 +276,122 @@
                   </ul>
                 </section>
               </div>
+            </div>
+          </el-card>
+        </div>
+
+        <!-- 部署向导：换云服务器一键部署（frps/TURN/隧道/地址候选） -->
+        <div v-else-if="tab === 'deploywizard'">
+          <el-alert type="info" show-icon :closable="false" style="margin-bottom:14px;">
+            <template #title>换云服务器 / 首次部署，按四步点完即可。全程自动，无需 SSH 手工操作；密码只保存在服务端数据目录（600 权限，不入库）。</template>
+          </el-alert>
+
+          <el-steps :active="dw.active" align-center finish-status="success" style="margin-bottom:16px;">
+            <el-step title="云服务器" description="frps + TURN 一键部署" />
+            <el-step title="隧道接入" description="frpc 自动切换" />
+            <el-step title="通话中继" description="双 TURN 并存下发" />
+            <el-step title="客户端地址" description="候选地址更新" />
+          </el-steps>
+
+          <!-- 第 1 步 -->
+          <el-card shadow="never" style="margin-bottom:14px;">
+            <template #header><b>🖥️ 第 1 步 · 云服务器信息</b></template>
+            <el-form label-width="90px" size="default" style="max-width:640px;">
+              <el-form-item label="公网 IP"><el-input v-model="dw.vps.host" placeholder="例如 185.242.233.140" /></el-form-item>
+              <el-form-item label="SSH 端口"><el-input-number v-model="dw.vps.port" :min="1" :max="65535" /></el-form-item>
+              <el-form-item label="用户名"><el-input v-model="dw.vps.user" /></el-form-item>
+              <el-form-item label="root 密码">
+                <el-input v-model="dw.vps.password" type="password" show-password
+                  :placeholder="dw.hasVpsPw ? '已保存（留空沿用）' : '请输入密码'" />
+              </el-form-item>
+              <el-form-item label="端口配置">
+                <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                  <div><div style="font-size:11px;color:#909399;margin-bottom:2px;">服务端口（默认3602）</div>
+                    <el-input-number v-model="dw.ports.server" :min="1" :max="65535" controls-position="right" style="width:130px;" /></div>
+                  <div><div style="font-size:11px;color:#909399;margin-bottom:2px;">frp 端口（默认7000）</div>
+                    <el-input-number v-model="dw.ports.frp" :min="1" :max="65535" controls-position="right" style="width:130px;" /></div>
+                  <div><div style="font-size:11px;color:#909399;margin-bottom:2px;">TURN 端口（默认3478）</div>
+                    <el-input-number v-model="dw.ports.turn" :min="1" :max="65535" controls-position="right" style="width:130px;" /></div>
+                </div>
+                <div style="font-size:11px;color:#9ca3af;margin-top:4px;">改服务端口后，地址候选 / frpc 转发 / 健康检查全程跟随；服务端本身要配套改（飞牛改 docker/.env 的 PORT，Win 改 data\.env 的 PORT）。</div>
+              </el-form-item>
+            </el-form>
+            <el-button @click="dwSave('vps')" :loading="dw.busy==='save-vps'">保存凭据</el-button>
+            <el-button @click="dwTest('vps')" :loading="dw.busy==='test-vps'">测试连接</el-button>
+            <el-button type="primary" @click="dwStart('vps-deploy')"
+              :disabled="dw.task.state==='running' || !dw.vps.host">🚀 一键部署 frps + TURN</el-button>
+            <pre v-if="dw.task.steps && dw.task.steps.length"
+              style="margin-top:12px;background:#0f172a;color:#86efac;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.7;max-height:260px;overflow:auto;font-family:Consolas,monospace;white-space:pre-wrap;">{{ dw.task.logs.map(l => l.line).join('\n') }}</pre>
+          </el-card>
+
+          <!-- 第 2 步：形态自动判定 —— frpc 必须跟服务端同机 -->
+          <el-card shadow="never" style="margin-bottom:14px;">
+            <template #header><b>🔌 第 2 步 · frp 隧道接入</b>
+              <el-tag size="small" :type="dwIsWin ? 'warning' : 'success'" style="margin-left:6px;">{{ dwIsWin ? 'Windows 服务端 · 本机模式' : '飞牛 NAS · SSH 模式' }}</el-tag>
+            </template>
+            <!-- Windows 本机模式：无 SSH，frpc.exe + 启动文件夹自启 -->
+            <template v-if="dwIsWin">
+              <div style="font-size:13px;line-height:1.9;color:#374151;">
+                服务端就跑在本机（Windows），向导直接本机操作，<b>不用填任何 SSH</b>：<br />
+                · <code style="background:#f3f4f6;padding:1px 6px;border-radius:4px;">frpc.toml</code> 自动生成到数据目录 frpc\ 下（本机服务 {{ dw.ports.server }} → 公网 {{ dw.ports.server }}）<br />
+                · frpc.exe 首次自动从 GitHub 下载（已存在则跳过）<br />
+                · 常驻 = 当前用户「启动」文件夹开机自启 + 立即启动
+              </div>
+              <el-button type="primary" style="margin-top:10px;" @click="dwStart('tunnel')"
+                :disabled="dw.task.state==='running' || dw.active < 1 || !dw.vps.host">自动接入隧道</el-button>
+            </template>
+            <!-- 飞牛 SSH 模式 -->
+            <template v-else>
+              <el-form label-width="90px" size="default" style="max-width:640px;">
+                <el-form-item label="飞牛地址"><el-input v-model="dw.fnos.host" /></el-form-item>
+                <el-form-item label="SSH 端口"><el-input-number v-model="dw.fnos.port" :min="1" :max="65535" /></el-form-item>
+                <el-form-item label="用户名"><el-input v-model="dw.fnos.user" /></el-form-item>
+                <el-form-item label="密码">
+                  <el-input v-model="dw.fnos.password" type="password" show-password
+                    :placeholder="dw.hasFnosPw ? '已保存（留空沿用）' : '请输入密码'" />
+                </el-form-item>
+              </el-form>
+              <el-button @click="dwSave('fnos')" :loading="dw.busy==='save-fnos'">保存凭据</el-button>
+              <el-button @click="dwTest('fnos')" :loading="dw.busy==='test-fnos'">测试连接</el-button>
+              <el-button type="primary" @click="dwStart('tunnel')"
+                :disabled="dw.task.state==='running' || dw.active < 1">自动切换隧道到新服务器</el-button>
+              <div style="margin-top:8px;color:#9ca3af;font-size:12px;">旧配置自动备份（frpc.toml.bak-*）；其他代理（工厂/网管等）原样保留，只换服务器地址与小智端口。</div>
+            </template>
+          </el-card>
+
+          <!-- 第 3 步 -->
+          <el-card shadow="never" style="margin-bottom:14px;">
+            <template #header><b>📞 第 3 步 · 通话 TURN 中继</b></template>
+            <el-button type="primary" @click="dwTurn" :disabled="dw.active < 2 || dw.busy==='turn'"
+              :loading="dw.busy==='turn'">写入中继配置并重启生效</el-button>
+            <div v-if="dw.ice" style="margin-top:10px;font-size:13px;">
+              <el-tag :type="dw.ice.hasVps ? 'success' : 'danger'">{{ dw.ice.hasVps ? '✓ VPS 中继已进入下发' : '✗ VPS 中继未下发' }}</el-tag>
+              <el-tag :type="dw.ice.hasCloudflare ? 'success' : 'info'" style="margin-left:6px;">Cloudflare {{ dw.ice.hasCloudflare ? '保留兜底' : '未配置' }}</el-tag>
+            </div>
+            <div style="margin-top:8px;color:#9ca3af;font-size:12px;">与 Cloudflare 托管中继并存，客户端自动挑通的用；重启服务端约 10~20 秒，期间管理台短暂失联。</div>
+          </el-card>
+
+          <!-- 第 4 步 -->
+          <el-card shadow="never" style="margin-bottom:14px;">
+            <template #header><b>📱 第 4 步 · 客户端地址候选</b></template>
+            <div style="font-size:13px;line-height:1.9;color:#374151;">
+              到「<b>对外对接 → 客户端配置</b>」把服务器地址候选改为两条（客户端只吃前两条）：<br />
+              <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">http://&lt;飞牛内网IP&gt;:3602</code>
+              （第 1 条 = 内网）
+              <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;margin-left:8px;">http://&lt;VPS公网IP&gt;:3602</code>
+              （第 2 条 = 外网）<br />
+              发布后客户端启动时/每 30 分钟自动拉取，无需更新 App；内网外网自动探测互备。
+            </div>
+            <el-button style="margin-top:10px;" @click="tab = 'clientconfig'">前往客户端配置 →</el-button>
+          </el-card>
+
+          <!-- 健康检查 -->
+          <el-card shadow="never">
+            <template #header><b>🩺 健康检查</b> <el-button size="small" text @click="dwHealth" style="float:right;">刷新</el-button></template>
+            <div v-for="h in dw.health" :key="h.key" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed #f0f0f0;font-size:13px;">
+              <span :style="{width:'9px',height:'9px',borderRadius:'50%',flex:'none',background: h.ok ? '#10B981' : '#ef4444'}"></span>
+              <span style="flex:1;">{{ h.label }}</span>
+              <span style="color:#9ca3af;font-size:12px;">{{ h.detail || (h.ok ? '正常' : '不通') }}</span>
             </div>
           </el-card>
         </div>
@@ -4520,7 +4637,23 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <el-descriptions-item label="监听端口">{{ info.port }}</el-descriptions-item>
                   <el-descriptions-item label="数据目录">{{ info.data_dir }}</el-descriptions-item>
                   <el-descriptions-item label="数据库路径">{{ info.db_path }}</el-descriptions-item>
-                  <el-descriptions-item label="文件存储">{{ info.files_dir }}</el-descriptions-item>
+                  <el-descriptions-item label="文件存储">
+                    <template v-if="!fdEdit">
+                      <span style="word-break:break-all">{{ info.files_dir }}</span>
+                      <el-tag v-if="info.files_dir_custom" type="warning" size="small" style="margin-left:6px">自定义</el-tag>
+                      <el-button size="small" text type="primary" style="margin-left:6px" @click="fdStart">改</el-button>
+                    </template>
+                    <template v-else>
+                      <div style="display:flex;gap:6px;width:100%">
+                        <el-input v-model="fdValue" size="small" placeholder="留空 = 恢复默认（数据目录/files）" />
+                        <el-button size="small" type="primary" :loading="fdBusy" @click="fdSave">保存</el-button>
+                        <el-button size="small" @click="fdEdit = false">取消</el-button>
+                      </div>
+                      <div style="font-size:11px;color:#909399;margin-top:4px;line-height:1.5">
+                        保存后需重启服务端生效；重启时会自动把旧目录里的文件搬到新目录（跨盘也能搬）。留空保存 = 恢复默认（文件自动搬回）。
+                      </div>
+                    </template>
+                  </el-descriptions-item>
                   <el-descriptions-item label="磁盘占用">{{ fmtBytes(info.files_disk_bytes) }}</el-descriptions-item>
                   <el-descriptions-item label="单文件上限">{{ info.max_file_mb }} MB</el-descriptions-item>
                   <el-descriptions-item label="Node 版本">{{ info.node }}</el-descriptions-item>
@@ -5265,7 +5398,7 @@ const MENU_SUB_OF = {
   attendance: 'g-office', files: 'g-office', messages: 'g-office',
   integrations: 'g-link', upstreams: 'g-link', clientconfig: 'g-link', push: 'g-link',
   master: 'g-biz', deduct: 'g-biz', modules: 'g-biz', training: 'g-biz',
-  settings: 'g-sys', license: 'g-sys', help: 'g-sys',
+  settings: 'g-sys', license: 'g-sys', help: 'g-sys', deploywizard: 'g-sys',
 };
 // 首屏不进任何分组：默认全收起，侧栏一眼看完。要看什么再展开。
 const openedGroups = ref([]);
@@ -5829,6 +5962,139 @@ async function loadTab() {
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); await loadRdc(); await loadUserOptions(); }
   else if (tab.value === 'deduct') await reloadDeduct();
   else if (tab.value === 'push') await loadPush();
+  else if (tab.value === 'deploywizard') await dwEnter();
+}
+
+/* ====== 部署向导（换云服务器一键部署） ======
+ * 服务端：/api/admin/deploy/*（server/src/routes/deploy_wizard.js）。
+ * 四步：① VPS 一键部署 frps+TURN（SSH 自动，日志实时回显）② frpc 隧道切换
+ * ③ turn.env 追加 + 重启生效 ④ 客户端地址候选（跳既有页面手工发布）。
+ * 密码不回显明文（服务端只回掩码），留空 = 沿用已保存的。
+ */
+const dw = reactive({
+  active: 0,
+  vps: { host: '', port: 22, user: 'root', password: '' },
+  fnos: { host: '192.168.31.44', port: 22, user: 'pblpan', password: '' },
+  ports: { server: 3602, frp: 7000, turn: 3478 },
+  platform: '',
+  hasVpsPw: false, hasFnosPw: false,
+  task: { state: 'idle', steps: [], logs: [] },
+  polling: null, waitBack: null,
+  health: [],
+  ice: null,
+  busy: '',
+});
+const dwIsWin = computed(() => dw.platform === 'win32');
+
+async function dwEnter() {
+  await dwLoadCreds();
+  dwHealth();
+  // 页面刷新后若有任务在跑（服务端内存任务），恢复轮询
+  try {
+    const r = await api.get('/admin/deploy/status');
+    dw.task = r.data;
+    if (r.data && r.data.state === 'running') dwStartPoll();
+  } catch { /* ignore */ }
+}
+
+async function dwLoadCreds() {
+  try {
+    const r = await api.get('/admin/deploy/creds');
+    dw.platform = r.data.platform || '';
+    if (r.data.ports) dw.ports = { ...dw.ports, ...r.data.ports };
+    if (r.data.vps) {
+      Object.assign(dw.vps, { host: r.data.vps.host, port: r.data.vps.port, user: r.data.vps.user, password: '' });
+      dw.hasVpsPw = !!r.data.vps.hasPassword;
+    }
+    if (r.data.fnos) {
+      Object.assign(dw.fnos, { host: r.data.fnos.host, port: r.data.fnos.port, user: r.data.fnos.user, password: '' });
+      dw.hasFnosPw = !!r.data.fnos.hasPassword;
+    }
+  } catch { /* 未保存过就保持空白 */ }
+}
+
+async function dwSave(which) {
+  dw.busy = 'save-' + which;
+  try {
+    const body = which === 'vps' ? { vps: dw.vps } : { fnos: dw.fnos };
+    body.ports = dw.ports; // 端口随凭据一起存（谁先保存都带上当前值）
+    await api.post('/admin/deploy/creds', body);
+    ElMessage.success('已保存');
+    await dwLoadCreds();
+  } catch (e) { ElMessage.error(e.response?.data?.error || e.message); }
+  finally { dw.busy = ''; }
+}
+
+async function dwTest(which) {
+  dw.busy = 'test-' + which;
+  try {
+    const r = await api.post('/admin/deploy/test', { which });
+    ElMessage.success(`连接成功（${r.data.ms}ms）`);
+  } catch (e) { ElMessage.error(e.response?.data?.error || e.message); }
+  finally { dw.busy = ''; }
+}
+
+async function dwStart(kind) {
+  try {
+    await api.post('/admin/deploy/' + kind);
+    dwStartPoll();
+  } catch (e) { ElMessage.error(e.response?.data?.error || e.message); }
+}
+
+function dwStartPoll() {
+  dwStopPoll();
+  dw.polling = setInterval(async () => {
+    try {
+      const r = await api.get('/admin/deploy/status');
+      dw.task = r.data;
+      if (r.data.state !== 'running') {
+        dwStopPoll();
+        dwHealth();
+        if (r.data.state === 'done') {
+          if (r.data.kind === 'vps') { dw.active = Math.max(dw.active, 1); ElMessage.success('服务器部署完成，进入下一步'); }
+          else if (r.data.kind === 'tunnel') { dw.active = Math.max(dw.active, 2); ElMessage.success('隧道接入完成'); }
+        } else if (r.data.state === 'error') {
+          ElMessage.error('任务失败：' + (r.data.error || '未知'));
+        }
+      }
+    } catch { /* 轮询失败忽略下一轮再试 */ }
+  }, 1500);
+}
+function dwStopPoll() { if (dw.polling) { clearInterval(dw.polling); dw.polling = null; } }
+
+async function dwTurn() {
+  dw.busy = 'turn';
+  try {
+    await api.post('/admin/deploy/turn');
+    if (dwIsWin.value) {
+      // Win 服务端没有守护进程，重启 = 用户手动；服务端已在响应里说明
+      ElMessage.info('中继配置已写入。请用「停止服务端.cmd」+「后台启动服务端.vbs」重启服务端后，回本页点「刷新健康检查」确认。');
+      dw.ice = (await api.get('/admin/deploy/verify-ice').catch(() => null))?.data || null;
+      return;
+    }
+    ElMessage.success('中继配置已写入，正在重启服务端（约 10~20 秒）...');
+    // 重启会让本进程失联 —— 请求失败是预期行为，忽略
+    await api.post('/admin/deploy/restart-self').catch(() => {});
+    // 轮询等服务端回来（最多 90 秒）
+    let back = false;
+    for (let i = 0; i < 45; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try { await api.get('/admin/deploy/creds'); back = true; break; } catch { /* 还没起来 */ }
+    }
+    if (!back) { ElMessage.error('服务端 90 秒未恢复，请稍后手动刷新页面检查'); dw.busy = ''; return; }
+    const r = await api.get('/admin/deploy/verify-ice');
+    dw.ice = r.data;
+    if (r.data.hasVps) { dw.active = Math.max(dw.active, 3); ElMessage.success('双 TURN 中继下发验证通过'); }
+    else ElMessage.warning('服务端已恢复，但 iceServers 里未见 VPS 中继 —— 检查 turn.env');
+  } catch (e) { ElMessage.error(e.response?.data?.error || e.message); }
+  finally { dw.busy = ''; }
+}
+
+async function dwHealth() {
+  try {
+    const r = await api.get('/admin/deploy/health');
+    dw.health = r.data.items;
+  } catch { /* ignore */ }
 }
 
 /* ====== 消息推送（APNs） ======
@@ -6370,6 +6636,28 @@ function kindTag(k) {
   return { text: 'success', image: 'warning', audio: 'danger', file: 'info', card: 'primary' }[k] || 'info';
 }
 async function loadInfo() { info.value = (await api.get('/admin/info')).data; }
+
+/* ---- 文件存储目录自定义（写 paths.env，重启生效，启动自动搬文件） ---- */
+const fdEdit = ref(false);
+const fdValue = ref('');
+const fdBusy = ref(false);
+function fdStart() {
+  fdValue.value = info.value.files_dir_custom ? info.value.files_dir : '';
+  fdEdit.value = true;
+}
+async function fdSave() {
+  fdBusy.value = true;
+  try {
+    const r = await api.post('/admin/files-dir', { dir: fdValue.value.trim() });
+    ElMessage.success(r.data.message || '已保存，重启服务端后生效');
+    fdEdit.value = false;
+    await loadInfo();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || e.message || '保存失败');
+  } finally {
+    fdBusy.value = false;
+  }
+}
 
 // ====== 客户端配置中心（v0.8.0 第一期） ======
 const cc = ref({ current: { version: 0, payload: {} }, history: [] });

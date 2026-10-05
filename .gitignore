@@ -29,6 +29,9 @@ data/
 # 飞牛 NAS 连接凭据（绝不入库。仓库 2026-09-16 已转私有，但仍按公开来防）
 deploy/.fnos.env
 
+# 公网 VPS（frps 中转站）凭据 —— root 密码绝不入库
+deploy/.vps.env
+
 # ChmlFrp 隧道配置 —— 内含账户 token（user=）与统一鉴权串（token=），等同凭据。
 # 只存在于本机 + 飞牛 /vol1/@appdata/chmlfrp/frpc.ini（权限 600），绝不入库。
 deploy/.chmlfrp.ini
