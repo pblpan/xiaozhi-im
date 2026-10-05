@@ -217,15 +217,20 @@ function validateFilesDir(raw) {
   const data = path.resolve(config.DATA_DIR);
   if (p === data) return { ok: false, error: '不能设成数据目录本身' };
   if (data.startsWith(p + path.sep)) return { ok: false, error: '不能设成数据目录的上级目录' };
+  // 🔴 必须走 config.mkdirsSafe（逐级建），**绝不能** fs.mkdirSync(recursive:true)。
+  //    2026-10-05 线上事故：这里填 `/proc/xz_nope/files` → recursive mkdir 在 procfs 上
+  //    死循环 → 单线程事件循环被占满 → 容器 CPU 97%、全站 HTTP 超时，只能重启容器。
+  //    详细机理与复现脚本见 config.js 的 mkdirsSafe 注释 / deploy/_probe_mkdir_loop.js。
+  const mk = config.mkdirsSafe(p);
+  if (!mk.ok) return { ok: false, error: `目录建不了：${mk.error}` };
   try {
-    fs.mkdirSync(p, { recursive: true });
-    const probe = path.join(p, `.xz_write_test_${Date.now()}`);
+    const probe = path.join(mk.dir, `.xz_write_test_${Date.now()}`);
     fs.writeFileSync(probe, 'ok');
     fs.unlinkSync(probe);
   } catch (e) {
     return { ok: false, error: `目录不可写：${e.message}` };
   }
-  return { ok: true, dir: p };
+  return { ok: true, dir: mk.dir };
 }
 
 router.post('/files-dir', (req, res) => {

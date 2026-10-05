@@ -55,9 +55,63 @@ function writePathsEnv(dir) {
   fs.writeFileSync(PATHS_ENV_FILE, lines.join('\n') + '\n', 'utf8');
 }
 
+/**
+ * 逐级建目录 —— **禁止用 fs.mkdirSync(dir, { recursive: true })** 处理用户输入的路径。
+ *
+ * 🔴 2026-10-05 线上事故（容器 node v22.23.2 实测复现）：
+ *    管理员在管理台「文件存储」里填 `/proc/xz_nope`，recursive mkdir 会**死循环**：
+ *      mkdir('/proc/xz_nope')  → ENOENT
+ *      → 往上建父目录 '/proc'   → EEXIST（已存在，Node 当成"建成了"）
+ *      → 回头再建 '/proc/xz_nope' → 又 ENOENT → 无限循环
+ *    procfs 就是这样的：它不允许创建，但报的是 ENOENT。
+ *    服务端是**单线程 + 同步 fs**，循环一进去事件循环被彻底占满 →
+ *    容器 CPU 97%、全站 HTTP 超时（TCP 还连得上，最容易被误判成"网络问题"），
+ *    必须重启容器才能恢复。踩点由 deploy/_probe_mkdir_loop.js 钉住。
+ *
+ *    对照组（同一台容器）：同路径**非** recursive → 0ms 返回 ENOENT；
+ *    正常盘 recursive → 1ms 成功。所以问题只在"recursive + procfs"这个组合。
+ *
+ * 这里改成一次只建一层：任何一层失败立刻带 code 返回，**结构上不可能循环**。
+ * @returns {{ok:true, dir:string} | {ok:false, code:string, dir:string, error:string}}
+ */
+function mkdirsSafe(dir, { maxDepth = 32 } = {}) {
+  let abs;
+  try { abs = path.resolve(String(dir)); } catch { return { ok: false, code: 'EINVAL', dir: String(dir), error: '路径格式不正确' }; }
+  // 起点必须用 path.parse().root —— Windows 上根是 `C:\`（含盘符和反斜杠），
+  // 直接 split(path.sep) 会把盘符拆成一个孤零零的 `C:`，拼出 `\C:` 这种烂路径。
+  // （本地测试 _test_mkdirs_safe.js 第一版就是这么红的。）
+  const root = path.parse(abs).root;
+  const parts = abs.slice(root.length).split(path.sep).filter(Boolean);
+  if (parts.length > maxDepth) {
+    return { ok: false, code: 'EDEPTH', dir: abs, error: `路径层级过深（${parts.length} 层，上限 ${maxDepth} 层）` };
+  }
+  let cur = root;
+  for (const seg of parts) {
+    cur = path.join(cur, seg);
+    try {
+      fs.mkdirSync(cur);
+    } catch (e) {
+      if (e.code === 'EEXIST') {
+        // 已存在：必须真是目录（同名文件这种情况在这里被揪出来）
+        try {
+          if (!fs.statSync(cur).isDirectory()) {
+            return { ok: false, code: 'ENOTDIR', dir: cur, error: `${cur} 已存在，但不是一个目录` };
+          }
+        } catch (e2) {
+          return { ok: false, code: e2.code || 'ESTAT', dir: cur, error: `无法访问 ${cur}：${e2.message}` };
+        }
+        continue;
+      }
+      return { ok: false, code: e.code || 'EMKDIR', dir: cur, error: `${cur} 建不了（${e.code || e.message}）` };
+    }
+  }
+  return { ok: true, dir: abs };
+}
+
 /** 把 src 目录里的文件搬到 dst（同盘 rename，跨盘 copy+删源），返回搬了几件 */
 function moveAllFiles(srcDir, dstDir) {
-  fs.mkdirSync(dstDir, { recursive: true });
+  const mk = mkdirsSafe(dstDir);
+  if (!mk.ok) throw new Error(mk.error);
   const entries = fs.readdirSync(srcDir, { withFileTypes: true }).filter((e) => e.isFile());
   let moved = 0;
   for (const e of entries) {
@@ -77,7 +131,30 @@ function moveAllFiles(srcDir, dstDir) {
 
 const DEFAULT_FILES_DIR = path.join(DATA_DIR, 'files');
 const _pathsEnvValue = readPathsEnv().FILESDIR;
-const FILES_DIR = _pathsEnvValue ? path.resolve(_pathsEnvValue) : DEFAULT_FILES_DIR;
+// 用 let 而不是 const：自定义目录建不出来时要能回落（见 ensureFilesDir）
+let FILES_DIR = _pathsEnvValue ? path.resolve(_pathsEnvValue) : DEFAULT_FILES_DIR;
+
+/**
+ * 建出 FILES_DIR 并返回实际生效值。
+ *
+ * 自定义目录**不能因为建不出来就把服务端拖死或让它起不来**：
+ *  · paths.env 是持久的，写进去一个已经拔掉的 U 盘、或 /proc 这种建不了的地方，
+ *    每次启动都会在这里失败 → 不回落就是"服务端永远起不来，且用户不知道为啥"。
+ *  · 所以失败就回落到默认目录，并在日志里明说。
+ * （注意：这里**绝不**用 recursive mkdir —— 见 mkdirsSafe 的事故说明。）
+ */
+function ensureFilesDir() {
+  const first = mkdirsSafe(FILES_DIR);
+  if (!first.ok) {
+    console.warn(`[小智IM] 文件存储目录 ${FILES_DIR} 用不了（${first.error}），回落到默认 ${DEFAULT_FILES_DIR}`);
+    FILES_DIR = DEFAULT_FILES_DIR;
+  }
+  const second = mkdirsSafe(FILES_DIR);
+  if (!second.ok) {
+    console.error(`[小智IM] 默认文件目录 ${FILES_DIR} 也建不了（${second.error}）—— 请检查数据目录的权限`);
+  }
+  return FILES_DIR;
+}
 
 // 一次性搬迁（启动时执行）：
 //  · 自定义目录生效 → 把默认目录遗留文件搬过去
@@ -122,7 +199,7 @@ function writePathsEnvCleanupPrev() {
   try { fs.writeFileSync(PATHS_ENV_FILE, lines.join('\n') + '\n', 'utf8'); } catch { /* ignore */ }
 }
 
-fs.mkdirSync(FILES_DIR, { recursive: true });
+ensureFilesDir();
 migrateFilesIfNeeded();
 
 // ---------------------------------------------------------------------------
@@ -565,6 +642,10 @@ module.exports = {
   PATHS_ENV_FILE,
   readPathsEnv,
   writePathsEnv,
+  // 🔴 建目录一律用这个（逐级建）。fs.mkdirSync(recursive:true) 在 procfs 上会死循环，
+  //    能把单线程服务端打死 —— 见 mkdirsSafe 上方的事故说明，别在别处另写一套。
+  mkdirsSafe,
+  ensureFilesDir,
   // 注意：这是**函数**不是常量 —— 向导热加载后它的值会变，
   // 消费方必须每次调用，不能在模块顶层取值缓存。
   CF_TURN_ENABLED: cfEnabled,
