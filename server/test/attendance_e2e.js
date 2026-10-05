@@ -54,10 +54,39 @@ async function api(method, p, { token, body } = {}) {
   return { status: res.status, body: json };
 }
 
-/** 'YYYY-MM-DD'（相对今天偏移；测试机与服务器同为北京时间） */
+/**
+ * 🔴 本用例所有"今天是几号 / 现在几点"必须按**服务器那个时区**算，不能按测试机本地时区。
+ *
+ * 2026-10-05 CI 假红（run 37389031174，182/188）：
+ *   runner 是 UTC，跑在 23:32Z —— 那一刻**北京已经是 10-06 早上 07:32**：
+ *   测试按 UTC 算出"今天是 10-05"，就认为 09:00 已经过了 → 期望 status='late'；
+ *   可服务端按 Asia/Shanghai 算"今天是 10-06、现在 07:32"→ 给的是 'normal'。
+ *   `records?day=<UTC 的今天>` 自然也是空的（打卡记在 10-06 上）。
+ *   这段窗口每天只有 16:00–24:00Z（= 北京 0 点后）会命中，白天跑全绿，
+ *   属于"假失败"——比真失败更危险，会让人开始不信红灯。
+ *
+ * 服务端不是错的：attendance.js 里写死 `TZ = ATT_TIMEZONE || 'Asia/Shanghai'`，
+ * 注释里说得很清楚（容器 TZ 常是 UTC，而员工看的是北京时间）。
+ * 所以错的是这个测试 —— 原来 dayStr 的注释写着"测试机与服务器同为北京时间"，
+ * 那是个**错的前提**（CI runner 不是北京时间），而 tsAt 又老老实实用了 +08:00，
+ * 两边口径不一致，才会只在深夜红。
+ */
+const TZ_NAME = 'Asia/Shanghai';
+const TZ_OFFSET_MIN = 8 * 60;   // 北京固定 +08:00（中国无夏令时，够用且不引依赖）
+
+/** 按北京时区取"年月日时分"（把时间戳挪 8 小时后用 UTC 取值 = 北京墙钟） */
+function bjParts(ts = Date.now()) {
+  const d = new Date(ts + TZ_OFFSET_MIN * 60000);
+  return {
+    y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(),
+    h: d.getUTCHours(), mi: d.getUTCMinutes(),
+  };
+}
+
+/** 'YYYY-MM-DD'（相对今天偏移；**按北京时区**，与服务器口径一致） */
 function dayStr(offset = 0) {
-  const d = new Date(Date.now() + offset * 86400000);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const p = bjParts(Date.now() + offset * 86400000);
+  return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
 }
 function weekdayOf(day) {
   const [y, m, d] = day.split('-').map(Number);
@@ -71,7 +100,12 @@ let serverLog = '';
 
 async function startServer() {
   serverProc = spawn(process.execPath, [path.join(SERVER_DIR, 'src', 'index.js')], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR, ADMIN_PASSWORD: 'TestAdmin_123' },
+    // 把时区显式钉住（服务端默认也是它）：这个用例的判据大量依赖"今天是几号、
+    // 现在几点"，测试机与服务器**必须同一个口径**，不然只会在深夜假红。见文件上方说明。
+    env: {
+      ...process.env, PORT: String(PORT), DATA_DIR,
+      ADMIN_PASSWORD: 'TestAdmin_123', ATT_TIMEZONE: TZ_NAME,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   serverProc.stdout.on('data', (d) => { serverLog += d.toString(); });
@@ -818,7 +852,7 @@ function stopServer() {
   // 清掉这几条，免得影响后续断言（今天的数据不在前面的报表区间内，但别留垃圾）
   for (const id of todayIds) await api('DELETE', `/api/admin/attendance/records/${id}`, { token: admin });
 
-  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+  const nowMin = bjParts().h * 60 + bjParts().mi;   // 按北京时区（与服务器一致，见文件上方说明）
   if (nowMin >= 8 * 60) {
     r = await api('GET', '/api/client/apps', { token: e1.token });
     const attBadge2 = (r.body.apps || []).find((x) => x.id === 'attendance');
