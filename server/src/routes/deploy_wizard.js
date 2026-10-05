@@ -489,7 +489,7 @@ router.post('/tunnel', (req, res) => {
   ]);
 
   const f = { ...creds.fnos };
-  f.host = f.host || '192.168.31.44';
+  if (!f.host) throw new Error('未填写飞牛的局域网地址（形如 192.168.1.10）');
   const vpsHost = creds.vps.host;
 
   (async () => {

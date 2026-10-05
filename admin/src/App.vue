@@ -5974,7 +5974,7 @@ async function loadTab() {
 const dw = reactive({
   active: 0,
   vps: { host: '', port: 22, user: 'root', password: '' },
-  fnos: { host: '192.168.31.44', port: 22, user: 'pblpan', password: '' },
+  fnos: { host: '', port: 22, user: '', password: '' },
   ports: { server: 3602, frp: 7000, turn: 3478 },
   platform: '',
   hasVpsPw: false, hasFnosPw: false,
