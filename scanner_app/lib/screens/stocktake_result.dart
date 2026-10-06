@@ -60,8 +60,14 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
 
   Future<void> _reload() async {
     try {
+      // 🔴 单名随行一起带回来（listWithMaster 的标量子查询 sheet_name），
+      //    **不要**在这里再 await 一次 repo.sheetName —— 两次 isolate 往返
+      //    会把 widget 测试 runAsync 的等待窗口挤爆（client 端 CI 上
+      //    4 条全挂，表现为"找不到任何文字"）。空单没有行 → 兜底空串。
       final rows = await _repo.listWithMaster(widget.sheetNo);
-      final name = await _repo.sheetName(widget.sheetNo);
+      final name = rows.isEmpty
+          ? ''
+          : ((rows.first['sheet_name'] as String?) ?? '');
       if (!mounted) return;
       setState(() {
         _all = rows;

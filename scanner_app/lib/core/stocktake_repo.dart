@@ -163,7 +163,9 @@ class StocktakeRepo {
     final db = await LocalDb.I.db();
     return db.rawQuery(
       '''
-      select s.id            as id,
+      select (select meta.name from sheet_meta meta
+               where meta.sheet_no = s.sheet_no) as sheet_name,
+             s.id            as id,
              s.barcode       as barcode,
              s.qty           as qty,
              s.scanned_at    as scanned_at,
