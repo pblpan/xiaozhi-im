@@ -789,6 +789,8 @@ CREATE TABLE IF NOT EXISTS product_master (
   unit TEXT,
   unit_price REAL,              -- 售价。名字沿用早期列名，语义见下面那条注释
   purchase_price REAL,          -- 进价（成本价）
+  member_price REAL,            -- 会员价（龙哥 2026-10-06：商档资料要带会员价/特价）
+  special_price REAL,           -- 特价（促销价）
   account_qty REAL,             -- 账面数（库存）；NULL = 账上没有，盘点时算差异
   batch TEXT,                   -- 本次导入批次号，commit 时用它区分新旧
   updated_at INTEGER NOT NULL
@@ -811,8 +813,16 @@ try {
   if (!pmCols.includes('purchase_price')) {
     db.exec('ALTER TABLE product_master ADD COLUMN purchase_price REAL');
   }
+  // 会员价/特价（2026-10-06）：同一套"启动时补列"的兜底 —— 老库建表时没这两列，
+  // CREATE TABLE IF NOT EXISTS 对已存在的表什么都不做，不补的话导入静默丢列。
+  if (!pmCols.includes('member_price')) {
+    db.exec('ALTER TABLE product_master ADD COLUMN member_price REAL');
+  }
+  if (!pmCols.includes('special_price')) {
+    db.exec('ALTER TABLE product_master ADD COLUMN special_price REAL');
+  }
 } catch (e) {
-  console.warn('[小智IM] product_master 补 purchase_price 列失败：%s', e.message);
+  console.warn('[小智IM] product_master 补列失败：%s', e.message);
 }
 
 // ── 开放 API 的「签名通道」（对接方用 app_id + app_secret 调，见 apisign.js）──

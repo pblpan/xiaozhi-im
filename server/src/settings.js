@@ -42,6 +42,13 @@ const KEYS = Object.freeze({
   //    数据库备份 / 导出 / 任何人查 settings 都能拿到一把能控机器的钥匙。
   //    明文只在生成的那一秒回给管理台一次，之后只能"吊销重发"。
   remoteDefaultCodeId: { key: 'remote_default_code_id', def: null },
+
+  // 商档查询页要不要显示「进货价」（龙哥 2026-10-06 要的"显示进价的权限"）。
+  // 默认关：进价是成本信息，给店员看的商档查询不该人人都看得见；
+  // 门店要给可靠的人看，管理台打开这个开关即可（改完推给在线客户端即时生效）。
+  // 注意这只是**显示层**的开关 —— 商档数据本身仍会同步到手机本地表，
+  // 它管的是"界面上给不给看"，不是数据加密。
+  masterShowPurchasePrice: { key: 'master_show_purchase_price', def: false },
 });
 
 const COMPANY_MAX = 20;
@@ -97,6 +104,7 @@ function all() {
     attendanceEnabled: get('attendanceEnabled'),
     attDefaultShift: get('attDefaultShift'),
     attWorkdays: get('attWorkdays'),
+    masterShowPurchasePrice: get('masterShowPurchasePrice'),
     // ⚠️ remoteDefaultCodeId **故意不放进 all()**：all() 会被
     //    /api/client/bootstrap 铺开出去，而那个接口是**免鉴权**的
     //    （App 冷启动还没登录就得拿公司名/好友模式）。
@@ -225,6 +233,14 @@ function update(input, by) {
     const c = cleanWorkdays(input.attWorkdays);
     if (c.error) return { error: c.error };
     const r = setRaw('attWorkdays', c.value, by);
+    if (r.error) return r;
+  }
+
+  if (input.masterShowPurchasePrice !== undefined) {
+    if (typeof input.masterShowPurchasePrice !== 'boolean') {
+      return { error: 'masterShowPurchasePrice 必须是 true/false' };
+    }
+    const r = setRaw('masterShowPurchasePrice', input.masterShowPurchasePrice, by);
     if (r.error) return r;
   }
 

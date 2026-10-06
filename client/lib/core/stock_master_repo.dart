@@ -201,6 +201,8 @@ class StockMasterRepo {
         unit TEXT,
         unit_price REAL,
         purchase_price REAL,
+        member_price REAL,
+        special_price REAL,
         account_qty REAL,
         source TEXT,
         updated_at INTEGER
@@ -230,6 +232,10 @@ class StockMasterRepo {
             //    这列永远为空，而它**不报错也不警告** —— 服务端 2026-09-26
             //    那次就是这么丢掉规格和单位的，直到要按单位判称重口径才发现。
             'purchase_price': e['purchase_price'],
+            // 会员价/特价（龙哥 2026-10-06）：同进价一个道理，这里不带，
+            // 本地就永远查不到，商档查询页那两行就是空的。
+            'member_price': e['member_price'],
+            'special_price': e['special_price'],
             'account_qty': e['account_qty'],
           });
         }
@@ -251,12 +257,21 @@ class StockMasterRepo {
 
     // 搬家：整表替换。商档就是"全量对齐"语义，没有"合并"这一说 ——
     // 下架的商品不该还留着账面数，否则盘点时会凭空多出一行。
+    //
+    // 🔴🔴 列清单必须把**价格三兄弟全带上**（进价/会员价/特价）：
+    //    2026-10-06 之前这里漏了 purchase_price —— 暂存表里明明写进去了，
+    //    INSERT…SELECT 的列清单没带它，搬完的正式表这一列全是 NULL。
+    //    商档查询页"进货价"从此一直显示不出来，而同步成功、条数都对，
+    //    **没有任何报错** —— 这是本轮五修里最隐蔽的一个 bug。
+    //    教训：staging 表加列时，搬家 SQL 必须同一次改，两处只改一处 = 静默丢列。
     await db.transaction((txn) async {
       await txn.delete('stock_master');
       await txn.rawInsert(
         'INSERT INTO stock_master '
-        '(barcode, name, spec, unit, unit_price, account_qty, source, updated_at) '
-        'SELECT barcode, name, spec, unit, unit_price, account_qty, source, updated_at '
+        '(barcode, name, spec, unit, unit_price, purchase_price, '
+        'member_price, special_price, account_qty, source, updated_at) '
+        'SELECT barcode, name, spec, unit, unit_price, purchase_price, '
+        'member_price, special_price, account_qty, source, updated_at '
         'FROM $stagingTable',
       );
     });

@@ -17,6 +17,7 @@ import 'remote_config.dart';
 class Workspace {
   static const _kMode = 'xz_friend_mode';
   static const _kName = 'xz_company_name';
+  static const _kPrice = 'xz_master_show_purchase_price';
 
   static const normal = 'normal';
   static const work = 'work';
@@ -26,6 +27,11 @@ class Workspace {
 
   /// 当前公司名（登录页标题、局域网扫描结果用得到）
   static final ValueNotifier<String> company = ValueNotifier<String>('');
+
+  /// 商档查询页要不要显示「进货价」（服务端管理台可配，默认不给看）。
+  /// 进价是成本信息 —— 默认关，门店要用时管理台打开，改完即时推给在线客户端。
+  static final ValueNotifier<bool> masterShowPurchasePrice =
+      ValueNotifier<bool>(false);
 
   /// 展示用品牌名：有公司名 →「好又多小智」，没有 →「小智 IM」。
   ///
@@ -51,6 +57,7 @@ class Workspace {
     mode.value = p.getString(_kMode) ?? normal;
     company.value = p.getString(_kName) ?? '';
     brand.value = brandOf(company.value);
+    masterShowPurchasePrice.value = p.getBool(_kPrice) ?? false;
     // 不 await：拿到最新值会通过 mode/company 通知 UI 自行重建，
     // 卡在这里等于让启动等一次网络往返
     refresh();
@@ -72,6 +79,9 @@ class Workspace {
           // 说成"服务端要清空"，一次网络抖动就把公司名抹了。
           companyName:
               b.containsKey('companyName') ? b['companyName'].toString() : null,
+          showPurchasePrice: b.containsKey('masterShowPurchasePrice')
+              ? b['masterShowPurchasePrice'] == true
+              : null,
         );
         return;
       }
@@ -83,7 +93,11 @@ class Workspace {
 
   /// 应用一份身份信息。每项传 `null` = **这次没拿到**（保持现状），
   /// 非 null（含空串） = 服务端明确了值。
-  static Future<void> apply({String? mode, String? companyName}) async {
+  static Future<void> apply({
+    String? mode,
+    String? companyName,
+    bool? showPurchasePrice,
+  }) async {
     final p = await SharedPreferences.getInstance();
     final m = mode;
     // 白名单：**只有** normal / work 两个值会被写进来，未知值一律忽略。
@@ -117,6 +131,13 @@ class Workspace {
         await p.setString(_kName, v);
       }
     }
+    // 显示进价开关：布尔量没有"空串"歧义，true/false 都是服务端明确的意思，
+    // 只有 null（这次没拿到）保持现状。
+    if (showPurchasePrice != null &&
+        showPurchasePrice != masterShowPurchasePrice.value) {
+      masterShowPurchasePrice.value = showPurchasePrice;
+      await p.setBool(_kPrice, showPurchasePrice);
+    }
   }
 
   /// 订阅服务端推来的设置变更（`settings:changed`），做到"管理台改完当场生效"。
@@ -141,6 +162,9 @@ class Workspace {
         mode: e['friendMode']?.toString(),
         companyName:
             e.containsKey('companyName') ? e['companyName']?.toString() : null,
+        showPurchasePrice: e.containsKey('masterShowPurchasePrice')
+            ? e['masterShowPurchasePrice'] == true
+            : null,
       );
     });
   }

@@ -201,6 +201,11 @@ class _CameraScanPageState extends State<CameraScanPage> {
   /// 确认制关着 → 直接落库 1 件（快速连扫模式，没有数量卡）。
   Future<void> _onScan(String code) async {
     if (_gate.confirmMode) {
+      // 🔴 扫到这一刻就响（龙哥 2026-10-06）：声音/震动是"这一枪扫上没有"的
+      //    确认信号，员工听到了才敢把商品移开去拿下一件。原来响在「确认录入」
+      //    落库之后 —— 中间隔着看卡、改数量、点按钮，员工一直不确定扫没扫上，
+      //    只好把同一件再扫一遍（件数就这么虚高了）。
+      unawaited(ScanFeedbackService.I.ok());
       // 同步关门：防止这一帧到商档查询完成之间又进来一帧（同码被当两件）。
       final now = DateTime.now().millisecondsSinceEpoch;
       setState(() {
@@ -259,7 +264,17 @@ class _CameraScanPageState extends State<CameraScanPage> {
 
       // 音反馈**先于界面**：声音是这条链路里延迟最低的一环，
       // 等 setState 把列表刷完再响，手感就"慢半拍"了。
-      unawaited(ScanFeedbackService.I.forResult(accepted: fb.accepted));
+      //
+      // 🔴 确认制下"扫到"已经在 _onScan 响过一声了（龙哥 2026-10-06），
+      //    这里只剩两种情况要响：
+      //    · 落库被拒 → fail（员工得知道这笔没进去，不能让"嘀"了却没记上）
+      //    · 确认制关（连扫）→ 成功 ok / 失败 fail：此时这一声就是"扫到了"本身
+      //    确认制的成功笔**不再响** —— 再响一遍就是双响，员工会以为扫了两件。
+      if (!fb.accepted) {
+        unawaited(ScanFeedbackService.I.fail());
+      } else if (!_gate.confirmMode) {
+        unawaited(ScanFeedbackService.I.ok());
+      }
 
       final s = await widget.sink.summary(widget.sheetNo);
       final recent = await widget.sink.recent(widget.sheetNo);

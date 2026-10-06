@@ -101,7 +101,8 @@ function stopServer() {
   console.log('\n【二】分块写 + commit 换底表');
   const batchA = 'BATCH-A';
   r = await api('POST', '/api/master/upload', { token: admin, body: { batch: batchA, rows: [
-    { barcode: '6900001', name: '矿泉水', spec: '550ml', unit: '瓶', unit_price: 2.5, account_qty: 100 },
+    { barcode: '6900001', name: '矿泉水', spec: '550ml', unit: '瓶', unit_price: 2.5,
+      member_price: 2.2, special_price: 1.99, account_qty: 100 },
     { barcode: '6900002', name: '方便面', unit: '袋', account_qty: 40 },
   ] } });
   ok('写第 1 块 2 行', r.status === 200 && r.body.accepted === 2, JSON.stringify(r.body));
@@ -132,6 +133,27 @@ function stopServer() {
     JSON.stringify(byCode['6900001']));
   ok('账上没有的商品 account_qty 可以是 NULL 之外的数（12）',
     byCode['6900003'] && byCode['6900003'].account_qty === 12, JSON.stringify(byCode['6900003']));
+  ok('会员价/特价随上传落库并可拉回（2.2 / 1.99）',
+    byCode['6900001'] && byCode['6900001'].member_price === 2.2 && byCode['6900001'].special_price === 1.99,
+    JSON.stringify(byCode['6900001']));
+
+  // ============================================================
+  console.log('\n【二·二】🔴 老格式重导不清会员价（coalesce 保护）');
+  // 会员价/特价不来自泰格主数据。门店隔三差五全量重导主数据，
+  // 如果"上传行没带这两列"就把库里的值清成 NULL，一次重导就清光 —— 不报任何错。
+  r = await api('POST', '/api/master/upload', { token: admin, body: { batch: batchA, rows: [
+    { barcode: '6900001', name: '矿泉水（老格式重导）', unit_price: 2.5, account_qty: 66 },
+  ] } });
+  ok('老格式行（不带会员价）覆盖成功', r.status === 200 && r.body.accepted === 1, JSON.stringify(r.body));
+  r = await api('POST', '/api/master/commit', { token: admin, body: { batch: batchA } });
+  ok('重导批次 commit 成功', r.status === 200, JSON.stringify(r.body));
+  r = await api('GET', '/api/master/', { token: staff });
+  const byCode2 = Object.fromEntries((r.body?.items || []).map((x) => [x.barcode, x]));
+  ok('重导后会员价/特价仍在（2.2 / 1.99）',
+    byCode2['6900001'] && byCode2['6900001'].member_price === 2.2 && byCode2['6900001'].special_price === 1.99,
+    JSON.stringify(byCode2['6900001']));
+  ok('重导的其他字段正常更新（库存 66）',
+    byCode2['6900001'] && byCode2['6900001'].account_qty === 66, JSON.stringify(byCode2['6900001']));
 
   // ============================================================
   console.log('\n【三】🔴 传一半放弃：旧商档必须完好');

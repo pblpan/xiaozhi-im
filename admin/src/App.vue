@@ -3745,7 +3745,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <el-alert type="success" :closable="false" style="margin-bottom:14px">
             <template #title>
               商品档案（商档）是<b>盘点的底表</b>：手机在盘点页点「同步商品档案」，
-              就把这里的<b>条码 / 名称 / 规格 / 售价 / 进价 / 库存</b>整份拉到手机上，
+              就把这里的<b>条码 / 名称 / 规格 / 售价 / 进价 / 会员价 / 特价 / 库存</b>整份拉到手机上，
               断网也能盘 ——
               扫出来的每一行靠它显示成人看得懂的名字，差异表靠它算金额。
               以前这份数据只能从泰格上游拉 —— 那台机器一关机、IP 一漂就断。
@@ -3762,7 +3762,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <div class="page-bar">
             <el-button type="primary" :loading="masterImport.running" @click="pickMasterFile">导入 CSV</el-button>
             <span class="hint" style="margin-left:8px">
-              标准格式（七列，<b>必须带表头</b>）：条码，名称，规格，单位，进价，售价，库存
+              标准格式（九列，<b>必须带表头</b>）：条码，名称，规格，单位，进价，售价，会员价，特价，库存
+              （会员价/特价没有可缺省，其余列必带）
             </span>
             <el-button :disabled="!master.total || masterImport.running" @click="clearMaster">清空</el-button>
             <span class="hint">
@@ -3812,6 +3813,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </el-table-column>
             <el-table-column label="进价" width="100">
               <template #default="{ row }">{{ row.purchase_price == null ? '—' : row.purchase_price }}</template>
+            </el-table-column>
+            <el-table-column label="会员价" width="100">
+              <template #default="{ row }">{{ row.member_price == null ? '—' : row.member_price }}</template>
+            </el-table-column>
+            <el-table-column label="特价" width="100">
+              <template #default="{ row }">{{ row.special_price == null ? '—' : row.special_price }}</template>
             </el-table-column>
             <el-table-column label="账面数（参考）" width="120">
               <template #default="{ row }">
@@ -4591,6 +4598,16 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <el-radio value="normal">普通好友模式</el-radio>
                   <el-radio value="work">工作模式</el-radio>
                 </el-radio-group>
+              </el-form-item>
+              <el-form-item label="进价显示">
+                <div>
+                  <el-switch v-model="compSetting.showPurchasePrice"
+                    active-text="商档查询显示进货价" inactive-text="不显示" />
+                  <div class="hint" style="margin-top:4px">
+                    开了之后，员工手机「商档查询」会显示<b>进货价</b>（进价是敏感数据，默认不给看）。
+                    保存后在线手机<b>立即生效</b>，无需重装。
+                  </div>
+                </div>
               </el-form-item>
               <el-form-item label=" ">
                 <el-alert :closable="false" :type="compSetting.mode === 'work' ? 'warning' : 'info'"
@@ -5923,7 +5940,11 @@ async function loadAll() {
     info.value = inf.data;
     // 公司名与好友模式：上手向导、仪表盘卡片、侧栏都要用，登录后就取好，
     // 不要等切到「系统设置」页才加载（否则向导第一步永远是未完成）
-    compSetting.value = { name: st.data.companyName || '', mode: st.data.friendMode || 'normal' };
+    compSetting.value = {
+      name: st.data.companyName || '',
+      mode: st.data.friendMode || 'normal',
+      showPurchasePrice: !!st.data.masterShowPurchasePrice,
+    };
     // 品牌名单一数据源在 pub，登录后把最新公司名回写过去
     pub.value = { ...pub.value, companyName: st.data.companyName || '' };
     await loadUserOptions();
@@ -5940,7 +5961,11 @@ async function loadTab() {
     // 否则刚在系统设置里配好中继、切回仪表盘，向导还显示"未完成"
     const [st, sc] = await Promise.all([api.get('/admin/stats'), api.get('/admin/settings')]);
     stats.value = st.data;
-    compSetting.value = { name: sc.data.companyName || '', mode: sc.data.friendMode || 'normal' };
+    compSetting.value = {
+      name: sc.data.companyName || '',
+      mode: sc.data.friendMode || 'normal',
+      showPurchasePrice: !!sc.data.masterShowPurchasePrice,
+    };
     await loadTurn();
   } else if (tab.value === 'users') await userPager.reset();
   else if (tab.value === 'groups') await groupPager.reset();
@@ -7210,21 +7235,23 @@ function splitCsvLine(line, delim) {
 }
 
 /**
- * 解析成龙哥定的**标准商档七列**：
+ * 解析成龙哥定的**标准商档列**（2026-09-26 定七列，2026-10-06 加会员价/特价）：
  *     { barcode 条码, name 名称, spec 规格, unit 单位,
- *       purchase_price 进价, unit_price 售价, account_qty 库存 }
+ *       purchase_price 进价, unit_price 售价,
+ *       member_price 会员价, special_price 特价, account_qty 库存 }
  *
- * 🔴 为什么必须齐着这七列读（2026-09-26 的血泪）：早先这个解析器只读
+ * 🔴 为什么必须齐着这些列读（2026-09-26 的血泪）：早先这个解析器只读
  *    {barcode, name, account_qty} 三列，**其余列一律丢弃**。于是门店按
  *    「条码/名称/规格/单位/进价/售价/库存」导进来的表，落到库里只剩三个字段 ——
  *    线上 12.6 万行商档「规格」和「单位」都是 0%，不是档案里没有，
  *    是**根本没读进来**。而它不报错、不警告，导入照样显示成功。
  *    少读字段比读错字段更难发现，因为一切看起来都正常。
  *
- * ⚠️ 七列是**龙哥 2026-09-27 加了「单位」之后**的样子（截图为准）：
- *     条码 | 名称 | 规格 | 单位 | 进价 | 售价 | 库存
+ * ⚠️ 列是**龙哥 2026-09-27 加了「单位」、2026-10-06 加了「会员价/特价」**之后的样子：
+ *     条码 | 名称 | 规格 | 单位 | 进价 | 售价 | 会员价 | 特价 | 库存
  *    「单位」不是可有可无的附带信息：补货那套「非称重按最小单位、
  *    称重按公斤」的判据就是它，缺了就只能一律按最小单位走。
+ *    会员价/特价**允许没有**：老档案不带这两列照样导，落库就是 NULL。
  *
  * 认两种形状：带表头（按列名找）/ 不带表头（序号,条码,名字,数量）。
  * 🔴 序号列的判定要**严格**：门店编码常常就是 1001、1002 这种四位数，
@@ -7274,6 +7301,11 @@ function parseMasterCsv(text) {
       //    否则 unit 会把 unit_price 抢走，售价变成空、单位变成价格。
       unit_price: find(['售价', '零售价', '单价', 'price', 'unit_price']),
       purchase_price: find(['进价', '成本价', '采购价', 'purchase']),
+      // 会员价/特价（2026-10-06）：找不到就 -1，行里落 null —— 老档案不带这两列照样导。
+      // ⚠️ '会员价' 必须在 '售价' 之后取没关系（表头全等优先），
+      //    但 '特价' 要防把「特价一」「今日特价」之外的列误吞，保持全等+包含两级即可。
+      member_price: find(['会员价', '会员价格', 'member_price']),
+      special_price: find(['特价', '促销价', 'special_price']),
       unit: find(['单位', '基本单位', '计价单位', 'unit']),
       account_qty: find(['库存', '账面', '数量', 'qty']),
     };
@@ -7315,6 +7347,8 @@ function parseMasterCsv(text) {
       unit: idx.unit >= 0 ? (c[idx.unit] || '') : '',
       purchase_price: idx.purchase_price >= 0 ? money(c[idx.purchase_price]) : null,
       unit_price: idx.unit_price >= 0 ? money(c[idx.unit_price]) : null,
+      member_price: idx.member_price >= 0 ? money(c[idx.member_price]) : null,
+      special_price: idx.special_price >= 0 ? money(c[idx.special_price]) : null,
       account_qty: idx.account_qty >= 0 ? money(c[idx.account_qty]) : null,
     });
   }
@@ -7352,14 +7386,20 @@ async function onMasterFile(e) {
   }).length;
   const fields = [
     ['条码', 'barcode'], ['名称', 'name'], ['规格', 'spec'], ['单位', 'unit'],
-    ['进价', 'purchase_price'], ['售价', 'unit_price'], ['库存', 'account_qty'],
+    ['进价', 'purchase_price'], ['售价', 'unit_price'],
+    ['会员价', 'member_price'], ['特价', 'special_price'],
+    ['库存', 'account_qty'],
   ];
-  const missing = fields.filter(([, k]) => stat(k) === 0).map(([label]) => label);
+  // 会员价/特价允许整列缺失（老档案不带），不进 missing 警告。
+  const optionalFields = new Set(['member_price', 'special_price']);
+  const missing = fields
+    .filter(([label, k]) => stat(k) === 0 && !optionalFields.has(k))
+    .map(([label]) => label);
   const statLine = fields.map(([label, k]) => `${label} <b>${stat(k)}</b>`).join(' / ');
   const warnHtml = missing.length
     ? `<div style="margin-top:8px;color:#e6a23c">⚠️ 这几列<b>一行都没读到</b>：${missing.join('、')}`
       + ` —— 文件里没有这一列，或列名不认识（认的是：`
-      + `条码 / 名称 / 规格 / 单位 / 进价 / 售价 / 库存）。<br>`
+      + `条码 / 名称 / 规格 / 单位 / 进价 / 售价 / 会员价 / 特价 / 库存）。<br>`
       + `缺了也能导，但下游要用的地方会一直显示"—"（比如补货按单位判称重口径）。</div>`
     : '';
   // 列数不齐 = 整行错位（进价吃售价、售价吃库存）。这种错"看着很整齐"，
@@ -8696,12 +8736,18 @@ const pwd = ref({ old: '', neu: '', neu2: '' });
 const pwdBusy = ref(false);
 
 // ---- 公司与好友模式 ----
-const compSetting = ref({ name: '', mode: 'normal' });
+// showPurchasePrice：「商档查询显示进货价」开关（2026-10-06）。默认关 ——
+// 进价是敏感数据，员工手机上默认不给看；老板要给谁看，在这里开。
+const compSetting = ref({ name: '', mode: 'normal', showPurchasePrice: false });
 const compBusy = ref(false);
 async function loadCompSetting() {
   try {
     const { data } = await api.get('/admin/settings');
-    compSetting.value = { name: data.companyName || '', mode: data.friendMode || 'normal' };
+    compSetting.value = {
+      name: data.companyName || '',
+      mode: data.friendMode || 'normal',
+      showPurchasePrice: !!data.masterShowPurchasePrice,
+    };
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '读取设置失败');
   }
@@ -8711,9 +8757,13 @@ async function saveCompSetting() {
   if (/[<>"'\\]/.test(name)) return ElMessage.warning('公司名称不能包含 < > " \' \\ 字符');
   compBusy.value = true;
   try {
-    await api.put('/admin/settings', { companyName: name, friendMode: compSetting.value.mode });
+    await api.put('/admin/settings', {
+      companyName: name,
+      friendMode: compSetting.value.mode,
+      masterShowPurchasePrice: !!compSetting.value.showPurchasePrice,
+    });
     pub.value = { ...pub.value, companyName: name }; // 侧栏/标签页品牌即时更新
-    ElMessage.success('设置已保存，客户端下次拉取即生效');
+    ElMessage.success('设置已保存，客户端即时生效（在线推送 / 下次拉取）');
     await loadCompSetting();
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '保存失败');

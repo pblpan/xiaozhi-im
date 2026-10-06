@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../core/scan_feedback.dart';
 import '../core/stock_master_repo.dart';
 import '../core/theme.dart';
+import '../core/workspace.dart';
 import 'camera_scan.dart';
 
 /// 商档查询页。
@@ -62,6 +64,12 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
         _master = row;
         _notFound = row == null;
       });
+      // 🔴 扫到就响（龙哥 2026-10-06）：商档查询也是"盲操作"，
+      //    员工看的是货架上的商品，不是屏幕。查到 = 「嘀」；
+      //    商档里没有 = 「嗡-嗡」两声 —— 和扫码枪同一套音色，
+      //    听习惯了两个页面的含义就一致：一声有、两声没有。
+      unawaited(ScanFeedbackService.I
+          .play(row == null ? ScanTone.fail : ScanTone.ok));
       // 扫到就停镜，免得同一码反复上报把结果刷来刷去。
       await _cam?.stop();
     } finally {
@@ -211,7 +219,12 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
         body: '条码：$_code\n（请确认条码是否正确，或先同步商档）',
       );
     }
-    return _masterCard(_master!);
+    // 监听开关：管理台改完「显示进货价」推下来，这张卡当场变 ——
+    // 不用退出页面重进（值读一次的话要重进才生效，龙哥会当成"改了没用"）。
+    return ValueListenableBuilder<bool>(
+      valueListenable: Workspace.masterShowPurchasePrice,
+      builder: (_, __, ___) => _masterCard(_master!),
+    );
   }
 
   Widget _card({
@@ -256,38 +269,57 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
         ),
       );
 
+  /// 字段显示顺序与名称（龙哥 2026-10-06 定的口径）：
+  /// 条码、商品名、规格、单位、进价、售价、会员价、特价、库存。
+  ///
+  /// ── 「进货价」为什么此前一直显示不出来 ─────────────────────────
+  /// 商档同步（syncFromServer）的 staging 表里明明写进了进价，
+  /// 但搬到正式表 stock_master 的 INSERT…SELECT **列清单漏了它**，
+  /// 本地表这一列全是 NULL —— 不报错、条数也对，极难发现。
+  /// 那个 bug 已修；修完后要重新同步一次商档，进价才有数据。
+  static const Map<String, String> _labels = <String, String>{
+    'barcode': '条码',
+    'name': '商品名',
+    'spec': '规格',
+    'unit': '单位',
+    'purchase_price': '进价',
+    'unit_price': '售价',
+    'member_price': '会员价',
+    'special_price': '特价',
+    'account_qty': '库存',
+    'source': '来源',
+    'updated_at': '更新时间',
+  };
+
+  /// 进价行受服务端开关控制（管理台「系统设置 → 商档查询显示进货价」，
+  /// 默认关 —— 龙哥 2026-10-06 要的"显示进价的权限"）。
+  /// 会员价/特价是卖给顾客的价格，不属于成本信息，不受这个开关管。
+  static const List<String> _order = <String>[
+    'barcode',
+    'name',
+    'spec',
+    'unit',
+    'purchase_price',
+    'unit_price',
+    'member_price',
+    'special_price',
+    'account_qty',
+    'source',
+    'updated_at',
+  ];
+
   Widget _masterCard(Map<String, dynamic> m) {
-    const labels = <String, String>{
-      'barcode': '条码',
-      'name': '品名',
-      'spec': '规格',
-      'unit': '单位',
-      'unit_price': '单价',
-      'account_qty': '账面数量',
-      'purchase_price': '进货价',
-      'source': '来源',
-      'updated_at': '更新时间',
-    };
-    final order = [
-      'barcode',
-      'name',
-      'spec',
-      'unit',
-      'unit_price',
-      'account_qty',
-      'purchase_price',
-      'source',
-      'updated_at',
-    ];
+    final showPurchase = Workspace.masterShowPurchasePrice.value;
     final rows = <MapEntry<String, String>>[];
-    for (final k in order) {
+    for (final k in _order) {
+      if (k == 'purchase_price' && !showPurchase) continue;
       if (m.containsKey(k)) {
-        rows.add(MapEntry(labels[k] ?? k, _fmt(k, m[k])));
+        rows.add(MapEntry(_labels[k] ?? k, _fmt(k, m[k])));
       }
     }
     // 任何表里多出来的字段也一并显示（不漏信息）。
     for (final k in m.keys) {
-      if (!order.contains(k)) {
+      if (!_order.contains(k)) {
         rows.add(MapEntry(k, _fmt(k, m[k])));
       }
     }

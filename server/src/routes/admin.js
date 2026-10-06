@@ -282,6 +282,7 @@ router.put('/settings', (req, res) => {
     type: 'settings:changed',
     companyName: r.settings.companyName,
     friendMode: r.settings.friendMode,
+    masterShowPurchasePrice: r.settings.masterShowPurchasePrice,
   });
   res.json(r.settings);
 });

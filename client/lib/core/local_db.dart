@@ -40,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 5;
+  static const int schemaVersion = 6;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -236,6 +236,27 @@ class LocalDb {
     (Database db) async {
       await _addColumn(db, 'stock_master', 'purchase_price', 'REAL');
     },
+    // v6：商档补「会员价 / 特价」（龙哥 2026-10-06）+ 扫码单命名表 sheet_meta。
+    //
+    // 🔴 两列照 purchase_price 的同款模式（v5）幂等补列：stock_master 是
+    //    商档的离线副本，服务端加了字段这里不同步，同步完本地永远是空的，
+    //    而且不报错。
+    //
+    // sheet_meta 是「扫码单命名」（龙哥 2026-10-04 单据一律弹窗命名的规则）：
+    // 拣货单（JK）等扫码单的名字存这里，没起过名的单没有行 —— 界面回退显示单号。
+    // 与 scanner_app（好又多版扫码枪）的同名表同构：两张表是同一份机制的镜像，
+    // 别改结构只改一边。
+    (Database db) async {
+      await _addColumn(db, 'stock_master', 'member_price', 'REAL');
+      await _addColumn(db, 'stock_master', 'special_price', 'REAL');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS sheet_meta (
+          sheet_no   TEXT PRIMARY KEY,
+          name       TEXT,
+          created_at INTEGER
+        )
+      ''');
+    },
   ];
 
   /// 有序迁移列表（**仅供测试**读取）。生产代码不要碰它。
@@ -301,7 +322,7 @@ class LocalDb {
   }
 
   /// 新建库（onCreate 收到的 version 即当前 schemaVersion）。
-  /// 冷启动在 v1 时只跑 _migrations[0]；从 0 直装到 v5 会跑 [0,1,2,3,4]。
+  /// 冷启动在 v1 时只跑 _migrations[0]；从 0 直装到 v6 会跑 [0,1,2,3,4,5]。
   /// ⚠️ 加迁移时这句里的数字要跟着改（写死的版本号最容易变成假说明）。
   Future<void> _onCreate(Database db, int version) async {
     for (var i = 1; i <= version; i++) {
