@@ -16,4 +16,4 @@
 ///    那个 `flutter` 对象就是工具从 pubspec 灌进去的。）
 ///
 /// 产物名由 pack_win.py 从 pubspec.yaml 读，不需要手改。
-const String kAppVersion = '0.23.0';
+const String kAppVersion = '0.24.0';

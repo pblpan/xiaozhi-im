@@ -1,7 +1,7 @@
 name: xiaozhi_scanner
 description: 小智扫码枪 —— 独立离线扫码工具（Android）
 publish_to: 'none'
-version: 1.0.3+5
+version: 1.0.4+6
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
