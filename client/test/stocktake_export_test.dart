@@ -330,18 +330,18 @@ void main() {
       expect(csv, contains('"苹果,红富士""大"""'));
     });
 
-    test('文本文档带单号/时间/合计，行号连续', () {
+    test('🔴 文本文档龙哥定版：每行「条码 数量 商品名」空格分隔，其他一律不带', () {
       final doc = StocktakeExport.toScanDoc([
         {'id': 1, 'barcode': 'A001', 'qty': 2, 'name': '甲'},
         {'id': 2, 'barcode': '999999', 'qty': 3, 'name': ''},
       ], sheetNo: 'PD20260919120000');
-      expect(doc, contains('扫码单号：PD20260919120000'));
-      expect(doc, contains('品种 2'));
-      expect(doc, contains('合计数量 5'));
-      expect(doc, contains('1. 条码 A001'));
-      expect(doc, contains('2. 条码 999999'));
-      expect(doc, contains('名称：未知条码'));
-      expect(doc, contains('共 2 行'));
+      final lines = doc.replaceAll('\uFEFF', '').split('\n')
+          .where((l) => l.trim().isNotEmpty).toList();
+      expect(lines.length, 2, reason: '只有数据行，没有表头/单号/时间/统计行');
+      expect(lines[0], 'A001 2 甲');
+      expect(lines[1], '999999 3 未知条码', reason: '名字空用「未知条码」占位');
+      // 数量整数不带 .0
+      expect(lines[0].split(' ').length, 3);
     });
 
     test('明细文件名与盈亏表文件名错开，不会互相覆盖', () {

@@ -231,30 +231,17 @@ class StocktakeExport {
     return sb.toString();
   }
 
-  /// 扫码明细文本文档（.txt）。给"发微信里直接看"的场景：
-  /// 不依赖 Excel，记事本/WPS 打开就是一张能读的清单。
+  /// 扫码明细文本文档（.txt）。🔴 龙哥 2026-10-06 定版：
+  /// 每行就三个字段、**空格分隔** —— 「条码 数量 商品名」，其他一律不带
+  /// （没有表头/序号/单号/时间/统计行 —— 发微信就是一张干净清单）。
+  /// 名字放最后一列：条码和数量本身不含空格，粘到别处按前两列取就行。
+  /// 开头带 UTF-8 BOM（不可见）：老版 WPS/记事本不按 UTF-8 猜就不会乱码。
   static String toScanDoc(List<Map<String, dynamic>> rows,
       {String sheetNo = ''}) {
-    final total = rows.fold<double>(0, (s, r) => s + _d(r['qty']));
-    final now = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    final ts = '${now.year}-${two(now.month)}-${two(now.day)} '
-        '${two(now.hour)}:${two(now.minute)}';
-
-    final sb = StringBuffer();
-    sb.writeln('扫码枪 · 扫码明细');
-    if (sheetNo.isNotEmpty) sb.writeln('扫码单号：$sheetNo');
-    sb.writeln('导出时间：$ts');
-    sb.writeln('品种 ${rows.length}　合计数量 ${_num(total)}');
-    sb.writeln('--------------------------------');
-    for (var i = 0; i < rows.length; i++) {
-      final r = rows[i];
-      sb.writeln(
-          '${i + 1}. 条码 ${r['barcode'] ?? ''}　数量 ${_num(_d(r['qty']))}');
-      sb.writeln('   名称：${scanNameOf(r)}');
+    final sb = StringBuffer('\uFEFF');
+    for (final r in rows) {
+      sb.writeln('${r['barcode'] ?? ''} ${_num(_d(r['qty']))} ${scanNameOf(r)}');
     }
-    sb.writeln('--------------------------------');
-    sb.writeln('共 ${rows.length} 行');
     return sb.toString();
   }
 
