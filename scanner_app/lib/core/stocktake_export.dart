@@ -187,7 +187,11 @@ class StocktakeExport {
   }
 
   /// 导出文件名：扫码_单号.csv
-  static String fileName(String sheetNo) => '扫码_$sheetNo.csv';
+  /// 🔴 [name] = 单据名（龙哥 2026-10-06）：起了名的单，导出/转发文件名就用名字，
+  /// 不能再退回单号 —— 之前就是栽在"转发出去的文件名还是 PD+时间戳"上。
+  /// 名字空/没起过才兜底用单号。下面三个命名函数同一条规则。
+  static String fileName(String sheetNo, [String? name]) =>
+      '扫码_${_label(sheetNo, name)}.csv';
 
   // ── 扫码明细导出（采集页底部「导出」用） ─────────────────────────
   //
@@ -255,8 +259,16 @@ class StocktakeExport {
   }
 
   /// 扫码明细文件名（与盈亏表的 fileName 故意错开，见上）。
-  static String scanCsvName(String sheetNo) => '扫码明细_$sheetNo.csv';
-  static String scanDocName(String sheetNo) => '扫码明细_$sheetNo.txt';
+  static String scanCsvName(String sheetNo, [String? name]) =>
+      '扫码明细_${_label(sheetNo, name)}.csv';
+  static String scanDocName(String sheetNo, [String? name]) =>
+      '扫码明细_${_label(sheetNo, name)}.txt';
+
+  /// 文件名里的"单据标识"：有名字用名字，没名字用单号。
+  static String _label(String sheetNo, String? name) {
+    final n = (name ?? '').trim();
+    return n.isEmpty ? sheetNo : n;
+  }
 
   /// 数量/金额的显示格式（整数不带 .0，小数最多 3 位）。
   ///

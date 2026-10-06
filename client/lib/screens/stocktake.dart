@@ -50,6 +50,7 @@ class _StocktakePageState extends State<StocktakePage> {
   final FocusNode _focus = FocusNode();
 
   String _sheetNo = '';
+  String _sheetName = '';
   List<Map<String, dynamic>> _rows = const [];
   Map<String, dynamic> _summary = const {};
   int _masterCount = 0;
@@ -88,8 +89,10 @@ class _StocktakePageState extends State<StocktakePage> {
       final no = sheets.isEmpty ? StocktakeRepo.newSheetNo() : sheets.first['sheet_no'] as String;
       // 🔴 数全表：服务端同步下来的商档 source 是 server，countLocal 默认只数 tiger
       final masterCount = await StockMasterRepo().countAll();
+      final name = sheets.isEmpty ? '' : await _repo.sheetName(no);
       if (!mounted) return;
       _sheetNo = no;
+      _sheetName = name;
       _masterCount = masterCount;
       await _reload();
     } catch (e) {
@@ -189,25 +192,36 @@ class _StocktakePageState extends State<StocktakePage> {
   }
 
   Future<void> _newSheet() async {
+    final no = StocktakeRepo.newSheetNo();
+    // 🔴 先弹窗起名（好又多版同款，龙哥 2026-10-06 要求继承过来）：
+    // 单据一多，光看 PD+时间戳分不清哪张单盘的是什么。名字可空 —— 空着用单号。
+    final name = await _askSheetName(hint: no);
+    if (name == null) return; // 取消 = 不开新单，保持当前单不动
+    if (name.isNotEmpty) await _repo.setSheetName(no, name);
+    if (!mounted) return;
     setState(() {
-      _sheetNo = StocktakeRepo.newSheetNo();
+      _sheetNo = no;
+      _sheetName = name;
       _lastHit = null;
       _rows = const [];
       _summary = const {};
     });
     await _reload();
-    _snack('已新建扫码单 $_sheetNo');
+    _snack(name.isEmpty ? '已新建扫码单 $no' : '已新建扫码单「$name」');
   }
 
   Future<void> _pickSheet() async {
     final sheets = await _repo.listSheets(prefix: StocktakeRepo.sheetPrefix);
     if (!mounted) return;
+
+    // 长按改名：关弹层 → 改名窗 → 改完重开弹层，立刻看到新名字。
+    String? renameTarget;
     final picked = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: AppColors.bgElevated,
       builder: (ctx) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
               leading: const Icon(Icons.add, color: AppColors.brand),
@@ -215,26 +229,108 @@ class _StocktakePageState extends State<StocktakePage> {
                   style: TextStyle(color: AppColors.text)),
               onTap: () => Navigator.pop(ctx, '__new__'),
             ),
-            ...sheets.map((s) => ListTile(
-                  leading: const Icon(Icons.receipt_long,
-                      color: AppColors.textWeak),
-                  title: Text(s['sheet_no'].toString(),
-                      style: const TextStyle(color: AppColors.text)),
-                  subtitle: Text('${s['kinds']} 个品种',
-                      style: const TextStyle(color: AppColors.textWeak)),
-                  onTap: () => Navigator.pop(ctx, s['sheet_no'].toString()),
-                )),
+            const Divider(height: 1, color: AppColors.divider),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('长按单据可改名',
+                    style:
+                        TextStyle(color: AppColors.textWeak, fontSize: 11)),
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: sheets.length,
+                itemBuilder: (ctx, i) {
+                  final s = sheets[i];
+                  final no = s['sheet_no'].toString();
+                  final name = (s['name'] ?? '').toString().trim();
+                  return ListTile(
+                    leading: const Icon(Icons.receipt_long,
+                        color: AppColors.textWeak),
+                    // 有名字显示名字，副标题兜底单号（好又多版同款）。
+                    title: Text(name.isEmpty ? no : name,
+                        style: const TextStyle(color: AppColors.text)),
+                    subtitle: Text(
+                        name.isEmpty
+                            ? '${s['kinds']} 个品种'
+                            : '$no · ${s['kinds']} 个品种',
+                        style: const TextStyle(color: AppColors.textWeak)),
+                    onTap: () => Navigator.pop(ctx, no),
+                    onLongPress: () {
+                      renameTarget = no;
+                      Navigator.pop(ctx);
+                    },
+                  );
+                },
+              ),
+            ),
           ],
         ),
       ),
     );
-    if (picked == null) return;
     if (picked == '__new__') return _newSheet();
+    if (renameTarget != null) {
+      await _renameSheet(renameTarget!);
+      if (!mounted) return;
+      return _pickSheet(); // 重开列表，改完马上能看到
+    }
+    if (picked == null) return;
     setState(() {
       _sheetNo = picked;
       _lastHit = null;
     });
+    _sheetName = await _repo.sheetName(picked);
+    if (!mounted) return;
+    setState(() {});
     await _reload();
+  }
+
+  /// 弹窗收一个单据名字。返回 null = 取消；空串 = 不起名（用单号）。
+  /// 新建和改名共用（与好又多版一致，同一种动作一种界面）。
+  Future<String?> _askSheetName({String? initial, String? hint}) {
+    final ctl = TextEditingController(text: initial ?? '');
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgElevated,
+        title: const Text('单据名称', style: TextStyle(color: AppColors.text)),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          maxLength: 30,
+          style: const TextStyle(color: AppColors.text),
+          decoration: InputDecoration(
+            hintText: hint ?? '例如：日配 9 月底盘点',
+            counterText: '',
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
+              child: const Text('确定')),
+        ],
+      ),
+    );
+  }
+
+  /// 长按已有单改名。清空名字 = 回退用单号。
+  Future<void> _renameSheet(String no) async {
+    final cur = await _repo.sheetName(no);
+    if (!mounted) return;
+    final name = await _askSheetName(initial: cur, hint: no);
+    if (name == null) return;
+    await _repo.setSheetName(no, name);
+    if (!mounted) return;
+    setState(() {
+      if (no == _sheetNo) _sheetName = name;
+    });
+    _snack(name.isEmpty ? '已清除 $no 的名称' : '已改名「$name」');
   }
 
   Future<void> _clearSheet() async {
@@ -334,9 +430,11 @@ class _StocktakePageState extends State<StocktakePage> {
     }
     setState(() => _exporting = true);
     try {
+      // 🔴 文件名优先用单据名（龙哥 2026-10-06）：转发出去要让同事看得出
+      // 这是哪张单，而不是一串 PD+时间戳。没起名才兜底单号。
       final name = FileIo.safeName(asDoc
-          ? StocktakeExport.scanDocName(_sheetNo)
-          : StocktakeExport.scanCsvName(_sheetNo));
+          ? StocktakeExport.scanDocName(_sheetNo, _sheetName)
+          : StocktakeExport.scanCsvName(_sheetNo, _sheetName));
       final text = asDoc
           ? StocktakeExport.toScanDoc(rows, sheetNo: _sheetNo)
           : StocktakeExport.toScanCsv(rows);
@@ -363,9 +461,10 @@ class _StocktakePageState extends State<StocktakePage> {
       context,
       f,
       rows: rows,
+      // 转发建议名同样优先单据名（与实际文件名一致，别两边对不上）。
       suggestName: ExportFlow.asDocName(f)
-          ? StocktakeExport.scanDocName(_sheetNo)
-          : StocktakeExport.scanCsvName(_sheetNo),
+          ? StocktakeExport.scanDocName(_sheetNo, _sheetName)
+          : StocktakeExport.scanCsvName(_sheetNo, _sheetName),
       onMessage: _snack,
     );
   }
@@ -489,9 +588,16 @@ class _StocktakePageState extends State<StocktakePage> {
           children: [
             const Icon(Icons.numbers, size: 16, color: AppColors.textWeak),
             const SizedBox(width: 6),
-            Text(_sheetNo,
-                style: const TextStyle(color: AppColors.text, fontSize: 13)),
-            const Spacer(),
+            // 有名字显示「名字（单号）」，空则只显示单号 —— 与好又多版一致。
+            Expanded(
+              child: Text(
+                _sheetName.isEmpty
+                    ? _sheetNo
+                    : '$_sheetName（$_sheetNo）',
+                style: const TextStyle(color: AppColors.text, fontSize: 13),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             _chip('${_summary['kinds'] ?? 0} 品种'),
             const SizedBox(width: 6),
             _chip('合计 ${StocktakeExport.fmtNum(_summary['total_qty'])}'),

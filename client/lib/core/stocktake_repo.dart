@@ -189,6 +189,28 @@ class StocktakeRepo {
     };
   }
 
+  /// 给单起名/改名（好又多版同款机制，2026-10-06 继承过来）。
+  /// 名字存在 sheet_meta 表（建表见 local_db.dart v6 迁移）。
+  /// INSERT OR REPLACE：改名就是整体替换，单号是主键不会漂。
+  Future<void> setSheetName(String sheetNo, String name) async {
+    final db = await LocalDb.I.db();
+    final n = name.trim();
+    await db.rawInsert(
+      'INSERT OR REPLACE INTO sheet_meta (sheet_no, name, created_at) '
+      'VALUES (?, ?, ?)',
+      [sheetNo, n.isEmpty ? null : n, DateTime.now().millisecondsSinceEpoch],
+    );
+  }
+
+  /// 查某张单的名字；没起过名返回空串（界面兜底显示单号）。
+  Future<String> sheetName(String sheetNo) async {
+    final db = await LocalDb.I.db();
+    final rows = await db.query('sheet_meta',
+        where: 'sheet_no = ?', whereArgs: [sheetNo], limit: 1);
+    if (rows.isEmpty) return '';
+    return (rows.first['name'] as String?) ?? '';
+  }
+
   /// 本机已有的扫码单（最近在前），用于"继续上次没扫完的单"。
   ///
   /// [prefix] 只取以它开头的单号。**扫码枪必须传 `sheetPrefix`（'PD'）**：
@@ -197,25 +219,42 @@ class StocktakeRepo {
   /// 员工点进去发现是一堆盘点数据（表头都是扫码的列），只会以为是坏了。
   Future<List<Map<String, dynamic>>> listSheets({String? prefix}) async {
     final db = await LocalDb.I.db();
-    final where = prefix == null || prefix.isEmpty ? '' : 'where sheet_no like ?';
+    final where = prefix == null || prefix.isEmpty
+        ? ''
+        : 'where r.sheet_no like ?';
+    // LEFT JOIN sheet_meta：没起过名的单 name 为 null，界面兜底显示单号。
+    // 不能 INNER JOIN —— sheet_meta 是后加的表，历史单在 meta 里根本没有行。
     return db.rawQuery(
       '''
-      select sheet_no,
-             count(*)               as kinds,
-             coalesce(sum(qty), 0)  as total_qty,
-             max(scanned_at)        as last_at
-        from scan_record
+      select r.sheet_no                 as sheet_no,
+             meta.name                  as name,
+             count(*)                   as kinds,
+             coalesce(sum(r.qty), 0)    as total_qty,
+             max(r.scanned_at)          as last_at
+        from scan_record r
+        left join sheet_meta meta on meta.sheet_no = r.sheet_no
        $where
-       group by sheet_no
+       group by r.sheet_no
        order by last_at DESC
       ''',
       prefix == null || prefix.isEmpty ? null : <Object?>['$prefix%'],
     );
   }
 
-  /// 整单删除（盘错了重来）。返回删除条数。
+  /// 整单删除（盘错了重来）。事务连带删 sheet_meta，
+  /// 否则删单后 meta 里会留一行孤儿名字 —— 重用同号概率虽低，但"列表里
+  /// 出现一张没有流水的单"这种事不值得赌。返回删除条数。
   Future<int> deleteSheet(String sheetNo) async {
     final db = await LocalDb.I.db();
-    return db.delete('scan_record', where: 'sheet_no = ?', whereArgs: [sheetNo]);
+    return db.transaction((txn) async {
+      final n = await txn.delete(
+        'scan_record',
+        where: 'sheet_no = ?',
+        whereArgs: [sheetNo],
+      );
+      await txn.delete('sheet_meta',
+          where: 'sheet_no = ?', whereArgs: [sheetNo]);
+      return n;
+    });
   }
 }

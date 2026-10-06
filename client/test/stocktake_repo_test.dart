@@ -252,6 +252,46 @@ void main() {
       expect(await repo.listScans('PDB'), hasLength(1));
     });
 
+    // ── 单据命名（2026-10-06 从好又多版继承，sheet_meta 表）──────────
+    test('setSheetName/sheetName：起名能查回，没起名返回空串', () async {
+      final repo = StocktakeRepo();
+      // 没起过名：空串（界面兜底显示单号），不能抛错
+      expect(await repo.sheetName('PDNOPE'), '');
+
+      await repo.setSheetName('PDX', '日配 9 月底盘点');
+      expect(await repo.sheetName('PDX'), '日配 9 月底盘点');
+
+      // 改名 = 整行替换，单号是主键不会长出第二行
+      await repo.setSheetName('PDX', '改名后的名字');
+      expect(await repo.sheetName('PDX'), '改名后的名字');
+
+      // 清空名字 = 存空串，查询退回空串
+      await repo.setSheetName('PDX', '');
+      expect(await repo.sheetName('PDX'), '');
+    });
+
+    test('listSheets 带出单据名；没名字的单 name 为 null', () async {
+      final repo = StocktakeRepo();
+      await repo.addScan('PDNAMED', '69001');
+      await repo.setSheetName('PDNAMED', '周五生鲜');
+      await repo.addScan('PDBARE', '69002'); // 没起名
+
+      final sheets = await repo.listSheets(prefix: 'PD');
+      final byNo = {for (final s in sheets) s['sheet_no'] as String: s};
+      expect(byNo['PDNAMED']!['name'], '周五生鲜');
+      // 老单/没起名的单在 meta 里没有行，LEFT JOIN 出来是 null —— 不能 INNER JOIN
+      expect(byNo['PDBARE']!.containsKey('name'), true);
+      expect(byNo['PDBARE']!['name'], isNull);
+    });
+
+    test('deleteSheet 连带删 sheet_meta，不留孤儿名字', () async {
+      final repo = StocktakeRepo();
+      await repo.addScan('PDGONE', '69001');
+      await repo.setSheetName('PDGONE', '要删掉的单');
+      await repo.deleteSheet('PDGONE');
+      expect(await repo.sheetName('PDGONE'), '', reason: '删单后 meta 里不能留名字');
+    });
+
     test('空单的汇总全是 0，不返回 null', () async {
       final s = await StocktakeRepo().summary('PD_NOT_EXIST');
       expect(s['kinds'], 0);

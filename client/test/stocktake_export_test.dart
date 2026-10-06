@@ -350,6 +350,22 @@ void main() {
       expect(StocktakeExport.fileName('PD1'), '扫码_PD1.csv');
     });
 
+    // ── 龙哥 2026-10-06：转发的文件名要用新建时起的名字 ─────────────
+    // 起了名的单导出还叫 PD+时间戳，微信里发出去谁也不知道是哪张单。
+    // 名字空/没起过必须兜底回单号（老单没有 meta 记录，sheetName 返回空串）。
+    test('🔴 文件名优先用单据名，名字空才兜底单号', () {
+      expect(StocktakeExport.scanCsvName('PD1', '日配盘点'),
+          '扫码明细_日配盘点.csv');
+      expect(StocktakeExport.scanDocName('PD1', '日配盘点'),
+          '扫码明细_日配盘点.txt');
+      expect(StocktakeExport.fileName('PD1', '日配盘点'), '扫码_日配盘点.csv');
+      // 兜底路径：名字空串 / 纯空格 / null 都要退回单号
+      expect(StocktakeExport.scanCsvName('PD1', ''), '扫码明细_PD1.csv');
+      expect(StocktakeExport.scanCsvName('PD1', '   '), '扫码明细_PD1.csv');
+      expect(StocktakeExport.scanDocName('PD1', null), '扫码明细_PD1.txt');
+      expect(StocktakeExport.fileName('PD1', ''), '扫码_PD1.csv');
+    });
+
     // ── 龙哥 2026-09-19 报的"条码栏是乱码" ──────────────────────
     // 真因不是编码（BOM 一直在），是 Excel 把 13 位数字条码当**数值**：
     // 显示成 6.92182E+12，超过 15 位还会把末尾置零。

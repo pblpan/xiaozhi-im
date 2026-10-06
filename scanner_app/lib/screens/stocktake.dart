@@ -572,9 +572,11 @@ class _StocktakePageState extends State<StocktakePage> {
     }
     setState(() => _exporting = true);
     try {
+      // 🔴 文件名优先用单据名（龙哥 2026-10-06）：转发出去要让同事看得出
+      // 这是哪张单，而不是一串 PD+时间戳。没起名才兜底单号。
       final name = FileIo.safeName(asDoc
-          ? StocktakeExport.scanDocName(_sheetNo)
-          : StocktakeExport.scanCsvName(_sheetNo));
+          ? StocktakeExport.scanDocName(_sheetNo, _sheetName)
+          : StocktakeExport.scanCsvName(_sheetNo, _sheetName));
       final text = asDoc
           ? StocktakeExport.toScanDoc(rows, sheetNo: _sheetNo)
           : StocktakeExport.toScanCsv(rows);
@@ -601,9 +603,10 @@ class _StocktakePageState extends State<StocktakePage> {
       context,
       f,
       rows: rows,
+      // 转发建议名同样优先单据名（与实际文件名一致，别两边对不上）。
       suggestName: ExportFlow.asDocName(f)
-          ? StocktakeExport.scanDocName(_sheetNo)
-          : StocktakeExport.scanCsvName(_sheetNo),
+          ? StocktakeExport.scanDocName(_sheetNo, _sheetName)
+          : StocktakeExport.scanCsvName(_sheetNo, _sheetName),
       onMessage: _snack,
     );
   }

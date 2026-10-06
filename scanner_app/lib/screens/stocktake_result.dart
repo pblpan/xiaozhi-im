@@ -46,6 +46,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
 
   List<Map<String, dynamic>> _all = const [];
   Map<String, dynamic> _sum = const {};
+  String _sheetName = '';
   int _filter = 0;
   bool _loading = true;
   bool _exporting = false;
@@ -60,10 +61,12 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
   Future<void> _reload() async {
     try {
       final rows = await _repo.listWithMaster(widget.sheetNo);
+      final name = await _repo.sheetName(widget.sheetNo);
       if (!mounted) return;
       setState(() {
         _all = rows;
         _sum = StocktakeExport.summarize(rows);
+        _sheetName = name;
         _loading = false;
         _error = null;
       });
@@ -90,7 +93,9 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
     setState(() => _exporting = true);
     try {
       final csv = StocktakeExport.toCsv(rows);
-      final name = FileIo.safeName(StocktakeExport.fileName(widget.sheetNo));
+      // 🔴 文件名优先单据名（龙哥 2026-10-06），没起名兜底单号。
+      final name =
+          FileIo.safeName(StocktakeExport.fileName(widget.sheetNo, _sheetName));
       final dir = await FileIo.dir();
       final f = File('${dir.path}${Platform.pathSeparator}$name');
       // writeAsString 默认就是 UTF-8，BOM 由 toCsv 负责加在内容里
@@ -112,7 +117,8 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
       context,
       f,
       rows: rows,
-      suggestName: StocktakeExport.fileName(widget.sheetNo),
+      // 转发建议名与实际文件名同规则：单据名优先。
+      suggestName: StocktakeExport.fileName(widget.sheetNo, _sheetName),
       onMessage: _snack,
     );
   }
@@ -133,7 +139,10 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
           children: [
             const Text('扫码盈亏',
                 style: TextStyle(color: AppColors.text, fontSize: 17)),
-            Text(widget.sheetNo,
+            Text(
+                _sheetName.isEmpty
+                    ? widget.sheetNo
+                    : '$_sheetName（${widget.sheetNo}）',
                 style:
                     const TextStyle(color: AppColors.textWeak, fontSize: 11)),
           ],

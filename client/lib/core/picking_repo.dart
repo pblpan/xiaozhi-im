@@ -49,6 +49,13 @@ class PickingRepo {
   Future<Map<String, dynamic>> summary(String sheetNo) =>
       _repo.summary(sheetNo);
 
+  /// 给单起名/改名（与盘点共用 sheet_meta 表，单号是主键不串）。
+  Future<void> setSheetName(String sheetNo, String name) =>
+      _repo.setSheetName(sheetNo, name);
+
+  /// 查某张单的名字；没起过名返回空串。
+  Future<String> sheetName(String sheetNo) => _repo.sheetName(sheetNo);
+
   /// 本机已有的拣货单（最近在前），只认 JK 前缀。
   Future<List<Map<String, dynamic>>> listSheets() =>
       _repo.listSheets(prefix: sheetPrefix);
