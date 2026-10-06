@@ -687,10 +687,15 @@ class SimpleRepo {
 
   /// 本趟的明细。
   ///
-  /// 🔴 商品名从 **`simple_item`（导入的清单）** 左连，**不连 stock_master**。
-  ///    必须是 LEFT JOIN：**清单外的商品**（口径允许扫、导出作第三段）
-  ///    在 simple_item 里没有行，INNER JOIN 会让它整行消失 ——
-  ///    而"少了一行"在明细里根本看不出来，员工会以为没扫上、再扫一遍。
+  /// 🔴 商品名**优先**从 `simple_item`（导入的清单）取 —— 业务口径（谁能扫、
+  ///    按什么规则）依然只看清单，这条铁律没动。
+  ///
+  /// 🔴 但**显示名字**要兜底连一次 `stock_master`（龙哥 2026-10-06 反馈）：
+  ///    清单外的商品（口径允许扫、导出作第三段）在确认卡上有商档名字
+  ///    （相机页查的是商档），落到列表里却显示"未知条码" ——
+  ///    同一笔先有名字后没名字，员工会以为刚才那笔没记上。
+  ///    必须是 LEFT JOIN：商档里也没有的条码照样要显示（name 为空 → 界面
+  ///    自己按未知条码处理），INNER JOIN 会把它们整行吃掉。
   ///
   /// 🔴 排序按 id **降序**（＝扫描先后倒过来，**刚扫的在最上面**）。
   ///    这是龙哥定的口径（2026-09-26）：扫码的人要核对的是"刚才那一笔"，
@@ -702,11 +707,15 @@ class SimpleRepo {
     return db.rawQuery('''
       select r.id, r.sheet_no, r.barcode, r.qty, r.scanned_at, r.phase,
              r.uploaded,
-             i.name as name, i.spec as spec, i.seq as seq
+             coalesce(i.name, m.name)  as name,
+             coalesce(i.spec, m.spec)  as spec,
+             m.unit                    as unit,
+             i.seq                     as seq
         from scan_record r
         left join stocktake_sheet s on s.sheet_no = r.sheet_no
         left join simple_item i
                on i.task_no = s.zone_code and i.barcode = r.barcode
+        left join stock_master m on m.barcode = r.barcode
        where r.sheet_no = ?
        order by r.id desc
     ''', <Object?>[_req(nodeNo, 'nodeNo')]);

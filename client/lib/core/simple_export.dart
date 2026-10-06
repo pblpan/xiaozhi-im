@@ -130,10 +130,15 @@ class SimpleExport {
   ///   · 清单里 + 在待复核集里  → 段 4（留空，**优先于段 1**）
   ///   · 清单外 + 有数        → 段 3
   ///   · 清单外 + 没数        → 丢掉（没扫到又不在清单里，它不存在）
+  ///
+  /// [extraNames] 给段 3 兜名字用（龙哥 2026-10-06）：清单外的码多半在
+  /// 商档里有名字（界面列表已经兜底显示了），导出来却是"未知条码"很难对账。
+  /// 调用方从商档查到多少给多少；没给的仍然落占位。
   static SimpleExportSegments build({
     required List<Map<String, dynamic>> items,
     required Map<String, double> qty,
     Set<String> pending = const <String>{},
+    Map<String, String> extraNames = const <String, String>{},
   }) {
     final data = <SimpleExportRow>[];
     final missing = <SimpleExportRow>[];
@@ -175,8 +180,13 @@ class SimpleExport {
     for (final code in extraCodes) {
       final q = qty[code];
       if (q == null || q == 0) continue; // 没扫到又不在清单里 → 它不存在
-      extra.add(SimpleExportRow(
-          barcode: code, qty: q, name: unknownName));
+      // 名字：优先用调用方给的（商档里查到的），查不到落占位 ——
+      // 和界面上"未知条码"的表现对齐，不假装知道它叫什么。
+      final name =
+          (extraNames[code] ?? '').toString().trim().isEmpty
+              ? unknownName
+              : extraNames[code]!.trim();
+      extra.add(SimpleExportRow(barcode: code, qty: q, name: name));
     }
 
     return SimpleExportSegments(

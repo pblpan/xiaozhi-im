@@ -84,6 +84,23 @@ void main() {
       expect(s.accounted, isTrue);
     });
 
+    // ── 龙哥 2026-10-06 #276：清单外条码商档里有，导出却写"未知条码" ──
+    // 界面确认卡查的是商档（有名字），落库列表只连 simple_item（NULL），
+    // 导出第三段又只认 simple_item —— 表现成"确认时认识、导出变未知"。
+    // extraNames 由页面把商档名字查好带进来，导出就用它兜底。
+    test('extraNames 带商档名 → 段3 用真名；没带的仍落未知条码占位', () {
+      final s = SimpleExport.build(
+        items: list,
+        qty: <String, double>{'Z9': 7, 'Y8': 3},
+        extraNames: <String, String>{'Z9': '王中王火腿肠'},
+      );
+      expect(s.extra.rows.map((r) => r.barcode).toList(), <String>['Y8', 'Z9']);
+      final y8 = s.extra.rows.singleWhere((r) => r.barcode == 'Y8');
+      final z9 = s.extra.rows.singleWhere((r) => r.barcode == 'Z9');
+      expect(z9.name, '王中王火腿肠', reason: '商档里查到的名字要带上');
+      expect(y8.name, SimpleExport.unknownName, reason: '没查到的仍用占位');
+    });
+
     test('🔴 段1/段2 都按导入顺序（未盘到的**不**单独排最后）', () {
       // 对账的人是按手上那张单子一行行往下对的，把没盘到的挪到最后
       // 会让他对不上号。

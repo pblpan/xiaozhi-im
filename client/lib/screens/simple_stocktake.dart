@@ -36,6 +36,7 @@ import '../core/simple_export.dart';
 import '../core/simple_repo.dart';
 import '../core/simple_rules.dart';
 import '../core/simple_scan_sink.dart';
+import '../core/stock_master_repo.dart';
 import '../core/theme.dart';
 import '../widgets/export_flow.dart';
 import 'camera_scan.dart';
@@ -744,8 +745,27 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       final pending = (_diffSet.isNotEmpty && !_thirdDone)
           ? _diffSet
           : const <String>{};
-      final segs =
-          SimpleExport.build(items: _items, qty: qty, pending: pending);
+
+      // 段 3（清单外）尽量带上商档名字（龙哥 2026-10-06）：界面上这一行
+      // 已经显示成商品名了，导出来却写"未知条码"没法对账。通常只有几条，
+      // 逐个查本地表开销可忽略；查不到的仍然落"未知条码"占位。
+      final inListCodes = _items
+          .map((e) => (e['barcode'] ?? '').toString().trim())
+          .where((c) => c.isNotEmpty)
+          .toSet();
+      final extraNames = <String, String>{};
+      for (final code in qty.keys) {
+        final c = code.trim();
+        if (c.isEmpty || inListCodes.contains(c)) continue;
+        try {
+          final m = await StockMasterRepo.instance.lookupLocal(c);
+          final n = (m?['name'] ?? '').toString().trim();
+          if (n.isNotEmpty) extraNames[c] = n;
+        } catch (_) {}
+      }
+
+      final segs = SimpleExport.build(
+          items: _items, qty: qty, pending: pending, extraNames: extraNames);
 
       // 🔴 硬判据：清单里的每一条都必须落在"已确定"/"没盘到"/"待复核"里。
       //    不成立就说明有商品被悄悄丢掉了 —— 宁可挡住不让导，
