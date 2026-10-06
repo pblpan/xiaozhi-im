@@ -32,6 +32,13 @@ done
 [ -z "$FNPACK" ] && { echo "ERROR: fnpack.exe 未找到"; exit 1; }
 
 echo "[1/4] 组装 app/src（server 源码 + node_modules.tar.gz）..."
+
+# 🔴 打包前先证明依赖真的在 node_modules 里。
+#    2026-10-05 踩过：ssh2 只装进了线上容器，本地 node_modules 没有 ——
+#    package.json 和 lock 都"看起来对"，包也照打不误，
+#    装到干净机器上服务端**直接起不来**（index.js 启动时同步 require 部署向导，
+#    那条链顶层 require('ssh2')）。详见 deploy/check_server_deps.py 的说明。
+"$PY" "$ROOT/deploy/check_server_deps.py" || { echo "ERROR: 服务端依赖不齐，已中止打包"; exit 1; }
 # ⚠️ 不要 rm -rf 整个 app/src，也不要逐目录 rm -rf：
 #    构建产物目录在桌面工作区监控范围内，递归删除会被安全删除护栏拦下
 #    （报 SAFE_DELETE_BULK_CONFIRM_REQUIRED，turn 级累计目标数 > 阈值 50 即中止），

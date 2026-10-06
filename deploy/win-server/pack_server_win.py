@@ -242,6 +242,17 @@ def stage(version):
     print('      node.exe  %.1f MB' % (os.path.getsize(NODE_EXE) / 1024 / 1024))
 
     # --- 服务端本体（镜像 server/ 的布局，config.js 的 ROOT 就是它上一级）---
+    # 🔴 先证明依赖真的在 node_modules 里再拷。2026-10-05 踩过：ssh2 只装进了线上
+    #    容器，本地 node_modules 没有 —— 下面那个 isdir('node_modules') 检查照样通过、
+    #    包照样打出来，装到干净机器上服务端**直接起不来**（启动时同步 require 部署
+    #    向导，那条链顶层 require('ssh2')）。详见 deploy/check_server_deps.py。
+    dep_check = subprocess.run(
+        [sys.executable, os.path.join(ROOT, 'deploy', 'check_server_deps.py')],
+        capture_output=True, text=True)
+    sys.stdout.write(dep_check.stdout)
+    if dep_check.returncode != 0:
+        raise SystemExit('服务端依赖不齐，已中止打包（见上面的清单）')
+
     app = os.path.join(STAGE, 'app')
     os.makedirs(app)
     for rel in ('src', 'public', 'node_modules'):
