@@ -7291,6 +7291,8 @@ function parseMasterCsv(text) {
   const hb = find(['商品条码', '条码', 'barcode', '商品编码', '国际条码']);
   let start = 0;
   let idx;
+  let noHeadNine = false;   // 无表头且识别为标准九列（嗅探在 money 定义之后做）
+  let priceSwapped = false; // 嗅探判定"售价在前"已自动对调（return 前挂到 out 上）
   if (hb >= 0) {
     start = 1;
     idx = {
@@ -7310,15 +7312,29 @@ function parseMasterCsv(text) {
       account_qty: find(['库存', '账面', '数量', 'qty']),
     };
   } else {
-    // 没有表头：只有当"第一列严格等于行号"时才认它是序号列。
-    // 🔴 无表头时**刻意只读旧的四列**（序号/条码/名称/数量），不去猜
-    //    规格/单位/进价/售价在哪一列 —— 列数对不上就会整表错位，
-    //    错位比少读几个字段严重得多。要带这些，请给文件加表头。
+    // 没有表头。按**列数**分流，列数不对宁可少读不错位：
+    //  ① 标准九列（龙哥 2026-10-06 定版）：
+    //     条码,商品名,规格,单位,进价,售价,会员价,特价,库存数（参考）
+    //     —— ERP/POS 直接导出来的原始文件往往没有表头行。
+    //  ② 老的简四列：序号,条码,名字,数量（第一列严格等于行号才认序号列，
+    //     🔴 判定必须严格：门店编码常是 1001 这种四位数，宽松判定会把
+    //     "第一列是编码"误认成序号，整表条码错位一格）。
     const sample = cells.slice(0, Math.min(cells.length, 5));
     const hasSerial = cells.length >= 2 && sample.every((c, i) => c[0] === String(i + 1));
-    idx = hasSerial
-      ? { barcode: 1, name: 2, account_qty: 3 }
-      : { barcode: 0, name: 1, account_qty: 2 };
+    if (!hasSerial && sample.every((c) => c.length === 9)) {
+      idx = {
+        barcode: 0, name: 1, spec: 2, unit: 3,
+        // 按龙哥定的顺序：进价第 5、售价第 6。
+        // ⚠️ 若文件实际是"售价在前"，下面（money 定义之后）会嗅探自动对调。
+        purchase_price: 4, unit_price: 5,
+        member_price: 6, special_price: 7, account_qty: 8,
+      };
+      noHeadNine = true;
+    } else {
+      idx = hasSerial
+        ? { barcode: 1, name: 2, account_qty: 3 }
+        : { barcode: 0, name: 1, account_qty: 2 };
+    }
   }
 
   // 价格/数量都可能带着 ¥、空格、千分位逗号（"1,280.00"），
@@ -7329,6 +7345,27 @@ function parseMasterCsv(text) {
     const n = Number(s);
     return Number.isFinite(n) ? n : null;
   };
+
+  // 🔴 价格列嗅探（只对无表头九列做）：定版顺序是「进价，售价」，但门店
+  //    ERP/POS 导出的原始文件常是**售价在前**（本店 12.6 万行第 5 列几乎
+  //    全大于第 6 列 —— 零售价高于进价是常识）。取前 200 行数据统计：
+  //    ≥80% 的行第 5 列 > 第 6 列就判定为"售价在前"，自动对调进价/售价
+  //    两列，并在导入提示里黄字说明（不黑箱，看得见、能否决）。
+  if (noHeadNine) {
+    let gt = 0, cnt = 0;
+    for (let i = 1; i < Math.min(cells.length, 201); i++) {
+      const a = money(cells[i][4]), b = money(cells[i][5]);
+      if (a === null || b === null || a === b) continue;
+      cnt++;
+      if (a > b) gt++;
+    }
+    if (cnt >= 20 && gt / cnt >= 0.8) {
+      const t = idx.purchase_price;
+      idx.purchase_price = idx.unit_price;
+      idx.unit_price = t;
+      priceSwapped = true;
+    }
+  }
 
   const out = [];
   // 🔴 列数和表头不一致 = 这一行**整列错位**了（分隔符猜错、或字段里有
@@ -7354,6 +7391,7 @@ function parseMasterCsv(text) {
   }
   // 挂在数组上带出去（改返回结构会动到所有调用点，没必要）
   out.colMismatch = colMismatch;
+  out.noHeadPriceSwapped = priceSwapped;
   return out;
 }
 
@@ -7411,12 +7449,18 @@ async function onMasterFile(e) {
       + `（价格带千分位很常见，如 ¥1,280.00 必须写成 "¥1,280.00"）。<br>`
       + `建议先在 Excel 里另存为 CSV 再导，别直接从表格复制。</div>`
     : '';
+  // 无表头九列的价格列对调说明（自动嗅探的结果要摆出来，不黑箱）
+  const swapHtml = rows.noHeadPriceSwapped
+    ? `<div style="margin-top:8px;color:#e6a23c">⚠️ 此文件<b>没有表头</b>，按标准九列识别；`
+      + `但检测到第 5 列普遍大于第 6 列 —— 已按 <b>售价在前、进价在后</b> 自动对调。`
+      + `若反了请给文件加表头再导。</div>`
+    : '';
 
   try {
     await ElMessageBox.confirm(
       `<div>从「${file.name}」解析到 <b>${rows.length}</b> 行，`
       + `导入完成后将替换现有的 ${master.value.total} 行商品档案。</div>`
-      + `<div style="margin-top:6px">${statLine}</div>${warnHtml}${misHtml}`,
+      + `<div style="margin-top:6px">${statLine}</div>${warnHtml}${misHtml}${swapHtml}`,
       '导入商品档案',
       { type: 'warning', confirmButtonText: '开始导入', cancelButtonText: '取消',
         dangerouslyUseHTMLString: true });
