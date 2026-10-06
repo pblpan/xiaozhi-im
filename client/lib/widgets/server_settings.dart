@@ -6,6 +6,7 @@ import 'package:xiaozhi_im_client/core/remote_config.dart';
 import 'package:xiaozhi_im_client/core/settings.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/workspace.dart';
+import 'package:xiaozhi_im_client/widgets/enterprise_switcher.dart';
 
 /// 服务器设置弹窗（双地址 + 网络模式 + 自动探测）。
 ///
@@ -183,6 +184,29 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // 🔴 连接状态：从首页顶条挪过来的（龙哥 2026-10-06 真机截图反馈）。
+                //    首页顶上那条「● 已连接 ∨」跟会话页 AppBar 的连接点是重复信息，
+                //    还把整个界面往下顶；而排查"连不上"的时候人正好就在这个弹窗里，
+                //    所以把状态放到这里 —— 打开服务器设置就能看到当前通不通。
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: AppColors.bgElevated,
+                    borderRadius: BorderRadius.circular(AppRadii.md),
+                    border: Border.all(color: AppColors.divider),
+                  ),
+                  child: const Row(
+                    children: [
+                      Text('当前连接',
+                          style: TextStyle(
+                              fontSize: 12.5, color: AppColors.textSub)),
+                      Spacer(),
+                      ConnStatusChip(dotSize: 9, fontSize: 12.5),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
                 // 网络模式
                 const _Label('网络模式'),
                 const SizedBox(height: 6),

@@ -8,18 +8,24 @@ import 'package:xiaozhi_im_client/socket.dart';
 
 /// 企业切换器（龙哥 2026-10-01 需求的核心 UI）。
 ///
-/// 两个组件：
-///   · [EnterpriseHeader] —— 钉在首页内容区顶部的一整条：左边是当前激活企业名 +
-///     连接状态点，点它弹出 [EnterpriseSwitcherSheet]；下方按需出现 [BackgroundReminderBar]
-///     （后台企业收到新消息时的"点击快速切换"提醒条）。
+/// 组件：
 ///   · [EnterpriseSwitcherSheet] —— 底部弹层，列出所有企业：企业名 + 两个服务器地址的
 ///     在线/离线点 + 未读数 + 激活高亮，点一下整域切换；另有重命名 / 删除，底部「+ 添加企业」。
+///     入口在会话页右上角「⋮ → 切换企业」。
+///   · [ConnStatusChip] —— 连接状态（点 + 文案），用在「服务器设置」弹窗顶部。
+///   · [EnterpriseHeader] —— 只剩一件事：后台企业来新消息时出提醒条，没有就不占空间。
 ///
-/// 为什么放在内容区顶部、而不是塞进每个页面的 AppBar：切换企业是**全局**动作，
-/// 任何一级页面都要触手可及（钉钉/企微/飞书都是这个位置）。
+/// ── 为什么首页顶部不再有常驻企业条（龙哥 2026-10-06 真机截图反馈）────────
+/// 顶上那条「● 已连接 ∨」占了 34px + 一整条状态栏留白，把整个界面往下顶；
+/// 而它显示的连接状态与会话页 AppBar 里那个点**是同一个信息**（重复两遍），
+/// 切换企业又是低频动作。所以：
+///   ① 顶条整条撤掉，界面直接顶到系统状态栏下面；
+///   ② 连接状态挪进「⋮ → 服务器设置」弹窗顶部（排查网络时正好要在这里看）；
+///   ③ 切换企业挪进「⋮ → 切换企业」；
+///   ④ [BackgroundReminderBar] 保留原位，但没有提醒时整条不占空间。
 
 // ---- 连接状态 → 颜色 / 文案 ----
-Color _stateColor(ConnState s) {
+Color connStateColor(ConnState s) {
   switch (s) {
     case ConnState.online:
       return AppColors.online;
@@ -32,7 +38,7 @@ Color _stateColor(ConnState s) {
   }
 }
 
-String _connText(ConnState s) {
+String connStateText(ConnState s) {
   switch (s) {
     case ConnState.online:
       return '已连接';
@@ -49,6 +55,55 @@ String _connText(ConnState s) {
 final ValueNotifier<ConnState> _idleNotifier =
     ValueNotifier<ConnState>(ConnState.idle);
 
+/// 当前应当展示的连接状态：跟激活企业走（多企业时各域各连各的），
+/// 没有激活企业（登录前 / 已登出）就退回全局 socket 状态。
+ValueNotifier<ConnState> activeLinkNotifier() {
+  final sm = SessionManager.instance;
+  final active = sm.active;
+  return active != null ? sm.linkStateOf(active.id) : _idleNotifier;
+}
+
+/// 连接状态小徽章：一个点 + 一行字（已连接 / 连接中 / 离线 / 未连接）。
+///
+/// 从首页顶条撤下来之后，这里成了连接状态的**唯一文字出口**，
+/// 目前用在「服务器设置」弹窗顶部 —— 排查网络时打开就能看到当前通不通。
+class ConnStatusChip extends StatelessWidget {
+  final double dotSize;
+  final double fontSize;
+
+  const ConnStatusChip({super.key, this.dotSize = 9, this.fontSize = 12});
+
+  @override
+  Widget build(BuildContext context) {
+    final sm = SessionManager.instance;
+    final active = sm.active;
+    return ValueListenableBuilder<ConnState>(
+      valueListenable: activeLinkNotifier(),
+      builder: (_, state, __) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: dotSize,
+            height: dotSize,
+            decoration:
+                BoxDecoration(color: connStateColor(state), shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(connStateText(state),
+              style: TextStyle(fontSize: fontSize, color: connStateColor(state))),
+          // 多企业时点开能确认是哪家（单企业就没什么可确认的，省掉）
+          if (sm.profiles.length > 1 && active != null) ...[
+            const SizedBox(width: 6),
+            Text(active.name,
+                style: TextStyle(
+                    fontSize: fontSize - 1, color: AppColors.textSub)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _StateDot extends StatelessWidget {
   final ConnState state;
   final double size;
@@ -58,7 +113,7 @@ class _StateDot extends StatelessWidget {
         width: size,
         height: size,
         decoration: BoxDecoration(
-          color: _stateColor(state),
+          color: connStateColor(state),
           shape: BoxShape.circle,
         ),
       );
@@ -123,25 +178,15 @@ class _EnterpriseHeaderState extends State<EnterpriseHeader> {
     return out;
   }
 
-  void _openSheet() {
-    showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.bgElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadii.lg)),
-      ),
-      builder: (_) => const EnterpriseSwitcherSheet(),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final active = _sm.active;
     final bg = _bgWithUnread;
-    // ⚠️ 钉在首页顶部：必须用 SafeArea 把整条（含状态栏占位）顶到系统状态栏之下，
-    // 否则公司名条会压到手机状态栏（时间/电量）上 —— 龙哥 2026-10-03 真机截图反馈。
-    // 外层 Material 填 bgElevated，让状态栏占位区和切换条同色，顶部看起来是一整块深色。
+    // 没有后台企业提醒 → 整条不占任何空间（连 SafeArea 都不占），
+    // 让下面的 AppBar 自己顶到系统状态栏下面 —— 龙哥 2026-10-06 真机截图要求
+    // "整个界面移到上面画线的地方"。原来这条常驻 34px + 状态栏留白，白白往下顶。
+    if (bg.isEmpty) return const SizedBox.shrink();
+    // ⚠️ 提醒条要钉在系统状态栏之下，所以仍用 SafeArea 顶开状态栏占位；
+    //    外层 Material 填 bgElevated，让占位区和提醒条同色。
     return Material(
       color: AppColors.bgElevated,
       child: SafeArea(
@@ -151,13 +196,6 @@ class _EnterpriseHeaderState extends State<EnterpriseHeader> {
         right: false,
         child: Column(
           children: [
-            EnterpriseSwitcherBar(
-              name: active?.name ?? '未连接',
-              stateNotifier: active != null
-                  ? _sm.linkStateOf(active.id)
-                  : _idleNotifier,
-              onTap: _openSheet,
-            ),
             for (final p in bg)
               BackgroundReminderBar(
                 profile: p,
@@ -170,64 +208,21 @@ class _EnterpriseHeaderState extends State<EnterpriseHeader> {
   }
 }
 
-/// 常驻顶部条：**只剩一个连接状态点 + 在线状态**，点开切换面板。
+/// 弹出企业切换面板（底部弹层）。
 ///
-/// ── 为什么把企业名去掉了（龙哥 2026-10-04 真机反馈）────────────────
-/// 原来这条写着「企业名」，可下面紧随其后的会话页顶栏已经有一行
-/// 「好又多小智」（服务端下发的公司名）——**同一个信息连着出现两遍**，
-/// 白占一行高，整块界面看起来"太靠下"。龙哥的要求是：
-///   ① 状态那里去掉"小智"，留一个点就行；
-///   ② 点 + 在线状态往上顶，紧贴系统状态栏，中间不留空；
-///   ③ 下面的主窗口跟着往上提，跟这个点挨在一起、不重叠。
-/// 所以这里把名字收成一个 Tooltip（长按仍能确认是哪家企业），
-/// 条高从 52 压到 34，SafeArea 之上不再留任何缝。
-/// [stateNotifier] 实时跟随激活企业的连接状态（连上/断线立刻变）。
-class EnterpriseSwitcherBar extends StatelessWidget {
-  final String name;
-  final ValueNotifier<ConnState> stateNotifier;
-  final VoidCallback onTap;
-
-  const EnterpriseSwitcherBar({
-    super.key,
-    required this.name,
-    required this.stateNotifier,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) => Material(
-        color: AppColors.bgElevated,
-        child: Tooltip(
-          // 名字不再常驻显示，但别把这个信息弄丢：长按仍能确认是哪家企业。
-          message: name,
-          child: InkWell(
-            onTap: onTap,
-            child: Container(
-              height: 34,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: Row(
-                children: [
-                  ValueListenableBuilder<ConnState>(
-                    valueListenable: stateNotifier,
-                    builder: (_, state, __) => _StateDot(state: state, size: 9),
-                  ),
-                  const Spacer(),
-                  ValueListenableBuilder<ConnState>(
-                    valueListenable: stateNotifier,
-                    builder: (_, state, __) => Text(
-                      _connText(state),
-                      style: TextStyle(fontSize: 12, color: _stateColor(state)),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Icon(Icons.expand_more_rounded,
-                      size: 20, color: AppColors.textSub),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
+/// 首页顶部的常驻条撤掉之后（见文件头注释），这里成了唯一入口 ——
+/// 会话页「⋮ → 切换企业」调的就是它。入口必须显性存在：
+/// "一个入口藏在别人页面里 = 没有入口"。
+Future<void> showEnterpriseSwitcher(BuildContext context) {
+  return showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppColors.bgElevated,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadii.lg)),
+    ),
+    builder: (_) => const EnterpriseSwitcherSheet(),
+  );
 }
 
 /// 后台企业收到新消息时的提醒条：点一下快速切换过去。
@@ -568,7 +563,7 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
                                   _StateDot(state: state, size: 7),
                                   const SizedBox(width: 6),
                                   Text(
-                                    _connText(state),
+                                    connStateText(state),
                                     style: const TextStyle(
                                       fontSize: 11.5,
                                       color: AppColors.textWeak,

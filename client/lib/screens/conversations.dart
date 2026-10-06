@@ -20,6 +20,8 @@ import 'package:xiaozhi_im_client/screens/login.dart';
 import 'package:xiaozhi_im_client/screens/remote.dart';
 import 'package:xiaozhi_im_client/screens/search.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
+import 'package:xiaozhi_im_client/widgets/enterprise_switcher.dart'
+    show showEnterpriseSwitcher;
 import 'package:xiaozhi_im_client/widgets/friend_auth_sheet.dart';
 import 'package:xiaozhi_im_client/widgets/server_settings.dart';
 
@@ -911,6 +913,9 @@ class ConversationsScreenState extends State<ConversationsScreen> {
               onSelected: (v) {
                 if (v == 'fav') _openFavorites();
                 if (v == 'server') _openServer();
+                // 首页顶部的常驻企业条撤掉之后（龙哥 2026-10-06），
+                // 这里成了切换企业的唯一入口 —— 入口必须显性存在。
+                if (v == 'switchco') showEnterpriseSwitcher(context);
                 if (v == 'logout') _logout();
                 if (v == 'tray') _cycleCloseAction();
                 if (v == 'sound') _toggleSound();
@@ -969,6 +974,15 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                     ])),
                 const PopupMenuDivider(),
                 _menuGroup('设置'),
+                // 切换企业：从首页顶部常驻条挪过来（龙哥 2026-10-06 真机反馈，
+                // 顶条把整个界面往下顶，撤掉）。多企业功能入口必须显性存在。
+                const PopupMenuItem(
+                    value: 'switchco',
+                    child: Row(children: [
+                      Icon(Icons.swap_horiz_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('切换企业')
+                    ])),
                 const PopupMenuItem(
                     value: 'server',
                     child: Row(children: [
