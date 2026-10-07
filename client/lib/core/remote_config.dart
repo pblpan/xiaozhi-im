@@ -200,12 +200,6 @@ class RemoteConfig {
   // 纯函数（供单测直接覆盖，不做任何 IO）
   // ============================================================
 
-  /// 提取字符串列表：非字符串元素丢弃
-  static List<String> _stringList(dynamic v) {
-    if (v is! List) return const [];
-    return v.whereType<String>().where((s) => s.trim().isNotEmpty).toList();
-  }
-
   /// 语义化版本比较：a < b 返回 true。位数不同按补零对齐（0.7 < 0.7.1）。
   static bool versionLess(String a, String b) {
     final pa = a.split('.').map((s) => int.tryParse(s) ?? 0).toList();
