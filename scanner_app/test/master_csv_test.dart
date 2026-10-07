@@ -349,5 +349,26 @@ void main() {
       // 名称列（第 4 列）与它有同样的形状，也得原样读出来
       expect(r.items[0]['name'], '冰红茶');
     });
+
+    test('🔴 文本文档(.txt)龙哥定版：每行「条码 数量 商品名」空格分隔，CRLF 换行', () {
+      final doc = StocktakeExport.toScanDoc(<Map<String, dynamic>>[
+        <String, dynamic>{'id': 1, 'barcode': 'A001', 'qty': 2.0, 'name': '甲'},
+        <String, dynamic>{'id': 2, 'barcode': '999999', 'qty': 3.0, 'name': ''},
+      ], sheetNo: 'PD20260919120000');
+      // 🔴 必须 CRLF：Windows 老版记事本只认 \r\n，单独 \n 会连成一行
+      // （龙哥 2026-10-08 报的"没有回车键、直接连在一起"）。
+      expect(doc.contains('\r\n'), isTrue, reason: '必须有回车键(CRLF)');
+      expect(doc.replaceAll('\r\n', '').contains('\n'), isFalse,
+          reason: '不能有单独的 LF，必须是 CRLF');
+      final lines = doc
+          .replaceAll('\uFEFF', '')
+          .split('\r\n')
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
+      expect(lines.length, 2, reason: '只有数据行，无表头/单号/时间/统计行');
+      expect(lines[0], 'A001 2 甲');
+      expect(lines[1], '999999 3 未知条码', reason: '名字空用「未知条码」占位');
+      expect(lines[0].split(' ').length, 3);
+    });
   });
 }

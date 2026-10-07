@@ -236,11 +236,17 @@ class StocktakeExport {
   /// （没有表头/序号/单号/时间/统计行 —— 发微信就是一张干净清单）。
   /// 名字放最后一列：条码和数量本身不含空格，粘到别处按前两列取就行。
   /// 开头带 UTF-8 BOM（不可见）：老版 WPS/记事本不按 UTF-8 猜就不会乱码。
+  ///
+  /// 🔴 2026-10-08 修「没有回车键、连成一行」：换行必须显式用 `\r\n`（CRLF）。
+  /// Dart 的 `writeln` 只输出 `\n`（LF），Windows 老版记事本不认单独的 LF，
+  /// 整文件会被显示成一行 —— 龙哥说的"没有回车键"就是这个。CRLF 在所有
+  /// Windows 文本查看器（含老版记事本）里都能正常换行，而内容字段不变。
   static String toScanDoc(List<Map<String, dynamic>> rows,
       {String sheetNo = ''}) {
     final sb = StringBuffer('\uFEFF');
     for (final r in rows) {
-      sb.writeln('${r['barcode'] ?? ''} ${_num(_d(r['qty']))} ${scanNameOf(r)}');
+      sb.write(
+          '${r['barcode'] ?? ''} ${_num(_d(r['qty']))} ${scanNameOf(r)}\r\n');
     }
     return sb.toString();
   }

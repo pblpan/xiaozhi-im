@@ -330,12 +330,17 @@ void main() {
       expect(csv, contains('"苹果,红富士""大"""'));
     });
 
-    test('🔴 文本文档龙哥定版：每行「条码 数量 商品名」空格分隔，其他一律不带', () {
+    test('🔴 文本文档龙哥定版：每行「条码 数量 商品名」空格分隔，CRLF 换行（有回车键）', () {
       final doc = StocktakeExport.toScanDoc([
         {'id': 1, 'barcode': 'A001', 'qty': 2, 'name': '甲'},
         {'id': 2, 'barcode': '999999', 'qty': 3, 'name': ''},
       ], sheetNo: 'PD20260919120000');
-      final lines = doc.replaceAll('\uFEFF', '').split('\n')
+      // 🔴 必须 CRLF：Windows 老版记事本只认 \r\n，单独的 \n 会被显示成一行
+      // —— 龙哥 2026-10-08 报的"没有回车键、直接连在一起"就是这个。
+      expect(doc.contains('\r\n'), isTrue, reason: '必须有回车键(CRLF)');
+      expect(doc.replaceAll('\r\n', '').contains('\n'), isFalse,
+          reason: '不能有单独的 LF，必须是 CRLF，否则记事本里连成一行');
+      final lines = doc.replaceAll('\uFEFF', '').split('\r\n')
           .where((l) => l.trim().isNotEmpty).toList();
       expect(lines.length, 2, reason: '只有数据行，没有表头/单号/时间/统计行');
       expect(lines[0], 'A001 2 甲');
