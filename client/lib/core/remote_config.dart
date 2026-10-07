@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -43,6 +44,12 @@ class RemoteConfig {
 
   /// 最低版本不满足时的提示文案；null = 版本没问题
   final ValueNotifier<String?> upgradeHint = ValueNotifier<String?>(null);
+
+  /// 当前平台可用的直装包地址（已拼成绝对地址）；null = 没有对应平台的直装包
+  final ValueNotifier<String?> upgradePackageUrl = ValueNotifier<String?>(null);
+
+  /// 通用升级说明页地址（已拼成绝对地址）；null = 没有
+  final ValueNotifier<String?> upgradePageUrl = ValueNotifier<String?>(null);
 
   bool featureOn(String name, {bool def = true}) {
     final f = payload['features'];
@@ -118,15 +125,16 @@ class RemoteConfig {
     try {
       final p = await SharedPreferences.getInstance();
 
-      // ---- ① 服务器地址候选 ----
-      final addrs = _stringList(pl['serverAddresses']);
-      if (addrs.isNotEmpty && !(await Settings.hasUserServers())) {
+      // ---- ① 服务器地址候选（支持字符串 或 {url,type}；含 IPv4/IPv6）----
+      final addrs = pl['serverAddresses'];
+      if (addrs is List && addrs.isNotEmpty && !(await Settings.hasUserServers())) {
         // 用户从没改过地址 → 跟随服务端下发；用户自己配过的优先，绝不覆盖
-        final nextLan = addrs.first;
-        final nextWan = addrs.length > 1 ? addrs[1] : addrs.first;
-        if (nextLan != Config.lanUrl || nextWan != Config.wanUrl) {
-          Config.lanUrl = nextLan;
-          Config.wanUrl = nextWan;
+        final cands = Config.parseCandidates(addrs);
+        if (cands.isNotEmpty) {
+          Config.serverCandidates = cands;
+          // 顺带把前两条写回 lan/wan，兼容任何仍读这两个字段的旧代码
+          Config.lanUrl = cands.first.url;
+          Config.wanUrl = cands.length > 1 ? cands[1].url : cands.first.url;
           Config.invalidateProbeCache(); // 下次重连/手动切换时用新地址，不打断当前连接
         }
       }
@@ -134,13 +142,22 @@ class RemoteConfig {
       // ---- ② 功能开关 / 公告 / 维护：payload 原样保留，消费方按需读 ----
       // （features 非法的键会在 featureOn() 里走默认值，不需要在这里清洗）
 
-      // ---- ③ 版本策略 ----
+      // ---- ③ 版本策略 + 升级包 ----
       final minVer = pl['minClientVersion'];
       if (minVer is String && minVer.isNotEmpty && versionLess(kAppVersion, minVer)) {
         upgradeHint.value = '当前版本 $kAppVersion 过低，请升级到 $minVer 或以上';
       } else {
         upgradeHint.value = null;
       }
+
+      // 选当前平台的直装包（android / windows / ios，都没有则 universal 兜底）
+      final pkgs = pl['upgradePackages'];
+      String? pkg;
+      if (pkgs is Map) pkg = _pickPackage(pkgs);
+      upgradePackageUrl.value = pkg != null ? _resolveUrl(pkg) : null;
+
+      final up = pl['upgradeUrl'];
+      upgradePageUrl.value = (up is String && up.trim().isNotEmpty) ? _resolveUrl(up.trim()) : null;
 
       // ---- ④ 落缓存 + 通知 ----
       payload = pl;
@@ -200,5 +217,33 @@ class RemoteConfig {
       if (x != y) return x < y;
     }
     return false;
+  }
+
+  /// 当前运行平台对应的安装包键名
+  static String _platformKey() {
+    if (Platform.isAndroid) return 'android';
+    if (Platform.isWindows) return 'windows';
+    if (Platform.isIOS) return 'ios';
+    return 'universal';
+  }
+
+  /// 从 upgradePackages 里挑当前平台的包；没有则回退 universal。
+  static String? _pickPackage(Map pkgs) {
+    for (final k in [_platformKey(), 'universal']) {
+      final v = pkgs[k];
+      if (v is String && v.trim().isNotEmpty) return v.trim();
+    }
+    return null;
+  }
+
+  /// 把可能的相对地址（以 / 开头）拼成基于当前服务器地址的绝对地址。
+  String _resolveUrl(String raw) {
+    final s = raw.trim();
+    if (s.startsWith('/')) {
+      final base = Config.baseUrl;
+      if (base.isEmpty) return s;
+      return base.replaceAll(RegExp(r'/$'), '') + s;
+    }
+    return s;
   }
 }

@@ -53,4 +53,27 @@ router.get('/:id/meta', (req, res) => {
   res.json(f);
 });
 
+// 安装包上传（APK/EXE 等体积远超普通文件 50MB 上限）。
+// 单独开一条高上限通道，不影响消息/头像/培训课件的既有 50MB 限制。
+const PKG_LIMIT_MB = Number(process.env.MAX_PACKAGE_MB || 300);
+const pkgUpload = multer({
+  storage,
+  limits: { fileSize: PKG_LIMIT_MB * 1024 * 1024 },
+});
+
+router.post('/upload-package', pkgUpload.single('file'), (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  if (!req.file) return res.status(400).json({ error: 'no file' });
+  const name = fixFilename(req.file.originalname);
+  const info = db.prepare('INSERT INTO files (owner_id,name,mime,size,path,created_at) VALUES (?,?,?,?,?,?)')
+    .run(uid, name, req.file.mimetype, req.file.size, req.file.filename, Date.now());
+  res.json({
+    id: info.lastInsertRowid,
+    name,
+    url: `/files/${req.file.filename}`,
+    mime: req.file.mimetype,
+    size: req.file.size,
+  });
+});
+
 module.exports = router;

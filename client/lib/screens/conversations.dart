@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/badges.dart';
 import 'package:xiaozhi_im_client/core/call_service.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
 import 'package:xiaozhi_im_client/core/remote_config.dart';
+import 'package:xiaozhi_im_client/core/app_updater.dart';
 import 'package:xiaozhi_im_client/core/session_manager.dart';
 import 'package:xiaozhi_im_client/core/sound_service.dart';
 import 'package:xiaozhi_im_client/core/storage.dart';
@@ -320,6 +322,32 @@ class ConversationsScreenState extends State<ConversationsScreen> {
               ],
             ),
             actions: [
+              ValueListenableBuilder<String?>(
+                valueListenable: rc.upgradePackageUrl,
+                builder: (_, pkg, __) => pkg == null
+                    ? const SizedBox.shrink()
+                    : ElevatedButton(
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          await AppUpdater.startUpdate(context, pkg);
+                        },
+                        child: const Text('立即更新'),
+                      ),
+              ),
+              ValueListenableBuilder<String?>(
+                valueListenable: rc.upgradePageUrl,
+                builder: (_, page, __) => page == null
+                    ? const SizedBox.shrink()
+                    : TextButton(
+                        onPressed: () async {
+                          final uri = Uri.parse(page);
+                          if (await canLaunchUrl(uri)) {
+                            await launchUrl(uri, mode: LaunchMode.externalApplication);
+                          }
+                        },
+                        child: const Text('前往升级页'),
+                      ),
+              ),
               TextButton(
                 onPressed: () async {
                   setD(() => fetchTip = '正在检查…');

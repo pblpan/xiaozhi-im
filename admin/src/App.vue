@@ -283,10 +283,17 @@
         <!-- 部署向导：换云服务器一键部署（frps/TURN/隧道/地址候选） -->
         <div v-else-if="tab === 'deploywizard'">
           <el-alert type="info" show-icon :closable="false" style="margin-bottom:14px;">
-            <template #title>换云服务器 / 首次部署，按四步点完即可。全程自动，无需 SSH 手工操作；密码只保存在服务端数据目录（600 权限，不入库）。</template>
+            <template #title>换云服务器 / 首次部署。服务器自身有公网 IP 时选「本地公网直连」更省事；否则选「云服务器隧道」走 frps。</template>
           </el-alert>
 
-          <el-steps :active="dw.active" align-center finish-status="success" style="margin-bottom:16px;">
+          <el-form label-width="0" style="margin-bottom:14px;">
+            <el-radio-group v-model="dw.shape">
+              <el-radio-button value="vps">云服务器隧道（frps）</el-radio-button>
+              <el-radio-button value="direct">本地公网直连（不走隧道）</el-radio-button>
+            </el-radio-group>
+          </el-form>
+
+          <el-steps v-if="dw.shape === 'vps'" :active="dw.active" align-center finish-status="success" style="margin-bottom:16px;">
             <el-step title="云服务器" description="frps + TURN 一键部署" />
             <el-step title="隧道接入" description="frpc 自动切换" />
             <el-step title="通话中继" description="双 TURN 并存下发" />
@@ -294,7 +301,7 @@
           </el-steps>
 
           <!-- 第 1 步 -->
-          <el-card shadow="never" style="margin-bottom:14px;">
+          <el-card v-if="dw.shape === 'vps'" shadow="never" style="margin-bottom:14px;">
             <template #header><b>🖥️ 第 1 步 · 云服务器信息</b></template>
             <el-form label-width="90px" size="default" style="max-width:640px;">
               <el-form-item label="公网 IP"><el-input v-model="dw.vps.host" placeholder="例如 185.242.233.140" /></el-form-item>
@@ -325,7 +332,7 @@
           </el-card>
 
           <!-- 第 2 步：形态自动判定 —— frpc 必须跟服务端同机 -->
-          <el-card shadow="never" style="margin-bottom:14px;">
+          <el-card v-if="dw.shape === 'vps'" shadow="never" style="margin-bottom:14px;">
             <template #header><b>🔌 第 2 步 · frp 隧道接入</b>
               <el-tag size="small" :type="dwIsWin ? 'warning' : 'success'" style="margin-left:6px;">{{ dwIsWin ? 'Windows 服务端 · 本机模式' : '飞牛 NAS · SSH 模式' }}</el-tag>
             </template>
@@ -360,7 +367,7 @@
           </el-card>
 
           <!-- 第 3 步 -->
-          <el-card shadow="never" style="margin-bottom:14px;">
+          <el-card v-if="dw.shape === 'vps'" shadow="never" style="margin-bottom:14px;">
             <template #header><b>📞 第 3 步 · 通话 TURN 中继</b></template>
             <el-button type="primary" @click="dwTurn" :disabled="dw.active < 2 || dw.busy==='turn'"
               :loading="dw.busy==='turn'">写入中继配置并重启生效</el-button>
@@ -371,18 +378,35 @@
             <div style="margin-top:8px;color:#9ca3af;font-size:12px;">与 Cloudflare 托管中继并存，客户端自动挑通的用；重启服务端约 10~20 秒，期间管理台短暂失联。</div>
           </el-card>
 
-          <!-- 第 4 步 -->
+          <!-- 第 4 步 / 本地公网直连：客户端地址候选 -->
           <el-card shadow="never" style="margin-bottom:14px;">
-            <template #header><b>📱 第 4 步 · 客户端地址候选</b></template>
-            <div style="font-size:13px;line-height:1.9;color:#374151;">
-              到「<b>对外对接 → 客户端配置</b>」把服务器地址候选改为两条（客户端只吃前两条）：<br />
-              <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">http://&lt;飞牛内网IP&gt;:3602</code>
-              （第 1 条 = 内网）
-              <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;margin-left:8px;">http://&lt;VPS公网IP&gt;:3602</code>
-              （第 2 条 = 外网）<br />
-              发布后客户端启动时/每 30 分钟自动拉取，无需更新 App；内网外网自动探测互备。
-            </div>
-            <el-button style="margin-top:10px;" @click="tab = 'clientconfig'">前往客户端配置 →</el-button>
+            <template #header><b>📱 客户端地址候选</b></template>
+
+            <template v-if="dw.shape === 'vps'">
+              <div style="font-size:13px;line-height:1.9;color:#374151;">
+                到「<b>对外对接 → 客户端配置</b>」把服务器地址候选改为两条（客户端只吃前两条）：<br />
+                <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">http://&lt;飞牛内网IP&gt;:3602</code>
+                （第 1 条 = 内网）
+                <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;margin-left:8px;">http://&lt;VPS公网IP&gt;:3602</code>
+                （第 2 条 = 外网）<br />
+                发布后客户端启动时/每 30 分钟自动拉取，无需更新 App；内网外网自动探测互备。
+              </div>
+              <el-button style="margin-top:10px;" @click="tab = 'clientconfig'">前往客户端配置 →</el-button>
+            </template>
+
+            <template v-else>
+              <div style="font-size:13px;line-height:1.9;color:#374151;margin-bottom:10px;">
+                服务器本身有公网 IP，客户端直连即可（不走 frps 隧道）。填好下面地址，点「写入客户端地址候选」会直接发布到客户端配置中心；
+                客户端按优先级并发探测 IPv4 / IPv6，哪个通连哪个。
+              </div>
+              <el-form label-width="110px" size="default" style="max-width:640px;">
+                <el-form-item label="内网 LAN"><el-input v-model="dw.direct.lan" placeholder="http://192.168.x.x:3602（同局域网用）" /></el-form-item>
+                <el-form-item label="公网 IPv4"><el-input v-model="dw.direct.ipv4" placeholder="http://你的公网IPv4:3602" /></el-form-item>
+                <el-form-item label="公网 IPv6"><el-input v-model="dw.direct.ipv6" placeholder="http://[2001:db8::1]:3602（IPv6 用方括号）" /></el-form-item>
+              </el-form>
+              <el-button type="primary" :loading="dwDirectBusy" @click="dwWriteAddresses">写入客户端地址候选</el-button>
+              <el-button @click="tab = 'clientconfig'">前往客户端配置细调 →</el-button>
+            </template>
           </el-card>
 
           <!-- 健康检查 -->
@@ -1713,9 +1737,18 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <el-form-item>
                     <template #label><span class="cc-label">服务器地址候选</span></template>
                     <div style="width:100%">
-                      <el-input v-model="ccForm.addrText" type="textarea" :rows="3"
-                        placeholder="每行一个，按优先级排序，如：&#10;http://192.168.1.100:3602&#10;https://your-domain.example.com" />
-                      <div class="hint">客户端未手动改过地址时按顺序探测；留空 = 用打包内置地址。改动后**不打断**在线连接，下次重连生效。</div>
+                      <div v-for="(a, i) in ccForm.addrs" :key="i" style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+                        <el-select v-model="a.type" style="width:130px">
+                          <el-option label="内网 LAN" value="lan" />
+                          <el-option label="公网 IPv4" value="ipv4" />
+                          <el-option label="公网 IPv6" value="ipv6" />
+                          <el-option label="其他/域名" value="other" />
+                        </el-select>
+                        <el-input v-model="a.url" placeholder="http:// 或 https:// 开头" style="flex:1" />
+                        <el-button size="small" text type="danger" @click="ccForm.addrs.splice(i,1)">删除</el-button>
+                      </div>
+                      <el-button size="small" @click="ccForm.addrs.push({ type: 'lan', url: '' })">+ 加地址</el-button>
+                      <div class="hint">客户端未手动改过地址时，按优先级并发探测选可达者（含 IPv4/IPv6）。留空 = 用打包内置地址。改动后**不打断**在线连接，下次重连生效。</div>
                     </div>
                   </el-form-item>
 
@@ -1736,13 +1769,34 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     <template #label><span class="cc-label">最低客户端版本</span></template>
                     <div style="width:100%">
                       <el-input v-model="ccForm.minVersion" placeholder="如 0.7.0；留空 = 不限制" style="width:220px" />
-                      <div class="hint">低于此版本的客户端会在登录页提示升级（不拦截使用）。</div>
+                      <div class="hint">低于此版本的客户端会在「关于」里提示并可直接更新。</div>
                     </div>
                   </el-form-item>
 
                   <el-form-item>
-                    <template #label><span class="cc-label">升级地址</span></template>
-                    <el-input v-model="ccForm.upgradeUrl" placeholder="https://…（留空 = 不显示）" />
+                    <template #label><span class="cc-label">在线更新</span></template>
+                    <div style="width:100%">
+                      <el-input v-model="ccForm.upgradeUrl" placeholder="通用升级说明页（https://…，留空 = 不显示）" style="margin-bottom:8px" />
+                      <div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+                        <span style="width:96px;color:#606266;font-size:13px">安卓 APK</span>
+                        <el-input v-model="ccForm.pkgAndroid" placeholder="上传后自动填，也可手填 /files/xxx 或 https://…" style="flex:1" />
+                        <el-button size="small" :loading="pkgUploading && pkgUploadingPlatform==='android'" @click="pkgPick('android')">{{ (ccForm.pkgAndroid||'').includes('/files/') ? '重新上传' : '上传文件' }}</el-button>
+                        <el-button v-if="ccForm.pkgAndroid" size="small" text type="danger" @click="ccForm.pkgAndroid = ''">清除</el-button>
+                      </div>
+                      <div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+                        <span style="width:96px;color:#606266;font-size:13px">Windows EXE</span>
+                        <el-input v-model="ccForm.pkgWindows" placeholder="上传后自动填，也可手填 /files/xxx 或 https://…" style="flex:1" />
+                        <el-button size="small" :loading="pkgUploading && pkgUploadingPlatform==='windows'" @click="pkgPick('windows')">{{ (ccForm.pkgWindows||'').includes('/files/') ? '重新上传' : '上传文件' }}</el-button>
+                        <el-button v-if="ccForm.pkgWindows" size="small" text type="danger" @click="ccForm.pkgWindows = ''">清除</el-button>
+                      </div>
+                      <div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+                        <span style="width:96px;color:#606266;font-size:13px">iOS 链接</span>
+                        <el-input v-model="ccForm.pkgIos" placeholder="App Store / TestFlight 链接" style="flex:1" />
+                        <el-button v-if="ccForm.pkgIos" size="small" text type="danger" @click="ccForm.pkgIos = ''">清除</el-button>
+                      </div>
+                      <div class="hint">安卓/WIN 客户端「关于 → 立即更新」会下载并调起安装；iOS 跳链接。文件走服务端 /files/ 托管（上限 300MB）。</div>
+                    </div>
+                    <input ref="pkgFileEl" type="file" style="display:none" @change="onPkgFile" />
                   </el-form-item>
 
                   <el-form-item>
@@ -5784,6 +5838,19 @@ const setupDoneCount = computed(() => setupSteps.value.filter((s) => s.done).len
 const setupDone = computed(() => setupDoneCount.value === setupSteps.value.length);
 const setupPercent = computed(() => Math.round((setupDoneCount.value / setupSteps.value.length) * 100));
 
+// 上手向导：所有步骤完成后默认折叠（龙哥 2026-10 需求）。
+// 已完成 → 折叠；未完成 → 展开。首屏已是完成态也直接折叠；
+// 用户手动展开后仍不被后续数据刷新强行收起（用 setupAutoCollapsed 守住）。
+// 初值必须为 false：若为 setupDone.value，则首屏已完成态下 immediate 触发
+// `now && !setupAutoCollapsed` 为 `true && !true` 恒为假，永远折叠不了。
+const setupAutoCollapsed = ref(false);
+watch(setupDone, (now) => {
+  if (now && !setupAutoCollapsed.value) {
+    setupOpen.value = false;
+    setupAutoCollapsed.value = true;
+  }
+}, { immediate: true });
+
 /**
  * 首次运行：设置管理台密码。
  * 成功即拿服务端返回的 token 直接进管理台 —— 刚设完密码再让人输一遍没有意义。
@@ -5998,10 +6065,13 @@ async function loadTab() {
  */
 const dw = reactive({
   active: 0,
+  shape: 'vps', // vps = 云服务器隧道；direct = 本地公网直连（不走隧道）
   vps: { host: '', port: 22, user: 'root', password: '' },
   fnos: { host: '', port: 22, user: '', password: '' },
   ports: { server: 3602, frp: 7000, turn: 3478 },
   platform: '',
+  // 本地公网直连：服务器自身的地址（带类型）
+  direct: { lan: '', ipv4: '', ipv6: '' },
   hasVpsPw: false, hasFnosPw: false,
   task: { state: 'idle', steps: [], logs: [] },
   polling: null, waitBack: null,
@@ -6009,6 +6079,28 @@ const dw = reactive({
   ice: null,
   busy: '',
 });
+
+// 本地公网直连：把填好的地址（带类型）写入客户端配置中心
+const dwDirectBusy = ref(false);
+async function dwWriteAddresses() {
+  const list = [];
+  if (dw.direct.lan.trim()) list.push({ url: dw.direct.lan.trim().replace(/\/+$/, ''), type: 'lan' });
+  if (dw.direct.ipv4.trim()) list.push({ url: dw.direct.ipv4.trim().replace(/\/+$/, ''), type: 'ipv4' });
+  if (dw.direct.ipv6.trim()) list.push({ url: dw.direct.ipv6.trim().replace(/\/+$/, ''), type: 'ipv6' });
+  if (!list.length) { ElMessage.warning('至少填一个地址'); return; }
+  dwDirectBusy.value = true;
+  try {
+    const { data } = await api.post('/admin/client-config', {
+      payload: { serverAddresses: list },
+      note: '部署向导-本地公网直连',
+    });
+    ElMessage.success(`已写入客户端地址候选（v${data.version}）`);
+  } catch (e) {
+    ElMessage.error('写入失败：' + (e.response?.data?.error || e.message));
+  } finally {
+    dwDirectBusy.value = false;
+  }
+}
 const dwIsWin = computed(() => dw.platform === 'win32');
 
 async function dwEnter() {
@@ -6693,21 +6785,59 @@ const ccNote = ref('');
 const ccBusy = ref(false);
 // 表单模型：从线上 payload 展开成好编辑的形状
 const ccForm = ref({
-  addrText: '',
+  addrs: [],           // [{ type, url }]  type ∈ lan/ipv4/ipv6/other
   features: [],        // [{ key, on }]
   minVersion: '',
-  upgradeUrl: '',
+  upgradeUrl: '',      // 通用升级说明页（浏览器打开）
+  pkgAndroid: '',      // 安卓直装包地址（APK）
+  pkgWindows: '',      // Windows 直装包地址（exe）
+  pkgIos: '',          // iOS 链接（App Store 等）
   announcements: [],   // [{ text, level }]
   maintOn: false,
   maintText: '',
 });
 
+// 安装包上传：隐藏 file input + 当前正在传的平台
+const pkgFileEl = ref(null);
+const pkgUploading = ref(false);
+const pkgUploadingPlatform = ref('');
+
+async function onPkgFile(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+  const platform = pkgUploadingPlatform.value;
+  pkgUploading.value = true;
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const { data } = await api.post('/files/upload-package', fd);
+    if (platform === 'android') ccForm.value.pkgAndroid = data.url;
+    else if (platform === 'windows') ccForm.value.pkgWindows = data.url;
+    else if (platform === 'ios') ccForm.value.pkgIos = data.url;
+    ElMessage.success(`已上传到 ${data.url}`);
+  } catch (err) { trErr(err, '上传安装包失败'); }
+  finally { pkgUploading.value = false; pkgUploadingPlatform.value = ''; }
+}
+
+function pkgPick(platform) {
+  pkgUploadingPlatform.value = platform;
+  pkgFileEl.value?.click();
+}
+
 function payloadToForm(p) {
+  const rawAddrs = p.serverAddresses || [];
+  const addrs = rawAddrs.map((a) => (typeof a === 'string'
+    ? { type: 'other', url: a }
+    : { type: a.type || 'other', url: a.url || '' }));
   return {
-    addrText: (p.serverAddresses || []).join('\n'),
+    addrs,
     features: Object.entries(p.features || {}).map(([key, on]) => ({ key, on: !!on })),
     minVersion: p.minClientVersion || '',
     upgradeUrl: p.upgradeUrl || '',
+    pkgAndroid: (p.upgradePackages && p.upgradePackages.android) || '',
+    pkgWindows: (p.upgradePackages && p.upgradePackages.windows) || '',
+    pkgIos: (p.upgradePackages && p.upgradePackages.ios) || '',
     announcements: (p.announcements || []).map((a) => ({ text: a.text, level: a.level || 'info' })),
     maintOn: !!p.maintenance,
     maintText: p.maintenance?.text || '',
@@ -6716,7 +6846,12 @@ function payloadToForm(p) {
 
 function formToPayload() {
   const p = {
-    serverAddresses: ccForm.value.addrText.split('\n').map((s) => s.trim()).filter(Boolean),
+    // 地址：ipv4/ipv6 保持 {url,type} 对象（老客户端不识别会丢弃，但这两类本就需要新客户端）；
+    // 其余类型（lan/wan/other）回退成字符串，保证老客户端仍能识别。
+    serverAddresses: ccForm.value.addrs
+      .map((a) => ({ type: a.type || 'other', url: String(a.url || '').trim().replace(/\/+$/, '') }))
+      .filter((a) => a.url)
+      .map((a) => (a.type === 'ipv4' || a.type === 'ipv6') ? { url: a.url, type: a.type } : a.url),
     features: {},
     announcements: ccForm.value.announcements.filter((a) => a.text.trim()).map((a) => ({ text: a.text.trim(), level: a.level })),
   };
@@ -6725,6 +6860,12 @@ function formToPayload() {
     if (k) p.features[k] = !!f.on;
   }
   if (ccForm.value.minVersion.trim()) p.minClientVersion = ccForm.value.minVersion.trim();
+  // 按平台安装包 + 通用升级页
+  const pkgs = {};
+  if (ccForm.value.pkgAndroid.trim()) pkgs.android = ccForm.value.pkgAndroid.trim();
+  if (ccForm.value.pkgWindows.trim()) pkgs.windows = ccForm.value.pkgWindows.trim();
+  if (ccForm.value.pkgIos.trim()) pkgs.ios = ccForm.value.pkgIos.trim();
+  if (Object.keys(pkgs).length) p.upgradePackages = pkgs;
   if (ccForm.value.upgradeUrl.trim()) p.upgradeUrl = ccForm.value.upgradeUrl.trim();
   if (ccForm.value.maintOn && ccForm.value.maintText.trim()) p.maintenance = { text: ccForm.value.maintText.trim(), until: null };
   return p;

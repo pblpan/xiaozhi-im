@@ -12,13 +12,19 @@ const db = require('./db');
 
 /** 首版默认配置：没有任何候选地址时，客户端继续用打包内置地址，行为不变 */
 const DEFAULT_CONFIG = Object.freeze({
-  serverAddresses: [], // 候选服务器地址，按优先级排序
+  serverAddresses: [], // 候选服务器地址，按优先级排序；元素可为字符串，或 { url, type }
   features: {},        // 功能开关：{ "groupCall": true, ... }
   minClientVersion: null, // 最低允许版本 "X.Y.Z"；null = 不限制
-  upgradeUrl: null,       // 升级说明页/下载地址
+  upgradeUrl: null,       // 通用升级说明页/下载地址（浏览器打开）
+  upgradePackages: {},    // 按平台直装包：{ android?, windows?, ios?, universal? }，值=下载地址
   announcements: [],      // 公告 [{ text, level: info|warn|critical }]
   maintenance: null,      // 维护公告 { text, until } 或 null
 });
+
+// 地址类型白名单（需求3：IPv4/IPv6 + 内网/外网/其他）
+const ADDR_TYPES = ['lan', 'wan', 'ipv4', 'ipv6', 'other'];
+// 安装包平台白名单
+const PKG_PLATFORMS = ['android', 'windows', 'ios', 'universal'];
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 const MAX_ADDRESSES = 10;
@@ -67,17 +73,32 @@ function validate(input) {
   }
   const out = { ...DEFAULT_CONFIG };
 
-  // serverAddresses：字符串数组，http(s) 开头，去重、限 10 条
+  // serverAddresses：数组，元素可为「字符串」或「{ url, type }」；http(s) 开头，去重、限 10 条。
+  // 需求3：支持给每条地址标类型（lan/wan/ipv4/ipv6/other），客户端据此做 IPv4/IPv6 全量探测。
   if (input.serverAddresses !== undefined) {
     const a = input.serverAddresses;
     if (!Array.isArray(a)) return { error: 'serverAddresses 必须是地址数组' };
     const seen = new Set();
     const list = [];
     for (const raw of a) {
-      const s = String(raw || '').trim().replace(/\/+$/, '');
+      let s;
+      let type;
+      if (typeof raw === 'string') {
+        s = raw.trim().replace(/\/+$/, '');
+      } else if (raw && typeof raw === 'object' && typeof raw.url === 'string') {
+        s = raw.url.trim().replace(/\/+$/, '');
+        if (raw.type !== undefined && raw.type !== null && raw.type !== '') {
+          if (!ADDR_TYPES.includes(raw.type)) {
+            return { error: `地址类型不合法：${raw.type}（允许 ${ADDR_TYPES.join('/')}）` };
+          }
+          type = raw.type;
+        }
+      } else {
+        return { error: '每条地址必须是字符串或 { url, type } 对象' };
+      }
       if (!s) continue;
       if (!/^https?:\/\//i.test(s)) return { error: `地址必须以 http:// 或 https:// 开头：${s}` };
-      if (!seen.has(s)) { seen.add(s); list.push(s); }
+      if (!seen.has(s)) { seen.add(s); list.push(type ? { url: s, type } : s); }
     }
     if (list.length > MAX_ADDRESSES) return { error: `地址最多 ${MAX_ADDRESSES} 条` };
     out.serverAddresses = list;
@@ -107,10 +128,32 @@ function validate(input) {
   if (input.upgradeUrl !== undefined) {
     const u = input.upgradeUrl;
     if (u !== null && u !== undefined && u !== '') {
-      if (typeof u !== 'string' || !/^https?:\/\//i.test(u.trim())) {
-        return { error: 'upgradeUrl 必须以 http:// 或 https:// 开头' };
+      // 允许绝对地址（http/https）或相对路径（以 / 开头，客户端拼 baseUrl 访问 /files/ 上的安装包）
+      if (typeof u !== 'string' || !/^(https?:\/\/|\/)/i.test(u.trim())) {
+        return { error: 'upgradeUrl 必须以 http(s):// 或 / 开头（/ 开头 = 相对服务器地址）' };
       }
       out.upgradeUrl = u.trim();
+    }
+  }
+
+  // upgradePackages：按平台直装包地址；每项为绝对地址或相对路径（同 upgradeUrl 规则）
+  if (input.upgradePackages !== undefined) {
+    const p = input.upgradePackages;
+    if (p === null || p === undefined) {
+      out.upgradePackages = {};
+    } else if (typeof p !== 'object' || Array.isArray(p)) {
+      return { error: 'upgradePackages 必须是对象 { android?, windows?, ios?, universal? }' };
+    } else {
+      const out2 = {};
+      for (const [k, v] of Object.entries(p)) {
+        if (!PKG_PLATFORMS.includes(k)) return { error: `不支持的安装包平台：${k}（允许 ${PKG_PLATFORMS.join('/')}）` };
+        if (v === null || v === undefined || v === '') continue;
+        if (typeof v !== 'string' || !/^(https?:\/\/|\/)/i.test(v.trim())) {
+          return { error: `升级包 ${k} 地址必须以 http(s):// 或 / 开头` };
+        }
+        out2[k] = v.trim();
+      }
+      out.upgradePackages = out2;
     }
   }
 

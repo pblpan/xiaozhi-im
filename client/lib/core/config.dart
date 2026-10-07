@@ -65,6 +65,16 @@ class Config {
   /// 兼容旧代码：socket.dart、api.dart 都读 baseUrl
   static String currentUrl = builtInBaseUrl;
 
+  /// 服务端下发的候选地址（带类型）。非空时 auto 模式全量并发探测选可达者。
+  /// 空 = 回退到 lanUrl/wanUrl 的旧逻辑（兼容老服务端 / 老配置）。
+  static List<ServerCandidate> serverCandidates = const [];
+
+  /// 是否使用服务端下发的候选地址
+  static bool get hasCandidates => serverCandidates.isNotEmpty;
+
+  /// 地址类型白名单（需求3：IPv4/IPv6 + 内网/外网/其他）
+  static const List<String> addrTypes = ['lan', 'wan', 'ipv4', 'ipv6', 'other'];
+
   /// 用户是否改过（任一地址或模式与内置默认不同）
   static bool get isCustom =>
       lanUrl != builtInBaseUrl ||
@@ -135,26 +145,31 @@ class Config {
       return _lastProbeUrl!;
     }
 
-    // 4) 并发探测
-    final lan = lanUrl.isNotEmpty ? lanUrl : null;
-    final wan = wanUrl.isNotEmpty ? wanUrl : null;
-    if (lan == null && wan == null) {
+    // 4) 待探测地址列表：
+    //    · 优先用服务端下发的全量候选（含 IPv4/IPv6，按优先级排序）；
+    //    · 否则回退到内置的 lan/wan 两条（兼容老服务端 / 老配置）。
+    final List<String> probeList;
+    if (hasCandidates) {
+      probeList = serverCandidates.map((c) => c.url).toList();
+    } else {
+      probeList = [
+        if (lanUrl.isNotEmpty) lanUrl,
+        if (wanUrl.isNotEmpty) wanUrl,
+      ];
+    }
+    if (probeList.isEmpty) {
       // 一个地址都没有（新装且局域网也没扫到）→ 状态就是"未配置"。
       // ⚠️ 这里**不做任何 fallback**：宁可让上层显示"去设置服务器"，
       //    也不要悄悄连一个写死的地址（加固前这里会 fallback 到内置生产 IP）。
       currentUrl = '';
       return currentUrl;
     }
-    if (lan != null && wan == null) {
-      _markProbe(lan);
+    if (probeList.length == 1) {
+      _markProbe(normalize(probeList.first));
       return currentUrl;
     }
-    if (wan != null && lan == null) {
-      _markProbe(wan);
-      return currentUrl;
-    }
-    // 两个都存在：并发探测，先到先用
-    final winner = await pickFor(lan!, wan!, mode);
+    // 多个候选：并发探测，先到先用；都不通回退到优先级最高的那条
+    final winner = await _raceProbeMany(probeList);
     _markProbe(winner);
     return currentUrl;
   }
@@ -191,6 +206,49 @@ class Config {
       return a; // 超时 fallback 到 LAN
     }
   }
+
+  /// 并发探测多个候选地址，返回先连通的；都不通 fallback 到第一个（按优先级）。
+  static Future<String> _raceProbeMany(List<String> urls) async {
+    final norm = urls.map((u) => normalize(u)).toList();
+    try {
+      final results = await Future.wait(norm.map((u) => _probe(u)))
+          .timeout(const Duration(seconds: 4));
+      for (final r in results) {
+        if (r.ok) return r.url;
+      }
+      return norm.first; // 都不通：回退到优先级最高的那条
+    } catch (_) {
+      return norm.first;
+    }
+  }
+
+  /// 把服务端下发的 serverAddresses（字符串 或 {url,type}）解析成候选列表。
+  /// 非法元素丢弃；字符串按格式猜类型（IPv6 / 内网 / 其他）。
+  static List<ServerCandidate> parseCandidates(List<dynamic> raw) {
+    final out = <ServerCandidate>[];
+    for (final e in raw) {
+      if (e is String && e.trim().isNotEmpty) {
+        out.add(ServerCandidate(normalize(e), _guessType(e)));
+      } else if (e is Map && e['url'] is String && (e['url'] as String).trim().isNotEmpty) {
+        final url = normalize(e['url'] as String);
+        final t = e['type'] is String ? e['type'] as String : 'other';
+        out.add(ServerCandidate(url, addrTypes.contains(t) ? t : 'other'));
+      }
+    }
+    return out;
+  }
+
+  static String _guessType(String url) {
+    final u = url.trim();
+    if (u.contains('[') && u.contains(']')) return 'ipv6'; // IPv6 字面量 [host]:port
+    if (_privateIpRe.hasMatch(u)) return 'lan';
+    return 'other';
+  }
+
+  static final RegExp _privateIpRe = RegExp(
+    r'https?://(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)',
+    caseSensitive: false,
+  );
 
   /// 单独探测一个地址是否可达（**不污染全局** `currentUrl`）。
   /// 供企业切换器显示"两个服务器地址都在链接状态"——每个档案的内网/外网各探一次。
@@ -250,4 +308,11 @@ class _ProbeResult {
   final bool ok;
   const _ProbeResult.ok(this.url) : ok = true;
   const _ProbeResult.fail(this.url) : ok = false;
+}
+
+/// 服务器候选地址（需求3：带类型，支持 IPv4/IPv6 区分探测）
+class ServerCandidate {
+  final String url;
+  final String type; // lan | wan | ipv4 | ipv6 | other
+  const ServerCandidate(this.url, this.type);
 }
