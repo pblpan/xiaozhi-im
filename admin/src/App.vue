@@ -510,15 +510,35 @@
             <template #header>
               <div class="card-hdr">
                 <span>系统帮助</span>
-                <span class="hint">按「先认识、再上手、出问题怎么办」的顺序编排</span>
+                <span class="hint">输入关键词，搜索你遇到的问题</span>
               </div>
             </template>
 
-            <el-alert type="success" :closable="false" style="margin-bottom:18px">
+            <el-alert type="success" :closable="false" style="margin-bottom:16px">
               <template #title>
                 数据 100% 在你自己机器上，不经过任何第三方云 —— 这是本系统与公有云 IM 的根本区别。
               </template>
             </el-alert>
+
+            <!-- 搜索框：输入即筛选下方常见问题（套工厂V2「搜索问题→解决问题」模式） -->
+            <el-input v-model="helpSearch" size="large" clearable
+              placeholder="搜索你遇到的问题，如：外网通话打不通、忘记密码、考勤看不到入口、客户端怎么更新…"
+              style="margin-bottom:4px">
+              <template #prefix><span style="font-size:16px;color:#909399">🔍</span></template>
+            </el-input>
+            <div class="hint" style="margin-bottom:16px">输入关键词即时筛选下方常见问题；没有匹配时请往下看各章节的完整说明。</div>
+
+            <!-- 常见问题（可搜索问答） -->
+            <section class="help-sec">
+              <h3>常见问题（输入即筛选）</h3>
+              <el-empty v-if="helpSearch && !helpFaqFiltered.length" description="没有匹配的问答，换个更短的关键词，或查看下方各章节的完整说明" />
+              <el-collapse v-else :model-value="helpSearch ? helpFaqFiltered.map((_, i) => String(i)) : []">
+                <el-collapse-item v-for="(it, i) in helpFaqFiltered" :key="i" :name="String(i)">
+                  <template #title><span class="faq-q">{{ it.q }}</span></template>
+                  <div class="faq-a" v-html="it.a"></div>
+                </el-collapse-item>
+              </el-collapse>
+            </section>
 
             <section class="help-sec">
               <h3>一、这是什么</h3>
@@ -927,106 +947,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </section>
 
             <section class="help-sec">
-              <h3>七、常见问题</h3>
-              <el-collapse>
-                <el-collapse-item title="外网呼入时，被叫端「来电界面根本不弹」，挂断后才显示未接" name="1">
-                  <p>已在 v0.6.1 修复，根因有两个，缺一都修不好：</p>
-                  <ul>
-                    <li>长连接断线后<b>放弃重连</b>（旧版重试 12 次就彻底不管了），且没有心跳，假死连接识别不出来 → 来电帧收不到。现在改为无限重连 + 20 秒应用层心跳 + 服务端 30 秒协议层探测。</li>
-                    <li>服务端一发现被叫掉线就<b>立刻拆话</b>，重连回来也补不了。现在有 20 秒宽限期，期内重连会补推来电界面。</li>
-                  </ul>
-                  <p>若仍出现：确认手机上的客户端版本 ≥ v0.6.1。</p>
-                </el-collapse-item>
-                <el-collapse-item title="双方都在外网时通话完全打不通，或只有声音没有画面" name="2">
-                  <p>说明 P2P 和中继都没成功，基本都是<b>中继没配上</b>。按顺序检查：</p>
-                  <ol>
-                    <li>本页「系统设置」是否显示已下发 TURN；没配就先配 Cloudflare TURN（不需要端口映射，最省事）。</li>
-                    <li>用<b>手机 4G/5G</b> 实测（同 Wi-Fi 下测不出来）。</li>
-                    <li>自建 coturn 方案还要确认公网端口真的能进 —— 在家里的网络上测公网 IP:3478 是测不准的。</li>
-                  </ol>
-                </el-collapse-item>
-                <el-collapse-item title="忘记管理员密码了" name="3">
-                  <p><b>先看能不能自己查回来</b>：Windows 版双击安装目录里的
-                    <code class="mono">查看管理员密码.cmd</code>，它会读出当前密码
-                    （首次运行向导里设的密码也会同步写进那份配置）。</p>
-                  <p>登录后可在「系统设置」页直接改（无需重启服务）。若已经登不进去、也查不到，
-                    用环境变量 <code class="mono">ADMIN_USERNAME</code> /
-                    <code class="mono">ADMIN_PASSWORD</code> 重启服务端做引导；
-                    用户名不存在时会自动补建这个管理员账号。</p>
-                  <p><b>全新服务器</b>（还从没设过管理密码）打开管理台会自动进「首次运行」向导，
-                    当场设一个就行，不用去翻任何配置文件。</p>
-                </el-collapse-item>
-                <el-collapse-item title="数据怎么备份 / 迁移" name="4">
-                  <p>全部数据都在 NAS 的应用目录（<code class="mono">/vol1/@appcenter/xiaozhi-im</code>）下：
-                    数据库、上传的文件、以及 <code class="mono">docker/.env</code> 配置。
-                    定期备份 <code class="mono">data/</code> 目录即可，迁机时整个目录搬过去。</p>
-                </el-collapse-item>
-                <el-collapse-item title="手机装了新版本，但界面还是旧的" name="5">
-                  <p>安卓在 <code class="mono">versionCode</code> 没增长时会<b>静默跳过</b>覆盖安装，看起来像没更新。
-                    请确认安装的是交付目录里版本号最高的那个 APK。</p>
-                </el-collapse-item>
-                <el-collapse-item title="客户端连不上服务器" name="6">
-                  <p>先在 App 内「服务器设置」确认地址正确（内网一般是 <code class="mono">http://192.168.1.100:3602</code>）。
-                    若人在外面，需要走外网访问通道；服务端本身只监听 3602 一个端口。</p>
-                </el-collapse-item>
-                <el-collapse-item title="员工登录后搜不到同事，也加不了好友" name="7">
-                  <p>先确认当前是不是<b>工作模式</b>。工作模式下：搜索只返回<b>同组织</b>成员，且不允许主动加好友
-                    （同事关系由组织决定，不靠申请/同意）。</p>
-                  <p>如果这个账号还<b>不属于任何组织</b>（普通模式时期自己注册的老账号，或直接在「用户管理」里建的），
-                    他就会一个人都搜不到，看着像系统坏了。处理办法：</p>
-                  <ol>
-                    <li>打开「组织机构 → 员工管理」；</li>
-                    <li>把他的<b>账号本身当作工号</b>录入（可顺手指定部门和岗位）；</li>
-                    <li>系统会识别出这是已有账号 → <b>收编进组织、不改密码</b>，并立刻与同事互为好友。</li>
-                  </ol>
-                  <p>要一次处理一批人，用「员工管理 → 批量导入」把账号列粘进去即可。</p>
-                </el-collapse-item>
-                <el-collapse-item title="部门删不掉，提示「该部门下有 N 名员工」，但列表里看不到人" name="8">
-                  <p>这是老版本的残留数据：早期「移除员工」只清掉了组织归属，没清部门 / 岗位，
-                    人被移走了却仍占着部门名额。当前版本已修复（移除时会一并清空）。</p>
-                  <p>若已有这种残留：把那个人<b>重新录入一次再移除</b>，即可清干净；或者给他重新指定一个部门再撤回。</p>
-                </el-collapse-item>
-                <el-collapse-item title="员工忘记登录密码了" name="9">
-                  <p>管理员在「用户管理」里找到该账号 → 编辑 → <b>重置密码</b>（不需要旧密码）。
-                    员工也可以在客户端「个人信息 → 账号 → 修改密码」自己改，但只能改自己的。</p>
-                </el-collapse-item>
-                <el-collapse-item title="普通模式切成工作模式，原来的人还能用吗" name="10">
-                  <p>能登录，和已有好友也能照常聊天（好友关系保留）。但<b>没进组织的人搜不到新同事</b>，
-                    因为工作模式下搜索被限定为同组织。把他们收编进组织即可，见「四之二」。</p>
-                </el-collapse-item>
-                <el-collapse-item title="员工端看不到「考勤打卡」入口" name="11">
-                  <p>考勤入口由服务端按<b>业务状态</b>决定是否下发，三个条件缺一不可：</p>
-                  <ol>
-                    <li>好友模式是<b>工作模式</b>（系统设置）；</li>
-                    <li>已经<b>创建组织</b>（组织机构）；</li>
-                    <li>该账号<b>是组织员工</b>（有工号）。</li>
-                  </ol>
-                  <p><b>先确认这个账号到底是不是"员工"</b>：最容易踩的是<b>账号没录入组织</b>（看「组织机构」里数得到人吗）——
-                    没入编的账号工作台是空的，看起来跟"功能坏了"一模一样。用「组织机构 → 录入员工」补上即可。</p>
-                  <p><b>如果这个账号是管理员</b>：管理员本身不参与考勤，看不到「考勤打卡」是<b>正常</b>的 ——
-                    他看到的是「<b>考勤记录</b>」（今日全员出勤、缺卡、代补卡）。两种角色看到的工作台本来就不同：
-                    员工 = 考勤打卡 / 我的申请 / 组织通讯录；管理员 = 考勤记录 / 组织通讯录。</p>
-                  <p>另外确认「考勤管理 → 考勤设置」里的<b>启用考勤</b>没有被关掉。客户端下拉刷新工作台即可。</p>
-                </el-collapse-item>
-                <el-collapse-item title="打卡时间不对，差了整整几小时" name="12">
-                  <p>打卡时刻按<b>服务器时钟</b>记录。先看「考勤管理」页右上角的<b>服务器时间</b>是否正确：</p>
-                  <ul>
-                    <li>时间本身就错了 → 服务器（或 NAS）系统时间没同步，开 NTP 对时；</li>
-                    <li>时间对、但记下来的时刻差 8 小时 → 容器时区是 UTC 而员工看的是北京时间。
-                      服务端已用显式时区（默认 <code class="mono">Asia/Shanghai</code>）换算，与容器 <code class="mono">TZ</code> 无关；
-                      若在别的时区部署，设环境变量 <code class="mono">ATT_TIMEZONE</code>（如 <code class="mono">Asia/Urumqi</code>）后重启服务。</li>
-                  </ul>
-                </el-collapse-item>
-                <el-collapse-item title="厂里是两班倒 / 周六也上班，怎么配" name="13">
-                  <p>①「考勤管理 → 考勤设置 → 工作日」把<b>周六</b>也勾上（不勾的星期不计应出勤）；
-                    ②「班次与考勤组 → 新增班次」建白班与夜班（夜班下班时间填 <code class="mono">06:00</code>，系统自动识别为跨天）；
-                    ③「考勤组」按<b>部门</b>把生产部纳进夜班 —— 之后新员工入职会自动进组，不用每次手工加人。</p>
-                </el-collapse-item>
-              </el-collapse>
-            </section>
-
-            <section class="help-sec">
-              <h3>八、端口与目录速查</h3>
+              <h3>七、端口与目录速查</h3>
               <table class="help-table">
                 <thead><tr><th style="width:200px">项目</th><th>值</th></tr></thead>
                 <tbody>
@@ -1774,9 +1695,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </el-form-item>
 
                   <el-form-item>
-                    <template #label><span class="cc-label">在线更新</span></template>
+                    <template #label><span class="cc-label">升级说明页网址（可选）</span></template>
                     <div style="width:100%">
-                      <el-input v-model="ccForm.upgradeUrl" placeholder="通用升级说明页（https://…，留空 = 不显示）" style="margin-bottom:8px" />
+                      <el-input v-model="ccForm.upgradeUrl" placeholder="升级说明页网址（https://…，可选；留空 = 客户端不显示该项）" style="margin-bottom:8px" />
                       <div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
                         <span style="width:96px;color:#606266;font-size:13px">安卓 APK</span>
                         <el-input v-model="ccForm.pkgAndroid" placeholder="上传后自动填，也可手填 /files/xxx 或 https://…" style="flex:1" />
@@ -1794,7 +1715,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                         <el-input v-model="ccForm.pkgIos" placeholder="App Store / TestFlight 链接" style="flex:1" />
                         <el-button v-if="ccForm.pkgIos" size="small" text type="danger" @click="ccForm.pkgIos = ''">清除</el-button>
                       </div>
-                      <div class="hint">安卓/WIN 客户端「关于 → 立即更新」会下载并调起安装；iOS 跳链接。文件走服务端 /files/ 托管（上限 300MB）。</div>
+                      <div class="hint">「升级说明页网址」是可选项：填了之后，客户端「关于」里会多一个打开该网址的入口（适合放更新须知 / 帮助文档）；<b>留空则客户端不显示该项</b>，不影响下面「立即更新」下载安装包。安卓/WIN「关于 → 立即更新」会下载并调起安装；iOS 跳链接。文件走服务端 /files/ 托管（上限 300MB）。</div>
                     </div>
                     <input ref="pkgFileEl" type="file" style="display:none" @change="onPkgFile" />
                   </el-form-item>
@@ -5841,15 +5762,27 @@ const setupPercent = computed(() => Math.round((setupDoneCount.value / setupStep
 // 上手向导：所有步骤完成后默认折叠（龙哥 2026-10 需求）。
 // 已完成 → 折叠；未完成 → 展开。首屏已是完成态也直接折叠；
 // 用户手动展开后仍不被后续数据刷新强行收起（用 setupAutoCollapsed 守住）。
-// 初值必须为 false：若为 setupDone.value，则首屏已完成态下 immediate 触发
-// `now && !setupAutoCollapsed` 为 `true && !true` 恒为假，永远折叠不了。
+//
+// 🔴 不能在 setup 期就 watch(setupDone)（加不加 immediate 都不行）：
+//    setupDone → setupDoneCount → setupSteps 这条链路会读 compSetting
+//    （本文件第 8926 行才声明）和 turn（第 9044 行才声明）。而 watch 在
+//    **创建时**就会先求值一次源、immediate 更是当场执行回调 —— 两者都会在
+//    这些 ref 初始化前求值 setupSteps，撞上 TDZ（Cannot access 'El' before
+//    initialization）直接白屏。与上面 brand 注释里"不能引用 compSetting"同源。
+//    所以把"建 watch + 首屏判定"整体推迟到 onMounted：那时 setup 已跑完、
+//    所有 ref 都已初始化，安全。初值仍必须是 false —— 若为 setupDone.value，
+//    则完成态下 `!setupAutoCollapsed` 恒为 false，永远折叠不了。
 const setupAutoCollapsed = ref(false);
-watch(setupDone, (now) => {
-  if (now && !setupAutoCollapsed.value) {
-    setupOpen.value = false;
-    setupAutoCollapsed.value = true;
-  }
-}, { immediate: true });
+onMounted(() => {
+  const collapseIfDone = () => {
+    if (setupDone.value && !setupAutoCollapsed.value) {
+      setupOpen.value = false;
+      setupAutoCollapsed.value = true;
+    }
+  };
+  collapseIfDone();                     // 首屏已是完成态：直接折叠
+  watch(setupDone, collapseIfDone);     // 之后在页面上做完最后一步 → 自动折叠
+});
 
 /**
  * 首次运行：设置管理台密码。
@@ -9991,6 +9924,130 @@ async function deleteAttRecord(row) {
   }
 }
 
+/* ---- 系统帮助页：可搜索问答（套工厂V2「搜索问题→解决问题」模式） ---- */
+const helpSearch = ref('');
+const helpFaq = [
+  { q: '外网呼入时，被叫端「来电界面根本不弹」，挂断后才显示未接',
+    tags: '来电 电话 通话 界面 未接 弹窗 不弹',
+    a: `<p>已在 v0.6.1 修复，根因有两个，缺一都修不好：</p>
+      <ul>
+        <li>长连接断线后<b>放弃重连</b>（旧版重试 12 次就彻底不管了），且没有心跳，假死连接识别不出来 → 来电帧收不到。现在改为无限重连 + 20 秒应用层心跳 + 服务端 30 秒协议层探测。</li>
+        <li>服务端一发现被叫掉线就<b>立刻拆话</b>，重连回来也补不了。现在有 20 秒宽限期，期内重连会补推来电界面。</li>
+      </ul>
+      <p>若仍出现：确认手机上的客户端版本 ≥ v0.6.1。</p>` },
+  { q: '双方都在外网时通话完全打不通，或只有声音没有画面',
+    tags: '通话 外网 中继 TURN 打不通 没画面 只有声音 P2P',
+    a: `<p>说明 P2P 和中继都没成功，基本都是<b>中继没配上</b>。按顺序检查：</p>
+      <ol>
+        <li>本页「系统设置」是否显示已下发 TURN；没配就先配 Cloudflare TURN（不需要端口映射，最省事）。</li>
+        <li>用<b>手机 4G/5G</b> 实测（同 Wi-Fi 下测不出来）。</li>
+        <li>自建 coturn 方案还要确认公网端口真的能进 —— 在家里的网络上测公网 IP:3478 是测不准的。</li>
+      </ol>` },
+  { q: '忘记管理员密码了',
+    tags: '管理员 密码 忘记 找回 重置 登录 登录不了',
+    a: `<p><b>先看能不能自己查回来</b>：Windows 版双击安装目录里的
+      <code class="mono">查看管理员密码.cmd</code>，它会读出当前密码
+      （首次运行向导里设的密码也会同步写进那份配置）。</p>
+      <p>登录后可在「系统设置」页直接改（无需重启服务）。若已经登不进去、也查不到，
+      用环境变量 <code class="mono">ADMIN_USERNAME</code> /
+      <code class="mono">ADMIN_PASSWORD</code> 重启服务端做引导；
+      用户名不存在时会自动补建这个管理员账号。</p>
+      <p><b>全新服务器</b>（还从没设过管理密码）打开管理台会自动进「首次运行」向导，
+      当场设一个就行，不用去翻任何配置文件。</p>` },
+  { q: '数据怎么备份 / 迁移',
+    tags: '备份 迁移 数据 数据库 文件 目录',
+    a: `<p>全部数据都在 NAS 的应用目录（<code class="mono">/vol1/@appcenter/xiaozhi-im</code>）下：
+      数据库、上传的文件、以及 <code class="mono">docker/.env</code> 配置。
+      定期备份 <code class="mono">data/</code> 目录即可，迁机时整个目录搬过去。</p>` },
+  { q: '手机装了新版本，但界面还是旧的',
+    tags: '更新 升级 版本 安装 安卓 APK 界面旧 没更新',
+    a: `<p>安卓在 <code class="mono">versionCode</code> 没增长时会<b>静默跳过</b>覆盖安装，看起来像没更新。
+      请确认安装的是交付目录里版本号最高的那个 APK。</p>` },
+  { q: '客户端连不上服务器',
+    tags: '连不上 连接 服务器 地址 网络 内网 外网 3602',
+    a: `<p>先在 App 内「服务器设置」确认地址正确（内网一般是 <code class="mono">http://192.168.1.100:3602</code>）。
+      若人在外面，需要走外网访问通道；服务端本身只监听 3602 一个端口。</p>` },
+  { q: '员工登录后搜不到同事，也加不了好友',
+    tags: '搜不到 同事 好友 工作模式 组织 加不了 空',
+    a: `<p>先确认当前是不是<b>工作模式</b>。工作模式下：搜索只返回<b>同组织</b>成员，且不允许主动加好友
+      （同事关系由组织决定，不靠申请/同意）。</p>
+      <p>如果这个账号还<b>不属于任何组织</b>（普通模式时期自己注册的老账号，或直接在「用户管理」里建的），
+      他就会一个人都搜不到，看着像系统坏了。处理办法：</p>
+      <ol>
+        <li>打开「组织机构 → 员工管理」；</li>
+        <li>把他的<b>账号本身当作工号</b>录入（可顺手指定部门和岗位）；</li>
+        <li>系统会识别出这是已有账号 → <b>收编进组织、不改密码</b>，并立刻与同事互为好友。</li>
+      </ol>
+      <p>要一次处理一批人，用「员工管理 → 批量导入」把账号列粘进去即可。</p>` },
+  { q: '部门删不掉，提示「该部门下有 N 名员工」，但列表里看不到人',
+    tags: '部门 删不掉 删除 员工 残留 名额',
+    a: `<p>这是老版本的残留数据：早期「移除员工」只清掉了组织归属，没清部门 / 岗位，
+      人被移走了却仍占着部门名额。当前版本已修复（移除时会一并清空）。</p>
+      <p>若已有这种残留：把那个人<b>重新录入一次再移除</b>，即可清干净；或者给他重新指定一个部门再撤回。</p>` },
+  { q: '员工忘记登录密码了',
+    tags: '员工 密码 忘记 重置 登录密码',
+    a: `<p>管理员在「用户管理」里找到该账号 → 编辑 → <b>重置密码</b>（不需要旧密码）。
+      员工也可以在客户端「个人信息 → 账号 → 修改密码」自己改，但只能改自己的。</p>` },
+  { q: '普通模式切成工作模式，原来的人还能用吗',
+    tags: '普通模式 工作模式 切换 老账号 还能用 好友',
+    a: `<p>能登录，和已有好友也能照常聊天（好友关系保留）。但<b>没进组织的人搜不到新同事</b>，
+      因为工作模式下搜索被限定为同组织。把他们收编进组织即可，见「四之二」。</p>` },
+  { q: '员工端看不到「考勤打卡」入口',
+    tags: '考勤打卡 入口 看不到 工作台 员工 管理员 缺入口',
+    a: `<p>考勤入口由服务端按<b>业务状态</b>决定是否下发，三个条件缺一不可：</p>
+      <ol>
+        <li>好友模式是<b>工作模式</b>（系统设置）；</li>
+        <li>已经<b>创建组织</b>（组织机构）；</li>
+        <li>该账号<b>是组织员工</b>（有工号）。</li>
+      </ol>
+      <p><b>先确认这个账号到底是不是"员工"</b>：最容易踩的是<b>账号没录入组织</b>（看「组织机构」里数得到人吗）——
+      没入编的账号工作台是空的，看起来跟"功能坏了"一模一样。用「组织机构 → 录入员工」补上即可。</p>
+      <p><b>如果这个账号是管理员</b>：管理员本身不参与考勤，看不到「考勤打卡」是<b>正常</b>的 ——
+      他看到的是「<b>考勤记录</b>」（今日全员出勤、缺卡、代补卡）。两种角色看到的工作台本来就不同：
+      员工 = 考勤打卡 / 我的申请 / 组织通讯录；管理员 = 考勤记录 / 组织通讯录。</p>
+      <p>另外确认「考勤管理 → 考勤设置」里的<b>启用考勤</b>没有被关掉。客户端下拉刷新工作台即可。</p>` },
+  { q: '打卡时间不对，差了整整几小时',
+    tags: '打卡 时间 不对 时区 8小时 UTC 服务器时间 差',
+    a: `<p>打卡时刻按<b>服务器时钟</b>记录。先看「考勤管理」页右上角的<b>服务器时间</b>是否正确：</p>
+      <ul>
+        <li>时间本身就错了 → 服务器（或 NAS）系统时间没同步，开 NTP 对时；</li>
+        <li>时间对、但记下来的时刻差 8 小时 → 容器时区是 UTC 而员工看的是北京时间。
+          服务端已用显式时区（默认 <code class="mono">Asia/Shanghai</code>）换算，与容器 <code class="mono">TZ</code> 无关；
+          若在别的时区部署，设环境变量 <code class="mono">ATT_TIMEZONE</code>（如 <code class="mono">Asia/Urumqi</code>）后重启服务。</li>
+      </ul>` },
+  { q: '厂里是两班倒 / 周六也上班，怎么配考勤',
+    tags: '两班倒 倒班 夜班 周六 周末 上班 排班 考勤组',
+    a: `<p>①「考勤管理 → 考勤设置 → 工作日」把<b>周六</b>也勾上（不勾的星期不计应出勤）；
+      ②「班次与考勤组 → 新增班次」建白班与夜班（夜班下班时间填 <code class="mono">06:00</code>，系统自动识别为跨天）；
+      ③「考勤组」按<b>部门</b>把生产部纳进夜班 —— 之后新员工入职会自动进组，不用每次手工加人。</p>` },
+  { q: '客户端怎么更新 / 升级（关于→立即更新、升级说明页）',
+    tags: '更新 升级 客户端 版本 关于 立即更新 安装包 APK EXE 升级说明页',
+    a: `<p>客户端「关于」里有「立即更新」：管理员在<b>客户端配置</b>页上传了安卓 APK / Windows EXE 安装包后，
+      客户端会下载并调起系统安装器完成升级（iOS 跳 App Store / TestFlight 链接）。</p>
+      <p>「升级说明页网址」是<b>可选项</b>：在客户端配置页填了之后，客户端「关于」里会多一个打开该网址的入口，
+      适合放更新须知 / 帮助文档；<b>留空则客户端不显示该项</b>，不影响「立即更新」下载安装包。</p>
+      <p>低于服务端设置的<b>最低客户端版本</b>时，客户端会在「关于」里提示并可直接更新。</p>` },
+  { q: '服务器怎么让外网手机直连（不走 frps 隧道）',
+    tags: '外网 公网 直连 手机 部署 向导 本地公网 隧道 frps 地址',
+    a: `<p>如果服务器自身有<b>公网 IP</b>（或已做端口映射），在<b>部署向导</b>里选「本地公网直连」最省事，
+      不用走 frps 隧道。向导会让你填服务器地址候选（可分类型标 <code class="mono">lan / wan / ipv4 / ipv6 / other</code>），
+      客户端启动时并发探测这些地址、自动连第一个可达的。</p>
+      <p>没有公网 IP 的，选「云服务器隧道」走 frps 内网穿透。两种形态在部署向导第一步即可切换。</p>` },
+];
+const helpFaqFiltered = computed(() => {
+  const q = (helpSearch.value || '').trim().toLowerCase();
+  if (!q) return helpFaq;
+  return helpFaq.filter((it) => {
+    const full = (it.q + ' ' + (it.tags || '') + ' ' + it.a.replace(/<[^>]+>/g, ' ')).toLowerCase();
+    if (full.includes(q)) return true;
+    // 子序列匹配：中文短语关键字被隔开（如「忘记密码」拆成「忘记管理员密码」）也能命中
+    const qt = (it.q + ' ' + (it.tags || '')).toLowerCase();
+    let i = 0;
+    for (const ch of qt) { if (ch === q[i]) i++; if (i === q.length) return true; }
+    return i === q.length;
+  });
+});
+
 onMounted(async () => {
   bindUnauthorized();
   // 登录前也要能显示「××小智」：bootstrap 免鉴权，只取公开字段
@@ -10232,6 +10289,8 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 
 /* ---- 系统帮助页 ---- */
 .help { max-width: 980px; }
+.faq-q { font-weight: 600; color: #1f2d3d; }
+.faq-a { font-size: 13.5px; line-height: 1.75; color: #4b5563; }
 .help-sec { margin-bottom: 26px; }
 .help-sec:last-child { margin-bottom: 4px; }
 .help-sec h3 {

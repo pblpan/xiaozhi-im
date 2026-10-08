@@ -80,6 +80,11 @@ FILES = [
     #    它一直不在清单里，所以线上传中文名课件照样乱码 —— 典型的
     #    "代码改了、文件没推、功能没上线、还不报错"。
     'src/routes/files.js',
+    # 🔴 2026-10-08 补：需求1 升级包配置（upgradePackages / 安装包上传地址）
+    #    + 需求3 部署向导地址模型（ADDR_TYPES：lan/ipv4/ipv6/other）。
+    #    之前漏在清单外 —— 只传 files.js（上传接口）不传它（配置 schema），
+    #    结果是"接口挂上了、配置字段却读不到"，功能半残还不报错。
+    'src/clientconfig.js',
     # 🔴 2026-09-27 晚「远程协助默认控制码」那轮补的：
     #    settings.js 加 remoteDefaultCodeId 键、remote.js 加三个默认码函数。
     #    第一次推的时候**这两个都不在清单里** —— 结果 admin.js 上去了、
