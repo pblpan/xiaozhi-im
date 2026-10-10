@@ -195,6 +195,24 @@ function cleanWorkdays(input) {
   return { value: [...set].sort((a, b) => a - b) };
 }
 
+/**
+ * 校验定位精度阈值（米）。
+ *
+ * 这个数不是"越大越严"：它判的是**手机自报的定位精度**（accuracy，单位米），
+ * 数值越大说明这次定位越糊。所以：
+ *   · 调小 = 更严格（要求定位很准才准打卡）→ 但室内/高楼之间常常拿不到
+ *     那么准的 GPS，会变成"员工站在店里也打不上卡"
+ *   · 调大 = 更宽松 → 大到一定程度等于放弃了这项防伪
+ * 上下限就是按这两头定的：低于 10 米在室内几乎打不上，高于 2000 米基本不设防。
+ */
+function cleanFenceAccuracy(input) {
+  const n = Number(input);
+  if (!Number.isFinite(n)) return { error: 'attFenceAccuracyMax 必须是数字（单位：米）' };
+  const v = Math.trunc(n);
+  if (v < 10 || v > 2000) return { error: '定位精度阈值需在 10~2000 米之间（默认 200；调小更严格，室内可能打不上卡）' };
+  return { value: v };
+}
+
 /** 管理台整体更新入口：只处理认识的键，返回 { ok, settings } 或 { error } */
 function update(input, by) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -249,9 +267,19 @@ function update(input, by) {
     if (r.error) return r;
   }
 
+  if (input.attFenceAccuracyMax !== undefined) {
+    const c = cleanFenceAccuracy(input.attFenceAccuracyMax);
+    if (c.error) return { error: c.error };
+    const r = setRaw('attFenceAccuracyMax', c.value, by);
+    if (r.error) return r;
+  }
+
   return { ok: true, settings: all() };
 }
 
 // setRaw 一并导出：远程协助的默认控制码要自己写一项（它没有走 update 的
 // 那套"公司名/好友模式"表单校验），但仍然要落同一张 settings 表。
-module.exports = { all, update, cleanCompany, cleanShift, cleanWorkdays, cleanTime, get, setRaw, KEYS };
+module.exports = {
+  all, update, cleanCompany, cleanShift, cleanWorkdays, cleanTime,
+  cleanFenceAccuracy, get, setRaw, KEYS,
+};

@@ -1,20 +1,26 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/call_service.dart';
+import 'package:xiaozhi_im_client/core/clipboard_image.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/file_io.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/core/voice.dart';
+import 'package:xiaozhi_im_client/core/win_screen.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/screens/forward.dart';
 import 'package:xiaozhi_im_client/screens/group_manage.dart';
 import 'package:xiaozhi_im_client/screens/group_panel.dart';
+import 'package:xiaozhi_im_client/screens/screenshot_editor.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/bubble.dart';
@@ -52,6 +58,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 每个成员的已读水位：userId -> 读到的最大 message id
   Map<int, int> _readMap = {};
   int _recallWindowMs = 120000;
+
+  /// 拖着文件悬在聊天窗上时显示投放提示（仅 Windows）
+  bool _dragHover = false;
 
   /// 对方正在输入（非空=显示）
   int? _typingUserId;
@@ -294,6 +303,12 @@ class _ChatScreenState extends State<ChatScreen> {
     if (type == 'message:new') {
       final m = Message.fromJson(e['message']);
       if (m.conversationId != widget.conv.id) return;
+      // 按 id 幂等去重。两种来源会送来同一条：
+      //   ①「文件助手」是自己↔自己的会话，服务端广播不排除发送者，
+      //      手机端刚发的那条会自己再收一次（不然电脑端收不到）；
+      //   ② 断线重连的补推。
+      // 不判重就是同一条消息在屏幕上出现两遍。
+      if (_msgs.any((x) => x.id == m.id)) return;
       setState(() => _msgs.add(m));
       _scroll();
       _clearTyping();
@@ -494,41 +509,187 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _attach() async {
-    final files = await FilePicker.pickFiles();
-    if (files.isEmpty) return;
-    final picked = files.first;
-    final path = picked.path;
-    if (path == null) return;
+  /// 上传一个文件并以 image / file 消息发出去。
+  /// 返回是否压缩过（原图直传为 false），供上层汇总提示。
+  /// [toastDone] 批量发送（拖拽/多选）时上层自己汇总，这里就不逐个弹提示。
+  Future<bool> _sendFile(File orig, {bool toastDone = true}) async {
+    final toUpload = await Media.prepareForUpload(orig); // 内网原图 / 外网压缩
+    final up = await ImApi().upload(toUpload);
+
+    final path = orig.path;
+    final name = (up['name'] ?? path).toString();
+    final isImg = (up['mime'] ?? '').toString().startsWith('image') ||
+        Media.isImagePath(name) ||
+        Media.isImagePath(path);
+    // 图片消息存 /files/xxx 访问路径，文件消息存原始文件名
+    final content = isImg ? (up['url'] ?? name).toString() : name;
+
+    final m = await ImApi()
+        .sendMessage(widget.conv.id, isImg ? 'image' : 'file', content, up['id']);
+    if (!mounted) return false;
+    setState(() => _msgs.add(Message.fromJson(m)));
+    _scroll();
+    final compressed = toUpload.path != orig.path;
+    if (toastDone && compressed) {
+      final newLen = await toUpload.length();
+      _toast('已压缩上传（${TimeFmt.size(await orig.length())} → ${TimeFmt.size(newLen)}）');
+    }
+    return compressed;
+  }
+
+  // ── 截图 / 粘贴图片 / 拖拽收文件（Windows；龙哥 2026-10-10 需求④）──
+
+  bool get _isWin => Platform.isWindows;
+
+  /// 把 PNG 字节落临时文件再走通用发送（Ctrl+V 贴图用）
+  Future<void> _sendPngBytes(Uint8List bytes) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final f = File(p.join(dir.path, 'paste_${DateTime.now().millisecondsSinceEpoch}.png'));
+      await f.writeAsBytes(bytes);
+      await _sendFile(f, toastDone: false);
+    } catch (e) {
+      if (mounted) _toast('发送失败: $e');
+    }
+  }
+
+  /// 拖拽进来的文件（可一次拖多个），逐个独立发送
+  Future<void> _sendDropped(DropDoneDetails d) async {
+    if (d.files.isEmpty) return;
+    setState(() => _dragHover = false);
+    var ok = 0;
+    final failed = <String>[];
     setState(() => _busy = true);
     try {
-      final orig = File(path);
-      final origLen = await orig.length();
-      final toUpload = await Media.prepareForUpload(orig); // 内网原图 / 外网压缩
-      final up = await ImApi().upload(toUpload);
-
-      final name = (up['name'] ?? path).toString();
-      final isImg = (up['mime'] ?? '').toString().startsWith('image') ||
-          Media.isImagePath(name) ||
-          Media.isImagePath(path);
-      // 图片消息存 /files/xxx 访问路径，文件消息存原始文件名
-      final content = isImg ? (up['url'] ?? name).toString() : name;
-
-      final m = await ImApi()
-          .sendMessage(widget.conv.id, isImg ? 'image' : 'file', content, up['id']);
-      if (!mounted) return;
-      setState(() => _msgs.add(Message.fromJson(m)));
-      _scroll();
-
-      if (toUpload.path != orig.path) {
-        final newLen = await toUpload.length();
-        _toast('已压缩上传（${TimeFmt.size(origLen)} → ${TimeFmt.size(newLen)}）');
+      for (final f in d.files) {
+        try {
+          await _sendFile(File(f.path), toastDone: false);
+          ok++;
+        } catch (_) {
+          failed.add(f.name);
+        }
       }
-    } catch (e) {
-      if (mounted) _toast('发送失败: ${_msg(e)}');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    if (!mounted) return;
+    if (ok == 0) {
+      _toast('发送失败：${failed.join('、')}');
+    } else if (failed.isNotEmpty) {
+      _toast('已发送 $ok 个，${failed.length} 个失败');
+    }
+  }
+
+  /// Windows 才包 DropTarget：拖文件进聊天窗直接发送
+  Widget _dropWrap(Widget child) {
+    if (!_isWin) return child;
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _dragHover = true),
+      onDragExited: (_) => setState(() => _dragHover = false),
+      onDragDone: _sendDropped,
+      child: Stack(
+        children: [
+          child,
+          if (_dragHover)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  color: AppColors.brand.withValues(alpha: 0.08),
+                  alignment: Alignment.center,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: AppColors.bgElevated,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.brand, width: 1.5),
+                    ),
+                    child: const Text('松开发送文件',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Ctrl+V：剪贴板里是图片就直接发图（有图优先于文本粘贴）。
+  /// 挂在输入框上游的 Focus 上 —— 按键从焦点节点冒泡上来，这里先拿到，
+  /// 认下（handled）系统就不会再走默认的文本粘贴。
+  KeyEventResult _onKeyEvent(FocusNode node, KeyEvent e) {
+    if (!_isWin) return KeyEventResult.ignored;
+    if (e is! KeyDownEvent) return KeyEventResult.ignored;
+    if (e.logicalKey != LogicalKeyboardKey.keyV) return KeyEventResult.ignored;
+    if (!HardwareKeyboard.instance.isControlPressed) return KeyEventResult.ignored;
+    final png = readClipboardImage();
+    if (png == null) return KeyEventResult.ignored; // 没图 → 放行，正常粘贴文本
+    _sendPngBytes(png);
+    return KeyEventResult.handled;
+  }
+
+  /// 打开截图编辑器（框选 → 可标注 → 发送）
+  Future<void> _startScreenshot() async {
+    setState(() => _busy = true);
+    String? shot;
+    try {
+      shot = await WinScreen.captureScreen();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+    if (shot == null) {
+      _toast('截图失败（需要 Windows 10 及以上）');
+      return;
+    }
+    final f = await Navigator.push<File>(
+      context,
+      MaterialPageRoute(builder: (_) => ScreenshotEditorPage(imagePath: shot!)),
+    );
+    if (f == null || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await _sendFile(f, toastDone: false);
+    } catch (e) {
+      _toast('发送失败: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 选文件发送（file_picker 默认允许多选，一次可以挑一堆）。
+  ///
+  /// 逐个独立上传、逐个记账：第 3 个失败不影响前 2 个已经发出去的。
+  /// 传 10 个文件因为其中一个坏了就全部回滚，比失败本身更让人恼火。
+  void _attach() async {
+    final files = await FilePicker.pickFiles();
+    if (files.isEmpty) return;
+    setState(() => _busy = true);
+    var ok = 0;
+    var compressed = 0;
+    final failed = <String>[];
+    try {
+      for (final picked in files) {
+        final path = picked.path;
+        if (path == null) continue;
+        try {
+          if (await _sendFile(File(path))) compressed++;
+          ok++;
+        } catch (_) {
+          failed.add(picked.name);
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+    if (ok == 0) {
+      _toast('发送失败：${failed.join('、')}');
+      return;
+    }
+    final tail = failed.isEmpty ? '' : '（${failed.length} 个失败：${failed.join('、')}）';
+    _toast(ok > 1 ? '已发送 $ok 个文件$tail' : '已发送$tail');
+    if (compressed > 0) _toast('其中 $compressed 个走外网已压缩上传');
   }
 
   String _msg(Object e) => e.toString().replaceFirst('Exception: ', '');
@@ -916,9 +1077,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 // 否则点进去发现"换了个图标"会以为是另一个群
                 ? GroupAvatar(
                     members: widget.conv.memberAvatars, size: 36, radius: 12)
-                : UserAvatar(
-                    name: _title, size: 36, radius: 12,
-                    imageUrl: widget.conv.avatar),
+                : widget.conv.isFileHelper
+                    ? const FileHelperAvatar(size: 36, radius: 12)
+                    : UserAvatar(
+                        name: _title, size: 36, radius: 12,
+                        imageUrl: widget.conv.avatar),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -940,12 +1103,14 @@ class _ChatScreenState extends State<ChatScreen> {
                               fontWeight: FontWeight.w600),
                         )
                       : Text(
-                          widget.conv.type == 'group'
-                              // 带上人数：群聊和单聊的第二行也就彻底不一样了
-                              ? (widget.conv.memberCount > 0
-                                  ? '群聊 · ${widget.conv.memberCount} 人'
-                                  : '群聊')
-                              : '私信',
+                          widget.conv.isFileHelper
+                              ? '手机 ↔ 电脑互传文件'
+                              : widget.conv.type == 'group'
+                                  // 带上人数：群聊和单聊的第二行也就彻底不一样了
+                                  ? (widget.conv.memberCount > 0
+                                      ? '群聊 · ${widget.conv.memberCount} 人'
+                                      : '群聊')
+                                  : '私信',
                           style: const TextStyle(
                               fontSize: 11.5,
                               color: AppColors.textWeak,
@@ -1040,7 +1205,7 @@ class _ChatScreenState extends State<ChatScreen> {
           const SizedBox(width: 4),
         ],
       ),
-      body: Stack(
+      body: _dropWrap(Stack(
         children: [
           Column(
             children: [
@@ -1057,7 +1222,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           if (_recording) _recordOverlay(),
         ],
-      ),
+      )),
     );
   }
 
@@ -1337,18 +1502,32 @@ class _ChatScreenState extends State<ChatScreen> {
                     : Icons.attach_file_rounded,
                 onTap: _busy ? null : _attach,
               ),
+              // 截图（框选 → 可标注/OCR → 发送）。只有 Windows 有；
+              // Android 上不显示，输入区不挤
+              if (_isWin)
+                _roundButton(
+                  icon: Icons.crop_rounded,
+                  onTap: _busy ? null : _startScreenshot,
+                ),
               const SizedBox(width: 8),
               _micButton(),
               const SizedBox(width: 8),
               Expanded(
-                child: Container(
-                  constraints: const BoxConstraints(maxHeight: 120),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(22),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: TextField(
+                child: Focus(
+                  // Windows：Ctrl+V 时剪贴板里有图就发图（见 _onKeyEvent）。
+                  // canRequestFocus=false / skipTraversal：这个节点只当"按键
+                  // 冒泡的中转站"，不参与焦点切换，输入框的焦点行为不受影响。
+                  onKeyEvent: _isWin ? _onKeyEvent : null,
+                  canRequestFocus: false,
+                  skipTraversal: true,
+                  child: Container(
+                    constraints: const BoxConstraints(maxHeight: 120),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: TextField(
                     controller: _ctrl,
                     focusNode: _focus,
                     minLines: 1,
@@ -1371,6 +1550,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       if (_showEmoji) setState(() => _showEmoji = false);
                     },
                   ),
+                ),
                 ),
               ),
               const SizedBox(width: 6),

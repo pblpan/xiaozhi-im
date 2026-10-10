@@ -282,6 +282,10 @@ class ImApi {
 
   Future<List<dynamic>> conversations() async => await _get('/conversations');
 
+  /// 「文件助手」会话：获取（没有就新建）。返回 { conversationId }
+  Future<Map<String, dynamic>> fileHelper() async =>
+      await _get('/conversations/filehelper');
+
   /// 会话历史 + 已读状态：
   /// { messages: [...], members: [...], peerLastReadId, minOtherReadId, recallWindowMs }
   Future<Map<String, dynamic>> messages(int cid) async =>

@@ -3392,6 +3392,18 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     </el-checkbox-group>
                     <div class="hint">只有勾选的星期计「应出勤」；未勾选的日期不判缺勤（休息日来上班，让员工提交加班申请即可）。</div>
                   </el-form-item>
+                  <el-form-item label="定位精度阈值">
+                    <el-input-number v-model="attConfig.fenceAccuracyMax" :min="10" :max="2000" :step="10" />
+                    <span class="hint" style="margin-left:8px">米（默认 200）</span>
+                    <div class="hint">
+                      手机打卡时会自报一个「定位精度」：<b>数字越大说明这次定位越糊</b>。
+                      精度差于这个阈值的打卡，在定位要求为「必须提供」的考勤组里会被<b>直接拒绝</b>，
+                      只做标记的组则照常记录、但在看板里标成「定位可疑」。<br />
+                      <b>怎么调：</b>调小 = 更严（要求定位更准），但室内、高楼密集处常常拿不到那么准的 GPS，
+                      会出现「人就在店里却打不上卡」；调大 = 更松，大到一定程度等于放弃这项防伪。
+                      建议先用默认的 200 米跑几天，看看看板里「定位可疑」多不多再决定。
+                    </div>
+                  </el-form-item>
                   <el-form-item label="服务器时间 / 时区">
                     <el-tag size="small" effect="plain" type="warning">{{ attFmtTs(attConfig.serverTime) }}</el-tag>
                     <el-tag size="small" effect="plain" style="margin-left:8px">{{ attConfig.timezone }}</el-tag>
@@ -9658,6 +9670,8 @@ const attConfig = ref({
   // 与服务端 attDefaultShift 的默认值保持一致（08:00-12:00 / 13:00-17:00，一天 4 次卡）
   defaultShift: { workStart: '08:00', restStart: '12:00', restEnd: '13:00', workEnd: '17:00', restMinutes: 60, flexMinutes: 0, lateGrace: 0, earlyGrace: 0 },
   workdays: [1, 2, 3, 4, 5],
+  // 定位精度阈值（米）：与服务端 attFenceAccuracyMax 默认值一致
+  fenceAccuracyMax: 200,
   serverTime: 0,
   timezone: '',
 });
@@ -9769,6 +9783,8 @@ async function loadAttConfig() {
       enabled: data.enabled !== false,
       defaultShift: data.defaultShift || attConfig.value.defaultShift,
       workdays: Array.isArray(data.workdays) ? data.workdays : [1, 2, 3, 4, 5],
+      // 定位精度阈值：老服务端还没这个字段时按默认 200 兜底
+      fenceAccuracyMax: Number(data.fenceAccuracyMax) || 200,
       serverTime: data.serverTime,
       timezone: data.timezone,
     };
@@ -9858,10 +9874,17 @@ async function saveAttConfig() {
       enabled: attConfig.value.enabled,
       defaultShift: shift,
       workdays: attConfig.value.workdays,
+      fenceAccuracyMax: attConfig.value.fenceAccuracyMax,
     });
     const n = Number(data.defaultShift?.punchesPerDay) || 2;
     ElMessage.success(`考勤设置已保存（默认班次一天 ${n} 次卡）`);
-    attConfig.value = { ...attConfig.value, enabled: data.enabled, defaultShift: data.defaultShift, workdays: data.workdays };
+    attConfig.value = {
+      ...attConfig.value,
+      enabled: data.enabled,
+      defaultShift: data.defaultShift,
+      workdays: data.workdays,
+      fenceAccuracyMax: Number(data.fenceAccuracyMax) || attConfig.value.fenceAccuracyMax,
+    };
     await loadAttOverview();
     await loadAttShifts();
   } catch (e) {

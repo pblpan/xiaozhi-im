@@ -262,6 +262,44 @@ class GroupAvatar extends StatelessWidget {
   }
 }
 
+/// 「文件助手」头像。
+///
+/// 它是个功能入口而不是一个人，所以刻意做得跟人头像不一样：
+/// 圆角方块（人头像更圆）+ 文件夹图标 + 琥珀色（与人头像的青绿/暖色渐变区分开）。
+/// 列表里扫一眼就知道"这个是传文件用的"，不会跟某个同事搞混。
+class FileHelperAvatar extends StatelessWidget {
+  final double size;
+  final double radius;
+
+  const FileHelperAvatar({super.key, this.size = 46, this.radius = 14});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFFFBBF24), Color(0xFFF59E0B)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFF59E0B).withValues(alpha: 0.3),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Icon(
+          Icons.folder_copy_rounded,
+          color: Colors.white,
+          size: size * 0.52,
+        ),
+      );
+}
+
 /// 品牌 Logo（登录页 / 空状态用）
 class BrandLogo extends StatelessWidget {
   final double size;

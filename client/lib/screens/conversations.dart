@@ -413,9 +413,28 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     await openWithUser(u);
   }
 
+  /// 打开「文件助手」（自己↔自己的会话，手机↔电脑传文件）。
+  /// 通讯录好友列表第一行是同一个东西；这里是会话列表的快捷入口，
+  /// 传文件是高频操作，多一个入口少一次翻页。
+  Future<void> _openFileHelper() async {
+    try {
+      final r = await ImApi().fileHelper();
+      final cid = (r['conversationId'] ?? 0) as int;
+      if (cid == 0) return;
+      await _openChat(
+          Conversation(id: cid, type: 'filehelper', title: '文件助手'));
+      if (mounted) _load(); // 新建的会话要出现在列表里
+    } on ApiException catch (e) {
+      _toast(e.status == 404
+          ? '当前服务端版本还没有文件助手，升级服务端后即可使用'
+          : e.message);
+    } catch (e) {
+      _toast(_msg(e));
+    }
+  }
+
   /// 发起群聊（龙哥 2026-10-10：客户端根本没有建群入口，群只能后台建）
-  Future<void> _openCreateGroup() async {
-    final r = await Navigator.push<Map<String, dynamic>>(
+  Future<void> _openCreateGroup() async {    final r = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
     );
@@ -688,6 +707,8 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     if (cv.type == 'group') {
       return GroupAvatar(members: cv.memberAvatars, size: 46, radius: 15);
     }
+    // 「文件助手」是自己↔自己的会话，没有"对方头像"可用，固定画成文件夹
+    if (cv.isFileHelper) return const FileHelperAvatar(size: 46, radius: 15);
     return UserAvatar(name: name, size: 46, radius: 15, imageUrl: cv.avatar);
   }
 
@@ -983,6 +1004,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'remote') _openRemote();
                 if (v == 'newfriends') _openNewFriends();
                 if (v == 'newgroup') _openCreateGroup();
+                if (v == 'filehelper') _openFileHelper();
               },
               // 菜单只放"不常用的功能 + 设置"。
               // 工作台 / 组织机构 / 个人信息已经提到一级导航（见 HomeShell），
@@ -1025,6 +1047,13 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                       Icon(Icons.group_add_rounded, size: 19),
                       SizedBox(width: 10),
                       Text('发起群聊')
+                    ])),
+                const PopupMenuItem(
+                    value: 'filehelper',
+                    child: Row(children: [
+                      Icon(Icons.folder_copy_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('文件助手')
                     ])),
                 const PopupMenuItem(
                     value: 'fav',

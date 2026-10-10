@@ -90,6 +90,10 @@ dependencies:
   #    拿不到时打卡页按"无定位"处理，管理台把定位要求设成 required 的组请用手机打。
   geolocator: ^14.1.1
 
+  # 聊天窗口拖拽收文件（龙哥 2026-10-10 需求④）：把文件从资源管理器拖进聊天窗
+  # 直接发送。只有桌面端有实现，Android 上包照样能编（无入口即无影响）。
+  desktop_drop: 0.8.4
+
   # ── 蓝牙价签打印：**故意不引蓝牙包** ──────────────────────────────
   # 原先引了 flutter_blue_plus，后来弃用：它的 FlutterBluePlus License 白纸黑字
   # 写着 "For for-profit organizations, a commercial license is required"，

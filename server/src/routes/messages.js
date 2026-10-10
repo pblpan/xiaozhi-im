@@ -89,6 +89,10 @@ router.get('/', (req, res) => {
       .get(uid, c.id, uid, mentionLike(MENTION_ALL), mentionLike(uid)).n;
 
     const base = { ...c, has_mention: unreadMentions > 0, muted: !!c.muted };
+    // 「文件助手」：只有自己一个成员的会话，标题与图标由客户端固定渲染
+    if (c.type === 'filehelper') {
+      return { ...base, title: '文件助手', avatar: null, is_group: false, is_filehelper: true };
+    }
     if (c.type === 'dm') {
       const other = db.prepare(`SELECT u.id,u.username,u.nickname,u.avatar,u.is_bot FROM conversation_members cm
         JOIN users u ON u.id=cm.user_id WHERE cm.conversation_id=? AND cm.user_id!=?`).get(c.id, uid);
@@ -133,6 +137,29 @@ router.get('/', (req, res) => {
     };
   });
   res.json(out);
+});
+
+// 「文件助手」：自己↔自己的会话，用来在手机和电脑之间倒文件（微信「文件传输助手」那一套）。
+//
+// 为什么不能复用 /dm/:userId：那条路由明确拒绝 self（单聊语义上必须有"对方"），
+// 而文件助手的成员只有自己一个。所以单开一个 type='filehelper' 的会话类型。
+// 每个用户永远只有一个，重复调用返回同一个 id（不新建）。
+router.get('/filehelper', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const existing = db.prepare(`SELECT c.id FROM conversations c
+    JOIN conversation_members m ON m.conversation_id = c.id AND m.user_id = ?
+    WHERE c.type = 'filehelper' ORDER BY c.id ASC LIMIT 1`).get(uid);
+  if (existing) return res.json({ conversationId: existing.id });
+
+  const info = db.prepare("INSERT INTO conversations (type,created_at) VALUES ('filehelper',?)").run(Date.now());
+  const cid = info.lastInsertRowid;
+  db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)').run(cid, uid);
+  events.emit('conversation.created', {
+    conversationId: cid,
+    selfId: uid,
+    data: { type: 'filehelper' },
+  });
+  res.json({ conversationId: cid });
 });
 
 // 获取/创建与某用户的单聊会话

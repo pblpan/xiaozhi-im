@@ -4,6 +4,7 @@ import 'package:xiaozhi_im_client/core/session_manager.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/models.dart';
+import 'package:xiaozhi_im_client/screens/chat.dart';
 import 'package:xiaozhi_im_client/screens/friend_templates.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 
@@ -29,6 +30,10 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
   List<User> _friends = [];
   bool _loading = true;
   String? _error;
+
+  /// 打开聊天页要带「我是谁」（已读回执 / 谁是自己发的消息都靠它）。
+  /// 惰性取：只有真去点文件助手时才拉接口，进列表不额外发一次请求。
+  int _myId = 0;
 
   @override
   void initState() {
@@ -113,6 +118,46 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
       await ImApi().rejectFriend(r.userId);
       _toast('已拒绝');
       await _load();
+    } catch (e) {
+      _toast(_errText(e));
+    }
+  }
+
+  Future<int> _ensureMyId() async {
+    if (_myId != 0) return _myId;
+    final me = await ImApi().me();
+    _myId = (me['user']?['id'] ?? 0) as int;
+    return _myId;
+  }
+
+  /// 打开「文件助手」：自己↔自己的会话，手机传上去的文件在电脑上就能下载。
+  ///
+  /// 老服务端没有 `/conversations/filehelper` → 404。这时给一句能懂的提示，
+  /// 而不是把 "not found" 原样甩出来（用户不知道该干嘛）。
+  Future<void> _openFileHelper() async {
+    try {
+      final r = await ImApi().fileHelper();
+      final cid = (r['conversationId'] ?? 0) as int;
+      if (cid == 0) {
+        _toast('服务端没有返回文件助手会话');
+        return;
+      }
+      final myId = await _ensureMyId();
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            conv: Conversation(id: cid, type: 'filehelper', title: '文件助手'),
+            myId: myId,
+            peerName: '文件助手',
+          ),
+        ),
+      );
+    } on ApiException catch (e) {
+      _toast(e.status == 404
+          ? '当前服务端版本还没有文件助手，升级服务端后即可使用'
+          : e.message);
     } catch (e) {
       _toast(_errText(e));
     }
@@ -348,59 +393,87 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
     );
   }
 
+  /// 「文件助手」固定占好友列表第一行：它不是一个好友，而是手机↔电脑互传文件的入口。
+  Widget _fileHelperTile() => ListTile(
+        leading: const FileHelperAvatar(size: 46, radius: 15),
+        title: const Text('文件助手',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        subtitle: const Text(
+          '手机和电脑互传文件',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 12.5, color: AppColors.textWeak),
+        ),
+        trailing: const Icon(Icons.chevron_right_rounded,
+            size: 20, color: AppColors.textWeak),
+        onTap: _openFileHelper,
+      );
+
   Widget _friendList() {
-    if (_friends.isEmpty) {
-      return _empty('还没有好友', '通过搜索账号或昵称，向对方发送好友申请');
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        itemCount: _friends.length,
-        separatorBuilder: (_, __) => const Divider(
-            height: 1, indent: 74, endIndent: 14, color: AppColors.divider),
-        itemBuilder: (_, i) {
-          final u = _friends[i];
-          // 设过备注时，副标题把「原昵称」亮出来——不然过几天就忘了这人本来叫啥
-          final sub = u.hasRemark
-              ? (u.display == u.username
-                  ? '@${u.username}'
-                  : '${u.display} · @${u.username}')
-              : ((u.signature ?? '').isNotEmpty ? u.signature! : '@${u.username}');
-          return ListTile(
-            leading: UserAvatar(name: u.noteName, size: 46, imageUrl: u.avatar),
-            title: Text(u.noteName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-            subtitle: Text(
-              sub,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12.5, color: AppColors.textWeak),
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  tooltip: u.hasRemark ? '修改备注' : '设置备注',
-                  visualDensity: VisualDensity.compact,
-                  icon: Icon(
-                    u.hasRemark ? Icons.sell_rounded : Icons.sell_outlined,
-                    size: 19,
-                    color: u.hasRemark ? AppColors.brand : AppColors.textSub,
+    final body = _friends.isEmpty
+        ? _empty('还没有好友', '通过搜索账号或昵称，向对方发送好友申请')
+        : RefreshIndicator(
+            onRefresh: _load,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              itemCount: _friends.length,
+              separatorBuilder: (_, __) => const Divider(
+                  height: 1, indent: 74, endIndent: 14, color: AppColors.divider),
+              itemBuilder: (_, i) {
+                final u = _friends[i];
+                // 设过备注时，副标题把「原昵称」亮出来——不然过几天就忘了这人本来叫啥
+                final sub = u.hasRemark
+                    ? (u.display == u.username
+                        ? '@${u.username}'
+                        : '${u.display} · @${u.username}')
+                    : ((u.signature ?? '').isNotEmpty
+                        ? u.signature!
+                        : '@${u.username}');
+                return ListTile(
+                  leading: UserAvatar(name: u.noteName, size: 46, imageUrl: u.avatar),
+                  title: Text(u.noteName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w600)),
+                  subtitle: Text(
+                    sub,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        const TextStyle(fontSize: 12.5, color: AppColors.textWeak),
                   ),
-                  onPressed: () => _editRemark(u),
-                ),
-                const Icon(Icons.chat_bubble_outline_rounded,
-                    size: 19, color: AppColors.textSub),
-              ],
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: u.hasRemark ? '修改备注' : '设置备注',
+                        visualDensity: VisualDensity.compact,
+                        icon: Icon(
+                          u.hasRemark ? Icons.sell_rounded : Icons.sell_outlined,
+                          size: 19,
+                          color: u.hasRemark ? AppColors.brand : AppColors.textSub,
+                        ),
+                        onPressed: () => _editRemark(u),
+                      ),
+                      const Icon(Icons.chat_bubble_outline_rounded,
+                          size: 19, color: AppColors.textSub),
+                    ],
+                  ),
+                  onTap: () => _pick(u),
+                  onLongPress: () => _editRemark(u),
+                );
+              },
             ),
-            onTap: () => _pick(u),
-            onLongPress: () => _editRemark(u),
           );
-        },
-      ),
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _fileHelperTile(),
+        const Divider(height: 1, indent: 74, endIndent: 14, color: AppColors.divider),
+        Expanded(child: body),
+      ],
     );
   }
 }

@@ -292,12 +292,25 @@ function stopServer() {
   // ⚠️ 这条判据**跟跑的钟点有关**，不能写死 ['pending','late']：
   //    09:00 之前打上班卡是"早到"不是"迟到" → lateMinutes 必须为 0、状态就该是 normal。
   //    写死的话早上 9 点前跑必红（2026-09-21 07:04 真踩到）—— 假失败比真失败更危险。
-  //    下面按"现在几点"推出**唯一该有的状态**去比对，比原来"挨着 pending/late 之一就算过"更严。
+  // ⚠️⚠️ "上班前"其实有**两档**，期望值必须从 donePunches（可观察状态）推，
+  //    不能只看钟点（2026-10-11 凌晨真踩到）：
+  //    · 03:00 前跑：打的卡落在 09:00 卡窗（startAt−6h）之外 → 服务端不认这张卡
+  //      （凌晨的卡分不清是今天早到还是昨天加班下班）→ donePunches=0 →
+  //      pending「未到上班时间」。这是产品行为，不是 bug。
+  //    · 03:00~09:00 跑：卡已打进窗 → donePunches>0 → normal（早到不算迟到）。
   const tStatusNow = Date.now();
   const tStatusBeforeStart = tStatusNow < tsAt(TODAY, '09:00'); // 09:00 = 本用例复位后的上班时间
-  ok('  今日状态：与运行时点一致（上班前 normal / 上班后 late）',
-    r.body.today.status === (tStatusBeforeStart ? 'normal' : 'late'),
-    `现在 ${new Date(tStatusNow).toISOString()}，上班前=${tStatusBeforeStart}，实际 ${JSON.stringify(r.body.today)}`);
+  const tToday = r.body.today;
+  if (!tStatusBeforeStart) {
+    ok('  今日状态：已过上班时间还没打齐 → 迟到或缺卡（不是 normal）',
+      tToday.status === 'late' || tToday.status === 'missing', JSON.stringify(tToday));
+  } else if (tToday.donePunches > 0) {
+    ok('  今日状态：上班前打了卡 → normal（早到不是迟到）',
+      tToday.status === 'normal' && tToday.lateMinutes === 0, JSON.stringify(tToday));
+  } else {
+    ok('  今日状态：上班时间未到且无有效卡 → pending「未到上班时间」',
+      tToday.status === 'pending' && /未到上班时间/.test(tToday.note || ''), JSON.stringify(tToday));
+  }
   ok('  迟到分钟数：09:00 前打卡必须为 0（早到不是迟到）',
     tStatusBeforeStart ? r.body.today.lateMinutes === 0 : r.body.today.lateMinutes > 0,
     `上班前=${tStatusBeforeStart}，lateMinutes=${r.body.today.lateMinutes}`);
@@ -638,6 +651,48 @@ function stopServer() {
   ok('  组的 locationIds 已自动清空', ((r.body?.items || []).find((x) => x.id === fenceGroup)?.locationIds || []).length === 0, '');
   await api('DELETE', `/api/admin/attendance/groups/${fenceGroup}`, { token: admin });
 
+  // ---------------- 九C：精度阈值后台可配 ----------------
+  // 龙哥 2026-10-10 要的：200 米这个默认值得能在管理台改，改完立刻生效。
+  console.log('\n【九C】定位精度阈值后台可配');
+  r = await api('GET', '/api/admin/attendance/config', { token: admin });
+  ok('配置里带 fenceAccuracyMax（默认 200）', r.body?.fenceAccuracyMax === 200, JSON.stringify(r.body?.fenceAccuracyMax));
+
+  // 建一个「必须提供定位」但不挂点位的组：只验精度/模拟，不验距离
+  r = await api('POST', '/api/admin/attendance/groups', { token: admin, body: { name: '精度组', memberIds: [e3.id], locationMode: 'required' } });
+  const accGroup = r.body?.id;
+  ok('  建精度校验组 → 200', r.status === 200, JSON.stringify(r.body));
+
+  r = await api('PUT', '/api/admin/attendance/config', { token: admin, body: { fenceAccuracyMax: 50 } });
+  ok('阈值改成 50 → 200 且回显', r.status === 200 && r.body?.fenceAccuracyMax === 50, JSON.stringify(r.body));
+  // 九B 已经给 e3 打过一次 out，先清掉，否则会先撞上"今天已打过这张卡"
+  r = await api('GET', `/api/admin/attendance/records?day=${TODAY}&userId=${e3.id}`, { token: admin });
+  const accOutId = (r.body?.items || []).find((x) => x.type === 'out')?.id;
+  if (accOutId) await api('DELETE', `/api/admin/attendance/records/${accOutId}`, { token: admin });
+  r = await api('POST', '/api/attendance/clock', { token: e3.token, body: { type: 'out', lat: 45.5105, lng: 126.9505, accuracy: 120 } });
+  ok('  阈值 50 时精度 120 米 → 400', r.status === 400 && /精度/.test(r.body?.error || ''), JSON.stringify(r.body));
+
+  r = await api('PUT', '/api/admin/attendance/config', { token: admin, body: { fenceAccuracyMax: 300 } });
+  ok('阈值改成 300 → 200', r.status === 200 && r.body?.fenceAccuracyMax === 300, JSON.stringify(r.body));
+  r = await api('POST', '/api/attendance/clock', { token: e3.token, body: { type: 'out', lat: 45.5105, lng: 126.9505, accuracy: 120 } });
+  ok('  阈值放宽后同一次定位 → 200（改完即生效，不用重启）', r.status === 200, JSON.stringify(r.body));
+
+  r = await api('PUT', '/api/admin/attendance/config', { token: admin, body: { fenceAccuracyMax: 5 } });
+  ok('阈值 5（低于下限 10）→ 400', r.status === 400, JSON.stringify(r.body));
+  r = await api('PUT', '/api/admin/attendance/config', { token: admin, body: { fenceAccuracyMax: 9999 } });
+  ok('阈值 9999（高于上限 2000）→ 400', r.status === 400, JSON.stringify(r.body));
+  r = await api('PUT', '/api/admin/attendance/config', { token: admin, body: { fenceAccuracyMax: '很准' } });
+  ok('阈值非数字 → 400', r.status === 400, JSON.stringify(r.body));
+  r = await api('GET', '/api/admin/attendance/config', { token: admin });
+  ok('  非法值没有污染配置（仍是 300）', r.body?.fenceAccuracyMax === 300, JSON.stringify(r.body?.fenceAccuracyMax));
+
+  // 防伪参数绝不能走免鉴权的 bootstrap 泄漏出去
+  r = await api('GET', '/api/client/bootstrap');
+  ok('免鉴权 bootstrap 不含精度阈值', r.status === 200
+    && !/fence/i.test(JSON.stringify(r.body)), JSON.stringify(r.body).slice(0, 160));
+
+  await api('PUT', '/api/admin/attendance/config', { token: admin, body: { fenceAccuracyMax: 200 } });
+  await api('DELETE', `/api/admin/attendance/groups/${accGroup}`, { token: admin });
+
   // ---------------- 十：报表与看板 ----------------
   console.log('\n【十】报表与看板');
   const from = dayStr(-12), to = TODAY;
@@ -664,6 +719,15 @@ function stopServer() {
   ok('  看板能看到迟到分钟与打卡时间', ovE1?.firstInTime === '09:30' && ovE1?.lateMinutes === 30, JSON.stringify(ovE1));
 
   r = await api('GET', `/api/admin/attendance/overview?day=${TODAY}`, { token: admin });
+  // 深夜档防假红（2026-10-11 00:33 踩到）：e1 的卡是"跑测试那一刻"打的，
+  // 深夜打的卡落在 09:00 卡窗外，present 会是 0 —— 那是打卡时刻的问题，
+  // 不是看板的 bug。用管理员补卡把今天的上班卡钉在 09:00（覆盖同日同类型），
+  // 让这条断言与钟点脱钩；上面【三】里"打卡即记录"的性质已有专门用例钉着。
+  if (r.body.stats.present < 1) {
+    await api('POST', '/api/admin/attendance/records',
+      { token: admin, body: { userId: e1.id, day: TODAY, type: 'in', time: '09:00', note: '测试钉时刻（防深夜假红）' } });
+    r = await api('GET', `/api/admin/attendance/overview?day=${TODAY}`, { token: admin });
+  }
   ok('看板：今天有 1 人已打上班卡', r.body.stats.present >= 1, JSON.stringify(r.body.stats));
 
   r = await api('GET', '/api/attendance/my', { token: e1.token });

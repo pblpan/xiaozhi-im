@@ -374,6 +374,9 @@ admin.get('/config', (req, res) => {
     //   写回时 cleanShift 只认它自己那几个键，多出来的派生字段会被忽略，往返安全。
     defaultShift: { ...(settings.get('attDefaultShift') || {}), ...shiftView(eff) },
     workdays: settings.get('attWorkdays'),
+    // 定位精度阈值（米）：手机自报的精度差于这个值就视为"定位不可信"。
+    // 管理台「考勤设置」里可直接改，改完下一次打卡即生效（引擎每次现读）。
+    fenceAccuracyMax: settings.get('attFenceAccuracyMax'),
     serverTime: Date.now(),
     timezone: att.TZ,
     effectiveDefaultShift: shiftView(eff),
@@ -387,10 +390,17 @@ admin.put('/config', (req, res) => {
   if (b.enabled !== undefined) patch.attendanceEnabled = !!b.enabled;
   if (b.defaultShift !== undefined) patch.attDefaultShift = b.defaultShift;
   if (b.workdays !== undefined) patch.attWorkdays = b.workdays;
+  if (b.fenceAccuracyMax !== undefined) patch.attFenceAccuracyMax = b.fenceAccuracyMax;
   if (!Object.keys(patch).length) return res.status(400).json({ error: '无修改内容' });
   const r = settings.update(patch, g.u.username);
   if (r.error) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, enabled: settings.get('attendanceEnabled'), defaultShift: settings.get('attDefaultShift'), workdays: settings.get('attWorkdays') });
+  res.json({
+    ok: true,
+    enabled: settings.get('attendanceEnabled'),
+    defaultShift: settings.get('attDefaultShift'),
+    workdays: settings.get('attWorkdays'),
+    fenceAccuracyMax: settings.get('attFenceAccuracyMax'),
+  });
 });
 
 /** 今日（或指定日）打卡看板：谁打了、谁没打、谁迟到 —— 未打卡的人也要列出 */

@@ -334,7 +334,13 @@ function sendMessage({ conversationId, senderId, kind, content, fileId, mentions
 
   const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(res.lastInsertRowid);
   const full = withFileInfo(msg);
-  hub.broadcastToConversation(db, conversationId, { type: 'message:new', message: full }, senderId);
+
+  // 「文件助手」是自己↔自己的会话：广播**不能**排除发送者。
+  // 排除了就一个接收者都不剩 —— 手机上传的文件，电脑上要手动刷新才看得到，
+  // 那这功能就白做了。客户端按消息 id 幂等去重，收到自己刚发的那条不会重复渲染。
+  const convType = db.prepare('SELECT type FROM conversations WHERE id = ?').get(conversationId)?.type;
+  const excludeSelf = convType === 'filehelper' ? null : senderId;
+  hub.broadcastToConversation(db, conversationId, { type: 'message:new', message: full }, excludeSelf);
   // 推给不在线的人（iOS 后台收不到 WS，只能靠通知）
   notifyPush(full);
   // 对外事件：外部系统（工厂V2/OA/脚本）订阅后即可拿到每条新消息
@@ -442,6 +448,8 @@ function remarkOf(ownerId, peerId) {
 function conversationTitle(conversationId, uid) {
   const c = db.prepare('SELECT id, type FROM conversations WHERE id = ?').get(conversationId);
   if (!c) return { id: conversationId, type: null, title: null };
+  // 「文件助手」：自己↔自己，标题固定，客户端也照这个名字渲染
+  if (c.type === 'filehelper') return { id: c.id, type: 'filehelper', title: '文件助手' };
   if (c.type === 'dm') {
     const other = db.prepare(`SELECT u.id, u.username, u.nickname FROM conversation_members cm
       JOIN users u ON u.id = cm.user_id

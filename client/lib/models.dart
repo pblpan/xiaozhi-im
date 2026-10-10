@@ -107,7 +107,7 @@ class AvatarSeed {
 
 class Conversation {
   final int id;
-  final String type; // dm | group
+  final String type; // dm | group | filehelper
   final String? title;
   final String? avatar;
   final String? lastContent;
@@ -158,6 +158,11 @@ class Conversation {
             .toList(),
         memberCount: (m['member_count'] ?? 0) as int,
       );
+
+  /// 「文件助手」：自己↔自己的会话，用来在手机和电脑之间倒文件。
+  /// 服务端下发的 type 就是 'filehelper'（老服务端没有这个类型，客户端自建的
+  /// Conversation 也带这个 type，所以只认 type、不依赖 is_filehelper 字段）
+  bool get isFileHelper => type == 'filehelper';
 }
 
 class Message {
