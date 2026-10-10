@@ -9,18 +9,33 @@ rem  （由其它脚本 call 调用，不要直接双击）
 rem
 rem  作用：定下安装目录 / 数据目录 / 端口，并把 data\.env 读成环境变量。
 rem
-rem  数据目录默认在 %LOCALAPPDATA% 下（安装向导可改到数据盘），不放安装目录里：
+rem  数据目录在安装向导里选定（位置记在注册表，本文件末尾会去读），
+rem  默认建议放数据盘，不放安装目录里：
 rem    安装目录在卸载时会被整个删掉。数据放外面，
 rem    卸载重装不丢聊天记录、不丢授权（机器码不变就不用重新出授权码）。
 rem ============================================================
 set "XZ_HOME=%~dp0"
 if "%XZ_HOME:~-1%"=="\" set "XZ_HOME=%XZ_HOME:~0,-1%"
+rem 2026-10-09：脚本收进了内部子目录 _sys\（安装根只留控制台 exe），
+rem 所以"脚本自己所在目录"不再等于安装根 —— 以 node\ 的位置反推安装根。
+rem 若本目录下没有 node\ 而上一级有，说明自己在 _sys\ 里，上跳一级。
+if not exist "%XZ_HOME%\node\node.exe" if exist "%XZ_HOME%\..\node\node.exe" for %%I in ("%XZ_HOME%\..") do set "XZ_HOME=%%~fI"
 set "XZ_NODE=%XZ_HOME%\node\node.exe"
 set "XZ_APP=%XZ_HOME%\app"
-rem 数据目录：安装向导选的目录（data_dir.cmd）优先；没选过就回落默认位置。
-rem data_dir.cmd 由安装程序生成（GBK 编码，内含一行 set "XZ_DATA=..."）。
+rem 数据目录 = 安装向导里选的那个位置，安装程序把它记在
+rem   HKCU\Software\小智IM服务端\DataDir
+rem
+rem 【2026-10-09 修】这里原来读 %XZ_HOME%\data_dir.cmd，而那个文件**早就没有任何
+rem    地方生成了**（安装器改用注册表 + init-env.js 传参），于是恒定回落到下面
+rem    C 盘的默认位置。客户只要把数据目录选到数据盘（安装向导默认就建议
+rem    D:\小智IM服务端\data），走本脚本链（后台启动服务端.vbs → _hidden.cmd）
+rem    起来的服务端就会在 C 盘另建一套空数据 —— 表现成"装完数据不见了 /
+rem    初始密码登不上"。控制台是 PowerShell、直接读注册表，所以只有这条
+rem    .cmd/.vbs 链中招，排查时极易看错方向。
 set "XZ_DATA=%LOCALAPPDATA%\小智IM服务端\data"
-if exist "%XZ_HOME%\data_dir.cmd" call "%XZ_HOME%\data_dir.cmd"
+rem reg.exe 在部分机器被安全策略拉黑 → 改用 PowerShell 读注册表（Get-ItemProperty 未被拦）。
+rem 注意：本文件需 GBK 落盘（见 pack_server_win.py::write_cmd），中文键名才能被 PowerShell 正确接收。
+for /f "usebackq delims=" %%a in (`powershell -NoProfile -Command "try{(Get-ItemProperty -Path 'HKCU:\Software\小智IM服务端' -Name DataDir -ErrorAction Stop).DataDir}catch{}"`) do set "XZ_DATA=%%a"
 set "PORT=3602"
 set "NODE_ENV=production"
 set "DATA_DIR=%XZ_DATA%"

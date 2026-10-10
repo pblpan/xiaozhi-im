@@ -79,7 +79,7 @@ Var XZ_DATA_NOTE   ; 数据目录页：说明文字（按检测结果拼）
 ; 所以这里直接把「用哪个地址登录、账号是什么、密码是什么」摆出来，
 ; 而不是让人自己去翻目录里的说明文件。
 !define MUI_FINISHPAGE_TEXT "小智IM 服务端 ${VERSION} 已安装完成。$\r$\n$\r$\n数据目录：$XZ_DATADIR$\r$\n$\r$\n管理后台（本机）：http://127.0.0.1:3602/admin$\r$\n管理后台（局域网）：http://$XZ_LAN:3602/admin$\r$\n$\r$\n管理账号：admin$\r$\n$XZ_PASS_LINE$\r$\n$\r$\n日常管理请用桌面上的「小智IM 服务端控制台」：启动 / 停止 / 重启、开机自启、$\r$\n实时日志、查看密码、配置防火墙，都在那一个窗口里。$\r$\n$\r$\n提示：要让同一局域网的手机连上，在控制台里点「配置防火墙」即可（会自动放通当前端口）。"
-!define MUI_FINISHPAGE_RUN "$INSTDIR\首次启动并打开后台.cmd"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\_sys\首次启动并打开后台.cmd"
 !define MUI_FINISHPAGE_RUN_TEXT "立即在后台启动服务端，并打开管理后台"
 
 !insertmacro MUI_PAGE_WELCOME
@@ -203,7 +203,7 @@ Function xzPwdPageCreate
   ${NSD_CreatePassword} 0 97u 100% 13u ""
   Pop $XZ_PWD_CTL2
 
-  ${NSD_CreateLabel} 0 120u 100% 26u "密码会写进数据目录的 .env 文件（不是明文存到别处）。$\r$\n以后忘了，双击安装目录下的「查看管理员密码.cmd」就能再看到。"
+  ${NSD_CreateLabel} 0 120u 100% 26u "密码会写进数据目录的 .env 文件（不是明文存到别处）。$\r$\n以后忘了，打开「小智IM 服务端控制台」点「查看管理员密码」就能再看到。"
   Pop $0
 
   nsDialogs::Show
@@ -244,6 +244,14 @@ Function .onInit
   ;
   ; ⚠️ 走的是 _stop_silent.cmd（按**端口 3602** 找进程后 taskkill /PID），
   ;    绝不 taskkill /IM node.exe —— 客户机上很可能还跑着别的 node 程序。
+  ; ⚠️ 两个位置都试：新版收在 _sys\，但老版本是摊在安装根的，
+  ;    升级时得能停掉老版本那份装的服务。
+  IfFileExists "$INSTDIR\_sys\_stop_silent.cmd" 0 xz_init_try_legacy
+    DetailPrint "正在停止旧版本服务端 …"
+    nsExec::ExecToLog 'cmd /c ""$INSTDIR\_sys\_stop_silent.cmd""'
+    Sleep 1200
+    Goto xz_init_done
+  xz_init_try_legacy:
   IfFileExists "$INSTDIR\_stop_silent.cmd" 0 xz_init_done
     DetailPrint "正在停止旧版本服务端 …"
     nsExec::ExecToLog 'cmd /c ""$INSTDIR\_stop_silent.cmd""'
@@ -288,6 +296,14 @@ Section "小智IM 服务端" SEC_MAIN
   SectionIn RO
   SetOutPath "$INSTDIR"
   File /r "__SRC__\*.*"
+
+  ; 升级清理（2026-10-09）：老版本把一堆 .cmd / .vbs / console.ps1 摊在安装根，
+  ; 现在统一收进 _sys\。不清掉的话，升级完客户目录里又是"一堆命令脚本" ——
+  ; 这一版改的正是这个观感（龙哥：入口应该是个 exe）。
+  ; Delete 不递归，所以 _sys\ 里刚装好的那份不会被动到。
+  Delete "$INSTDIR\*.cmd"
+  Delete "$INSTDIR\*.vbs"
+  Delete "$INSTDIR\console.ps1"
 
   ; ---------- 数据目录（刻意放在安装目录**之外**）----------
   ; 放里面的话卸载会连聊天记录、上传文件、授权状态一起删光。
@@ -350,7 +366,7 @@ Section "小智IM 服务端" SEC_MAIN
   ;   · 客户在向导里自己设的 → 不回显（他知道自己输了什么）
   ;   · 随机生成的 → 一定要显示，否则他又没得抄
   StrCmp $XZ_HASENV "1" 0 xz_line_fresh
-    StrCpy $XZ_PASS_LINE "沿用原有密码（忘了的话：双击安装目录里的「查看管理员密码.cmd」）"
+    StrCpy $XZ_PASS_LINE "沿用原有密码（忘了的话：打开「小智IM 服务端控制台」点「查看管理员密码」）"
     Goto xz_line_done
   xz_line_fresh:
   StrCmp $XZ_CUSTOM "1" 0 xz_line_random
@@ -364,33 +380,34 @@ Section "小智IM 服务端" SEC_MAIN
   IntFmt $InstSizeKB "0x%08X" $2
 
   ; ---------- 快捷方式 ----------
-  ; 桌面 + 开始菜单都以「服务端控制台」为主入口：启停/重启、开机自启、日志、
-  ; 查密码、防火墙都在它里面，客户不用再记"哪个 .cmd 干什么"。
-  ; 原来的单个脚本快捷方式收进「高级工具」子文件夹 —— 排障时才用得上。
-  CreateShortCut "$DESKTOP\小智IM 服务端控制台.lnk" "$INSTDIR\小智IM 服务端控制台.cmd" "" "$INSTDIR\小智IM 服务端控制台.cmd" 0
-  CreateShortCut "$DESKTOP\小智IM 管理后台.lnk"     "$INSTDIR\打开管理后台.cmd" "" "$INSTDIR\打开管理后台.cmd" 0
+  ; 桌面 + 开始菜单都以「服务端控制台」为主入口（现在是一个真 exe，不再是 .cmd）：
+  ; 启停/重启、开机自启、日志、查密码、防火墙都在它里面，
+  ; 客户不用再记"哪个 .cmd 干什么"。
+  ; 原来的单个脚本收进安装目录的 _sys\，只在开始菜单「高级工具」里露出快捷方式。
+  CreateShortCut "$DESKTOP\小智IM 服务端控制台.lnk" "$INSTDIR\小智IM 服务端控制台.exe" "" "$INSTDIR\小智IM 服务端控制台.exe" 0
+  CreateShortCut "$DESKTOP\小智IM 管理后台.lnk"     "$INSTDIR\_sys\打开管理后台.cmd" "" "$INSTDIR\_sys\打开管理后台.cmd" 0
 
   CreateDirectory "$SMPROGRAMS\${SHORT_NAME}"
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\小智IM 服务端控制台.lnk" "$INSTDIR\小智IM 服务端控制台.cmd" "" "$INSTDIR\小智IM 服务端控制台.cmd" 0
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\打开管理后台.lnk"        "$INSTDIR\打开管理后台.cmd" "" "$INSTDIR\打开管理后台.cmd" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\小智IM 服务端控制台.lnk" "$INSTDIR\小智IM 服务端控制台.exe" "" "$INSTDIR\小智IM 服务端控制台.exe" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\打开管理后台.lnk"        "$INSTDIR\_sys\打开管理后台.cmd" "" "$INSTDIR\_sys\打开管理后台.cmd" 0
   CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\卸载 ${SHORT_NAME}.lnk"  "$INSTDIR\uninst.exe"
 
   CreateDirectory "$SMPROGRAMS\${SHORT_NAME}\高级工具"
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\后台启动服务端.lnk"          "$INSTDIR\后台启动服务端.vbs" "" "$INSTDIR\后台启动服务端.vbs" 0
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\启动服务端（前台看日志）.lnk" "$INSTDIR\启动服务端.cmd" "" "$INSTDIR\启动服务端.cmd" 0
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\停止服务端.lnk"             "$INSTDIR\停止服务端.cmd" "" "$INSTDIR\停止服务端.cmd" 0
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\查看管理员密码.lnk"         "$INSTDIR\查看管理员密码.cmd" "" "$INSTDIR\查看管理员密码.cmd" 0
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\查看运行日志.lnk"           "$INSTDIR\查看运行日志.cmd" "" "$INSTDIR\查看运行日志.cmd" 0
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\配置防火墙（需管理员）.lnk"  "$INSTDIR\配置防火墙.cmd" "" "$INSTDIR\配置防火墙.cmd" 0
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\设为开机自启.lnk"           "$INSTDIR\设为开机自启.cmd" "" "$INSTDIR\设为开机自启.cmd" 0
-  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\取消开机自启.lnk"           "$INSTDIR\取消开机自启.cmd" "" "$INSTDIR\取消开机自启.cmd" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\后台启动服务端.lnk"          "$INSTDIR\_sys\后台启动服务端.vbs" "" "$INSTDIR\_sys\后台启动服务端.vbs" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\启动服务端（前台看日志）.lnk" "$INSTDIR\_sys\启动服务端.cmd" "" "$INSTDIR\_sys\启动服务端.cmd" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\停止服务端.lnk"             "$INSTDIR\_sys\停止服务端.cmd" "" "$INSTDIR\_sys\停止服务端.cmd" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\查看管理员密码.lnk"         "$INSTDIR\_sys\查看管理员密码.cmd" "" "$INSTDIR\_sys\查看管理员密码.cmd" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\查看运行日志.lnk"           "$INSTDIR\_sys\查看运行日志.cmd" "" "$INSTDIR\_sys\查看运行日志.cmd" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\配置防火墙（需管理员）.lnk"  "$INSTDIR\_sys\配置防火墙.cmd" "" "$INSTDIR\_sys\配置防火墙.cmd" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\设为开机自启.lnk"           "$INSTDIR\_sys\设为开机自启.cmd" "" "$INSTDIR\_sys\设为开机自启.cmd" 0
+  CreateShortCut "$SMPROGRAMS\${SHORT_NAME}\高级工具\取消开机自启.lnk"           "$INSTDIR\_sys\取消开机自启.cmd" "" "$INSTDIR\_sys\取消开机自启.cmd" 0
 
   WriteUninstaller "$INSTDIR\uninst.exe"
 
   ; ---------- 开机自启 ----------
   ; 写 HKCU 的 Run：登录 Windows 后由 wscript 隐藏窗口拉起。
   ; 用 HKCU 而不是 HKLM：用户级写入不需要管理员权限，卸载也好清。
-  WriteRegStr HKCU "${RUN_KEY}" "XiaozhiIMServer" 'wscript.exe "$INSTDIR\后台启动服务端.vbs"'
+  WriteRegStr HKCU "${RUN_KEY}" "XiaozhiIMServer" 'wscript.exe "$INSTDIR\_sys\后台启动服务端.vbs"'
 
   ; ---------- 「添加/删除程序」里的条目 ----------
   WriteRegStr   HKCU "${UNINST_KEY}" "DisplayName"     "${APP_NAME}"
@@ -406,7 +423,13 @@ Section "小智IM 服务端" SEC_MAIN
 SectionEnd
 
 Section "Uninstall"
-  ; 先停服务 —— 走 _stop_silent.cmd（按端口），不按 node.exe 映像名杀
+  ; 先停服务 —— 走 _stop_silent.cmd（按端口），不按 node.exe 映像名杀。
+  ; 同样两个位置都试：新版在 _sys\，老版本摊在安装根。
+  IfFileExists "$INSTDIR\_sys\_stop_silent.cmd" 0 xz_un_try_legacy
+    nsExec::ExecToLog 'cmd /c ""$INSTDIR\_sys\_stop_silent.cmd""'
+    Sleep 1200
+    Goto xz_un_stopped
+  xz_un_try_legacy:
   IfFileExists "$INSTDIR\_stop_silent.cmd" 0 xz_un_stopped
     nsExec::ExecToLog 'cmd /c ""$INSTDIR\_stop_silent.cmd""'
     Sleep 1200

@@ -37,6 +37,11 @@ const KEYS = Object.freeze({
   // 需要放假的日期用「请假/调休」或管理台手工修正处理。
   attWorkdays: { key: 'att_workdays', def: [1, 2, 3, 4, 5] },
 
+  // 定位精度阈值（米）：打卡定位精度差于该值视为"不可信"，required 组直接拒绝
+  // （attendance.js 的 fenceAccuracyMax 读它）。只服务端用，**故意不进 all()** ——
+  // all() 会随免鉴权的 bootstrap 铺给客户端，防伪参数不该让端上知道。
+  attFenceAccuracyMax: { key: 'att_fence_accuracy_max', def: 200 },
+
   // 🔴 远程协助的「默认控制码」：管理台统一维护、给管理员做远程维护用。
   //    这里**只存访问码的 id**，不是明文 —— 明文一旦写进 settings 表，
   //    数据库备份 / 导出 / 任何人查 settings 都能拿到一把能控机器的钥匙。

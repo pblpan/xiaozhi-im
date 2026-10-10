@@ -30,6 +30,12 @@
         android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <!-- 考勤打卡定位（地理围栏 + 定位防伪）：geolocator 走系统 LocationManager
+         （forceLocationManager，见 screens/attendance.dart），不依赖 Google 服务。
+         COARSE 是低配兜底；FINE 才拿得到围栏判定需要的米级精度。
+         两行都要 —— 只声明 FINE 时部分机型请求弹窗只给"精确"选项，被拒后没有降级路径。 -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <application
         android:label="小智IM"
         android:name="${applicationName}"

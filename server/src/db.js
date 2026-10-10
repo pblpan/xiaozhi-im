@@ -438,12 +438,14 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_attempts_user ON remote_code_atte
 
 /* ==================== 考勤（工作模式的标配能力，对标钉钉考勤）====================
  *
- * 六张表，职责互不重叠：
+ * 八张表，职责互不重叠：
  *   att_shifts        班次：几点上下班、休息时段、弹性与宽限（一个组织可有多套）
  *   att_groups        考勤组：一批人用哪套班次、要不要定位、允不允许外勤
  *   att_group_members 考勤组的「点名」成员
  *   att_group_depts   考勤组按部门纳入（部门内所有人自动算成员，新员工自动进组）
- *   att_records       打卡流水
+ *   att_locations     组织级统一打卡点位（地理围栏：经纬度 + 半径），考勤组从中勾选
+ *   att_group_locations 考勤组 ↔ 点位 关联（多对多）
+ *   att_records       打卡流水（含定位精度 / 是否模拟定位 / 围栏判定 / 命中点位）
  *   att_requests      请假/补卡/外出/加班申请单
  *
  * 【一天打几次卡，由班次有没有休息时段决定】
@@ -486,9 +488,10 @@ CREATE TABLE IF NOT EXISTS att_groups (
   org_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   shift_id INTEGER,                          -- NULL = 用组织默认班次
-  -- 定位要求：off 不校验 | optional 有就记、没有算外勤 | required 必须带定位
-  -- 刻意**不做地理围栏**（公司坐标+半径）：桌面端拿不到定位、内网场景意义有限，
-  -- 而围栏要配坐标与地图，是"配了也不准"的功能。只记录地点，由管理者判断。
+  -- 定位要求：off 不校验 | optional 有就记、没有算外勤 | required 必须带定位且命中围栏
+  -- required 时打卡必须落在「考勤组允许的点位」半径内，否则直接拒绝（最严）；
+  -- 同时叠加定位精度阈值 + 模拟定位检测，异常打卡标记 loc_status 入报表。
+  -- 点位在组织级统一维护（att_locations），本组勾选可用子集（att_group_locations）。
   location_mode TEXT NOT NULL DEFAULT 'off',
   created_at INTEGER NOT NULL
 );
@@ -501,6 +504,25 @@ CREATE TABLE IF NOT EXISTS att_group_depts (
   group_id INTEGER NOT NULL,
   dept_id INTEGER NOT NULL,
   PRIMARY KEY(group_id, dept_id)
+);
+-- 组织级统一打卡点位（地理围栏）：经纬度 + 半径。考勤组从中勾选可用子集。
+-- 刻意做成"组织统一维护、组勾选"而不是"每组各建一套坐标"：门店点位就那么几个
+-- （门店总部 / 二号仓 / 配送点），让每组重复填坐标既易错又难统一改。
+CREATE TABLE IF NOT EXISTS att_locations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id INTEGER NOT NULL,
+  name TEXT NOT NULL,                -- 点位名称，如「门店总部」「二号仓」
+  lat REAL NOT NULL,                 -- 纬度
+  lng REAL NOT NULL,                 -- 经度
+  radius INTEGER NOT NULL DEFAULT 100, -- 围栏半径（米）：在此范围内打卡算"到位"
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_att_locations_org ON att_locations (org_id);
+-- 考勤组 ↔ 点位关联（多对多，先删后插保持幂等）
+CREATE TABLE IF NOT EXISTS att_group_locations (
+  group_id INTEGER NOT NULL,
+  location_id INTEGER NOT NULL,
+  PRIMARY KEY(group_id, location_id)
 );
 CREATE TABLE IF NOT EXISTS att_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -542,6 +564,11 @@ ensureColumn('att_shifts', 'early_grace', 'early_grace INTEGER NOT NULL DEFAULT 
 ensureColumn('att_shifts', 'rest_start', 'rest_start TEXT');
 ensureColumn('att_shifts', 'rest_end', 'rest_end TEXT');
 ensureColumn('att_records', 'slot', 'slot INTEGER NOT NULL DEFAULT 1');
+// 定位防伪字段（v0.27.0 新增）：定位精度 / 是否模拟定位 / 围栏判定结果 / 命中的点位
+ensureColumn('att_records', 'accuracy', 'accuracy REAL');
+ensureColumn('att_records', 'mock', 'mock INTEGER');
+ensureColumn('att_records', 'loc_status', 'loc_status TEXT');
+ensureColumn('att_records', 'matched_location_id', 'matched_location_id INTEGER');
 ensureColumn('att_requests', 'slot', 'slot INTEGER NOT NULL DEFAULT 1');
 
 // ---- 管理台列表页的查询索引（v0.14.0 新增）----
@@ -792,6 +819,7 @@ CREATE TABLE IF NOT EXISTS product_master (
   member_price REAL,            -- 会员价（龙哥 2026-10-06：商档资料要带会员价/特价）
   special_price REAL,           -- 特价（促销价）
   account_qty REAL,             -- 账面数（库存）；NULL = 账上没有，盘点时算差异
+  supplier TEXT,                -- 供应商（龙哥 2026-10-10：商档在库存后加一列供应商）
   batch TEXT,                   -- 本次导入批次号，commit 时用它区分新旧
   updated_at INTEGER NOT NULL
 );
@@ -820,6 +848,11 @@ try {
   }
   if (!pmCols.includes('special_price')) {
     db.exec('ALTER TABLE product_master ADD COLUMN special_price REAL');
+  }
+  // 供应商（2026-10-10）：同一套"启动时补列"兜底 —— 老库建表时没这列，
+  // CREATE TABLE IF NOT EXISTS 对已存在的表什么都不做，不补的话导入静默丢列。
+  if (!pmCols.includes('supplier')) {
+    db.exec('ALTER TABLE product_master ADD COLUMN supplier TEXT');
   }
 } catch (e) {
   console.warn('[小智IM] product_master 补列失败：%s', e.message);

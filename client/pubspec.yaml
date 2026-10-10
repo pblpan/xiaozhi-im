@@ -78,6 +78,18 @@ dependencies:
   #    所以 Windows 构建产物里不会多出播放器的原生代码。
   video_player: 2.14.0
 
+  # 考勤打卡定位（地理围栏 + 定位防伪）：经纬度 / 精度 / isMocked 一起拿。
+  #
+  # 🔴 **Android 必须 forceLocationManager=true**（见 screens/attendance.dart）：
+  #    geolocator 默认走 FusedLocationProviderClient（Google Play Services），
+  #    门店国产手机没有 GSF —— 不强制的话在这批手机上拿不到位置。
+  #    forceLocationManager 让它退回 Android 框架自带的 LocationManager，
+  #    不依赖任何 Google 服务，与 mobile_scanner 用 bundled MLKit 是同一个思路。
+  #
+  # 🔴 Windows 也有实现（geolocator_windows，走系统位置服务）：桌面端能定位就定位，
+  #    拿不到时打卡页按"无定位"处理，管理台把定位要求设成 required 的组请用手机打。
+  geolocator: ^14.1.1
+
   # ── 蓝牙价签打印：**故意不引蓝牙包** ──────────────────────────────
   # 原先引了 flutter_blue_plus，后来弃用：它的 FlutterBluePlus License 白纸黑字
   # 写着 "For for-profit organizations, a commercial license is required"，

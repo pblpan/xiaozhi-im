@@ -346,6 +346,121 @@ function groupMemberIds(groupRow, orgId) {
 
 /* ==================== 3. 打卡 ==================== */
 
+/* ---------- 3.0 地理围栏 / 定位防伪 ---------- */
+
+// 定位精度阈值（米）：精度差于这个值直接视为"定位不可信"，required 模式拒绝打卡。
+// 通过管理台设置 attFenceAccuracyMax 可覆盖（默认 200 米，足够放过高楼/室内的正常漂移，
+// 又能挡掉"城市级"的粗定位——那种基本是开着代理或定位服务抽风）。
+const FENCE_ACCURACY_MAX = 200;
+function fenceAccuracyMax() {
+  const v = Number(settings.get('attFenceAccuracyMax'));
+  return Number.isFinite(v) && v > 0 ? v : FENCE_ACCURACY_MAX;
+}
+
+/**
+ * 两经纬度之间的球面距离（米），WGS-84 近似（门店/厂区尺度下误差可忽略）。
+ * 客户端传来的就是 WGS-84（手机 GPS 原始坐标），服务端不需要做任何坐标转换，
+ * 点位也是用同一套坐标录入的 —— 两头同一基准，距离才准。
+ */
+function haversine(lat1, lng1, lat2, lng2) {
+  const R = 6371000; // 地球半径（米）
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(a)));
+}
+
+/** 组织下全部打卡点位（按 id 方便反查名称） */
+function listOrgLocations(orgId) {
+  return db.prepare('SELECT * FROM att_locations WHERE org_id=? ORDER BY id').all(Number(orgId));
+}
+
+/** 某考勤组勾选的点位（组织级统一维护，组只挑子集） */
+function locationsForGroup(orgId, groupId) {
+  if (!groupId) return [];
+  return db.prepare(`SELECT l.* FROM att_locations l
+    JOIN att_group_locations gl ON gl.location_id=l.id
+    WHERE gl.group_id=? AND l.org_id=? ORDER BY l.id`).all(Number(groupId), Number(orgId));
+}
+
+/**
+ * 围栏判定 + 定位防伪。
+ *
+ * 入参：
+ *   mode        'off' | 'optional' | 'required'
+ *   lat,lng     客户端经纬度（非有限数 / (0,0) 视为"没有定位"）
+ *   accuracy    定位精度（米），可能为 null（客户端没给）
+ *   mock        是否模拟定位（客户端上报 isMocked，绕 GMS 的国产机也能拿到）
+ *   locations   该组勾选的点位数组（locationsForGroup 的结果）
+ *
+ * 返回：
+ *   { ok, error, locStatus, matchedLocationId, matchedLocationName, distance }
+ *   locStatus：null（未启用/无定位）| 'ok'（命中围栏）| 'outside'（有围栏但不在任何点位内）
+ *              | 'weak_gps'（精度过低）| 'mock'（模拟定位）| 'no_fix'（无定位）
+ *   口径：mock > weak_gps > outside > ok（优先级，决定命中的是哪种异常）。
+ *
+ * 关键设计：
+ *   · required 模式：命中任一异常（mock / weak_gps / outside / no_fix）都**直接拒绝**，
+ *     不写打卡记录 —— 这是龙哥拍板的"最严"方案，代打卡/虚拟定位从源头挡掉。
+ *   · optional 模式：**从不拒绝**，只把异常标记进 loc_status，让异常打卡进报表
+ *     （报表/看板据此标红，由管理者判断），不打扰正常打卡。
+ *   · 如果该组没勾任何点位，则没有"距离"维度，required 只校验"有定位 + 非模拟 + 精度达标"，
+ *     不按距离拒（避免管理员忘了配点位却全员打不了卡）。
+ */
+function validateFence({ mode = 'off', lat, lng, accuracy = null, mock = false, locations = [] }) {
+  const base = { ok: true, error: null, locStatus: null, matchedLocationId: null, matchedLocationName: null, distance: null };
+  if (mode === 'off') return base; // 不校验：连坐标都不需要
+
+  const hasLoc = Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) &&
+    !(Number(lat) === 0 && Number(lng) === 0);
+  if (!hasLoc) {
+    // 没有定位：required 拒绝；optional 不拒绝（只是"没记录定位"，loc_status 留空）
+    if (mode === 'required') return { ...base, ok: false, error: '本考勤组要求定位打卡，请允许客户端获取位置后重试' };
+    return { ...base, locStatus: null };
+  }
+
+  const latN = Number(lat), lngN = Number(lng);
+  // ⚠️ Number(null)=0 且 Number.isFinite(0)=true —— 不先排除 null 会把"没传精度"
+  // 算成"精度 0 米"，进而在返回值里留下一个假的 distance:0
+  const accN = accuracy != null && Number.isFinite(Number(accuracy)) ? Number(accuracy) : null;
+  const isMock = !!mock;
+
+  // 1) 模拟定位：最高优先级异常，required 直接拒
+  if (isMock) {
+    return mode === 'required'
+      ? { ...base, ok: false, error: '检测到模拟定位（虚拟位置），打卡被拒绝' }
+      : { ...base, ok: true, locStatus: 'mock' };
+  }
+  // 2) 精度过低：GPS 漂移太大，required 拒绝
+  if (accN != null && accN > fenceAccuracyMax()) {
+    return mode === 'required'
+      ? { ...base, ok: false, error: `定位精度过低（约 ${Math.round(accN)} 米），请在开阔处重试` }
+      : { ...base, ok: true, locStatus: 'weak_gps' };
+  }
+  // 3) 地理围栏：该组有勾选点位时，必须落在某个点位半径内
+  if (locations && locations.length) {
+    let best = null, bestId = null, bestName = null;
+    for (const loc of locations) {
+      const d = haversine(latN, lngN, Number(loc.lat), Number(loc.lng));
+      if (best == null || d < best) { best = d; bestId = loc.id; bestName = loc.name; }
+    }
+    if (best > Number(locations[0].radius)) {
+      // 不在任何点位内：required 拒绝；optional 记 'outside' 进报表
+      return mode === 'required'
+        ? { ...base, ok: false, error: `打卡位置不在允许的考勤点位范围内（距最近点位「${bestName}」约 ${best} 米，超过围栏半径）` }
+        : { ...base, ok: true, locStatus: 'outside', distance: best };
+    }
+    // 命中围栏
+    return { ...base, ok: true, locStatus: 'ok', matchedLocationId: bestId, matchedLocationName: bestName, distance: best };
+  }
+  // 4) 没勾点位：只要求"有定位 + 非模拟 + 精度达标"，不按距离判
+  return { ...base, ok: true, locStatus: 'ok', distance: accN };
+}
+
+/* ==================== 3.1 打卡 ==================== */
+
 /**
  * 打卡。type='in'|'out'，slot=1|2（第几段：1=上午，2=下午；2 次卡的班次只有 slot 1）。
  *
@@ -359,7 +474,7 @@ function groupMemberIds(groupRow, orgId) {
  * 只看 type 不看 slot 的话，中午打的那次会把下班卡覆盖掉 —— 员工下午明明打了卡，
  * 报表上却是缺卡。所以下面的去重口径必须带上 slot。
  */
-function clock({ userId, orgId, type, slot = 1, at = Date.now(), lat = null, lng = null, address = null, device = null, source = 'app', addressNote = null }) {
+function clock({ userId, orgId, type, slot = 1, at = Date.now(), lat = null, lng = null, address = null, device = null, source = 'app', addressNote = null, accuracy = null, mock = false, locStatus = null, matchedLocationId = null }) {
   if (!['in', 'out'].includes(type)) return { error: '打卡类型只能是 in 或 out' };
   // 这里的兜底只负责"把脏值收敛到 1"，不做合法性判断 —— clock() 是内部函数，
   // 边界上的 400 由调用方（路由 / createRequest）用 slotOf() 拦掉。
@@ -372,19 +487,27 @@ function clock({ userId, orgId, type, slot = 1, at = Date.now(), lat = null, lng
   const note = addressNote ? String(addressNote).slice(0, 120) : null;
   if (cnt === 0) {
     const r = db.prepare(`INSERT INTO att_records
-      (org_id,user_id,day,type,slot,at,source,lat,lng,address,device,note,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      (org_id,user_id,day,type,slot,at,source,lat,lng,address,device,note,
+       accuracy,mock,loc_status,matched_location_id,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(Number(orgId), Number(userId), day, type, sl, at, source,
         lat == null ? null : Number(lat), lng == null ? null : Number(lng),
-        addr, dev, note, Date.now());
+        addr, dev, note,
+        accuracy == null ? null : Number(accuracy), mock ? 1 : 0,
+        locStatus || null, matchedLocationId == null ? null : Number(matchedLocationId),
+        Date.now());
     return { record: recordById(r.lastInsertRowid), updated: false };
   }
   // 一天同一张卡打 20 次显然是程序在重放请求，不再新增，只覆盖最近一条
   const last = db.prepare('SELECT id FROM att_records WHERE user_id=? AND day=? AND type=? AND slot=? ORDER BY at DESC LIMIT 1')
     .get(Number(userId), day, type, sl);
-  db.prepare('UPDATE att_records SET at=?, lat=?, lng=?, address=?, device=?, source=?, note=? WHERE id=?')
+  db.prepare(`UPDATE att_records SET at=?, lat=?, lng=?, address=?, device=?, source=?, note=?,
+      accuracy=?, mock=?, loc_status=?, matched_location_id=? WHERE id=?`)
     .run(at, lat == null ? null : Number(lat), lng == null ? null : Number(lng),
-      addr, dev, source, note, last.id);
+      addr, dev, source, note,
+      accuracy == null ? null : Number(accuracy), mock ? 1 : 0,
+      locStatus || null, matchedLocationId == null ? null : Number(matchedLocationId),
+      last.id);
   return { record: recordById(last.id), updated: true };
 }
 
@@ -414,6 +537,11 @@ function decorateRecord(r) {
     address: r.address,
     device: r.device,
     note: r.note,
+    // 定位防伪字段：前端/管理台据此标红异常打卡
+    accuracy: r.accuracy,
+    mock: r.mock ? true : false,
+    locStatus: r.loc_status || null,
+    matchedLocationId: r.matched_location_id || null,
     username: r.username,
     nickname: r.nickname,
     employeeNo: r.employee_no,
@@ -1139,21 +1267,30 @@ function overview({ orgId, day, now = Date.now() }) {
     };
   });
 
-  // 打卡地址：只有看板需要在列表里直接看到，单独查一次（带定位的打卡）
-  const locRows = db.prepare(`SELECT user_id, type, slot, address, lat, lng, source FROM att_records
+  // 打卡地址 + 定位防伪：只有看板需要在列表里直接看到，单独查一次
+  const locRows = db.prepare(`SELECT user_id, type, slot, address, lat, lng, source, loc_status, matched_location_id
+    FROM att_records
     WHERE org_id=? AND day=? AND (address IS NOT NULL OR lat IS NOT NULL)`).all(Number(orgId), day);
   const locMap = new Map();
   for (const l of locRows) {
     const cur = locMap.get(l.user_id) || {};
-    cur[l.type + (Number(l.slot) === 2 ? 2 : 1)] = { address: l.address, lat: l.lat, lng: l.lng, source: l.source };
+    cur[l.type + (Number(l.slot) === 2 ? 2 : 1)] = {
+      address: l.address, lat: l.lat, lng: l.lng, source: l.source,
+      locStatus: l.loc_status || null, matchedLocationId: l.matched_location_id || null,
+    };
     locMap.set(l.user_id, cur);
   }
+  // 异常定位口径：命中任一张卡的 mock/weak_gps/outside 都算"定位异常"，看板据此标红
+  const ANOM = new Set(['mock', 'weak_gps', 'outside']);
   for (const it of items) {
     const l = locMap.get(it.userId);
     if (l) {
       it.location = l;
-      const withAddr = it.punches.filter((p) => l[p.key] && l[p.key].address);
-      it.address = withAddr.length ? l[withAddr[0].key].address : null;
+      const all = it.punches.map((p) => l[p.key]).filter(Boolean);
+      const withAddr = all.filter((x) => x.address);
+      it.address = withAddr.length ? withAddr[0].address : null;
+      it.locAnomaly = all.some((x) => ANOM.has(x.locStatus));
+      it.locStatus = all.find((x) => ANOM.has(x.locStatus))?.locStatus || 'ok';
     }
   }
 
@@ -1193,4 +1330,6 @@ module.exports = {
   coverageOn, leaveCoverage, leaveDaysOf,
   createRequest, listRequests, reviewRequest, decorateRequest,
   overview,
+  // 地理围栏 / 定位防伪
+  haversine, fenceAccuracyMax, listOrgLocations, locationsForGroup, validateFence,
 };

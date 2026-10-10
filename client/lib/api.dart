@@ -426,14 +426,21 @@ class ImApi {
   /// 存（去重口径带 slot），只发 type 会把第 1 段那张覆盖掉。
   /// 2 次卡的班次只用 slot=1，传 2 会被服务端拒（400）。
   ///
+  /// 定位三件套：lat/lng 坐标、accuracy 精度（米）、mock 是否模拟定位。
+  /// 服务端据此做地理围栏 + 防伪校验：required 组命中异常（无定位/模拟定位/
+  /// 精度过低/超出围栏）直接拒绝；optional 组不拒但会标进报表。
+  ///
   /// **不传时间** —— 时刻一律由服务端决定，客户端改本机时间无效。
   Future<Map<String, dynamic>> attendanceClock(String type,
-          {int slot = 1, double? lat, double? lng, String? address, String? device}) async =>
+          {int slot = 1, double? lat, double? lng, double? accuracy, bool? mock,
+           String? address, String? device}) async =>
       await _post('/attendance/clock', {
         'type': type,
         'slot': slot,
         if (lat != null) 'lat': lat,
         if (lng != null) 'lng': lng,
+        if (accuracy != null) 'accuracy': accuracy,
+        if (mock != null) 'mock': mock,
         if (address != null) 'address': address,
         if (device != null) 'device': device,
       });

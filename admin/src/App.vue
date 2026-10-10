@@ -3037,6 +3037,17 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <el-table-column label="打卡地点" min-width="140">
                     <template #default="{ row }">{{ row.address || '—' }}</template>
                   </el-table-column>
+                  <el-table-column label="定位校验" width="118" align="center">
+                    <template #default="{ row }">
+                      <template v-if="row.locAnomaly">
+                        <el-tag size="small" type="danger" effect="dark">{{ attLocStatusLabel(row.locStatus) }}</el-tag>
+                      </template>
+                      <template v-else-if="row.locStatus === 'ok'">
+                        <el-tag size="small" type="success" effect="plain">围栏内</el-tag>
+                      </template>
+                      <span v-else class="hint">—</span>
+                    </template>
+                  </el-table-column>
                   <el-table-column label="操作" width="132" fixed="right">
                     <template #default="{ row }">
                       <el-button size="small" @click="openAttRecordDlg(row)">补卡</el-button>
@@ -3240,8 +3251,13 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                       <span v-if="row.shift" class="hint">（{{ row.shift.workStart }}-{{ row.shift.workEnd }}）</span>
                     </template>
                   </el-table-column>
-                  <el-table-column label="定位要求" width="110">
-                    <template #default="{ row }">{{ attLocLabel(row.locationMode) }}</template>
+                  <el-table-column label="定位要求" min-width="150">
+                    <template #default="{ row }">
+                      {{ attLocLabel(row.locationMode) }}
+                      <div v-if="row.locationIds && row.locationIds.length" class="hint">
+                        围栏：{{ row.locationIds.map((id) => attLocName(id)).join('、') }}
+                      </div>
+                    </template>
                   </el-table-column>
                   <el-table-column label="纳入部门" min-width="150">
                     <template #default="{ row }">
@@ -3386,6 +3402,40 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </el-form-item>
                 </el-form>
               </el-tab-pane>
+
+              <!-- ======== 打卡点位（地理围栏） ======== -->
+              <el-tab-pane label="打卡点位" name="locations">
+                <div class="card-hdr" style="margin-bottom:8px">
+                  <span><b>打卡点位</b> —— 组织统一维护，考勤组从中勾选可用子集</span>
+                  <el-button size="small" type="primary" @click="openLocDlg()">新增点位</el-button>
+                </div>
+                <div class="hint" style="margin-bottom:10px">
+                  打卡点位就是「允许在哪里打卡」的地理围栏：填好<b>经纬度</b>和<b>围栏半径（米）</b>，
+                  对应考勤组把定位要求设为「必须提供」后，员工只有落在某个点位半径内才能打卡；
+                  超出围栏、定位精度过低或检测到<b>模拟定位</b>都会被直接拒绝。点位只需建一次，多个考勤组共用。
+                </div>
+                <el-table :data="attLocations" border stripe size="small" empty-text="还没有打卡点位，点右上角「新增点位」">
+                  <el-table-column prop="name" label="点位名称" min-width="140" />
+                  <el-table-column label="纬度" width="120">
+                    <template #default="{ row }">{{ Number(row.lat).toFixed(6) }}</template>
+                  </el-table-column>
+                  <el-table-column label="经度" width="120">
+                    <template #default="{ row }">{{ Number(row.lng).toFixed(6) }}</template>
+                  </el-table-column>
+                  <el-table-column label="围栏半径" width="110" align="center">
+                    <template #default="{ row }">{{ row.radius }} 米</template>
+                  </el-table-column>
+                  <el-table-column label="被引用" width="100" align="center">
+                    <template #default="{ row }">{{ attGroupRefCount(row.id) }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="140">
+                    <template #default="{ row }">
+                      <el-button size="small" type="primary" plain @click="openLocDlg(row)">编辑</el-button>
+                      <el-button size="small" type="danger" @click="removeLoc(row)">删除</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
             </el-tabs>
           </el-card>
 
@@ -3450,9 +3500,16 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-radio-group v-model="attGroupForm.locationMode">
                   <el-radio label="off">不校验</el-radio>
                   <el-radio label="optional">有就记录</el-radio>
-                  <el-radio label="required">必须提供</el-radio>
+                  <el-radio label="required">必须提供（围栏）</el-radio>
                 </el-radio-group>
-                <div class="hint">桌面端拿不到定位，除非确有必要（外勤岗）否则保持"不校验"。</div>
+                <div class="hint">「必须提供」= 员工打卡必须带定位且命中围栏，否则直接拒绝（挡代打卡/虚拟定位）；「有就记录」= 不拒绝，但异常定位会标红进报表。</div>
+              </el-form-item>
+              <el-form-item v-if="attGroupForm.locationMode !== 'off'" label="允许打卡点位">
+                <el-select v-model="attGroupForm.locationIds" multiple clearable placeholder="勾选本组可用的打卡点位（不选 = 只校验有定位，不按距离拒）"
+                           style="width:100%">
+                  <el-option v-for="l in attLocations" :key="l.id" :label="`${l.name}（半径 ${l.radius} 米）`" :value="l.id" />
+                </el-select>
+                <div class="hint">勾选后，本组员工只有落在某个点位半径内才能打卡（地理围栏）。点位在「打卡点位」页统一维护。</div>
               </el-form-item>
               <el-form-item label="纳入部门">
                 <el-select v-model="attGroupForm.deptIds" multiple clearable placeholder="选部门（含其子部门）"
@@ -3472,6 +3529,30 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <template #footer>
               <el-button @click="attGroupDlg = false">取消</el-button>
               <el-button type="primary" :loading="attBusy" @click="saveAttGroup">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 打卡点位编辑 -->
+          <el-dialog v-model="attLocDlg" :title="attLocForm.id ? '编辑打卡点位' : '新增打卡点位'" width="520px">
+            <el-form label-width="110px">
+              <el-form-item label="点位名称">
+                <el-input v-model="attLocForm.name" maxlength="30" placeholder="如：门店总部 / 二号仓" />
+              </el-form-item>
+              <el-form-item label="纬度">
+                <el-input v-model="attLocForm.lat" style="width:200px" placeholder="如：31.230416" />
+                <div class="hint">WGS-84 十进制，手机 GPS 读数直接填（与员工端同一基准）。</div>
+              </el-form-item>
+              <el-form-item label="经度">
+                <el-input v-model="attLocForm.lng" style="width:200px" placeholder="如：121.473701" />
+              </el-form-item>
+              <el-form-item label="围栏半径">
+                <el-input-number v-model="attLocForm.radius" :min="10" :max="5000" :step="10" />
+                <span class="hint" style="margin-left:8px">米：在此范围内打卡算"到位"。</span>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="attLocDlg = false">取消</el-button>
+              <el-button type="primary" :loading="attBusy" @click="saveLoc">保存</el-button>
             </template>
           </el-dialog>
 
@@ -3720,7 +3801,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <el-alert type="success" :closable="false" style="margin-bottom:14px">
             <template #title>
               商品档案（商档）是<b>盘点的底表</b>：手机在盘点页点「同步商品档案」，
-              就把这里的<b>条码 / 名称 / 规格 / 售价 / 进价 / 会员价 / 特价 / 库存</b>整份拉到手机上，
+              就把这里的<b>条码 / 名称 / 规格 / 单位 / 进价 / 售价 / 会员价 / 特价 / 库存</b>整份拉到手机上，
               断网也能盘 ——
               扫出来的每一行靠它显示成人看得懂的名字，差异表靠它算金额。
               以前这份数据只能从泰格上游拉 —— 那台机器一关机、IP 一漂就断。
@@ -3737,7 +3818,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <div class="page-bar">
             <el-button type="primary" :loading="masterImport.running" @click="pickMasterFile">导入 CSV</el-button>
             <span class="hint" style="margin-left:8px">
-              标准格式（九列，<b>必须带表头</b>）：条码，名称，规格，单位，进价，售价，会员价，特价，库存
+              标准格式（十列，<b>必须带表头</b>，供应商可选）：条码，名称，规格，单位，进价，售价，会员价，特价，库存，供应商
               （会员价/特价没有可缺省，其余列必带）
             </span>
             <el-button :disabled="!master.total || masterImport.running" @click="clearMaster">清空</el-button>
@@ -3783,11 +3864,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <el-table-column label="单位" width="80">
               <template #default="{ row }">{{ row.unit || '—' }}</template>
             </el-table-column>
-            <el-table-column label="售价" width="100">
-              <template #default="{ row }">{{ row.unit_price == null ? '—' : row.unit_price }}</template>
-            </el-table-column>
             <el-table-column label="进价" width="100">
               <template #default="{ row }">{{ row.purchase_price == null ? '—' : row.purchase_price }}</template>
+            </el-table-column>
+            <el-table-column label="售价" width="100">
+              <template #default="{ row }">{{ row.unit_price == null ? '—' : row.unit_price }}</template>
             </el-table-column>
             <el-table-column label="会员价" width="100">
               <template #default="{ row }">{{ row.member_price == null ? '—' : row.member_price }}</template>
@@ -3795,10 +3876,13 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <el-table-column label="特价" width="100">
               <template #default="{ row }">{{ row.special_price == null ? '—' : row.special_price }}</template>
             </el-table-column>
-            <el-table-column label="账面数（参考）" width="120">
+            <el-table-column label="账面数（库存参考）" width="150">
               <template #default="{ row }">
                 <b>{{ row.account_qty == null ? '—' : row.account_qty }}</b>
               </template>
+            </el-table-column>
+            <el-table-column label="供应商" min-width="160">
+              <template #default="{ row }">{{ row.supplier || '—' }}</template>
             </el-table-column>
           </el-table>
           <el-empty v-if="!master.list.length && !masterImport.running"
@@ -5467,6 +5551,7 @@ const metricGroups = computed(() => {
         { key: 'orgMembers', label: '组织人数' },
         { key: 'attShifts', label: '班次', tab: 'attendance' },
         { key: 'attGroups', label: '考勤组', tab: 'attendance' },
+        { key: 'attLocations', label: '打卡点位', tab: 'attendance' },
         // 待审批是"每天都有活要干"，属正常状态，不标红（标红的是真异常）；
         // 它靠顶部提醒条提示，这里保持安静，否则满屏都是红的。
         { key: 'attPending', label: '待审批申请', tab: 'attendance' },
@@ -7309,10 +7394,11 @@ function splitCsvLine(line, delim) {
 }
 
 /**
- * 解析成龙哥定的**标准商档列**（2026-09-26 定七列，2026-10-06 加会员价/特价）：
+ * 解析成龙哥定的**标准商档列**（2026-09-26 定七列，2026-10-06 加会员价/特价，
+ *    2026-10-10 加供应商）：
  *     { barcode 条码, name 名称, spec 规格, unit 单位,
  *       purchase_price 进价, unit_price 售价,
- *       member_price 会员价, special_price 特价, account_qty 库存 }
+ *       member_price 会员价, special_price 特价, account_qty 库存, supplier 供应商 }
  *
  * 🔴 为什么必须齐着这些列读（2026-09-26 的血泪）：早先这个解析器只读
  *    {barcode, name, account_qty} 三列，**其余列一律丢弃**。于是门店按
@@ -7321,11 +7407,12 @@ function splitCsvLine(line, delim) {
  *    是**根本没读进来**。而它不报错、不警告，导入照样显示成功。
  *    少读字段比读错字段更难发现，因为一切看起来都正常。
  *
- * ⚠️ 列是**龙哥 2026-09-27 加了「单位」、2026-10-06 加了「会员价/特价」**之后的样子：
- *     条码 | 名称 | 规格 | 单位 | 进价 | 售价 | 会员价 | 特价 | 库存
+ * ⚠️ 列是**龙哥 2026-09-27 加了「单位」、2026-10-06 加了「会员价/特价」、
+ *    2026-10-10 加了「供应商」**之后的样子：
+ *     条码 | 名称 | 规格 | 单位 | 进价 | 售价 | 会员价 | 特价 | 库存 | 供应商
  *    「单位」不是可有可无的附带信息：补货那套「非称重按最小单位、
  *    称重按公斤」的判据就是它，缺了就只能一律按最小单位走。
- *    会员价/特价**允许没有**：老档案不带这两列照样导，落库就是 NULL。
+ *    会员价/特价/供应商**允许没有**：老档案不带这几列照样导，落库就是 NULL。
  *
  * 认两种形状：带表头（按列名找）/ 不带表头（序号,条码,名字,数量）。
  * 🔴 序号列的判定要**严格**：门店编码常常就是 1001、1002 这种四位数，
@@ -7384,6 +7471,7 @@ function parseMasterCsv(text) {
       special_price: find(['特价', '促销价', 'special_price']),
       unit: find(['单位', '基本单位', '计价单位', 'unit']),
       account_qty: find(['库存', '账面', '数量', 'qty']),
+      supplier: find(['供应商', '供货商', 'supplier', '厂商']),
     };
   } else {
     // 没有表头。按**列数**分流，列数不对宁可少读不错位：
@@ -7402,6 +7490,15 @@ function parseMasterCsv(text) {
         // ⚠️ 若文件实际是"售价在前"，下面（money 定义之后）会嗅探自动对调。
         purchase_price: 4, unit_price: 5,
         member_price: 6, special_price: 7, account_qty: 8,
+      };
+      noHeadNine = true;
+    } else if (!hasSerial && sample.every((c) => c.length === 10)) {
+      // 九列 + 供应商（可选列，位置在库存之后）。同样支持"售价在前"嗅探。
+      idx = {
+        barcode: 0, name: 1, spec: 2, unit: 3,
+        purchase_price: 4, unit_price: 5,
+        member_price: 6, special_price: 7, account_qty: 8,
+        supplier: 9,
       };
       noHeadNine = true;
     } else {
@@ -7461,6 +7558,7 @@ function parseMasterCsv(text) {
       member_price: idx.member_price >= 0 ? money(c[idx.member_price]) : null,
       special_price: idx.special_price >= 0 ? money(c[idx.special_price]) : null,
       account_qty: idx.account_qty >= 0 ? money(c[idx.account_qty]) : null,
+      supplier: idx.supplier >= 0 ? (c[idx.supplier] || '').trim() : '',
     });
   }
   // 挂在数组上带出去（改返回结构会动到所有调用点，没必要）
@@ -7500,10 +7598,10 @@ async function onMasterFile(e) {
     ['条码', 'barcode'], ['名称', 'name'], ['规格', 'spec'], ['单位', 'unit'],
     ['进价', 'purchase_price'], ['售价', 'unit_price'],
     ['会员价', 'member_price'], ['特价', 'special_price'],
-    ['库存', 'account_qty'],
+    ['库存', 'account_qty'], ['供应商', 'supplier'],
   ];
-  // 会员价/特价允许整列缺失（老档案不带），不进 missing 警告。
-  const optionalFields = new Set(['member_price', 'special_price']);
+  // 会员价/特价/供应商允许整列缺失（老档案不带），不进 missing 警告。
+  const optionalFields = new Set(['member_price', 'special_price', 'supplier']);
   const missing = fields
     .filter(([label, k]) => stat(k) === 0 && !optionalFields.has(k))
     .map(([label]) => label);
@@ -9575,6 +9673,9 @@ const attShiftDlg = ref(false);
 const attShiftForm = ref({});
 const attGroupDlg = ref(false);
 const attGroupForm = ref({});
+const attLocations = ref([]);
+const attLocDlg = ref(false);
+const attLocForm = ref({ id: null, name: '', lat: '', lng: '', radius: 100 });
 const attRecDlg = ref(false);
 const attRecForm = ref({});
 const attDetailDlg = ref(false);
@@ -9649,7 +9750,13 @@ function attStatusType(s) {
   }[s] || 'info';
 }
 function attLocLabel(m) {
-  return { off: '不校验', optional: '有就记录', required: '必须提供' }[m] || '不校验';
+  return { off: '不校验', optional: '有就记录', required: '必须提供（围栏）' }[m] || '不校验';
+}
+function attLocStatusLabel(s) {
+  return { ok: '围栏内', outside: '超出围栏', weak_gps: '精度过低', mock: '模拟定位', no_fix: '无定位' }[s] || '—';
+}
+function attLocName(id) {
+  return attLocations.value.find((l) => l.id === id)?.name || ('#' + id);
 }
 function attSourceLabel(s) {
   return { app: '客户端打卡', admin: '管理员补录', makeup: '补卡审批' }[s] || s;
@@ -9712,9 +9819,23 @@ async function loadAttRequests() {
 async function loadAttTab() {
   if (attTab.value === 'today') await loadAttOverview();
   else if (attTab.value === 'report') await loadAttReport();
-  else if (attTab.value === 'shift') { await loadAttShifts(); await loadAttGroups(); }
+  else if (attTab.value === 'shift') { await loadAttShifts(); await loadAttGroups(); await loadAttLocations(); }
+  else if (attTab.value === 'locations') await loadAttLocations();
   else if (attTab.value === 'review') await loadAttRequests();
   else if (attTab.value === 'config') await loadAttConfig();
+}
+async function loadAttLocations() {
+  try {
+    attLocations.value = (await api.get('/admin/attendance/locations')).data.items || [];
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载打卡点位失败');
+  }
+}
+// 某点位被多少个考勤组引用（用于删除前的提示，避免误删正在用的围栏）
+function attGroupRefCount(locId) {
+  let n = 0;
+  for (const g of attGroups.value) if ((g.locationIds || []).includes(locId)) n++;
+  return n;
 }
 async function loadAttendance() {
   if (!attDay.value) attDay.value = attToday();
@@ -9725,6 +9846,7 @@ async function loadAttendance() {
   }
   await loadOrgs();          // 部门/员工列表（报表筛选、考勤组选人要用）
   await loadAttConfig();     // 服务器时间、开关、默认班次
+  await loadAttLocations();  // 打卡点位（考勤组弹窗勾选用）
   await loadAttTab();
 }
 async function saveAttConfig() {
@@ -9799,8 +9921,9 @@ async function removeShift(row) {
 function openGroupDlg(row) {
   attGroupForm.value = row
     ? { id: row.id, name: row.name, shiftId: row.shiftId || null, locationMode: row.locationMode || 'off',
-        deptIds: [...(row.deptIds || [])], memberIds: [...(row.memberIds || [])] }
-    : { id: null, name: '', shiftId: null, locationMode: 'off', deptIds: [], memberIds: [] };
+        deptIds: [...(row.deptIds || [])], memberIds: [...(row.memberIds || [])],
+        locationIds: [...(row.locationIds || [])] }
+    : { id: null, name: '', shiftId: null, locationMode: 'off', deptIds: [], memberIds: [], locationIds: [] };
   attGroupDlg.value = true;
 }
 async function saveAttGroup() {
@@ -9826,6 +9949,53 @@ async function removeGroup(row) {
     await api.delete(`/admin/attendance/groups/${row.id}`);
     ElMessage.success('已删除');
     await loadAttGroups();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
+// ---- 打卡点位 ----
+function openLocDlg(row) {
+  attLocForm.value = row
+    ? { id: row.id, name: row.name, lat: String(row.lat), lng: String(row.lng), radius: row.radius || 100 }
+    : { id: null, name: '', lat: '', lng: '', radius: 100 };
+  attLocDlg.value = true;
+}
+async function saveLoc() {
+  const f = attLocForm.value;
+  const lat = Number(f.lat), lng = Number(f.lng);
+  if (!String(f.name || '').trim()) { ElMessage.warning('请填写点位名称'); return; }
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    ElMessage.warning('经纬度不合法：纬度 -90~90，经度 -180~180');
+    return;
+  }
+  attBusy.value = true;
+  try {
+    const b = { name: f.name, lat, lng, radius: f.radius || 100 };
+    if (f.id) await api.put(`/admin/attendance/locations/${f.id}`, b);
+    else await api.post('/admin/attendance/locations', b);
+    ElMessage.success('打卡点位已保存');
+    attLocDlg.value = false;
+    await loadAttLocations();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    attBusy.value = false;
+  }
+}
+async function removeLoc(row) {
+  const n = attGroupRefCount(row.id);
+  const tip = n > 0
+    ? `有 ${n} 个考勤组正在使用该点位，删除后这些组将失去该围栏（若组没有其他点位，将退回"只校验有定位"）。`
+    : '该点位未被任何考勤组引用。';
+  try {
+    await ElMessageBox.confirm(`确认删除打卡点位「${row.name}」？${tip}`, '删除确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    await api.delete(`/admin/attendance/locations/${row.id}`);
+    ElMessage.success('已删除');
+    await loadAttLocations();
+    if (attGroups.value.length) await loadAttGroups(); // 引用数变了，同步刷新
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '删除失败');
   }

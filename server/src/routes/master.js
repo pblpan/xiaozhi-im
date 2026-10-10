@@ -89,7 +89,7 @@ router.get('/', (req, res) => {
   const total = db.prepare(`SELECT COUNT(*) AS n FROM product_master ${where}`).get(...params).n;
   const rows = db.prepare(`
     SELECT barcode, name, spec, unit, unit_price, purchase_price,
-           member_price, special_price, account_qty, updated_at
+           member_price, special_price, account_qty, supplier, updated_at
       FROM product_master ${where}
      ORDER BY barcode ASC
      LIMIT ? OFFSET ?
@@ -109,11 +109,15 @@ router.get('/', (req, res) => {
 // ============================================================
 
 /**
- * 写一块商档。导入的标准格式（龙哥 2026-09-26 定六列，2026-10-06 加会员价/特价）：
+ * 写一块商档。导入的标准格式（龙哥 2026-09-26 定六列，2026-10-06 加会员价/特价，
+ *    2026-10-10 加供应商 supplier）：
  *   body: { rows: [{ 商品条码 barcode, 商品名称 name, 规格 spec,
  *                    进价 purchase_price, 售价 unit_price,
  *                    会员价 member_price, 特价 special_price,
- *                    库存 account_qty }], batch }
+ *                    库存 account_qty, 供应商 supplier（可选） }], batch }
+ *
+ * 🔴 supplier 用 coalesce 保护（同 member_price/special_price）：老格式重导
+ *    不带/空串都不清掉已有供应商；要改就传新值（同名 UPSERT 直接覆盖）。
  *
  * 🔴 batch 必填：没有批次号就没法在 commit 时区分新旧，
  *    也就没法做到"传一半不影响店里现有底表"。
@@ -138,8 +142,8 @@ router.post('/upload', (req, res) => {
   const upsert = db.prepare(`
     INSERT INTO product_master
       (barcode, name, spec, unit, unit_price, purchase_price,
-       member_price, special_price, account_qty, batch, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+       member_price, special_price, account_qty, supplier, batch, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(barcode) DO UPDATE SET
       name = excluded.name,
       spec = excluded.spec,
@@ -149,6 +153,7 @@ router.post('/upload', (req, res) => {
       member_price = coalesce(excluded.member_price, product_master.member_price),
       special_price = coalesce(excluded.special_price, product_master.special_price),
       account_qty = excluded.account_qty,
+      supplier = coalesce(excluded.supplier, product_master.supplier),
       batch = excluded.batch,
       updated_at = excluded.updated_at
   `);
@@ -163,7 +168,7 @@ router.post('/upload', (req, res) => {
       upsert.run(bc, text(raw.name), text(raw.spec), text(raw.unit),
         num(raw.unit_price), num(raw.purchase_price),
         num(raw.member_price), num(raw.special_price),
-        num(raw.account_qty), batch, now);
+        num(raw.account_qty), text(raw.supplier), batch, now);
       accepted++;
     }
     db.exec('COMMIT');

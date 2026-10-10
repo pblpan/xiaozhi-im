@@ -3,23 +3,48 @@
 #
 #  一个窗口管完服务端日常运维：启动 / 停止 / 重启、开机自启、
 #  实时日志、打开管理后台、查看管理员密码、配置防火墙、打开数据目录。
-#  取代原来散在安装目录里的一堆 .cmd（它们仍在，排在开始菜单「高级工具」）。
+#  取代原来散在安装目录里的一堆 .cmd（它们现在收进 _sys\ 子目录，
+#  只有排障时才用得上，入口在开始菜单「高级工具」）。
 #
 #  技术选型：PowerShell 5.1 + WinForms。
 #  为什么不用编译型 exe：客户机零依赖 —— Win10/11 自带 PowerShell 与 .NET，
 #  不用带运行时、不用签名、不会有杀软误报"未知 exe"。
+#  ⚠️ 安装目录里客户看到的入口是「小智IM 服务端控制台.exe」（NSIS 编的启动器），
+#     它把这个脚本拉起来。别把入口又改回 .cmd —— 那是龙哥明确否掉的形态。
 #
 #  ⚠️ 本文件必须存成 **UTF-8 带 BOM**：PowerShell 5.1 读无 BOM 的 .ps1 时
 #     按系统 ANSI(GBK) 解释，中文全变乱码。
 # ============================================================
 
+param(
+    # 安装根目录，由「小智IM 服务端控制台.exe」启动器传入。
+    # 本脚本收在安装根的 _sys\ 子目录里，所以不能再拿"脚本自己所在目录"当安装根。
+    [string]$AppRoot = ''
+)
+
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 安装根：优先用 exe 传来的 -AppRoot；万一有人直接跑这个 .ps1，再自己推一次。
+if ([string]::IsNullOrWhiteSpace($AppRoot)) {
+    $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+    # 兜底：本 .ps1 位于 _sys\ 时，上一级才是安装根（判据是 node\ 在哪一级）
+    if (-not (Test-Path (Join-Path $Root 'node\node.exe'))) {
+        $up = Split-Path -Parent $Root
+        if (Test-Path (Join-Path $up 'node\node.exe')) { $Root = $up }
+    }
+} else {
+    $Root = $AppRoot.TrimEnd('\')
+}
+
 $Node = Join-Path $Root 'node\node.exe'
 $App  = Join-Path $Root 'app'
+
+# 内部脚本目录：后台启动服务端.vbs / 配置防火墙.cmd 都在这里。
+# （直接跑源码树里的 .ps1 时 _sys\ 不存在，那就退回安装根。）
+$SysDir = Join-Path $Root '_sys'
+if (-not (Test-Path $SysDir)) { $SysDir = $Root }
 
 # ---------------- 数据目录 / 端口 ----------------
 function Get-DataDir {
@@ -53,19 +78,38 @@ function Get-ServerVersion {
 }
 
 # ---------------- 进程状态 ----------------
+# 不要用 Get-NetTCPConnection 查端口/进程：它走 CIM/WMI，本机实测单次约 3.5 秒；
+# 下面的定时器每 2 秒跑一次 Update-Status，一次至少调它两次 → UI 线程被连续占死，
+# 窗口表现为"卡死/假死"。改用 netstat -ano 解析（同机实测约 0.3 秒）。
 function Get-ServerPid {
     $port = Get-Port
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($conn) { return [int]$conn.OwningProcess }
+    try {
+        $hit = netstat -ano -p tcp | Select-String -Pattern (':' + $port + '\s+\S+\s+LISTENING') | Select-Object -First 1
+        if ($hit) {
+            $tk = ($hit.Line.Trim() -split '\s+')
+            $last = $tk[$tk.Count - 1]
+            if ($last -match '^\d+$') { return [int]$last }
+        }
+    } catch { }
     return 0
 }
 
-function Test-Running { return ((Get-ServerPid) -gt 0) }
+# 快速探活：TCP 连接测试（本机实测约 18ms），不碰 WMI；用于起停时的轮询等待。
+function Test-Running {
+    $port = Get-Port
+    $c = New-Object System.Net.Sockets.TcpClient
+    try {
+        $iar = $c.BeginConnect('127.0.0.1', $port, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne(500)) { $c.EndConnect($iar); $c.Close(); return $true }
+    } catch { }
+    try { $c.Close() } catch { }
+    return $false
+}
 
 # ---------------- 启停 ----------------
 function Start-Server {
     if (Test-Running) { return $true }
-    $vbs = Join-Path $Root '后台启动服务端.vbs'
+    $vbs = Join-Path $SysDir '后台启动服务端.vbs'
     if (Test-Path $vbs) {
         Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $vbs + '"') -WindowStyle Hidden
     } else {
@@ -113,7 +157,7 @@ function Test-Autostart {
 
 function Set-Autostart([bool]$on) {
     if ($on) {
-        $vbs = Join-Path $Root '后台启动服务端.vbs'
+        $vbs = Join-Path $SysDir '后台启动服务端.vbs'
         $val = 'wscript.exe "' + $vbs + '"'
         New-ItemProperty -Path $RunKey -Name 'XiaozhiIMServer' -Value $val -PropertyType String -Force | Out-Null
     } else {
@@ -280,12 +324,12 @@ $tray.ContextMenuStrip = $trayMenu
 $script:startedAt = $null
 
 function Update-Status {
-    $running = Test-Running
     $port = Get-Port
+    $pidNow = Get-ServerPid          # 只查一次（netstat ~0.3s），不要重复调用
+    $running = ($pidNow -gt 0)
     if ($running) {
         $lamp.ForeColor = [System.Drawing.Color]::FromArgb(34, 197, 94)
         $lblState.Text = '运行中'
-        $pidNow = Get-ServerPid
         $mem = ''
         try {
             $proc = Get-Process -Id $pidNow -ErrorAction Stop
@@ -395,7 +439,7 @@ $btnPwd.Add_Click({
 })
 
 $btnFw.Add_Click({
-    $cmd = Join-Path $Root '配置防火墙.cmd'
+    $cmd = Join-Path $SysDir '配置防火墙.cmd'
     if (-not (Test-Path $cmd)) {
         [System.Windows.Forms.MessageBox]::Show('找不到 配置防火墙.cmd（可能被删了）', '提示', 'OK', 'Warning') | Out-Null
         return

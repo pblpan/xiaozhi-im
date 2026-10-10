@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../api.dart';
 import '../core/theme.dart';
@@ -16,6 +18,10 @@ import 'attendance_request.dart';
 ///
 /// 打卡时刻**不传**给服务端（服务端用服务器时钟），否则改一下系统时间
 /// 就能随便补卡，考勤数据立刻失去意义。
+///
+/// 定位：考勤组把定位要求设为「必须提供」时，打卡前先取 GPS
+/// （经纬度 + 精度 + 是否模拟定位）一并上报，服务端做地理围栏与防伪判定 ——
+/// 判定口径（命中哪个点位、精度阈值、模拟定位拦截）全在服务端，客户端只采集。
 class AttendancePage extends StatefulWidget {
   const AttendancePage({super.key});
 
@@ -28,6 +34,14 @@ class _AttendancePageState extends State<AttendancePage> {
   bool _busy = false;
   String? _error;
   Map<String, dynamic> _d = const {};
+  // 定位自检结果（进页面时被动查一次，供状态条提示）：'off'=定位服务关闭 'noPerm'=未授权 'ready'=可用
+  String _locState = 'ready';
+
+  /// 本组定位要求（'off' / 'optional' / 'required'），从服务端下发的 group 读。
+  String get _locMode {
+    final g = _d['group'] as Map?;
+    return (g?['locationMode'] ?? 'off').toString();
+  }
 
   @override
   void initState() {
@@ -47,12 +61,74 @@ class _AttendancePageState extends State<AttendancePage> {
         _d = r;
         _loading = false;
       });
+      unawaited(_refreshLocHint());
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
         _error = e.toString();
       });
+    }
+  }
+
+  /// 进页面后的定位自检（不取坐标、不弹窗，只查服务与权限状态，给状态条用）。
+  Future<void> _refreshLocHint() async {
+    if (_locMode == 'off') return;
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        if (mounted) setState(() => _locState = 'off');
+        return;
+      }
+      final p = await Geolocator.checkPermission();
+      if (mounted) {
+        setState(() => _locState =
+            (p == LocationPermission.denied || p == LocationPermission.deniedForever) ? 'noPerm' : 'ready');
+      }
+    } catch (_) {
+      // 拿不到状态就当可用：真正打卡时还会再取一次，错误在那时提示
+      if (mounted) setState(() => _locState = 'ready');
+    }
+  }
+
+  /// 取当前定位（经纬度 / 精度 / 是否模拟定位）。
+  ///
+  /// 🔴 Android 必须 forceLocationManager=true：geolocator 默认走
+  ///    FusedLocationProvider（Google Play Services），门店国产手机没有 GSF，
+  ///    不强制就是"永远拿不到定位"。LocationManager 是系统自带服务，必定可用；
+  ///    模拟定位检测（isMock）在这条通路上同样有效（读 Location.isMock()）。
+  /// Windows / macOS / Linux 走各自系统位置服务，拿不到就返回 null
+  /// （required 组在打卡时拦截并提示，optional 组照常打、只是不带定位）。
+  Future<Map<String, dynamic>?> _currentFix({bool requestPermission = true}) async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) return null;
+      var p = await Geolocator.checkPermission();
+      if (p == LocationPermission.denied && requestPermission) {
+        p = await Geolocator.requestPermission();
+      }
+      if (p == LocationPermission.denied || p == LocationPermission.deniedForever) return null;
+
+      final LocationSettings settings;
+      if (Platform.isAndroid) {
+        settings = AndroidSettings(
+          accuracy: LocationAccuracy.high,
+          forceLocationManager: true, // 🔴 避开 GMS，见类注释
+          timeLimit: const Duration(seconds: 10),
+        );
+      } else if (Platform.isIOS || Platform.isMacOS) {
+        settings = AppleSettings(accuracy: LocationAccuracy.high, timeLimit: const Duration(seconds: 10));
+      } else {
+        settings = const LocationSettings(accuracy: LocationAccuracy.high, timeLimit: Duration(seconds: 10));
+      }
+      final pos = await Geolocator.getCurrentPosition(locationSettings: settings);
+      return {
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+        'accuracy': pos.accuracy,
+        'mock': pos.isMocked,
+      };
+    } catch (_) {
+      // 定位失败不抛：由调用方决定 required 拦下还是 optional 放行
+      return null;
     }
   }
 
@@ -67,10 +143,40 @@ class _AttendancePageState extends State<AttendancePage> {
 
   /// 打卡。slot = 第几段（1 = 第 1 段的上班/下班，2 = 第 2 段的上班/下班）。
   /// 一天 4 次卡的班次里，第 1 段的 out 和收工的 out 都是 type=out，靠 slot 区分。
+  ///
+  /// 定位要求非 off 时先取 GPS：
+  ///   required —— 拿不到定位（服务关/权限拒/超时）直接拦下，不上报打卡；
+  ///               请求发出后是否命中围栏、精度是否达标、是否模拟定位，由服务端判定。
+  ///   optional —— 拿到就带上，拿不到照常打（服务端记"无定位"）。
   Future<void> _clock(String type, int slot) async {
     setState(() => _busy = true);
     try {
-      final r = await ImApi().attendanceClock(type, slot: slot, device: _deviceName());
+      Map<String, dynamic>? fix;
+      if (_locMode != 'off') {
+        fix = await _currentFix();
+        if (!mounted) return;
+        if (fix == null && _locMode == 'required') {
+          final svcOff = !(await Geolocator.isLocationServiceEnabled());
+          setState(() => _locState = svcOff ? 'off' : 'noPerm');
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(svcOff
+                ? '本考勤组要求定位打卡：当前手机的定位服务已关闭，请到系统设置打开「位置信息」后重试'
+                : '本考勤组要求定位打卡：当前未获得定位权限，请在系统设置里允许本应用使用位置信息后重试'),
+            duration: const Duration(seconds: 5),
+            backgroundColor: AppColors.danger,
+          ));
+          return;
+        }
+      }
+      final r = await ImApi().attendanceClock(
+        type,
+        slot: slot,
+        device: _deviceName(),
+        lat: fix == null ? null : (fix['lat'] as double),
+        lng: fix == null ? null : (fix['lng'] as double),
+        accuracy: fix == null ? null : (fix['accuracy'] as double),
+        mock: fix == null ? null : (fix['mock'] as bool),
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text((r['message'] ?? '打卡成功').toString()),
@@ -135,6 +241,10 @@ class _AttendancePageState extends State<AttendancePage> {
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 30),
       children: [
         _todayCard(),
+        if (_locMode != 'off') ...[
+          const SizedBox(height: 14),
+          _locBanner(),
+        ],
         const SizedBox(height: 14),
         _clockRow(),
         const SizedBox(height: 18),
@@ -148,6 +258,47 @@ class _AttendancePageState extends State<AttendancePage> {
           _groupHint(),
         ],
       ],
+    );
+  }
+
+  /// 定位状态条：本组有定位要求时提示当前 GPS 可用性，别让员工点打卡才知道要定位。
+  Widget _locBanner() {
+    final sem = AppSemantic.of(context);
+    final required = _locMode == 'required';
+    final (icon, color, text) = switch (_locState) {
+      'off' => (
+          Icons.location_off_outlined,
+          AppColors.warn,
+          '手机定位服务已关闭，无法获取位置${required ? ' —— 请到系统设置打开「位置信息」后打卡' : ''}'
+        ),
+      'noPerm' => (
+          Icons.lock_outline,
+          AppColors.warn,
+          '尚未授权定位权限${required ? ' —— 请在系统设置里允许本应用使用位置信息后打卡' : ''}'
+        ),
+      _ => (
+          Icons.my_location_outlined,
+          AppColors.brand,
+          required ? '打卡时将获取当前位置并校验是否在考勤点位围栏内，超出围栏会被拒绝' : '打卡时会顺带记录当前位置（不作强制）'
+        ),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: sem.cardBg,
+        borderRadius: BorderRadius.circular(AppRadii.md),
+        border: Border.all(color: required ? color.withValues(alpha: 0.45) : sem.cardBorder),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(text,
+                style: TextStyle(fontSize: 12, height: 1.5, color: required ? AppColors.text : sem.muted)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -498,9 +649,9 @@ class _AttendancePageState extends State<AttendancePage> {
   static String _locLabel(String? m) {
     switch (m) {
       case 'required':
-        return '必须提供（桌面端无定位，请用手机打卡）';
+        return '必须提供（打卡需命中考勤点位围栏，超出范围 / 模拟定位 / 精度过低会被拒绝）';
       case 'optional':
-        return '有就记录';
+        return '有就记录（异常定位会标进管理台报表）';
       default:
         return '不校验';
     }

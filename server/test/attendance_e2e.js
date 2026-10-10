@@ -587,6 +587,57 @@ function stopServer() {
   ok('  (0,0) 视为无效定位 → 400', r.status === 400, JSON.stringify(r.body));
   await api('DELETE', `/api/admin/attendance/groups/${locGroup}`, { token: admin });
 
+  // ---------------- 九B：打卡点位与地理围栏防伪 ----------------
+  // 围栏判定口径全在服务端：命中放行、超围栏/模拟定位/精度过低直接拒绝（required）；
+  // optional 永不拒绝但异常标进流水与看板。这里把每种异常都钉住，防回退。
+  console.log('\n【九B】打卡点位与地理围栏防伪');
+  r = await api('POST', '/api/admin/attendance/locations', { token: admin, body: { name: '门店总部', lat: 45.51, lng: 126.95, radius: 150 } });
+  ok('新增点位 → 200', r.status === 200, JSON.stringify(r.body));
+  const fenceLocId = r.body?.id;
+  r = await api('POST', '/api/admin/attendance/locations', { token: admin, body: { name: '坏坐标', lat: 999, lng: 126.95 } });
+  ok('  经纬度非法 → 400', r.status === 400, JSON.stringify(r.body));
+  r = await api('GET', '/api/admin/attendance/locations', { token: admin });
+  ok('  点位列表含新点位', r.status === 200 && (r.body?.items || []).some((x) => x.id === fenceLocId), JSON.stringify(r.body).slice(0, 120));
+
+  r = await api('POST', '/api/admin/attendance/groups', { token: admin, body: { name: '围栏组', memberIds: [e3.id], locationMode: 'required', locationIds: [fenceLocId] } });
+  const fenceGroup = r.body?.id;
+  ok('建围栏组（挂点位）→ 200', r.status === 200, JSON.stringify(r.body));
+  r = await api('GET', '/api/admin/attendance/groups', { token: admin });
+  const fenceGroupRow = (r.body?.items || []).find((x) => x.id === fenceGroup);
+  ok('  组详情带 locationIds', Array.isArray(fenceGroupRow?.locationIds) && fenceGroupRow.locationIds[0] === fenceLocId, JSON.stringify(fenceGroupRow));
+
+  r = await api('POST', '/api/attendance/clock', { token: e3.token, body: { type: 'in', lat: 45.5105, lng: 126.9505, accuracy: 20 } });
+  ok('围栏内打卡 → 200', r.status === 200, JSON.stringify(r.body));
+  ok('  响应带命中点位名与 locStatus=ok', r.body?.matchedLocationName === '门店总部' && r.body?.locStatus === 'ok', JSON.stringify(r.body).slice(0, 160));
+
+  r = await api('POST', '/api/attendance/clock', { token: e3.token, body: { type: 'out', lat: 46.0, lng: 127.5, accuracy: 20 } });
+  ok('超出围栏 → 400（最严方案）', r.status === 400 && /围栏/.test(r.body?.error || ''), JSON.stringify(r.body));
+
+  r = await api('POST', '/api/attendance/clock', { token: e3.token, body: { type: 'out', lat: 45.5105, lng: 126.9505, accuracy: 20, mock: true } });
+  ok('模拟定位 → 400', r.status === 400 && /模拟/.test(r.body?.error || ''), JSON.stringify(r.body));
+
+  r = await api('POST', '/api/attendance/clock', { token: e3.token, body: { type: 'out', lat: 45.5105, lng: 126.9505, accuracy: 500 } });
+  ok('精度 500 米 → 400', r.status === 400 && /精度/.test(r.body?.error || ''), JSON.stringify(r.body));
+
+  // optional 组：超围栏不拒绝，但异常必须落库、进看板
+  r = await api('PUT', `/api/admin/attendance/groups/${fenceGroup}`, { token: admin, body: { name: '围栏组', memberIds: [e3.id], locationMode: 'optional', locationIds: [fenceLocId] } });
+  ok('组改 optional → 200', r.status === 200, JSON.stringify(r.body));
+  r = await api('POST', '/api/attendance/clock', { token: e3.token, body: { type: 'out', lat: 46.0, lng: 127.5, accuracy: 20 } });
+  ok('optional 超围栏仍放行 → 200', r.status === 200, JSON.stringify(r.body));
+  ok('  响应 locStatus=outside 且带距离', r.body?.locStatus === 'outside' && typeof r.body?.locDistance === 'number', JSON.stringify(r.body).slice(0, 160));
+  r = await api('GET', '/api/attendance/records', { token: e3.token });
+  ok('  流水里看得到 locStatus=outside', (r.body?.items || []).some((x) => x.type === 'out' && x.locStatus === 'outside'), JSON.stringify(r.body).slice(0, 220));
+  r = await api('GET', `/api/admin/attendance/overview?day=${TODAY}`, { token: admin });
+  const anomRow = (r.body?.items || []).find((x) => x.userId === e3.id);
+  ok('看板把该人标为定位异常', anomRow?.locAnomaly === true && anomRow?.locStatus === 'outside', JSON.stringify(anomRow).slice(0, 220));
+
+  // 删点位 → 自动从组解绑（不留悬空关联）
+  r = await api('DELETE', `/api/admin/attendance/locations/${fenceLocId}`, { token: admin });
+  ok('删除点位 → 200', r.status === 200, JSON.stringify(r.body));
+  r = await api('GET', '/api/admin/attendance/groups', { token: admin });
+  ok('  组的 locationIds 已自动清空', ((r.body?.items || []).find((x) => x.id === fenceGroup)?.locationIds || []).length === 0, '');
+  await api('DELETE', `/api/admin/attendance/groups/${fenceGroup}`, { token: admin });
+
   // ---------------- 十：报表与看板 ----------------
   console.log('\n【十】报表与看板');
   const from = dayStr(-12), to = TODAY;

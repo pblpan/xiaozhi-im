@@ -183,6 +183,7 @@ router.post('/clock', (req, res) => {
   const now = Date.now();
   const day = att.dayOf(now);
   const { shift, group } = att.shiftFor(g.u.id, g.org.id);
+  let fenceInfo = null;
 
   // 一天 4 次卡的班次才有第 2 段。不拦的话会凭空多出"下午上班卡"，
   // 而判定计划里根本没有它 —— 员工以为自己打了卡，报表上还是缺卡。
@@ -194,18 +195,32 @@ router.post('/clock', (req, res) => {
     });
   }
 
-  // 定位要求：required 时必须有坐标；optional/off 有就记下来
+  // 定位字段：经纬度 / 精度（米）/ 是否模拟定位
   const mode = group?.locationMode || 'off';
   const hasLoc = Number.isFinite(Number(req.body?.lat)) && Number.isFinite(Number(req.body?.lng))
     && !(Number(req.body?.lat) === 0 && Number(req.body?.lng) === 0);
-  if (mode === 'required' && !hasLoc) {
-    return res.status(400).json({ error: '本考勤组要求打卡时提供定位，请允许客户端获取位置后重试' });
+  const lat = hasLoc ? Number(req.body.lat) : null;
+  const lng = hasLoc ? Number(req.body.lng) : null;
+  const accuracy = req.body?.accuracy != null && Number.isFinite(Number(req.body.accuracy))
+    ? Number(req.body.accuracy) : null;
+  const mock = req.body?.mock === true || req.body?.mock === 1;
+
+  // 地理围栏 + 定位防伪：required 模式下命中任一异常（无定位 / 模拟定位 / 精度过低 / 超出围栏）
+  // 直接拒绝，不写记录（最严方案，从源头挡掉代打卡与虚拟定位）。
+  if (mode === 'required' || mode === 'optional') {
+    const locations = group ? att.locationsForGroup(g.org.id, group.id) : [];
+    const fence = att.validateFence({ mode, lat, lng, accuracy, mock, locations });
+    if (!fence.ok) return res.status(400).json({ error: fence.error });
+    fenceInfo = fence; // 通过后才往下走，异常分支已 return
   }
 
   const r = att.clock({
     userId: g.u.id, orgId: g.org.id, type, slot, at: now,
-    lat: hasLoc ? Number(req.body.lat) : null,
-    lng: hasLoc ? Number(req.body.lng) : null,
+    lat, lng,
+    accuracy,
+    mock,
+    locStatus: fenceInfo ? fenceInfo.locStatus : null,
+    matchedLocationId: fenceInfo ? fenceInfo.matchedLocationId : null,
     address: req.body?.address ? String(req.body.address).slice(0, MAX_ADDRESS) : null,
     device: req.body?.device ? String(req.body.device).slice(0, 80) : null,
     source: 'app',
@@ -230,7 +245,12 @@ router.post('/clock', (req, res) => {
       donePunches: today.donePunches, expectedPunches: today.expectedPunches,
       workedMinutes: today.workedMinutes,
     },
-    message: `${att.punchLabelOf(shift, type + slot)}打卡成功 ${att.hhmmOf(now)}${r.updated ? '（已更新今天这张卡）' : ''}`,
+    // 定位防伪结果回传：客户端据此显示"已命中门店总部围栏 / 精度过低"等状态条
+    locStatus: fenceInfo ? fenceInfo.locStatus : null,
+    matchedLocationName: fenceInfo ? fenceInfo.matchedLocationName : null,
+    locDistance: fenceInfo ? fenceInfo.distance : null,
+    message: `${att.punchLabelOf(shift, type + slot)}打卡成功 ${att.hhmmOf(now)}${r.updated ? '（已更新今天这张卡）' : ''}`
+      + (fenceInfo && fenceInfo.matchedLocationName ? ` · 命中「${fenceInfo.matchedLocationName}」` : ''),
   });
 });
 
@@ -565,6 +585,7 @@ admin.delete('/shifts/:id', (req, res) => {
 function groupDetail(row) {
   const deptIds = db.prepare('SELECT dept_id FROM att_group_depts WHERE group_id=?').all(row.id).map((r) => r.dept_id);
   const memberIds = db.prepare('SELECT user_id FROM att_group_members WHERE group_id=?').all(row.id).map((r) => r.user_id);
+  const locationIds = db.prepare('SELECT location_id FROM att_group_locations WHERE group_id=?').all(row.id).map((r) => r.location_id);
   const shift = row.shift_id ? db.prepare('SELECT * FROM att_shifts WHERE id=?').get(row.shift_id) : null;
   // 实际人数必须与判定口径一致（显式成员 ∪ 部门含子部门内的人），
   // 否则会出现"界面显示 5 人、实际按 7 人算考勤"这种对不上的情况
@@ -588,7 +609,7 @@ function groupDetail(row) {
       };
     })(),
     locationMode: row.location_mode || 'off',
-    deptIds, memberIds, memberCount,
+    deptIds, memberIds, locationIds, memberCount,
   };
 }
 
@@ -606,9 +627,10 @@ function groupPayload(b) {
 }
 
 /** 写成员关系（先删后插，简单且幂等） */
-function setGroupRelations(groupId, orgId, deptIds = [], memberIds = []) {
+function setGroupRelations(groupId, orgId, deptIds = [], memberIds = [], locationIds = []) {
   db.prepare('DELETE FROM att_group_depts WHERE group_id=?').run(groupId);
   db.prepare('DELETE FROM att_group_members WHERE group_id=?').run(groupId);
+  db.prepare('DELETE FROM att_group_locations WHERE group_id=?').run(groupId);
   const insD = db.prepare('INSERT OR IGNORE INTO att_group_depts (group_id,dept_id) VALUES (?,?)');
   for (const d of deptIds) {
     if (db.prepare('SELECT id FROM org_depts WHERE id=? AND org_id=?').get(Number(d), orgId)) insD.run(groupId, Number(d));
@@ -616,6 +638,10 @@ function setGroupRelations(groupId, orgId, deptIds = [], memberIds = []) {
   const insM = db.prepare('INSERT OR IGNORE INTO att_group_members (group_id,user_id) VALUES (?,?)');
   for (const u of memberIds) {
     if (db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(Number(u), orgId)) insM.run(groupId, Number(u));
+  }
+  const insL = db.prepare('INSERT OR IGNORE INTO att_group_locations (group_id,location_id) VALUES (?,?)');
+  for (const lid of locationIds) {
+    if (db.prepare('SELECT id FROM att_locations WHERE id=? AND org_id=?').get(Number(lid), orgId)) insL.run(groupId, Number(lid));
   }
 }
 
@@ -629,7 +655,7 @@ admin.post('/groups', (req, res) => {
   }
   const info = db.prepare('INSERT INTO att_groups (org_id,name,shift_id,location_mode,created_at) VALUES (?,?,?,?,?)')
     .run(g.org.id, v.name, v.shift_id, v.location_mode, Date.now());
-  setGroupRelations(info.lastInsertRowid, g.org.id, req.body?.deptIds || [], req.body?.memberIds || []);
+  setGroupRelations(info.lastInsertRowid, g.org.id, req.body?.deptIds || [], req.body?.memberIds || [], req.body?.locationIds || []);
   res.json({ ok: true, id: info.lastInsertRowid, message: '考勤组已新增' });
 });
 
@@ -647,7 +673,7 @@ admin.put('/groups/:id', (req, res) => {
   }
   db.prepare('UPDATE att_groups SET name=?,shift_id=?,location_mode=? WHERE id=?')
     .run(v.name, v.shift_id, v.location_mode, id);
-  setGroupRelations(id, g.org.id, req.body?.deptIds || [], req.body?.memberIds || []);
+  setGroupRelations(id, g.org.id, req.body?.deptIds || [], req.body?.memberIds || [], req.body?.locationIds || []);
   res.json({ ok: true, message: '已保存' });
 });
 
@@ -657,7 +683,63 @@ admin.delete('/groups/:id', (req, res) => {
   if (!r.changes) return res.status(404).json({ error: '考勤组不存在' });
   db.prepare('DELETE FROM att_group_depts WHERE group_id=?').run(Number(req.params.id));
   db.prepare('DELETE FROM att_group_members WHERE group_id=?').run(Number(req.params.id));
+  db.prepare('DELETE FROM att_group_locations WHERE group_id=?').run(Number(req.params.id));
   res.json({ ok: true, message: '已删除（这些人回到默认班次）' });
+});
+
+/* ---------------- 打卡点位（组织级统一维护，地理围栏） ---------------- */
+
+function locationPayload(b) {
+  const name = String(b.name || '').trim();
+  if (!name || [...name].length > 30) return { error: '点位名称必填，最多 30 个字' };
+  const lat = Number(b.lat), lng = Number(b.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return { error: '经纬度不合法' };
+  }
+  const radius = Number.isFinite(Number(b.radius)) ? Number(b.radius) : 100;
+  if (radius <= 0 || radius > 5000) return { error: '围栏半径需在 1~5000 米之间' };
+  return { value: { name, lat, lng, radius } };
+}
+
+admin.get('/locations', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  res.json({ items: att.listOrgLocations(g.org.id) });
+});
+
+admin.post('/locations', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  const p = locationPayload(req.body || {});
+  if (p.error) return res.status(400).json({ error: p.error });
+  const v = p.value;
+  const info = db.prepare('INSERT INTO att_locations (org_id,name,lat,lng,radius,created_at) VALUES (?,?,?,?,?,?)')
+    .run(g.org.id, v.name, v.lat, v.lng, v.radius, Date.now());
+  res.json({ ok: true, id: info.lastInsertRowid, message: '打卡点位已新增' });
+});
+
+admin.put('/locations/:id', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT id FROM att_locations WHERE id=? AND org_id=?').get(id, g.org.id)) {
+    return res.status(404).json({ error: '点位不存在' });
+  }
+  const p = locationPayload(req.body || {});
+  if (p.error) return res.status(400).json({ error: p.error });
+  const v = p.value;
+  db.prepare('UPDATE att_locations SET name=?,lat=?,lng=?,radius=? WHERE id=?')
+    .run(v.name, v.lat, v.lng, v.radius, id);
+  res.json({ ok: true, message: '已保存' });
+});
+
+admin.delete('/locations/:id', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT id FROM att_locations WHERE id=? AND org_id=?').get(id, g.org.id)) {
+    return res.status(404).json({ error: '点位不存在' });
+  }
+  // 顺手解绑引用该点位的考勤组，避免留下悬空关联
+  db.prepare('DELETE FROM att_group_locations WHERE location_id=?').run(id);
+  db.prepare('DELETE FROM att_locations WHERE id=? AND org_id=?').run(id, g.org.id);
+  res.json({ ok: true, message: '已删除（已自动从相关考勤组解绑）' });
 });
 
 /* ---------------- 审批 ---------------- */

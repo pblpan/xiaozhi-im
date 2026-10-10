@@ -51,13 +51,22 @@ FILES = os.path.join(HERE, 'files')
 BUILD = os.path.join(HERE, 'build')
 STAGE = os.path.join(BUILD, 'stage')
 
+# 内部脚本子目录（2026-10-09 加）。
+# 起因：龙哥装上服务端后打开安装目录，看到的是一整屏 .cmd（"控制台不是改成 exe 了吗？"）。
+# 控制台本体早就是图形窗口了，但入口留成 .cmd，客户观感就是"一堆命令脚本"。
+# 现在：安装根只放「小智IM 服务端控制台.exe」一个门面，
+# 所有 .cmd / .vbs / console.ps1 一律收进这个子目录。
+# ⚠️ _env.cmd 里 XZ_HOME 原来是"脚本自己所在目录"，收进子目录后必须上跳一级，
+#    它已经改成"以 node\ 的位置反推安装根"（见 files/_env.cmd）。
+APP_SYS = '_sys'
+
 APP_NAME = '小智IM 服务端'
 SHORT_NAME = '小智IM服务端'
 DESKTOP_DIR = os.path.join('D:', os.sep, 'Users', 'pblpa', 'Desktop', '小智 IM')
 
 # 内置 Node 运行时（与 Docker 侧 node:22-slim 同大版本，node:sqlite 才可用）
 NODE_ROOT = os.path.join('C:', os.sep, 'Users', 'pblpa', '.workbuddy', 'binaries',
-                         'node', 'versions', '22.22.2-3')
+                         'node', 'versions', '22.22.2-6')
 NODE_EXE = os.path.join(NODE_ROOT, 'node.exe')
 NODE_LICENSE = os.path.join(NODE_ROOT, 'LICENSE')
 
@@ -227,7 +236,7 @@ def write_text_gbk(dst, text):
 
 
 def stage(version):
-    print('[1/4] 组装安装目录 …')
+    print('[1/5] 组装安装目录 …')
     if not os.path.isfile(NODE_EXE):
         raise SystemExit('找不到 Node 运行时：%s' % NODE_EXE)
     if not os.path.isfile(NODE_LICENSE):
@@ -269,13 +278,20 @@ def stage(version):
              for r, _, fs in os.walk(app) for f in fs)
     print('      app/      %.1f MB（含 node_modules）' % (sz / 1024 / 1024))
 
-    # --- 顶层脚本 / 快捷方式目标 ---
+    # --- 内部脚本（全部收进 _sys\，安装根只留控制台 exe）---
+    # 「小智IM 服务端控制台.cmd」是上一代入口，已被「小智IM 服务端控制台.exe」取代，
+    # 不再拷贝（源文件保留在 files/ 里作历史参考）。
+    sysdir = os.path.join(STAGE, APP_SYS)
+    os.makedirs(sysdir)
     n = 0
     for fn in sorted(os.listdir(FILES)):
         if fn.endswith(('.cmd', '.vbs')):
-            write_cmd(os.path.join(FILES, fn), os.path.join(STAGE, fn), version)
+            if fn == '小智IM 服务端控制台.cmd':
+                continue
+            write_cmd(os.path.join(FILES, fn), os.path.join(sysdir, fn), version)
             n += 1
-    print('      脚本 %d 个（含中文的走 GBK，纯 ASCII 桥接脚本保持 ASCII）' % n)
+    print('      %s\\ 内部脚本 %d 个（含中文的走 GBK，纯 ASCII 桥接脚本保持 ASCII）'
+          % (APP_SYS, n))
 
     # --- 服务端控制台（PowerShell WinForms）---
     # ⚠️ .ps1 的编码规则跟 .cmd 完全不同：必须是 **UTF-8 带 BOM**。
@@ -285,10 +301,10 @@ def stage(version):
     if not os.path.isfile(src_ps1):
         raise SystemExit('缺少服务端控制台脚本：%s' % src_ps1)
     text_ps1 = open(src_ps1, encoding='utf-8').read().replace('__VERSION__', version)
-    with open(os.path.join(STAGE, 'console.ps1'), 'w', encoding='utf-8-sig',
+    with open(os.path.join(sysdir, 'console.ps1'), 'w', encoding='utf-8-sig',
               newline='\r\n') as f:
         f.write(text_ps1.replace('\r\n', '\n'))
-    print('      控制台 console.ps1（UTF-8 BOM，PowerShell 5.1 才能正确读中文）')
+    print('      %s\\console.ps1（UTF-8 BOM，PowerShell 5.1 才能正确读中文）' % APP_SYS)
 
     # --- 交付说明（随包一份，客户翻目录时看得到）---
     write_text_gbk(os.path.join(STAGE, '版本说明.txt'), f"""小智IM 服务端（Windows 版）  v{version}
@@ -308,7 +324,8 @@ def stage(version):
   两个端口都要在 Windows 防火墙上放通：控制台里点「配置防火墙」即可
 
 【怎么用（推荐）】
-  双击桌面上的「小智IM 服务端控制台」——一个窗口管完：
+  双击桌面上的「小智IM 服务端控制台」（实体是安装目录里的
+  「小智IM 服务端控制台.exe」）—— 一个窗口管完：
     · 启动 / 停止 / 重启服务端      · 开机自动启动开关
     · 实时运行日志                  · 打开管理后台
     · 查看管理员密码                · 配置防火墙
@@ -316,11 +333,18 @@ def stage(version):
 
   管理账号 admin，初始密码在控制台里点「查看管理员密码」。
 
+【安装目录里有什么】
+  小智IM 服务端控制台.exe   ← 日常就用这一个（双击即开面板）
+  node\\  app\\              服务端本体 + 内置的 Node 运行时
+  _sys\\                     内部脚本（.cmd / .vbs / 控制台脚本），平时不用动
+  数据**不在这里** —— 见上面「装在哪」
+
 【怎么用（命令行/排障）】
-  开始菜单 → 小智IM 服务端 → 高级工具 里保留了原来的脚本：
+  开始菜单 → 小智IM 服务端 → 高级工具：
     · 后台启动服务端.vbs   后台运行（开机自启走的就是它）
     · 启动服务端.cmd       前台运行，关窗口即停
     · 查看运行日志.cmd     看日志（data\\logs\\server.log）
+  （这些脚本的实体都在安装目录的 _sys\\ 子目录里。）
 
 【排障】
   · 服务起不来      → 控制台看日志最后几行
@@ -358,6 +382,28 @@ def build_nsi(version, out_file, nsis_path):
     return nsis_path
 
 
+def build_console_exe(version, out_file, nsis_path):
+    """编译「小智IM 服务端控制台.exe」—— 装到安装根的那个门面。
+
+    内容极简：检查 _sys\\console.ps1 在不在，在就把它拉起来，然后自己退出。
+    真正的界面逻辑仍在 .ps1 里；这个 exe 只负责"看起来像个正经软件的入口"。
+
+    ⚠️ 与主安装脚本一样：NSIS 按 ANSI 读脚本会把中文变方块，必须写 UTF-8 **带 BOM**。
+       行尾同样先归一成 LF 再交给 newline='\\r\\n'（本机 git 是 autocrlf=true，
+       模板重新检出后会是 CRLF，叠加就写出 \\r\\r\\n）。
+    """
+    tpl = open(os.path.join(HERE, 'console_exe.nsi.tpl'), encoding='utf-8').read()
+    nsi = (tpl
+           .replace('__VERSION__', version)
+           .replace('__VI_VERSION__', vi_version(version))
+           .replace('__ICON__', ICON)
+           .replace('__OUT_FILE__', out_file))
+    nsi = nsi.replace('\r\n', '\n')
+    with open(nsis_path, 'w', encoding='utf-8-sig', newline='\r\n') as f:
+        f.write(nsi)
+    return nsis_path
+
+
 def main():
     ap = argparse.ArgumentParser(description='打包 Windows 服务端安装程序')
     ap.add_argument('--no-deliver', action='store_true', help='只出到 build 目录，不复制到桌面')
@@ -378,6 +424,22 @@ def main():
 
     stage(version)
 
+    # ---- 控制台 exe：安装根的门面 ----
+    # 先编它，再让它一起过下面的出厂地址扫描（exe 里只会嵌入 _sys\console.ps1 这种
+    # 相对路径，本来也扫不出东西，但流程上别留缺口）。
+    print('[2/5] 编译控制台 exe …')
+    console_out = os.path.join(STAGE, '小智IM 服务端控制台.exe')
+    console_nsi = build_console_exe(version, console_out,
+                                    os.path.join(BUILD, 'console_exe.nsi'))
+    r = subprocess.run([makensis, '/V2', console_nsi], cwd=BUILD,
+                       capture_output=True, text=True, encoding='utf-8', errors='replace')
+    if r.returncode != 0 or not os.path.isfile(console_out):
+        print('控制台 exe 编译失败，退出码 %s' % r.returncode)
+        print((r.stdout or '')[-2000:])
+        print((r.stderr or '')[-2000:])
+        return 1
+    print('      小智IM 服务端控制台.exe  %.0f KB' % (os.path.getsize(console_out) / 1024))
+
     # ---- 出厂前拦一道：分发包不许带开发者的真实地址/域名 ----
     hits, scanned = scan_banned(STAGE)
     # 阈值别卡太死（实测正常 60 上下，node_modules 已排除）：只需拦住"扫了个空"，
@@ -391,7 +453,7 @@ def main():
             print('   - %s  ← %s' % (rel, why))
         print('   共 %d 处。改掉源文件（多半是 admin/src 或 docs 里的示例地址）再重打。' % len(hits))
         return 1
-    print('[1/4] 出厂前地址扫描：%d 个文件，未发现真实地址/域名' % scanned)
+    print('[3/5] 出厂前地址扫描：%d 个文件，未发现真实地址/域名' % scanned)
 
     os.makedirs(BUILD, exist_ok=True)
     out_name = '%s-Setup-v%s.exe' % (SHORT_NAME, version)
@@ -410,10 +472,10 @@ def main():
         shutil.move(out_path, old_backup)
         print('      旧包已挪到 %s（编译失败会挪回原处）' % old_backup)
 
-    print('[2/4] 生成安装脚本 …')
+    print('[4/5] 生成安装脚本 …')
     script = build_nsi(version, out_path, os.path.join(BUILD, 'installer.nsi'))
 
-    print('[3/4] NSIS 编译 …')
+    print('[5/5] NSIS 编译 …')
     r = subprocess.run([makensis, '/V2', script], cwd=BUILD,
                        capture_output=True, text=True, encoding='utf-8', errors='replace')
     tail = '\n'.join((r.stdout or '').splitlines()[-12:])
@@ -428,7 +490,7 @@ def main():
             print('      旧包已放回 %s' % out_path)
         return 1
 
-    print('[4/4] 生成安装包：%s（%.1f MB）'
+    print('  生成安装包：%s（%.1f MB）'
           % (out_path, os.path.getsize(out_path) / 1024 / 1024))
 
     if not args.no_deliver and os.path.isdir(DESKTOP_DIR):

@@ -129,6 +129,14 @@ FILES = [
     'src/index.js',
     'src/deploylib.js',
     'src/routes/deploy_wizard.js',
+    # 🔴 2026-10-10 补：考勤「打卡点位 + 地理围栏防伪」这一轮。
+    #    attendance.js 是围栏判定引擎（haversine / validateFence / clock 落防伪字段），
+    #    routes/attendance.js 是路由（/clock 接定位参数 + /locations 点位 CRUD
+    #    + 考勤组挂 locationIds）。这两个文件此前**从没进过清单**（早期考勤
+    #    跟着整包上线的，热部署机制建立后没人补）—— 漏推的后果是"本地测试
+    #    全绿、线上还是老考勤"，而且 required 组新校验不上线等于白做。
+    'src/attendance.js',
+    'src/routes/attendance.js',
 ]
 
 
