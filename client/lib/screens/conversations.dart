@@ -16,6 +16,7 @@ import 'package:xiaozhi_im_client/core/workspace.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/screens/chat.dart';
+import 'package:xiaozhi_im_client/screens/create_group.dart';
 import 'package:xiaozhi_im_client/screens/favorites.dart';
 import 'package:xiaozhi_im_client/screens/friends_new.dart';
 import 'package:xiaozhi_im_client/screens/login.dart';
@@ -410,6 +411,24 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     _refreshPendingCount();
     if (u == null) return;
     await openWithUser(u);
+  }
+
+  /// 发起群聊（龙哥 2026-10-10：客户端根本没有建群入口，群只能后台建）
+  Future<void> _openCreateGroup() async {
+    final r = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
+    );
+    if (!mounted) return;
+    await _load();
+    final cid = (r?['conversationId'] ?? 0) as int;
+    if (cid == 0) return;
+    for (final c in _all) {
+      if (c.id == cid) {
+        await _openChat(c);
+        break;
+      }
+    }
   }
 
   // ---------------- 远程协助 ----------------
@@ -963,6 +982,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'about') _openAbout();
                 if (v == 'remote') _openRemote();
                 if (v == 'newfriends') _openNewFriends();
+                if (v == 'newgroup') _openCreateGroup();
               },
               // 菜单只放"不常用的功能 + 设置"。
               // 工作台 / 组织机构 / 个人信息已经提到一级导航（见 HomeShell），
@@ -999,6 +1019,13 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                           ),
                         ],
                       ])),
+                const PopupMenuItem(
+                    value: 'newgroup',
+                    child: Row(children: [
+                      Icon(Icons.group_add_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('发起群聊')
+                    ])),
                 const PopupMenuItem(
                     value: 'fav',
                     child: Row(children: [

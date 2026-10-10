@@ -70,6 +70,89 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
     }
   }
 
+  /// 添加成员：从好友里挑还没进群的人。
+  ///
+  /// 服务端允许**任何群成员**拉人（不只是群主/管理员），这里就跟服务端一致，
+  /// 不额外设门槛 —— 界面比服务端严会让"别人能拉、我却点不了"，反而更难解释。
+  Future<void> _addMembers(GroupDetail d) async {
+    List<User> friends;
+    try {
+      final r = await ImApi().friends();
+      friends = ((r['friends'] as List?) ?? const [])
+          .map((e) => User.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      _toast('拉取好友失败: ${_msg(e)}');
+      return;
+    }
+    final inGroup = d.members.map((m) => m.id).toSet();
+    final candidates = friends.where((u) => !inGroup.contains(u.id)).toList();
+    if (!mounted) return;
+    if (candidates.isEmpty) {
+      _toast('好友都已经在这个群里了');
+      return;
+    }
+
+    final picked = <int>{};
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('添加成员'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: candidates.length,
+              itemBuilder: (c, i) {
+                final u = candidates[i];
+                return CheckboxListTile(
+                  dense: true,
+                  value: picked.contains(u.id),
+                  onChanged: (v) => setLocal(() {
+                    if (v == true) {
+                      picked.add(u.id);
+                    } else {
+                      picked.remove(u.id);
+                    }
+                  }),
+                  secondary: UserAvatar(
+                      name: u.remark ?? u.nickname ?? u.username,
+                      size: 32,
+                      radius: 10,
+                      imageUrl: u.avatar),
+                  title: Text(u.remark ?? u.nickname ?? u.username,
+                      style: const TextStyle(fontSize: 14)),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            FilledButton(
+              onPressed: picked.isEmpty ? null : () => Navigator.pop(ctx, true),
+              child: Text(picked.isEmpty ? '添加' : '添加（${picked.length}）'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (go != true || picked.isEmpty) return;
+
+    var okN = 0;
+    for (final uid in picked) {
+      try {
+        await ImApi().addMember(widget.groupId, uid);
+        okN++;
+      } catch (_) {
+        /* 个别失败不阻断，最后统一汇报 */
+      }
+    }
+    if (!mounted) return;
+    _toast(okN == picked.length ? '已添加 $okN 人' : '添加完成，成功 $okN / ${picked.length} 人');
+    await _load();
+  }
+
   Future<void> _editName() async {
     final ctrl = TextEditingController(text: _d?.name ?? '');
     final v = await _inputDialog('修改群名', ctrl, hint: '输入新的群名称');
@@ -305,6 +388,16 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
 
                 // ---- 成员 ----
                 _sectionTitle('群成员（${d.members.length}）'),
+                // 龙哥 2026-10-10：客户端此前**没有添加成员的入口** ——
+                // addMember 接口一直都在，就是没人调。服务端允许普通成员拉人，
+                // 所以这里不给 canManage 门槛。
+                ListTile(
+                  leading: const Icon(Icons.person_add_alt_1_rounded, size: 21),
+                  title: const Text('添加成员', style: TextStyle(fontSize: 14.5)),
+                  trailing: const Icon(Icons.chevron_right_rounded,
+                      size: 20, color: AppColors.textWeak),
+                  onTap: () => _addMembers(d),
+                ),
                 ...d.members.map((m) {
                   final isMe = m.id == widget.myId;
                   return ListTile(

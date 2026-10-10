@@ -20,6 +20,12 @@ class MessageBubble extends StatelessWidget {
   final Message msg;
   final bool mine;
   final String? senderName;
+
+  /// 发送者在群里的角色：owner / admin / member。
+  /// 群聊里用来在名字后面挂「群主」「管理员」标签 —— 龙哥 2026-10-10：
+  /// "群聊现在没有群主"，成员列表里有但聊天里看不出来，问都不知道该问谁。
+  final String? senderRole;
+
   final String baseUrl;
   final bool showTime;
 
@@ -53,6 +59,7 @@ class MessageBubble extends StatelessWidget {
     required this.msg,
     required this.mine,
     this.senderName,
+    this.senderRole,
     this.baseUrl = '',
     this.showTime = false,
     this.onLongPress,
@@ -149,6 +156,30 @@ class MessageBubble extends StatelessWidget {
                             Text(senderName!,
                                 style: const TextStyle(
                                     fontSize: 11.5, color: AppColors.textWeak)),
+                            // 群主 / 管理员：跟机器人标签同一套视觉，颜色区分身份
+                            if (senderRole == 'owner' || senderRole == 'admin') ...[
+                              const SizedBox(width: 5),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: (senderRole == 'owner'
+                                          ? const Color(0xFFF5B942)
+                                          : AppColors.brand)
+                                      .withValues(alpha: 0.16),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                    senderRole == 'owner' ? '群主' : '管理员',
+                                    style: TextStyle(
+                                        fontSize: 9.5,
+                                        height: 1.3,
+                                        fontWeight: FontWeight.w600,
+                                        color: senderRole == 'owner'
+                                            ? const Color(0xFFF5B942)
+                                            : AppColors.brand)),
+                              ),
+                            ],
                             // 机器人标签：让群成员一眼看出这条是系统推的，不是真人说的
                             if (msg.senderIsBot) ...[
                               const SizedBox(width: 5),

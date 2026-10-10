@@ -14,6 +14,7 @@ import 'package:xiaozhi_im_client/core/voice.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/screens/forward.dart';
 import 'package:xiaozhi_im_client/screens/group_manage.dart';
+import 'package:xiaozhi_im_client/screens/group_panel.dart';
 import 'package:xiaozhi_im_client/socket.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/bubble.dart';
@@ -892,6 +893,15 @@ class _ChatScreenState extends State<ChatScreen> {
     return widget.peerName;
   }
 
+  /// 发送者在群里的角色（owner / admin / member），用于气泡上的身份标签。
+  String? _senderRole(Message m) {
+    if (widget.conv.type != 'group') return null;
+    for (final mem in _members) {
+      if (mem.id == m.senderId) return mem.role;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final canSend = _hasText && !_busy;
@@ -976,6 +986,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   case 'manage':
                     _openGroupManage();
                     break;
+                  case 'panel':
+                    _openGroupPanel();
+                    break;
                 }
               },
               itemBuilder: (_) => const [
@@ -998,6 +1011,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 PopupMenuDivider(),
+                PopupMenuItem(
+                  value: 'panel',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.apps_rounded, size: 20),
+                    title: Text('群文件 · 相册 · 课堂'),
+                  ),
+                ),
                 PopupMenuItem(
                   value: 'manage',
                   child: ListTile(
@@ -1160,6 +1182,21 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// 群功能面板（群文件 / 相册 / 视频 / 课堂）
+  void _openGroupPanel() {
+    final gid = widget.conv.groupId;
+    if (gid == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GroupPanelScreen(
+          groupId: gid,
+          groupName: widget.conv.title ?? '群聊',
+        ),
+      ),
+    );
+  }
+
   Widget _body() {
     if (_loading) {
       return const Center(
@@ -1205,6 +1242,7 @@ class _ChatScreenState extends State<ChatScreen> {
               msg: m,
               mine: m.senderId == widget.myId,
               senderName: _senderName(m),
+              senderRole: _senderRole(m),
               baseUrl: Config.baseUrl,
               showTime: _showTimeAt(i),
               readLabel: _readLabelFor(i),

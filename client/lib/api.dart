@@ -553,6 +553,41 @@ class ImApi {
   Future<Map<String, dynamic>> leaveGroup(int gid) async =>
       await _post('/groups/$gid/leave', const {});
 
+  // ---- 群功能面板（2026-10-10）----
+  //
+  // 群文件/相册/视频三样是**从消息流聚合**出来的，不是单独的表：
+  // 消息被撤回，它就从这三个列表里一起消失，不存在"群里还留着一份"的脏数据。
+
+  /// 群文件（群里发过的文件，不含图片）
+  Future<List<dynamic>> groupFiles(int gid) async =>
+      (await _get('/groups/$gid/files'))['items'] as List<dynamic>? ?? [];
+
+  /// 群相册（群里发过的图片）
+  Future<List<dynamic>> groupAlbums(int gid) async =>
+      (await _get('/groups/$gid/albums'))['items'] as List<dynamic>? ?? [];
+
+  /// 群视频（群里发过的视频文件）
+  Future<List<dynamic>> groupVideos(int gid) async =>
+      (await _get('/groups/$gid/videos'))['items'] as List<dynamic>? ?? [];
+
+  /// 群课堂：{ items: [...], canManage: bool }
+  Future<Map<String, dynamic>> groupCourses(int gid) async =>
+      await _get('/groups/$gid/courses');
+
+  Future<void> linkGroupCourse(int gid, int courseId) async =>
+      await _post('/groups/$gid/courses', {'courseId': courseId});
+
+  Future<void> unlinkGroupCourse(int gid, int courseId) async =>
+      await _delete('/groups/$gid/courses/$courseId');
+
+  /// 全部群（仅系统管理员）—— 用来进那些自己不在里面的群
+  Future<List<dynamic>> allGroups() async =>
+      (await _get('/groups/all'))['items'] as List<dynamic>? ?? [];
+
+  /// 系统管理员直接加入任意群
+  Future<Map<String, dynamic>> joinGroupAsAdmin(int gid) async =>
+      await _post('/groups/$gid/join', const {});
+
   // ---- 通话 ----
   /// 拉取 ICE 服务器配置（STUN / TURN）。
   ///

@@ -16,7 +16,19 @@ function loadGroup(gid, uid, res) {
   if (!g) { res.status(404).json({ error: 'not found' }); return null; }
   const me = db.prepare('SELECT role,muted_until FROM group_members WHERE group_id=? AND user_id=?').get(gid, uid);
   if (!me) { res.status(403).json({ error: 'not a group member' }); return null; }
-  return { g, me, isOwner: g.owner_id === uid, isAdmin: me.role === 'admin' || g.owner_id === uid };
+
+  // 🔴 系统管理员在**任何群**里都算管理员（龙哥 2026-10-10："保留系统管理员
+  //    可以主动直接进入和加入所有群聊"）。POST /:groupId/join 把管理员加进来时
+  //    给的是 member 角色 —— 只看群内角色的话，管理员进了群却改不了群名、
+  //    挂不了课程，等于"进得去、管不了"，比进不去更让人困惑。
+  //    ⚠️ 但 isOwner **不跟着升**：转让群主、被踢保护这类"群归属"的操作
+  //    仍然只认真正的群主，系统管理员不能把别人的群转走。
+  const isSysAdmin = db.prepare('SELECT role FROM users WHERE id=?').get(uid)?.role === 'admin';
+  return {
+    g, me, isSysAdmin,
+    isOwner: g.owner_id === uid,
+    isAdmin: me.role === 'admin' || g.owner_id === uid || isSysAdmin,
+  };
 }
 
 /** 群变更后通知全体成员刷新（前端收到后重拉群信息/会话列表） */
@@ -68,6 +80,26 @@ router.get('/my', (req, res) => {
     (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id=g.id) members
     FROM groups g JOIN group_members m ON m.group_id=g.id WHERE m.user_id=? ORDER BY g.id DESC`).all(uid);
   res.json(rows);
+});
+
+/**
+ * 全部群（仅系统管理员）—— 配合 POST /:groupId/join 用。
+ * 「管理员要能进所有群」这句话里藏着一个前提：他得先**看得到**有哪些群。
+ * /my 只返回我加入的，管理员一个群都没进过时那里是空的，
+ * 于是"能进所有群"变成了"不知道有群可进"。
+ */
+router.get('/all', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const me = db.prepare('SELECT role FROM users WHERE id=?').get(uid);
+  if (!me || me.role !== 'admin') return res.status(403).json({ error: '只有系统管理员可以查看全部群' });
+  const rows = db.prepare(`
+    SELECT g.id, g.name, g.avatar, g.conversation_id, g.created_at,
+           u.nickname AS owner_name,
+           (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) AS members,
+           EXISTS(SELECT 1 FROM group_members m2 WHERE m2.group_id = g.id AND m2.user_id = ?) AS joined
+      FROM groups g LEFT JOIN users u ON u.id = g.owner_id
+     ORDER BY g.id DESC`).all(uid);
+  res.json({ items: rows.map((r) => ({ ...r, joined: !!r.joined })), total: rows.length });
 });
 
 // 群信息 + 成员 + 我的角色
@@ -184,7 +216,11 @@ router.delete('/:groupId/members/:userId', (req, res) => {
   const tm = db.prepare('SELECT role FROM group_members WHERE group_id=? AND user_id=?').get(gid, target);
   if (!tm) return res.status(404).json({ error: '该用户不在群里' });
   if (!ctx.isAdmin) return res.status(403).json({ error: '只有群主或管理员可以移出成员' });
-  if (!ctx.isOwner && tm.role === 'admin') return res.status(403).json({ error: '管理员不能移出其他管理员' });
+  // 系统管理员不受"管理员不能移出管理员"这条限制 —— 他就是兜底的那个人，
+  // 真出现管理员胡来的情况，总得有个人能处理
+  if (!ctx.isOwner && tm.role === 'admin' && !ctx.isSysAdmin) {
+    return res.status(403).json({ error: '管理员不能移出其他管理员' });
+  }
 
   db.prepare('DELETE FROM group_members WHERE group_id=? AND user_id=?').run(gid, target);
   db.prepare('DELETE FROM conversation_members WHERE conversation_id=? AND user_id=?').run(ctx.g.conversation_id, target);
@@ -248,6 +284,194 @@ router.post('/:groupId/members', (req, res) => {
     data: { groupId: gid, userId, operatorId: uid },
   });
   res.json({ ok: true });
+});
+
+/* ============================================================
+ * 群功能面板：群文件 / 群相册 / 群视频 / 群课堂
+ *
+ * 前三样**不建新表** —— 群里发过的东西本来就在 messages 里，
+ * 再复制一份到"群文件表"就等于两处真相：撤回了的消息在群文件里还在、
+ * 换了个文件名两处对不上。这里直接从消息流聚合，天然跟着撤回走。
+ * 只有群课堂需要新表（group_courses），因为它关联的是培训中心的课程，
+ * 不是消息。
+ * ============================================================ */
+
+/** 该群会话里某类消息的原始行（带上传者与文件信息） */
+function collectGroupMedia(gid, kinds, mimePrefix) {
+  const g = db.prepare('SELECT conversation_id FROM groups WHERE id=?').get(gid);
+  if (!g) return [];
+  const sql = `
+    SELECT m.id, m.kind, m.content, m.created_at, m.sender_id, m.file_id,
+           u.nickname AS sender_name, u.username AS sender_username, u.avatar AS sender_avatar,
+           f.name AS file_name, f.mime AS file_mime, f.size AS file_size, f.path AS file_path
+      FROM messages m
+      JOIN users u ON u.id = m.sender_id
+      LEFT JOIN files f ON f.id = m.file_id
+     WHERE m.conversation_id = ? AND m.deleted = 0 AND m.kind IN (${kinds.map(() => '?').join(',')})
+       ${mimePrefix ? 'AND f.mime LIKE ?' : ''}
+     ORDER BY m.id DESC`;
+  const args = [g.conversation_id, ...kinds];
+  if (mimePrefix) args.push(mimePrefix + '%');
+  return db.prepare(sql).all(...args);
+}
+
+/** 把一行媒体消息整理成前端直接能渲染的形状；file_path 不外泄，只给访问地址 */
+function shapeMedia(r) {
+  return {
+    id: r.id,
+    kind: r.kind,
+    createdAt: r.created_at,
+    sender: { id: r.sender_id, name: r.sender_name || r.sender_username, avatar: r.sender_avatar },
+    // 图片消息的 content 就是 /files/xxx；文件消息要从 files 表 join 出来
+    url: r.kind === 'image' ? r.content : (r.file_path ? `/files/${r.file_path}` : null),
+    name: r.file_name || null,
+    mime: r.file_mime || null,
+    size: r.file_size || null,
+    fileId: r.file_id || null,
+  };
+}
+
+/** 群文件：群里发过的所有文件（不含图片，图片归群相册） */
+router.get('/:groupId/files', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  const rows = collectGroupMedia(gid, ['file']);
+  res.json({ items: rows.map(shapeMedia), total: rows.length });
+});
+
+/** 群相册：群里发过的所有图片，最近的最先 */
+router.get('/:groupId/albums', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  const rows = collectGroupMedia(gid, ['image']);
+  res.json({ items: rows.map(shapeMedia), total: rows.length });
+});
+
+/** 群视频：群里发过的视频文件（按 mime 前缀筛，不靠扩展名猜） */
+router.get('/:groupId/videos', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  const rows = collectGroupMedia(gid, ['file'], 'video/');
+  res.json({ items: rows.map(shapeMedia), total: rows.length });
+});
+
+/** 群课堂：这个群挂了哪些培训中心的课（带我自己的学习进度） */
+router.get('/:groupId/courses', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  const rows = db.prepare(`
+    SELECT c.id, c.title, c.intro, c.category, c.required, c.cover_file_id,
+           gc.created_at AS linked_at, gc.created_by,
+           (SELECT COUNT(*) FROM tr_chapter ch WHERE ch.course_id = c.id) AS chapter_count,
+           (SELECT COUNT(*) FROM tr_lesson l JOIN tr_chapter ch2 ON ch2.id = l.chapter_id
+             WHERE ch2.course_id = c.id) AS lesson_count
+      FROM group_courses gc
+      JOIN tr_course c ON c.id = gc.course_id
+     WHERE gc.group_id = ?
+     ORDER BY gc.created_at DESC`).all(gid);
+
+  const progress = db.prepare(`SELECT COUNT(*) total,
+      SUM(CASE WHEN p.done = 1 THEN 1 ELSE 0 END) done
+    FROM tr_lesson l JOIN tr_chapter ch ON ch.id = l.chapter_id
+    LEFT JOIN tr_progress p ON p.lesson_id = l.id AND p.user_id = ?
+    WHERE ch.course_id = ?`);
+
+  res.json({
+    items: rows.map((c) => {
+      const p = progress.get(uid, c.id) || { total: 0, done: 0 };
+      const total = Number(p.total) || 0;
+      const done = Number(p.done) || 0;
+      return {
+        id: c.id,
+        title: c.title,
+        intro: c.intro,
+        category: c.category,
+        required: !!c.required,
+        cover: c.cover_file_id,
+        chapterCount: Number(c.chapter_count) || 0,
+        lessonCount: Number(c.lesson_count) || 0,
+        // 没课时也不能省这个字段：客户端"有数据才渲染"会让人以为没记录
+        progressPct: total ? Math.round((done * 100) / total) : 0,
+        linkedAt: c.linked_at,
+      };
+    }),
+    // 群主/管理员才需要"挂课程"按钮，前端按这个决定要不要显示
+    canManage: ctx.isAdmin,
+  });
+});
+
+/** 挂一门课到群里（群主或管理员） */
+router.post('/:groupId/courses', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const cid = Number((req.body || {}).courseId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  if (!ctx.isAdmin) return res.status(403).json({ error: '只有群主或管理员可以挂课程' });
+  if (!Number.isInteger(cid) || cid <= 0) return res.status(400).json({ error: '课程 id 不合法' });
+  if (!db.prepare('SELECT id FROM tr_course WHERE id=?').get(cid)) {
+    return res.status(404).json({ error: '课程不存在' });
+  }
+  if (db.prepare('SELECT 1 FROM group_courses WHERE group_id=? AND course_id=?').get(gid, cid)) {
+    return res.json({ ok: true, duplicated: true });   // 重复挂不算错，幂等
+  }
+  db.prepare('INSERT INTO group_courses (group_id,course_id,created_by,created_at) VALUES (?,?,?,?)')
+    .run(gid, cid, uid, Date.now());
+  notifyGroup(ctx.g.conversation_id, gid, 'course:linked', { courseId: cid });
+  res.json({ ok: true });
+});
+
+/** 从群里摘掉一门课（群主或管理员）；只解关联，不动课程本身 */
+router.delete('/:groupId/courses/:courseId', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const cid = Number(req.params.courseId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  if (!ctx.isAdmin) return res.status(403).json({ error: '只有群主或管理员可以摘课程' });
+  db.prepare('DELETE FROM group_courses WHERE group_id=? AND course_id=?').run(gid, cid);
+  notifyGroup(ctx.g.conversation_id, gid, 'course:unlinked', { courseId: cid });
+  res.json({ ok: true });
+});
+
+/**
+ * 系统管理员直接进群（龙哥 2026-10-10 要的"管理员可主动进入和加入所有群聊"）。
+ *
+ * 为什么单独一个端点而不是顺手放开 loadGroup：
+ *   放开 loadGroup 的话，管理员能"看"但不能"说话"（不在 conversation_members
+ *   里就收不到消息、发消息会被拒），界面上就是"进得去、发不出"的半残状态。
+ *   这里一次性把 group_members 和 conversation_members 都补齐 —— 要么不进，
+ *   要么就是个能正常收发消息的普通成员。
+ */
+router.post('/:groupId/join', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const me = db.prepare('SELECT role FROM users WHERE id=?').get(uid);
+  if (!me || me.role !== 'admin') return res.status(403).json({ error: '只有系统管理员可以直接进群' });
+  const g = db.prepare('SELECT id,conversation_id FROM groups WHERE id=?').get(gid);
+  if (!g) return res.status(404).json({ error: '群不存在' });
+
+  db.exec('BEGIN');
+  try {
+    if (!db.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id=?').get(gid, uid)) {
+      db.prepare('INSERT INTO group_members (group_id,user_id,role,joined_at) VALUES (?,?,?,?)')
+        .run(gid, uid, 'member', Date.now());
+    }
+    if (!db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id=? AND user_id=?')
+      .get(g.conversation_id, uid)) {
+      db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)')
+        .run(g.conversation_id, uid);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: e.message });
+  }
+  hub.broadcastToUser(uid, { type: 'conversation.created', conversationId: g.conversation_id, data: { groupId: gid } });
+  notifyGroup(g.conversation_id, gid, 'member');
+  res.json({ ok: true, conversationId: g.conversation_id });
 });
 
 module.exports = router;

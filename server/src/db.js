@@ -1109,6 +1109,26 @@ BEGIN
   SELECT RAISE(ABORT, '${childTable}.${childCol} 指向不存在的 ${parentTable}.${parentCol}');
 END;`;
 
+// ---------------------------------------------------------------------------
+// 群课堂：群 ↔ 培训课程的关联（2026-10-10）
+//
+// 群里挂一门课，点「群课堂」直接进课程页 —— 课程、章节、课时、进度、考试
+// 全复用培训中心那套（tr_* 十张表），这里只存"哪个群挂了哪门课"。
+//
+// 🔴 为什么不复制一份课程数据进群：培训中心改了课（加章节、换视频），
+//    群课堂必须跟着变。复制一份就是"两处真相"，改一处另一处不动，
+//    最后出现"群里这门课还是旧版"这种谁也说不清的故障。
+db.exec(`
+CREATE TABLE IF NOT EXISTS group_courses (
+  group_id INTEGER NOT NULL,
+  course_id INTEGER NOT NULL,
+  created_by INTEGER,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (group_id, course_id)
+);
+CREATE INDEX IF NOT EXISTS idx_group_courses_course ON group_courses (course_id);
+`);
+
 // 覆盖的关联（表.列 → 表.列）：
 //   会话成员、群成员、好友关系 —— 孤儿行会让好友树/群成员列表出现空壳条目
 const FK_RELATIONS = [
@@ -1119,6 +1139,8 @@ const FK_RELATIONS = [
   ['friendships', 'user_id', 'users', 'id'],
   ['friendships', 'friend_id', 'users', 'id'],
   ['groups', 'conversation_id', 'conversations', 'id'],
+  ['group_courses', 'group_id', 'groups', 'id'],
+  ['group_courses', 'course_id', 'tr_course', 'id'],
 ];
 
 for (const [child, childCol, parent, parentCol] of FK_RELATIONS) {
