@@ -901,7 +901,14 @@ class _ChatScreenState extends State<ChatScreen> {
         titleSpacing: widget.embedded ? 16 : 0,
         title: Row(
           children: [
-            UserAvatar(name: _title, size: 36, radius: 12),
+            widget.conv.type == 'group'
+                // 群聊顶栏也用拼出来的群头像，跟列表里看到的保持一致，
+                // 否则点进去发现"换了个图标"会以为是另一个群
+                ? GroupAvatar(
+                    members: widget.conv.memberAvatars, size: 36, radius: 12)
+                : UserAvatar(
+                    name: _title, size: 36, radius: 12,
+                    imageUrl: widget.conv.avatar),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -923,7 +930,12 @@ class _ChatScreenState extends State<ChatScreen> {
                               fontWeight: FontWeight.w600),
                         )
                       : Text(
-                          widget.conv.type == 'group' ? '群聊' : '私信',
+                          widget.conv.type == 'group'
+                              // 带上人数：群聊和单聊的第二行也就彻底不一样了
+                              ? (widget.conv.memberCount > 0
+                                  ? '群聊 · ${widget.conv.memberCount} 人'
+                                  : '群聊')
+                              : '私信',
                           style: const TextStyle(
                               fontSize: 11.5,
                               color: AppColors.textWeak,

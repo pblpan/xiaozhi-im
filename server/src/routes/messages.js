@@ -98,13 +98,38 @@ router.get('/', (req, res) => {
         ...base,
         title: remark || other?.nickname || other?.username,
         avatar: other?.avatar,
+        is_group: false,
         peer: other ? { ...other, is_bot: !!other.is_bot, remark } : other,
       };
     }
     const g = db.prepare('SELECT id,name,avatar,announcement FROM groups WHERE conversation_id=?').get(c.id);
+
+    // 群头像拼接素材（龙哥 2026-10-10 要的"群聊用成员头像拼出来"）。
+    // 排序：群主 → 管理员 → 普通成员，同级别按入群先后。这样"谁是群主"在
+    // 头像第一格里就看得出来，也保证头像不会因为成员进出而整片乱跳。
+    // 只取前 9 个：再多也拼不下，而且列表页每多带一个头像就多一份流量。
+    const members = g ? db.prepare(`
+      SELECT u.id, u.username, u.nickname, u.avatar
+        FROM group_members gm
+        JOIN users u ON u.id = gm.user_id
+       WHERE gm.group_id = ?
+       ORDER BY CASE gm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+                gm.joined_at ASC
+       LIMIT 9`).all(g.id) : [];
+    const memberCount = g
+      ? (db.prepare('SELECT COUNT(*) n FROM group_members WHERE group_id=?').get(g.id)?.n || 0)
+      : 0;
+
     return {
       ...base, title: g?.name, avatar: g?.avatar,
       announcement: g?.announcement, group_id: g?.id,
+      is_group: true,
+      member_count: memberCount,
+      member_avatars: members.map((m) => ({
+        id: m.id,
+        name: m.nickname || m.username || '',
+        avatar: m.avatar || null,
+      })),
     };
   });
   res.json(out);

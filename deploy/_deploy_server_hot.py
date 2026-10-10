@@ -94,6 +94,10 @@ FILES = [
     'src/settings.js',
     'src/remote.js',
     'src/routes/remote.js',
+    # 🔴 2026-10-10 补：会话列表（/api/conversations）就在这个文件里。
+    #    它此前**从没进过清单** —— 群头像拼接素材（member_avatars /
+    #    member_count）改了却推不上去，线上会话列表还是老样子，而且不报错。
+    'src/routes/messages.js',
     # ── 🔴 2026-10-03「10 项全栈加固 + 数据体检页」这一轮 ──
     # 审计找出的 10 个缺陷对应的实现全在这几个文件里，漏任何一个都是
     # "代码推了、行为没变"（而且往往不报错：限流文件不推 = 登录照样无限流）。

@@ -87,6 +87,24 @@ class User {
   }
 }
 
+/// 拼群头像用的一格素材：一个成员的「名字 + 头像地址」。
+///
+/// 只要这两个就够了 —— 头像图加载不出来时，靠名字首字 + 哈希渐变兜底，
+/// 所以群里每个格子永远有内容，不会出现空白方块。
+class AvatarSeed {
+  final int? id;
+  final String name;
+  final String? imageUrl;
+
+  const AvatarSeed({this.id, required this.name, this.imageUrl});
+
+  factory AvatarSeed.fromJson(Map<String, dynamic> m) => AvatarSeed(
+        id: m['id'] as int?,
+        name: (m['name'] ?? '').toString(),
+        imageUrl: m['avatar'] as String?,
+      );
+}
+
 class Conversation {
   final int id;
   final String type; // dm | group
@@ -100,6 +118,10 @@ class Conversation {
   final String? announcement; // 群公告
   final int? groupId; // 群聊对应的群 id（单聊为 null）
   final Map<String, dynamic>? peer;
+  /// 群聊才有的：用来拼群头像的成员素材（最多 9 个，群主/管理员排前面）
+  final List<AvatarSeed> memberAvatars;
+  /// 群聊总人数（memberAvatars 只带前 9 个，这个才是真实人数）
+  final int memberCount;
 
   const Conversation({
     required this.id,
@@ -114,6 +136,8 @@ class Conversation {
     this.announcement,
     this.groupId,
     this.peer,
+    this.memberAvatars = const [],
+    this.memberCount = 0,
   });
 
   factory Conversation.fromJson(Map<String, dynamic> m) => Conversation(
@@ -129,6 +153,10 @@ class Conversation {
         announcement: m['announcement'],
         groupId: m['group_id'] as int?,
         peer: m['peer'] as Map<String, dynamic>?,
+        memberAvatars: (m['member_avatars'] as List<dynamic>? ?? [])
+            .map((e) => AvatarSeed.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        memberCount: (m['member_count'] ?? 0) as int,
       );
 }
 

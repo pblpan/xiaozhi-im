@@ -480,6 +480,56 @@ function stopServer() {
   wsA.close();
   wsB.close();
 
+  // ---------------- 群头像拼接素材 ----------------
+  // 龙哥 2026-10-10：个人聊天和群聊不好区分，主流软件是拿成员头像拼成群头像。
+  // 服务端负责把「拼图素材」下发下去，客户端拿它画九宫格。
+  console.log('\n【群头像拼接素材】');
+  r = await api('POST', '/api/groups', { token: ta, body: { name: '拼图群' } });
+  const gId = r.body?.groupId, gCid = r.body?.conversationId;
+  ok('建群 → 200', r.status === 200 && Number.isInteger(gId), JSON.stringify(r.body));
+  await api('POST', `/api/groups/${gId}/members`, { token: ta, body: { userId: bId } });
+  await api('POST', `/api/groups/${gId}/members`, { token: ta, body: { userId: C.user.id } });
+
+  r = await api('GET', '/api/conversations', { token: ta });
+  const gConv = r.body.find((c) => c.id === gCid);
+  ok('群会话带 is_group=true', gConv?.is_group === true, JSON.stringify(gConv).slice(0, 160));
+  ok('  带 member_count=3', gConv?.member_count === 3, JSON.stringify(gConv?.member_count));
+  ok('  带 member_avatars 且每人有 name', Array.isArray(gConv?.member_avatars)
+    && gConv.member_avatars.length === 3
+    && gConv.member_avatars.every((x) => typeof x.name === 'string' && x.name.length > 0),
+    JSON.stringify(gConv?.member_avatars));
+  // 比 id 不比名字：alice 的昵称在上面的用例里被改成了 24 个 emoji，
+  // 拿名字断言会随前面的用例一起漂移
+  ok('  群主排第一格（alice 是建群人）',
+    gConv?.member_avatars?.[0]?.id === aId,
+    JSON.stringify(gConv?.member_avatars?.map((x) => x.id)));
+  ok('  单聊会话 is_group=false',
+    r.body.find((c) => c.id === dmCid)?.is_group === false,
+    JSON.stringify(r.body.find((c) => c.id === dmCid)?.is_group));
+
+  // 上限 9 个：群再大也不能把整个群成员表塞进列表接口。
+  // 这里**直接写库**造人，不走 /api/auth/register —— 注册接口有 5 次/小时的
+  // IP 限流（防批量灌号），测试里灌 10 个会被 429 挡下，那是限流在正常工作，
+  // 不是本用例要测的东西。造数据用 SQL、断言仍然走 HTTP。
+  const { DatabaseSync } = require('node:sqlite');
+  const tdb = new DatabaseSync(path.join(DATA_DIR, 'xiaozhi-im.db'));
+  const extraIds = [];
+  for (let i = 0; i < 10; i++) {
+    const info = tdb.prepare(
+      "INSERT INTO users (username, password_hash, nickname, role, created_at) VALUES (?,?,?,'user',?)",
+    ).run(`gax${i}`, 'x', `群员${i}`, Date.now());
+    extraIds.push(Number(info.lastInsertRowid));
+  }
+  tdb.close();
+  for (const uid2 of extraIds) {
+    await api('POST', `/api/groups/${gId}/members`, { token: ta, body: { userId: uid2 } });
+  }
+  r = await api('GET', '/api/conversations', { token: ta });
+  const bigConv = r.body.find((c) => c.id === gCid);
+  ok('13 人群只下发前 9 个头像，但 member_count 是真实人数 13',
+    bigConv?.member_avatars?.length === 9 && bigConv?.member_count === 13,
+    JSON.stringify({ avatars: bigConv?.member_avatars?.length, count: bigConv?.member_count }));
+
   // ---------------- 结果 ----------------
   console.log(`\n${'='.repeat(52)}`);
   console.log(`通过 ${passed} / ${passed + failed}`);

@@ -659,6 +659,19 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     return c;
   }
 
+  /// 会话头像：群聊用成员头像拼的九宫格，单聊用对方真实头像。
+  ///
+  /// 以前两种会话都用「名字首字 + 哈希渐变」，一排看下去分不出哪个是群 ——
+  /// 现在群聊是拼图 + 右下角「群」徽标，一眼就能分开。
+  /// 顺带修了一个老问题：单聊明明有 avatar 字段，列表却从没用它，
+  /// 所以设置了头像的人在这里也只显示首字。
+  Widget _avatarFor(Conversation cv, String name) {
+    if (cv.type == 'group') {
+      return GroupAvatar(members: cv.memberAvatars, size: 46, radius: 15);
+    }
+    return UserAvatar(name: name, size: 46, radius: 15, imageUrl: cv.avatar);
+  }
+
   Widget _tile(Conversation cv) {
     final name = cv.title ?? (cv.type == 'group' ? '群聊' : '会话');
     final selected = _sel?.id == cv.id;
@@ -674,7 +687,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
             padding: const EdgeInsets.fromLTRB(8, 10, 12, 10),
             child: Row(
               children: [
-                UserAvatar(name: name, size: 46, radius: 15),
+                _avatarFor(cv, name),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
