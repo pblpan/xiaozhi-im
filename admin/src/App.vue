@@ -3448,6 +3448,135 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </el-table-column>
                 </el-table>
               </el-tab-pane>
+
+              <!-- ======== 智能薪酬（复刻钉钉） ======== -->
+              <el-tab-pane label="智能薪酬" name="salary">
+                <div class="hint" style="margin-bottom:10px">
+                  按<b>考勤结果 + 这里的规则</b>算每个人每月的扣款与奖励：迟到分档扣、缺卡按次扣、
+                  旷工按天扣日工资、请假按比例扣、全勤发奖、审批过的加班按时长算加班费。
+                  日工资 = 月薪基数 ÷ 计薪天数。报表<b>每次现算</b>——改了打卡记录、审批了请假，
+                  重新打开就是对的，没有"重算"按钮也没有旧快照。
+                </div>
+
+                <!-- 规则 -->
+                <el-card shadow="never" style="margin-bottom:14px">
+                  <template #header><b>扣款 / 奖励规则</b>
+                    <el-tag v-if="salConfig.customized" size="small" type="success" style="margin-left:8px">已自定义</el-tag>
+                    <el-tag v-else size="small" type="info" effect="plain" style="margin-left:8px">出厂默认</el-tag>
+                  </template>
+                  <el-form label-width="150px" size="small">
+                    <el-form-item label="迟到扣款（分档）">
+                      <div v-for="(t, i) in salConfig.lateTiers" :key="i" style="margin-bottom:4px">
+                        ≤ <el-input-number v-model="t.upTo" :min="1" :max="1440" size="small" controls-position="right" style="width:100px" /> 分钟
+                        扣 <el-input-number v-model="t.amount" :min="0" :max="100000" size="small" controls-position="right" style="width:110px" /> 元
+                        <el-button size="small" text type="danger" @click="salConfig.lateTiers.splice(i, 1)"
+                                   :disabled="salConfig.lateTiers.length <= 1">删</el-button>
+                      </div>
+                      <div>
+                        <el-button size="small" @click="salConfig.lateTiers.push({ upTo: (salConfig.lateTiers.at(-1)?.upTo || 0) + 30, amount: 50 })"
+                                   :disabled="salConfig.lateTiers.length >= 4">加一档</el-button>
+                        <span class="hint" style="margin-left:8px">
+                          超出最后一档的部分按下面"每分钟"单价算；档位分钟数必须逐档递增。
+                        </span>
+                      </div>
+                    </el-form-item>
+                    <el-form-item label="超出档每分钟扣">
+                      <el-input-number v-model="salConfig.latePerMinute" :min="0" :max="1000" :step="0.5" />
+                      <span class="hint" style="margin-left:8px">元 / 分钟（迟到超过最后一档时按分钟计）</span>
+                    </el-form-item>
+                    <el-form-item label="缺卡每次扣">
+                      <el-input-number v-model="salConfig.missingCardDeduct" :min="0" :max="100000" />
+                      <span class="hint" style="margin-left:8px">元（旷工的天<b>不重复</b>扣缺卡）</span>
+                    </el-form-item>
+                    <el-form-item label="旷工扣款比例">
+                      <el-input-number v-model="salConfig.absentDayDeductPct" :min="0" :max="300" />
+                      <span class="hint" style="margin-left:8px">% 日工资 / 天</span>
+                    </el-form-item>
+                    <el-form-item label="请假扣款比例">
+                      <el-input-number v-model="salConfig.leaveDeductPct" :min="0" :max="300" />
+                      <span class="hint" style="margin-left:8px">% 日工资 / 天（半天按 0.5 天）</span>
+                    </el-form-item>
+                    <el-form-item label="全勤奖">
+                      <el-input-number v-model="salConfig.fullAttendanceBonus" :min="0" :max="100000" />
+                      <span class="hint" style="margin-left:8px">元（当月无迟到/早退/缺卡/旷工/请假才发）</span>
+                    </el-form-item>
+                    <el-form-item label="加班费时薪">
+                      <el-input-number v-model="salConfig.overtimePerHour" :min="0" :max="100000" />
+                      <span class="hint" style="margin-left:8px">
+                        元 / 小时（0 = 不计加班费）。时长只认<b>审批通过的加班申请</b>，休息日来打卡不算。
+                      </span>
+                    </el-form-item>
+                    <el-form-item label="计薪天数">
+                      <el-input-number v-model="salConfig.dayDivisor" :min="1" :max="31" :step="0.01" />
+                      <span class="hint" style="margin-left:8px">天 / 月（法定口径 21.75）</span>
+                    </el-form-item>
+                    <el-form-item>
+                      <el-button type="primary" :loading="salBusy" @click="saveSalConfig">保存规则并重算</el-button>
+                    </el-form-item>
+                  </el-form>
+                </el-card>
+
+                <!-- 基数 -->
+                <el-card shadow="never" style="margin-bottom:14px">
+                  <template #header><b>员工月薪基数</b>
+                    <el-button size="small" type="primary" :loading="salBusy" style="float:right" @click="saveSalBases">保存基数</el-button>
+                  </template>
+                  <el-table :data="salBases" border stripe size="small" max-height="320"
+                            empty-text="还没有员工 —— 先在「组织机构」里录员工">
+                    <el-table-column prop="username" label="工号" width="120" />
+                    <el-table-column prop="nickname" label="姓名" min-width="120" />
+                    <el-table-column label="月薪基数（元）" width="220">
+                      <template #default="{ row }">
+                        <el-input-number v-model="row.monthBase" :min="0" :max="10000000" :step="100"
+                                         controls-position="right" style="width:180px" />
+                      </template>
+                    </el-table-column>
+                    <el-table-column :label="'日工资（按 ' + salConfig.dayDivisor + ' 天）'" min-width="140">
+                      <template #default="{ row }">{{ ((Number(row.monthBase) || 0) / (salConfig.dayDivisor || 21.75)).toFixed(2) }} 元</template>
+                    </el-table-column>
+                  </el-table>
+                </el-card>
+
+                <!-- 报表 -->
+                <el-card shadow="never">
+                  <template #header>
+                    <b>月度工资表</b>
+                    <el-date-picker v-model="salMonth" type="month" value-format="YYYY-MM" :clearable="false"
+                                    style="width:130px;margin:0 10px" @change="loadSalReport" />
+                    <el-tag size="small" type="warning" effect="plain">全员应发合计：¥{{ salReport.totalNet }}</el-tag>
+                    <el-button size="small" style="float:right" @click="exportSalCsv">导出 CSV</el-button>
+                  </template>
+                  <el-table :data="salReport.items" border stripe size="small" max-height="420"
+                            empty-text="这个月还没有数据">
+                    <el-table-column prop="username" label="工号" width="100" />
+                    <el-table-column prop="nickname" label="姓名" width="100" />
+                    <el-table-column prop="base" label="基数" width="90" align="right" />
+                    <el-table-column label="考勤概况" min-width="230">
+                      <template #default="{ row }">
+                        迟到 {{ row.stats.lateCount }} 次({{ row.stats.lateMinutes }}分) ·
+                        缺卡 {{ row.stats.missingCount }} ·
+                        旷工 {{ row.stats.absentDays }} 天 ·
+                        请假 {{ row.stats.leaveDays }} 天
+                        <template v-if="row.stats.overtimeMinutes > 0"> · 加班 {{ row.stats.overtimeMinutes }} 分</template>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="明细" min-width="300">
+                      <template #default="{ row }">
+                        <div v-for="x in row.items" :key="x.key" :style="{ color: x.amount < 0 ? '#c0392b' : '#1e8e3e' }">
+                          {{ x.label }} {{ x.amount >= 0 ? '+' : '' }}{{ x.amount }}
+                          <span class="hint">{{ x.note }}</span>
+                        </div>
+                        <span v-if="!row.items.length" class="hint">没配基数，也无法判定（无出勤记录）</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="deductions" label="扣款合计" width="100" align="right" />
+                    <el-table-column prop="bonus" label="奖励合计" width="100" align="right" />
+                    <el-table-column label="应发" width="110" align="right">
+                      <template #default="{ row }"><b>¥{{ row.net }}</b></template>
+                    </el-table-column>
+                  </el-table>
+                </el-card>
+              </el-tab-pane>
             </el-tabs>
           </el-card>
 
@@ -9695,6 +9824,23 @@ const attRecForm = ref({});
 const attDetailDlg = ref(false);
 const attDetail = ref({ day: '', nickname: '', items: [] });
 
+// ── 智能薪酬（复刻钉钉的"考勤算工资"）──
+const salMonth = ref('');
+const salBusy = ref(false);
+const salConfig = ref({
+  lateTiers: [{ upTo: 30, amount: 20 }, { upTo: 60, amount: 50 }],
+  latePerMinute: 2,
+  missingCardDeduct: 50,
+  absentDayDeductPct: 100,
+  leaveDeductPct: 100,
+  fullAttendanceBonus: 100,
+  dayDivisor: 21.75,
+  overtimePerHour: 0,
+  customized: false,
+});
+const salBases = ref([]);
+const salReport = ref({ items: [], totalNet: 0, config: {} });
+
 // 看板卡片：口径与服务端判定一致（迟到含"迟到+早退"，早退同理）
 const attOvCards = computed(() => [
   { k: 'total', label: '应打卡' }, { k: 'present', label: '已打卡' },
@@ -9839,6 +9985,86 @@ async function loadAttTab() {
   else if (attTab.value === 'locations') await loadAttLocations();
   else if (attTab.value === 'review') await loadAttRequests();
   else if (attTab.value === 'config') await loadAttConfig();
+  else if (attTab.value === 'salary') await loadSalary();
+}
+
+// ── 智能薪酬 ──
+async function loadSalary() {
+  if (!salMonth.value) {
+    const d = new Date();
+    salMonth.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+  try {
+    const [cfg, bases] = await Promise.all([
+      api.get('/admin/attendance/salary/config'),
+      api.get('/admin/attendance/salary/bases'),
+    ]);
+    if (cfg.data?.config) {
+      // 档位是数组，深拷贝一份再做表单编辑（避免直接改到展示数据）
+      salConfig.value = { ...cfg.data.config, lateTiers: (cfg.data.config.lateTiers || []).map((t) => ({ ...t })) };
+    }
+    salBases.value = bases.data?.items || [];
+    await loadSalReport();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载智能薪酬失败');
+  }
+}
+async function loadSalReport() {
+  try {
+    salReport.value = (await api.get('/admin/attendance/salary/report?month=' + salMonth.value)).data;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载薪酬报表失败');
+  }
+}
+async function saveSalConfig() {
+  salBusy.value = true;
+  try {
+    const { data } = await api.put('/admin/attendance/salary/config', salConfig.value);
+    salConfig.value = { ...data.config, lateTiers: (data.config.lateTiers || []).map((t) => ({ ...t })) };
+    ElMessage.success('薪酬规则已保存，报表已按新规则重算');
+    await loadSalReport();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    salBusy.value = false;
+  }
+}
+async function saveSalBases() {
+  salBusy.value = true;
+  try {
+    await api.put('/admin/attendance/salary/bases', {
+      items: salBases.value.map((b) => ({ userId: b.userId, monthBase: Number(b.monthBase) || 0 })),
+    });
+    ElMessage.success('月薪基数已保存');
+    await loadSalReport();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    salBusy.value = false;
+  }
+}
+/** 报表导出 CSV（Excel 直接打开；金额两位列拆开，方便财务核对） */
+function exportSalCsv() {
+  const esc = (v) => '"' + String(v ?? '').replaceAll('"', '""') + '"';
+  const head = ['工号', '姓名', '月薪基数', '迟到次数', '迟到分钟', '缺卡次数', '早退次数', '旷工天数', '请假天数', '加班分钟', '扣款合计', '奖励合计', '应发', '明细'];
+  const lines = [head.map(esc).join(',')];
+  for (const it of salReport.value.items || []) {
+    lines.push([
+      it.username, it.nickname, it.base,
+      it.stats?.lateCount ?? 0, it.stats?.lateMinutes ?? 0,
+      it.stats?.missingCount ?? 0, it.stats?.earlyCount ?? 0,
+      it.stats?.absentDays ?? 0, it.stats?.leaveDays ?? 0,
+      it.stats?.overtimeMinutes ?? 0,
+      it.deductions, it.bonus, it.net,
+      (it.items || []).map((x) => `${x.label} ${x.amount}（${x.note}）`).join('；'),
+    ].map(esc).join(','));
+  }
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `智能薪酬_${salMonth.value}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 async function loadAttLocations() {
   try {

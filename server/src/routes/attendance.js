@@ -783,5 +783,65 @@ admin.post('/requests/:id/review', (req, res) => {
   res.json({ ok: true, request: r.request, message: approve ? '已通过' : '已驳回' });
 });
 
+/* ---------------- 智能薪酬（复刻钉钉的"考勤算工资"） ----------------
+ * 只对管理端开放：算钱的东西，规则与基数都不能让普通接口碰到。
+ * 报表每次按打卡流水现算（见 salary.js 的说明），没有"重算"按钮可做错。
+ */
+const salary = require('../salary');
+
+admin.get('/salary/config', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  res.json({ ok: true, config: salary.configOf(g.org.id) });
+});
+
+admin.put('/salary/config', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  const r = salary.saveConfig(g.org.id, req.body || {}, g.u.id);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, config: r.config });
+});
+
+admin.get('/salary/bases', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  const bases = salary.basesOf(g.org.id);
+  const members = db.prepare(
+    'SELECT id, username, nickname FROM users WHERE org_id=? AND is_bot=0 ORDER BY id')
+    .all(g.org.id);
+  res.json({
+    ok: true,
+    items: members.map((m) => ({ userId: m.id, username: m.username, nickname: m.nickname, monthBase: bases[m.id] || 0 })),
+  });
+});
+
+admin.put('/salary/bases', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  const r = salary.saveBases(g.org.id, req.body?.items || [], g.u.id);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ ok: true });
+});
+
+admin.get('/salary/report', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  const now = Date.now();
+  const month = /^\d{4}-\d{2}$/.test(String(req.query.month || ''))
+    ? String(req.query.month) : att.today(now).slice(0, 7);
+  res.json({ ok: true, ...salary.computeReport({ orgId: g.org.id, month, now }) });
+});
+
+/** 员工端：我的工资条（只看自己；还没配基数为 0 时 items 只有空说明） */
+router.get('/salary', (req, res) => {
+  const u = authOf(req, res); if (!u) return;
+  const st = state();
+  if (!st.workMode || !st.enabled || !st.org || !u.org_id) {
+    return res.json({ available: false, items: [], stats: null, net: 0 });
+  }
+  const now = Date.now();
+  const month = /^\d{4}-\d{2}$/.test(String(req.query.month || ''))
+    ? String(req.query.month) : att.today(now).slice(0, 7);
+  const r = salary.computeReport({ orgId: st.org.id, month, now });
+  const mine = r.items.find((x) => x.userId === u.id);
+  res.json({ available: true, month, config: r.config, ...(mine || { items: [], stats: null, net: 0, base: 0 }) });
+});
+
 module.exports = router;
 module.exports.admin = admin;

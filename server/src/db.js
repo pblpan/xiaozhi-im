@@ -1129,6 +1129,34 @@ CREATE TABLE IF NOT EXISTS group_courses (
 CREATE INDEX IF NOT EXISTS idx_group_courses_course ON group_courses (course_id);
 `);
 
+// 智能薪酬（复刻钉钉，2026-10-11）：
+//   salary_config —— 组织级的扣款/奖励规则，一行一个组织（没配过就用出厂默认）。
+//   salary_base   —— 员工月薪基数（算迟到/请假扣款时折日工资用，日工资=基数/计薪天数）。
+// 只存"怎么算"，不存"算出来的结果"—— 月度报表每次按 att_records 现算，
+// 管理员改了打卡记录/审批了请假，报表立刻就是对的，不会出现"报表比流水旧"。
+db.exec(`
+CREATE TABLE IF NOT EXISTS salary_config (
+  org_id INTEGER PRIMARY KEY,
+  late_tiers TEXT NOT NULL DEFAULT '[]',
+  late_per_minute REAL NOT NULL DEFAULT 2,
+  missing_card_deduct REAL NOT NULL DEFAULT 50,
+  absent_day_deduct_pct REAL NOT NULL DEFAULT 100,
+  leave_deduct_pct REAL NOT NULL DEFAULT 100,
+  full_attendance_bonus REAL NOT NULL DEFAULT 100,
+  day_divisor REAL NOT NULL DEFAULT 21.75,
+  overtime_per_hour REAL NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  updated_by INTEGER
+);
+CREATE TABLE IF NOT EXISTS salary_base (
+  org_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  month_base REAL NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (org_id, user_id)
+);
+`);
+
 // 覆盖的关联（表.列 → 表.列）：
 //   会话成员、群成员、好友关系 —— 孤儿行会让好友树/群成员列表出现空壳条目
 const FK_RELATIONS = [
@@ -1141,6 +1169,9 @@ const FK_RELATIONS = [
   ['groups', 'conversation_id', 'conversations', 'id'],
   ['group_courses', 'group_id', 'groups', 'id'],
   ['group_courses', 'course_id', 'tr_course', 'id'],
+  ['salary_config', 'org_id', 'orgs', 'id'],
+  ['salary_base', 'org_id', 'orgs', 'id'],
+  ['salary_base', 'user_id', 'users', 'id'],
 ];
 
 for (const [child, childCol, parent, parentCol] of FK_RELATIONS) {
