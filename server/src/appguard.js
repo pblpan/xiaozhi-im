@@ -147,6 +147,18 @@ const RULES = [
     // 按路径排除即可，不需要再看头
     exempt: [/^\/api\/training\/admin\//],
   },
+  {
+    app: 'assistant',
+    scope: '智能助手问答',
+    label: '问一句（使用问题问答）',
+    paths: [
+      'POST   /api/assistant/ask',
+    ],
+    test: (p) => /^\/api\/assistant\/ask$/.test(p),
+    // 管理台的配置/试问接口在 /api/admin/assistant/*（要求 admin 身份），
+    // 停用员工问答不能把管理员"重新启用"的入口也拦死
+    exempt: [/^\/api\/admin\/assistant\//],
+  },
 ];
 
 /**

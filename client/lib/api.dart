@@ -286,6 +286,12 @@ class ImApi {
   Future<Map<String, dynamic>> fileHelper() async =>
       await _get('/conversations/filehelper');
 
+  /// 智能助手：问一个使用问题（#314）。
+  /// 返回 { answer, source: 'llm'|'kb'|'fallback', related?: [...], note? }。
+  /// aiFailFast=true 时 LLM 故障直接抛错而不是降级（暂未用，留作"重试"场景）。
+  Future<dynamic> askAssistant(String question) async =>
+      await _post('/assistant/ask', {'question': question});
+
   /// 会话历史 + 已读状态：
   /// { messages: [...], members: [...], peerLastReadId, minOtherReadId, recallWindowMs }
   Future<Map<String, dynamic>> messages(int cid) async =>

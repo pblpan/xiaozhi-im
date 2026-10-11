@@ -34,6 +34,7 @@ import '../screens/simple_stocktake.dart';
 import '../screens/stocktake.dart';
 import '../screens/training.dart';
 import '../screens/price_tag_print.dart';
+import '../screens/assistant.dart';
 
 /// 内置应用 id 清单（与服务端 apps.js 的 BUILTIN_APPS 一一对应）
 ///
@@ -78,6 +79,9 @@ const kBuiltinAppIds = {
   //    这里留着就会在工作台上重新冒出图标。页面类还在，由 inventory.dart 直接推。
   'training',
   'price_tag',
+  // #314 智能助手（2026-10-11）：接管"系统怎么用"的问答（服务端帮助知识库
+  // + 可选大模型）。所有登录用户可见 —— 帮助是给所有人用的，不分角色/组织。
+  'assistant',
 };
 
 /// 该 id 是否是本客户端认识的内置应用。
@@ -107,6 +111,8 @@ Widget? builtinAppPage(String id) {
       return const TrainingPage();
     case 'price_tag':
       return const PriceTagPrintPage();
+    case 'assistant':
+      return const AssistantScreen();
     default:
       return null;
   }

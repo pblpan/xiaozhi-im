@@ -157,6 +157,14 @@ FILES = [
     #    而且不报错（管理台只会弹"操作失败"）。
     'src/integration.js',
     'src/routes/integrations.js',
+    # 🔴 2026-10-11 补：智能助手（#314）。三个**新文件**（不在清单里就 404/500：
+    #    routes/assistant.js 不上去 index.js require 直接崩，比"功能没上线"更狠），
+    #    外加 settings.js（4 个 assistant_* 键）与 appmodules.js（smart_toy 图标 ——
+    #    此前也从没进过清单，漏推 = 管理台图标白名单还是旧的）。
+    'src/assistant.js',
+    'src/helpkb.js',
+    'src/routes/assistant.js',
+    'src/appmodules.js',
 ]
 
 

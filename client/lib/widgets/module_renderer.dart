@@ -56,6 +56,7 @@ const Map<String, IconData> kModuleIcons = {
   'receipt_long': Icons.receipt_long_outlined,
   'barcode': Icons.qr_code_scanner,
   'school': Icons.school_outlined,
+  'smart_toy': Icons.smart_toy_outlined,
 };
 
 IconData moduleIcon(String name) => kModuleIcons[name] ?? Icons.dashboard_outlined;

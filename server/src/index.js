@@ -137,6 +137,9 @@ app.use('/api/admin/push', require('./routes/push').admin);
 app.use('/api/admin/orphans', require('./routes/orphans'));
 // 部署向导：换云服务器一键部署（frps/TURN/隧道）。挂 /api/admin 之前（路径更长）。
 app.use('/api/admin/deploy', require('./routes/deploy_wizard'));
+// 智能助手（#314）：员工问答 + 管理端配置。管理前缀更长，挂 /api/admin 之前。
+app.use('/api/admin/assistant', require('./routes/assistant').admin);
+app.use('/api/assistant', require('./routes/assistant'));
 app.use('/api/admin', require('./routes/admin'));
 // 考勤（工作模式下随工作模式启用）：员工端打卡/我的考勤/申请
 app.use('/api/attendance', require('./routes/attendance'));

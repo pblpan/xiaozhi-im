@@ -54,6 +54,15 @@ const KEYS = Object.freeze({
   // 注意这只是**显示层**的开关 —— 商档数据本身仍会同步到手机本地表，
   // 它管的是"界面上给不给看"，不是数据加密。
   masterShowPurchasePrice: { key: 'master_show_purchase_price', def: false },
+
+  // 智能助手（#314 龙哥：智能助手接管帮助 + 接入智能体）。
+  // 四个键都**故意不进 all()**：bootstrap 免鉴权，LLM 的 Key/地址绝不能铺出去；
+  // 只走 /api/admin/assistant/config（Key 只回 hasKey 布尔，永不回明文）。
+  // 没配 Key 时助手降级为纯内置帮助知识库检索，功能不缺、只是不"聪明"。
+  assistantEnabled: { key: 'assistant_enabled', def: false },
+  assistantApiBase: { key: 'assistant_api_base', def: '' },
+  assistantApiKey: { key: 'assistant_api_key', def: '' },
+  assistantModel: { key: 'assistant_model', def: 'deepseek-chat' },
 });
 
 const COMPANY_MAX = 20;

@@ -528,6 +528,68 @@
             </el-input>
             <div class="hint" style="margin-bottom:16px">输入关键词即时筛选下方常见问题；没有匹配时请往下看各章节的完整说明。</div>
 
+            <!-- 问一问智能助手（#314）：比关键词搜索更进一步 —— 用一句话问，答一句人话 -->
+            <el-card shadow="never" style="margin-bottom:16px">
+              <div style="display:flex;gap:10px;align-items:flex-start">
+                <el-input v-model="aiAsk.q" size="large" clearable :disabled="aiAsk.busy"
+                  placeholder="直接问，如：补卡怎么申请？泰格日报推不到群里？"
+                  @keyup.enter="runAiAsk">
+                  <template #prefix><span style="font-size:16px">🤖</span></template>
+                </el-input>
+                <el-button type="primary" size="large" :loading="aiAsk.busy" @click="runAiAsk">问一问</el-button>
+              </div>
+              <div v-if="aiAsk.answer" style="margin-top:12px">
+                <el-alert :type="aiAsk.source === 'llm' ? 'success' : 'info'" :closable="false">
+                  <template #title>
+                    {{ aiAsk.answer }}
+                    <el-tag size="small" style="margin-left:8px" type="info" effect="plain">
+                      {{ aiAsk.source === 'llm' ? 'AI' : '内置帮助库' }}
+                    </el-tag>
+                  </template>
+                </el-alert>
+                <div v-if="aiAsk.note" class="hint" style="margin-top:6px">{{ aiAsk.note }}</div>
+                <div v-if="aiAsk.related?.length" style="margin-top:8px">
+                  <span class="hint">相关：</span>
+                  <el-button v-for="(rq, i) in aiAsk.related" :key="i" size="small" text type="primary"
+                    @click="aiAsk.q = rq; runAiAsk()">{{ rq }}</el-button>
+                </div>
+              </div>
+            </el-card>
+
+            <!-- 智能助手接入配置（#314）：接 OpenAI 兼容大模型；不配也能用（纯内置帮助库） -->
+            <el-collapse style="margin-bottom:16px">
+              <el-collapse-item title="智能助手接入（配大模型后回答更聪明；不配也能用）">
+                <el-form :model="aiCfg.form" label-width="110px" style="max-width:640px">
+                  <el-form-item label="启用 AI">
+                    <el-switch v-model="aiCfg.form.enabled" />
+                    <span class="hint" style="margin-left:10px">关 = 只用内置帮助库回答（完全离线，不外发任何数据）</span>
+                  </el-form-item>
+                  <el-form-item label="接口地址">
+                    <el-input v-model="aiCfg.form.apiBase" placeholder="https://api.deepseek.com（OpenAI 兼容即可）" />
+                  </el-form-item>
+                  <el-form-item label="API Key">
+                    <el-input v-model="aiCfg.form.apiKey" type="password" show-password
+                      :placeholder="aiCfg.hasKey ? '已保存（留空 = 沿用，输入新值 = 更换）' : '粘贴服务方的 API Key'" />
+                    <div class="hint" style="margin-top:4px">Key 只存在你的服务器上，界面永远不回显明文</div>
+                  </el-form-item>
+                  <el-form-item label="模型">
+                    <el-input v-model="aiCfg.form.model" placeholder="deepseek-chat" />
+                  </el-form-item>
+                  <el-form-item label=" ">
+                    <el-button type="primary" :loading="aiCfg.busy" @click="saveAiCfg">保存配置</el-button>
+                    <el-button :loading="aiCfg.busy" @click="testAiCfg">试问一句（真调一次）</el-button>
+                    <span v-if="aiCfg.testNote" class="hint" style="margin-left:10px">{{ aiCfg.testNote }}</span>
+                  </el-form-item>
+                </el-form>
+                <el-alert type="info" :closable="false">
+                  <template #title>
+                    启用 AI 后，员工的问题会连带着「内置帮助库命中条目」一起发给你配的大模型服务；
+                    不启用则完全不出网。AI 挂了自动降级回内置帮助库，功能不会断。
+                  </template>
+                </el-alert>
+              </el-collapse-item>
+            </el-collapse>
+
             <!-- 常见问题（可搜索问答） -->
             <section class="help-sec">
               <h3>常见问题（输入即筛选）</h3>
@@ -6403,6 +6465,8 @@ async function loadTab() {
   else if (tab.value === 'deduct') await reloadDeduct();
   else if (tab.value === 'push') await loadPush();
   else if (tab.value === 'deploywizard') await dwEnter();
+  // 智能助手配置随帮助页加载（老版本服务端没有该接口时静默，不影响帮助页）
+  else if (tab.value === 'help') { await loadAiCfg(); }
 }
 
 /* ====== 部署向导（换云服务器一键部署） ======
@@ -10659,7 +10723,75 @@ async function deleteAttRecord(row) {
 
 /* ---- 系统帮助页：可搜索问答（套工厂V2「搜索问题→解决问题」模式） ---- */
 const helpSearch = ref('');
+/* ====== 智能助手（#314）====== */
+const aiAsk = ref({ q: '', answer: '', source: '', note: '', related: null, busy: false });
+const aiCfg = ref({ hasKey: false, busy: false, testNote: '',
+  form: { enabled: false, apiBase: '', apiKey: '', model: '' } });
+
+async function loadAiCfg() {
+  try {
+    const { data } = await api.get('/admin/assistant/config');
+    aiCfg.value.hasKey = !!data.hasKey;
+    aiCfg.value.form = { enabled: !!data.enabled, apiBase: data.apiBase || '', apiKey: '', model: data.model || '' };
+  } catch { /* 老版本服务端没有该接口，静默 */ }
+}
+
+/** 问一问（帮助页顶部）：尊重总开关 —— 这就是员工视角看到的回答 */
+async function runAiAsk() {
+  const q = aiAsk.value.q.trim();
+  if (!q) return ElMessage.warning('先输入问题');
+  aiAsk.value.busy = true;
+  try {
+    const { data } = await api.post('/assistant/ask', { question: q });
+    aiAsk.value.answer = data.answer || '';
+    aiAsk.value.source = data.source || '';
+    aiAsk.value.note = data.note || '';
+    aiAsk.value.related = data.related || null;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '提问失败');
+  } finally { aiAsk.value.busy = false; }
+}
+
+async function saveAiCfg() {
+  aiCfg.value.busy = true;
+  try {
+    const f = aiCfg.value.form;
+    // apiKey 留空 = 沿用已存（服务端约定）；填了新值才提交
+    const body = { enabled: f.enabled, apiBase: f.apiBase, model: f.model };
+    if (f.apiKey.trim()) body.apiKey = f.apiKey.trim();
+    const { data } = await api.put('/admin/assistant/config', body);
+    aiCfg.value.hasKey = !!data.hasKey;
+    aiCfg.value.form.enabled = !!data.enabled;
+    aiCfg.value.form.apiBase = data.apiBase || '';
+    aiCfg.value.form.model = data.model || '';
+    aiCfg.value.form.apiKey = '';
+    ElMessage.success('已保存');
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally { aiCfg.value.busy = false; }
+}
+
+/** 试问：先静默保存（刚粘贴的 Key 不存就试会白试一次），再 force 真调 */
+async function testAiCfg() {
+  aiCfg.value.busy = true;
+  aiCfg.value.testNote = '';
+  try {
+    await saveAiCfg();
+    const { data } = await api.post('/admin/assistant/test', {
+      question: '补卡怎么申请？',
+    });
+    aiCfg.value.testNote = data.source === 'llm'
+      ? `✅ AI 已接通（模型 ${data.model || ''}）：${String(data.answer).slice(0, 60)}…`
+      : `⚠️ 仍走内置帮助库${data.note ? '（' + data.note + '）' : ' —— 检查地址/Key/开关'}`;
+  } catch (e) {
+    aiCfg.value.testNote = '❌ ' + (e.response?.data?.error || e.message || '试问失败');
+  } finally { aiCfg.value.busy = false; }
+}
+
 const helpFaq = [
+  /* ====== 智能助手（#314）：接管帮助问答 ====== */
+  // 「问一问」走 /assistant/ask（尊重总开关）；
+  // 配置卡的「试问」走 /admin/assistant/test（force：配好了就算没启用也真调一次）。
   { q: '集成对接向导建错了能改吗？怎么改？',
     tags: '集成 对接 向导 修改 编辑 改 机器人 推送地址 入站 出站 订阅 改名',
     a: `<p><b>都能改</b>，不用删了重建（重建会让对接方重新配置）：</p>
