@@ -1103,6 +1103,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         <div v-else-if="tab === 'friends'">
           <div class="page-bar">
             <el-button @click="loadFriends">刷新</el-button>
+            <el-button v-if="compSetting.mode === 'work'" type="warning" :loading="friendBackfillBusy"
+                       @click="backfillFriends">一键补齐全员好友</el-button>
             <el-input v-model="friendQ" placeholder="搜用户名 / 好友名 / 状态" clearable size="small"
                       style="width:220px" />
             <span class="hint">共 {{ friendTotal }} 条好友关系，分布在 {{ friendTreeFiltered.length }} 位用户下（默认折叠，点左侧三角展开；搜索时自动展开命中项）</span>
@@ -6857,6 +6859,26 @@ const friendTreeFiltered = computed(() => {
 /* 过滤后的树是全新节点，default-expanded-keys 对它们生效 —— 搜索时全部展开，方便直接看到命中行 */
 const friendSearchExpanded = computed(() =>
   friendQ.value.trim() ? friendTreeFiltered.value.map((u) => u.key) : []);
+
+/* 一键补齐全员好友（工作模式）：normal 时期注册的老用户切到 work 后没人给他们
+ * 补好友 —— 这个按钮幂等地把所有真人两两互加。切换模式那一刻服务端也会自动补，
+ * 这里是给"模式早已是 work、好友却漏了"的场景兜底（2026-10-11 龙哥反馈）。 */
+const friendBackfillBusy = ref(false);
+async function backfillFriends() {
+  try {
+    await ElMessageBox.confirm(
+      '把系统里所有真人用户两两互加为好友（已有的关系不动，机器人不参与）。用户多时 relations 会成倍增长，确定继续？',
+      '补齐全员好友', { type: 'warning' });
+  } catch { return; }
+  friendBackfillBusy.value = true;
+  try {
+    const { data } = await api.post('/admin/friendships/backfill');
+    ElMessage.success(`补齐完成：${data.users} 位用户应互为 ${data.pairs} 对，本次新增 ${data.added} 条关系`);
+    await loadFriends();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '补齐失败');
+  } finally { friendBackfillBusy.value = false; }
+}
 
 async function loadGroups() { return groupPager.reset(); }
 async function loadFriends() {

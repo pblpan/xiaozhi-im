@@ -272,8 +272,22 @@ router.get('/settings', (req, res) => {
 // 本接口不做这个强校验 —— 模式开关与建机构是两件事，绑死反而难用。
 router.put('/settings', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
+  // 记住切模式前的值：normal → work 的那一刻要给所有老用户补齐好友
+  // （组织录入的 autoFriend 只管"以后录入的人"，normal 时期注册的没人管 —— 2026-10-11 龙哥反馈）
+  const modeBefore = settings.get('friendMode');
   const r = settings.update(req.body, uid);
   if (r.error) return res.status(400).json({ error: r.error });
+  let friendsBackfilled = null;
+  let friendsBackfillError = null;
+  if (r.settings.friendMode === 'work' && modeBefore !== 'work') {
+    try {
+      friendsBackfilled = backfillAllFriendships();
+    } catch (e) {
+      // 补齐失败不让设置本身失败（模式已生效），但要把错误亮给管理员 —— 悄悄吞掉
+      // 就是下一个"推成功群里看不到"：界面说切好了，好友其实没补。
+      friendsBackfillError = e.message;
+    }
+  }
   // 推给所有在线客户端：公司名决定顶部标题、好友模式决定底部导航形态，
   // 这两样改完不推的话，已经开着的 App 要等重启或切后台才变 ——
   // 用户看到的就是"我在服务器上改了，客户端没改"。
@@ -284,7 +298,11 @@ router.put('/settings', (req, res) => {
     friendMode: r.settings.friendMode,
     masterShowPurchasePrice: r.settings.masterShowPurchasePrice,
   });
-  res.json(r.settings);
+  res.json({
+    ...r.settings,
+    ...(friendsBackfilled ? { friendsBackfilled } : {}),
+    ...(friendsBackfillError ? { friendsBackfillError } : {}),
+  });
 });
 
 /* ============ 远程协助：默认控制码（管理员远程维护用） ============ */
@@ -1009,6 +1027,62 @@ router.delete('/messages/:id', (req, res) => {
 });
 
 /* ==================== Friendships ==================== */
+
+/**
+ * 全员两两互加好友（工作模式补齐，2026-10-11 龙哥反馈）。
+ *
+ * 背景：组织录入新员工有 autoFriend，但 normal 模式时期注册的老用户
+ * 在切到工作模式后**没有任何人给他们补好友** —— 用户看到的就是
+ * "都工作模式了，怎么同事还不是好友"。
+ *
+ * 口径：
+ *   · 范围 = 所有真人（is_bot=0）。机器人不是人，不进好友关系。
+ *   · 关系是**双向两行**（与 friends.js / orgs.js autoFriend 同构），
+ *     status 直接 'accepted' —— 工作模式的语义就是"同事天然是好友"。
+ *   · 幂等：UNIQUE(user_id,friend_id) + INSERT OR IGNORE，点多少次都不重复。
+ *   · 显式事务一次性写入；半途回滚，不留"加了一半"的脏状态。
+ *   · 已有 accepted 关系原样保留（备注 remark 等不碰）。
+ *   · 🔴 normal 时期的手动申请（status='pending'）**升级为 accepted** 而不是跳过：
+ *     pending 行占住 UNIQUE(user_id,friend_id) 的一位，OR IGNORE 会跳过这一方向，
+ *     造成"bob→alice 是好友、alice→bob 还挂在申请里"的单向怪状态；
+ *     且工作模式语义就是"同事天然是好友"，申请-审批那套在这里没有意义。
+ *     （e2e 曾用 added=11 抓出这条 —— 升级数单列 upgraded，不与 added 混计。）
+ */
+function backfillAllFriendships() {
+  const ids = db.prepare('SELECT id FROM users WHERE is_bot = 0 ORDER BY id').all().map((r) => r.id);
+  const now = Date.now();
+  const ins = db.prepare("INSERT OR IGNORE INTO friendships (user_id,friend_id,status,created_at) VALUES (?,?,'accepted',?)");
+  const promote = db.prepare("UPDATE friendships SET status='accepted' WHERE user_id=? AND friend_id=? AND status='pending'");
+  let added = 0;
+  let upgraded = 0;
+  db.exec('BEGIN');
+  try {
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        added += ins.run(ids[i], ids[j], now).changes;
+        added += ins.run(ids[j], ids[i], now).changes;
+        upgraded += promote.run(ids[i], ids[j]).changes;
+        upgraded += promote.run(ids[j], ids[i]).changes;
+      }
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* 事务已结束 */ }
+    throw e;
+  }
+  const n = ids.length;
+  return { users: n, pairs: n * (n - 1) / 2, added, upgraded };
+}
+
+/** 一键补齐全员好友（管理台「好友关系」页按钮）。幂等，随时可点 */
+router.post('/friendships/backfill', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  try {
+    res.json({ ok: true, ...backfillAllFriendships() });
+  } catch (e) {
+    res.status(500).json({ error: '补齐失败：' + e.message });
+  }
+});
 
 router.get('/friendships', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
