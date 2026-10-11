@@ -1406,8 +1406,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </template>
           </el-alert>
           <div class="page-bar" style="margin-bottom:14px">
-            <el-button type="warning" @click="openTigerDialog()">🧾 泰格 POS 日报对接</el-button>
-            <span class="hint">一键建好「泰格日报」机器人和推送地址，并给出对接方（tiger-bridge）的配置说明 —— 已配置过的不会重复建。</span>
+            <el-button type="warning" @click="openTigerDialog()">📊 门店日报对接</el-button>
+            <span class="hint">把收银 / POS / ERP 软件的销售日报推进群里：一键建好机器人和推送地址，再按说明配置对接方（主流软件都能接 —— 自带推送的填地址即走，只有数据库的跑个采集脚本）。</span>
           </div>
 
           <el-tabs v-model="intTab">
@@ -5700,8 +5700,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
       </template>
     </el-dialog>
 
-    <!-- 泰格 POS 日报对接向导：3 步（选会话 / 开通 / 对接说明） -->
-    <el-dialog v-model="tigerDlg" title="泰格 POS 日报对接" width="680px" @close="tigerStep=0">
+    <!-- 门店日报对接向导：3 步（选会话 / 开通 / 对接说明） -->
+    <el-dialog v-model="tigerDlg" title="门店日报对接" width="680px" @close="tigerStep=0">
       <el-steps :active="tigerStep" finish-status="success" simple style="margin-bottom:18px">
         <el-step title="推到哪" />
         <el-step title="一键开通" />
@@ -5733,7 +5733,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           </el-form-item>
           <el-form-item label="会建什么">
             <div class="hint" style="line-height:1.9">
-              ① 机器人「泰格日报」（已存在就复用，不会重复建）<br />
+              ① 机器人「{{ TIGER_BOT_NAME }}」（已存在就复用，不会重复建）<br />
               ② 推送地址「{{ TIGER_HOOK_NAME }}」（同名已存在则改指向，地址不变）<br />
               ③ 机器人自动进你选的群
             </div>
@@ -5746,36 +5746,50 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         <el-result icon="success" :title="tigerResult?.reused ? '对接已更新' : '对接已开通'">
           <template #sub-title>
             <div style="text-align:left;margin-top:6px">
-              <p>机器人「{{ tigerResult?.botName }}」已在群里就位。下面这个地址就是<b>tiger-bridge（POS 机上的采集程序）</b>要推送的目标：</p>
+              <p>机器人「{{ tigerResult?.botName }}」已在群里就位。下面这个地址就是要配到<b>收银 / POS / ERP 软件</b>（或它的采集脚本）里的推送目标：</p>
               <p><code class="mono" style="word-break:break-all">{{ tigerResult?.url }}</code>
                 <el-button size="small" type="primary" text @click="copy(tigerResult?.url)">复制</el-button></p>
               <p>
                 <el-button size="small" @click="tigerTestPush">推一张样例日报看看</el-button>
-                <span class="hint" style="margin-left:8px">收到 = 链路通了，剩下的只是把 tiger-bridge 指到这个地址</span>
+                <span class="hint" style="margin-left:8px">收到 = 链路通了，剩下的只是让软件往这个地址推</span>
               </p>
             </div>
           </template>
         </el-result>
       </div>
 
-      <!-- 第 3 步：对接说明 -->
+      <!-- 第 3 步：对接说明（通用 —— 主流软件都能接） -->
       <div v-show="tigerStep === 2">
         <el-alert type="info" :closable="false" style="margin-bottom:12px">
           <template #title>
-            tiger-bridge 已跑在 POS 机上（Node 只读取数）。下面是它对接这套地址时的<b>配置方法与必踩坑</b>，改配置后要重启采集程序生效。
+            对接原理就一条：<b>任何软件只要能往上面的地址 POST 一段 JSON，群里就出日报</b>。
+            不同软件按下面的路子接。
           </template>
         </el-alert>
-        <el-descriptions :column="1" border size="small" style="margin-bottom:12px">
-          <el-descriptions-item label="推送目标">第 2 步复制的地址（POST，JSON）</el-descriptions-item>
-          <el-descriptions-item label="取数口径">只读官方视图 pos_v_income_day / v_realtime_stock；价格用 uf_get_itemprice；绝不直写泰格业务表</el-descriptions-item>
-          <el-descriptions-item label="对账">tiger-bridge 自带熔断：与自己合计不一致时 exit 2 且不推（宁可不报，不报错的错数）</el-descriptions-item>
-          <el-descriptions-item label="日报内容">蓝卡片：销售额 / 客数 / 客单价 + 与官方日结的对账结论</el-descriptions-item>
-        </el-descriptions>
         <el-collapse>
-          <el-collapse-item title="报文样例（tiger-bridge 推的就是这种形状）">
+          <el-collapse-item title="主流软件怎么接（按你的软件对号入座）">
+            <el-table :data="dailyReportWays" size="small" border style="margin-bottom:6px">
+              <el-table-column prop="kind" label="软件类型" width="200" />
+              <el-table-column prop="how" label="怎么接" />
+              <el-table-column prop="eg" label="例子" width="180" />
+            </el-table>
+            <div class="hint">
+              拿不准自己的软件属于哪类：看它设置里有没有「Webhook / 消息推送 / 机器人」字样 ——
+              有就是第一类；只有数据库/导出的就是第二类。
+            </div>
+          </el-collapse-item>
+          <el-collapse-item title="第二类：采集脚本怎么写（只有数据库的软件）">
+            <ol style="margin:0;padding-left:18px;line-height:2">
+              <li>建<b>只读</b>数据库账号（只给 SELECT 权限），脚本只读不写 —— 收银软件的账绝不能从外面改。</li>
+              <li>每天固定时间查一次当日汇总（销售额/客数/客单价），往推送地址 POST 一段 JSON。</li>
+              <li>日期参数传<b>本地时间字符串</b>（<code class="mono">2026-10-11 00:00:00</code>），别传 UTC —— 会静默丢晚高峰的营业额。</li>
+              <li>自带<b>对账</b>：和自己合计对不上就不推（宁可不报，不报错的错数）。现成范例：泰格 POS 的 tiger-bridge（Node 只读取数 + 官方视图口径 + 熔断）。</li>
+            </ol>
+          </el-collapse-item>
+          <el-collapse-item title="报文样例（推的就是这种形状）">
             <pre class="mono" style="margin:0;padding:10px;background:var(--el-fill-color-light);border-radius:6px;overflow:auto">{
-  "title": "门店日报 · 09-17",
-  "text": "销售额 ¥40,123.45 · 客数 356 笔 · 客单价 ¥112.76\n毛利率 22.4%（口径：净销售额-成本，成本=out_qty×进价）",
+  "title": "门店日报 · 10-11",
+  "text": "销售额 ¥40,123.45 · 客数 356 笔 · 客单价 ¥112.76\n毛利率 22.4%",
   "color": "blue",
   "fields": [
     {"label": "销售额", "value": "¥40,123.45", "short": true},
@@ -5783,7 +5797,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
     {"label": "客单价", "value": "¥112.76", "short": true},
     {"label": "毛利率", "value": "22.4%", "short": true}
   ],
-  "footer": "tiger-bridge · 泰格 POS 数据对接"
+  "footer": "门店日报 · 自动推送"
 }</pre>
             <div class="hint" style="margin-top:6px">
               🔴 title / text / footer / fields[].value <b>必须是字符串</b> —— 传对象会得到
@@ -5791,12 +5805,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               推完必须回读消息确认内容，别只看状态码。
             </div>
           </el-collapse-item>
-          <el-collapse-item title="四条必踩坑（tiger-bridge 侧）">
+          <el-collapse-item title="四条必踩坑（对接方侧）">
             <ol style="margin:0;padding-left:18px;line-height:2">
               <li>地址前缀是 <code class="mono">/api/hooks/incoming/&lt;token&gt;</code> —— 漏 <code class="mono">/api</code> 会 404。</li>
-              <li>签名校验保持<b>关</b>：tiger-bridge 不会算 IM 的 HMAC，开了必 401。</li>
-              <li>日期参数传<b>本地时间字符串</b>（<code class="mono">2026-09-17 00:00:00</code>），绝不能传 JS Date —— UTC 转换会静默丢掉下午 4 点后的营业额。</li>
-              <li>库存看 <code class="mono">v_realtime_stock</code>，别直接查 <code class="mono">wh_stock</code>（那是永不动的账面数）。</li>
+              <li>签名校验保持<b>关</b>：第三方只签自家的签名，开了必 401 推不进来。</li>
+              <li>推送失败先看「推的人」是不是群成员 —— 机器人不在群里是一切"推不进"的头号原因（向导已自动拉进去，手工改过的检查一下）。</li>
+              <li>HTTP 200 ≠ 推对了：确认群里出现的是正常卡片，不是 <code class="mono">[object Object]</code>。</li>
             </ol>
           </el-collapse-item>
         </el-collapse>
@@ -8704,11 +8718,25 @@ const clientStep = ref(0);
 const incomingStep = ref(0);
 const outgoingStep = ref(0);
 
-/* ====== 泰格 POS 日报对接向导（2026-10-11 #313）====== */
+/* ====== 门店日报对接向导（2026-10-11 #313，龙哥定名：不能叫泰格 —— 要对接主流软件）====== */
 // 把「建机器人 + 建入站推送 + 教对接方怎么配」压成一个三步向导。
 // 机器人/推送地址都按名字找，找到就复用 —— 向导重复打开不会建出一堆重复的。
-const TIGER_BOT_NAME = '泰格日报';
-const TIGER_HOOK_NAME = '泰格POS日报';
+// 🔴 通用性：主流收银/ERP 都能接 —— 自带 webhook 的填地址就走；
+//    只有数据库的（泰格/思迅/科脉…）跑个只读采集脚本再推。泰格只是其中一例。
+const TIGER_BOT_NAME = '日报助手';
+const TIGER_HOOK_NAME = '门店日报';
+
+/** 主流软件对接路子（向导第 3 步的表 —— 龙哥 2026-10-11：不能绑泰格，要考虑主流软件） */
+const dailyReportWays = [
+  { kind: '自带 Webhook / 消息推送', how: '软件设置里找到「Webhook / 推送 / 机器人」配置，把推送地址照填即可（密钥/签名留空）',
+    eg: '银豹、二维火、客如云等' },
+  { kind: '只有数据库（SQL Server / MySQL 等）', how: '在收银机上跑一个只读采集脚本：定时查当日汇总 → 往推送地址 POST JSON。只读不写，绝不碰收银软件的账',
+    eg: '泰格虎威、思迅、科脉等' },
+  { kind: '只有导出文件（Excel/CSV）', how: '人工导出后丢给对接脚本解析推送；或干脆把日报数据做成动态模块（上游接口）在工作台里点开看',
+    eg: '部分老版收银软件' },
+  { kind: '自己开发的系统 / 脚本', how: '直接照报文样例 POST 即可，任何语言一行 HTTP 请求的事',
+    eg: '自研 ERP、Excel VBA' },
+];
 const tigerDlg = ref(false);
 const tigerStep = ref(0);            // 0=选会话 1=开通中/结果 2=对接说明
 const tigerBusy = ref(false);
@@ -9070,14 +9098,14 @@ async function tigerTestPush() {
     await api.post(`/admin/integrations/incoming/${tigerResult.value.hookId}/send`, {
       kind: 'card',
       content: {
-        title: '泰格 POS 日报（样例）',
-        text: '销售额 ¥12,345.67 · 客数 123 笔 · 客单价 ¥100.37\n\n对账：与泰格官方日结口径一致 ✅',
+        title: '门店日报（样例）',
+        text: '销售额 ¥12,345.67 · 客数 123 笔 · 客单价 ¥100.37\n\n这是收银软件推过来的日报样子',
         color: 'blue',
         fields: [
           { label: '销售额', value: '¥12,345.67', short: true },
           { label: '客数', value: '123', short: true },
         ],
-        footer: 'tiger-bridge · 泰格 POS 数据对接',
+        footer: '门店日报 · 自动推送',
       },
     });
     ElMessage.success('样例已推送，去群里看');
@@ -10802,16 +10830,16 @@ const helpFaq = [
         <li><b>令牌 / 签名凭据</b>：权限和有效期建好后不可改，但可以随时吊销 / 停用 / 重新发一对。</li>
       </ul>
       <p>每一步向导页面上也有说明文字，第一次接可以先读完再点下一步。</p>` },
-  { q: '泰格 POS 日报怎么对接到群里？',
-    tags: '泰格 POS 日报 对接 tiger-bridge 销售报表 推送',
-    a: `<p>集成对接页顶部点 <b>「泰格 POS 日报对接」</b>，三步走完：</p>
+  { q: '门店日报怎么对接到群里（收银软件 / POS / ERP）',
+    tags: '门店 日报 对接 收银 POS ERP 泰格 思迅 科脉 银豹 销售报表 推送 tiger-bridge',
+    a: `<p>集成对接页顶部点 <b>「门店日报对接」</b>，三步走完：</p>
       <ol>
         <li><b>推到哪</b>：选日报要进的群（先确认群里有真人 —— 只有机器人自己等于天天推没人看）。</li>
-        <li><b>一键开通</b>：自动建好机器人「泰格日报」和推送地址「泰格POS日报」（同名已存在就复用 / 改指向，地址不变），机器人自动进群。可当场点「推一张样例日报」验证链路。</li>
-        <li><b>对接说明</b>：向导给出 tiger-bridge（POS 机上的采集程序）的配置要点和必踩坑 —— 地址带 /api 前缀、签名保持关、日期传本地字符串、库存看 v_realtime_stock。</li>
+        <li><b>一键开通</b>：自动建好机器人「日报助手」和推送地址「门店日报」（同名已存在就复用 / 改指向，地址不变），机器人自动进群。可当场点「推一张样例日报」验证链路。</li>
+        <li><b>对接说明</b>：按你的软件对号入座 —— <b>自带 Webhook/推送</b>的（银豹、二维火、客如云等）把地址照填即可；<b>只有数据库</b>的（泰格、思迅、科脉等）跑一个只读采集脚本定时推；<b>只有导出文件</b>的走脚本解析或工作台动态模块。</li>
       </ol>
-      <p>以后要换群 / 换机器人 / 停用：入站推送列表里点「泰格POS日报」的「编辑」，地址不变，对接方零改动。</p>
-      <p>数据口径：tiger-bridge 只读泰格官方视图取数（pos_v_income_day / v_realtime_stock），自带与官方日结的对账熔断，绝不直写泰格业务表。</p>` },
+      <p>以后要换群 / 换机器人 / 停用：入站推送列表里点「门店日报」的「编辑」，地址不变，对接方零改动。</p>
+      <p>采集脚本两条铁律：只读不写（收银软件的账绝不从外面改）、自带对账（对不上就不推 —— 宁可不报，不报错的错数）。现成范例：泰格 POS 的 tiger-bridge。</p>` },
   { q: '推送返回成功，但群里看不到消息',
     tags: '推送 成功 看不到 群 无人 空白 假成功 卡片',
     a: `<p>按命中率排序排查：</p>

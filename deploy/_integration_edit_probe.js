@@ -73,9 +73,9 @@ async function api(method, p, body) {
     ok('管理台 index.html 拿到 bundle 名', !!m, idx.slice(0, 120));
     if (m) {
       const js = await (await fetch(BASE + '/admin/' + m[0])).text();
-      ok('bundle 含「泰格 POS 日报对接」入口', js.includes('泰格 POS 日报对接'));
+      ok('bundle 含「门店日报对接」入口', js.includes('门店日报对接'));
       ok('bundle 含向导说明（编辑不改变地址）', js.includes('推送地址（token）不变'));
-      ok('bundle 含帮助 FAQ（泰格日报怎么接）', js.includes('泰格 POS 日报怎么对接到群里'));
+      ok('bundle 含帮助 FAQ（门店日报怎么接）', js.includes('门店日报怎么对接到群里'));
     }
   } finally {
     // 自清理：探针数据一个不留
