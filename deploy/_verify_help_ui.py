@@ -117,7 +117,7 @@ def main():
         app_len = len(page.inner_text("#app"))
         print("\n=== 1) 登录态 / 白屏检查 ===")
         print("  #app 文本长度:", app_len)
-        print("  顶栏 v0.26.0:", "v0.26.0" in body)
+        print("  顶栏 v0.26.67:", "v0.26.67" in body)
         print("  仍停在登录页(含'登录'按钮):", "登录" in body and "系统帮助" not in body)
 
         # 客户端配置：标签改名

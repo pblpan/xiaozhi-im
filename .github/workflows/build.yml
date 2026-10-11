@@ -463,7 +463,7 @@ jobs:
           #    这样的包：叫「小智IM-Android-v0.19.1.apk」，里面却搜不到 0.20.0。
           WANT=$(sed -n 's/^version:[[:space:]]*//p' "${CLIENT_DIR}/pubspec.yaml" | head -1 | tr -d '\r')
           OUTDIR="${CLIENT_DIR}/build/app/outputs/flutter-apk"
-          OUT="${OUTDIR}/xiaozhi-im-Android-${WANT}.apk"
+          OUT="${OUTDIR}/xiaozhi-im-Android-${WANT%%+*}.apk"
           cp "${OUTDIR}/app-release.apk" "$OUT"
           echo "发布文件名: $(basename "$OUT")"
           echo "发布文件 sha256: $(sha256sum "$OUT" | cut -d' ' -f1)"
@@ -473,7 +473,11 @@ jobs:
   #
   # 只出 hyd 版，不出 std：好又多版才是要交付的那一个（带内置商档），
   # 通用版没有内置档案、客户那边用不上，不产。
+  # 🔴 临时关闭：扫码枪（好又多版）不进本轮全平台打包批次（龙哥 2026-10-11 定：
+  #    "扫码枪是附属 App，平时不打包，只在有需要的时候单独打包出一次"）。
+  #    需要时去掉下面这行 if: false，再单独 dispatch 本 job 即可。
   build-scanner-hyd:
+    if: false
     name: Scanner 好又多版 APK
     runs-on: ubuntu-latest
     steps:
@@ -760,7 +764,7 @@ jobs:
             echo "::error::没有 hyd 产物可发布"
             exit 1
           fi
-          OUT="${OUTDIR}/xiaozhi-scanner-hyd-Android-${WANT}.apk"
+          OUT="${OUTDIR}/xiaozhi-scanner-hyd-Android-${WANT%%+*}.apk"
           cp "$SRC" "$OUT"
           echo "发布文件名: $(basename "$OUT")"
           echo "发布文件 sha256: $(sha256sum "$OUT" | cut -d' ' -f1)"
@@ -818,7 +822,7 @@ jobs:
           # Windows 侧没有 aapt2 可问版本（exe 的版本资源要读 PE），所以这里
           # **不假装验版本** —— 只保证"名字里那个版本是 pubspec 的，不是我敲的"。
           WANT=$(sed -n 's/^version:[[:space:]]*//p' "${CLIENT_DIR}/pubspec.yaml" | head -1 | tr -d '\r')
-          OUT="xiaozhi-im-windows-${WANT}.zip"
+          OUT="xiaozhi-im-windows-${WANT%%+*}.zip"
           mv xiaozhi-im-windows-exe.zip "$OUT"
           echo "发布文件名: $OUT"
           echo "发布文件 sha256: $(sha256sum "$OUT" | cut -d' ' -f1)"
