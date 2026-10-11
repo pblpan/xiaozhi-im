@@ -6,7 +6,7 @@ const express = require('express');
 const db = require('../db');
 const { verifyToken } = require('../auth');
 const {
-  SCOPES, sanitizeScopes, createBot, listBots, getBot, deleteBot, ensureBotInConversation,
+  SCOPES, sanitizeScopes, createBot, updateBot, listBots, getBot, deleteBot, ensureBotInConversation,
   createApiToken, listApiTokens, revokeApiToken, deleteApiToken,
   newHookToken, newSecret,
 } = require('../integration');
@@ -84,6 +84,15 @@ router.post('/bots/:id/conversations', (req, res) => {
 router.delete('/bots/:id', (req, res) => {
   const uid = adminOf(req, res); if (uid === null) return;
   try { res.json(deleteBot(req.params.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+/** 改机器人资料（名称/头像）。账号创建后不可改。 */
+router.patch('/bots/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const bot = getBot(req.params.id);
+  if (!bot) return res.status(404).json({ error: '机器人不存在' });
+  try { res.json(updateBot(req.params.id, req.body || {})); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -211,6 +220,48 @@ router.post('/incoming', (req, res) => {
     .run(label, newHookToken(), signed ? newSecret() : '', Number(botId),
       Number(conversationId), uid, Date.now());
   res.json(shapeIncoming(db.prepare(`${INCOMING_SELECT} WHERE h.id = ?`).get(info.lastInsertRowid)));
+});
+
+/** 编辑入站推送（2026-10-11 龙哥：向导要可以修改）。
+ *  可改：用途名 / 机器人 / 目标会话 / 签名校验开关。token（即地址）不变 ——
+ *  改地址等于把所有对接方的配置同时作废，真要换就删除重建。 */
+router.patch('/incoming/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const id = Number(req.params.id);
+  const h = db.prepare('SELECT * FROM incoming_hooks WHERE id = ?').get(id);
+  if (!h) return res.status(404).json({ error: '不存在' });
+  const b = req.body || {};
+  const sets = [];
+  const args = [];
+  if (typeof b.name === 'string' && b.name.trim()) {
+    sets.push('name = ?'); args.push(b.name.trim().slice(0, 64));
+  }
+  if (b.conversationId !== undefined) {
+    try { ensureBotInConversation(b.botId !== undefined ? b.botId : h.bot_id, b.conversationId); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    sets.push('conversation_id = ?'); args.push(Number(b.conversationId));
+  }
+  if (b.botId !== undefined) {
+    const bot = getBot(b.botId);
+    if (!bot) return res.status(400).json({ error: '机器人不存在' });
+    // 🔴 换机器人时新机器人也要进当前会话 —— 否则接下来所有推送都"not a member"。
+    //    （会话分支在上面已跑过，这里 conversationId 取的是本次请求的新值或原值）
+    const targetConv = b.conversationId !== undefined ? Number(b.conversationId) : h.conversation_id;
+    try { ensureBotInConversation(bot.id, targetConv); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    sets.push('bot_id = ?'); args.push(Number(b.botId));
+  }
+  if (b.signed !== undefined) {
+    // 开签名 = 现生成 secret；关签名 = 清空（前端把 secret 展示成"未开启"）
+    sets.push('secret = ?'); args.push(b.signed ? newSecret() : '');
+  }
+  if (!sets.length) return res.status(400).json({ error: '没有要修改的内容' });
+  args.push(id);
+  db.prepare(`UPDATE incoming_hooks SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+  const fresh = db.prepare(`${INCOMING_SELECT} WHERE h.id = ?`).get(id);
+  res.json({ ...shapeIncoming(fresh),
+    // 刚开了签名时把 secret 带回去一次（列表接口本来就会回它，这里保持同形状）
+    secretRotated: b.signed === true });
 });
 
 router.post('/incoming/:id/revoke', (req, res) => {

@@ -87,6 +87,25 @@ function createBot({ name, ownerId, avatar }) {
   return publicBot(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid));
 }
 
+/** 改机器人资料（2026-10-11 龙哥：向导要可以修改）。账号 username 建后不可改 ——
+ *  它是对外身份锚点，改了会让所有已发的令牌/钩子配置对不上人。 */
+function updateBot(id, { name, avatar }) {
+  const u = db.prepare('SELECT * FROM users WHERE id = ? AND is_bot = 1').get(Number(id));
+  if (!u) throw new Error('机器人不存在');
+  const sets = [];
+  const args = [];
+  if (name !== undefined) {
+    const nick = String(name || '').trim().slice(0, 32);
+    if (!nick) throw new Error('机器人名称不能为空');
+    sets.push('nickname = ?'); args.push(nick);
+  }
+  if (avatar !== undefined) { sets.push('avatar = ?'); args.push(String(avatar || '') || null); }
+  if (!sets.length) throw new Error('没有要修改的内容');
+  args.push(Number(id));
+  db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+  return publicBot(db.prepare('SELECT * FROM users WHERE id = ?').get(Number(id)));
+}
+
 function publicBot(u) {
   if (!u) return null;
   return {
@@ -304,7 +323,7 @@ module.exports = {
   TOKEN_PREFIX, SCOPES,
   randomHex, newApiToken, newSecret, newHookToken,
   parseScopes, sanitizeScopes, hasScope,
-  createBot, listBots, getBot, deleteBot, ensureBotInConversation, publicBot,
+  createBot, updateBot, listBots, getBot, deleteBot, ensureBotInConversation, publicBot,
   createApiToken, getApiToken, listApiTokens, revokeApiToken, deleteApiToken,
   authenticate, requireAuth, requireScope,
 };

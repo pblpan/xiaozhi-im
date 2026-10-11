@@ -1340,8 +1340,13 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <template #title>
               把「小智 IM」接到其他软件的入口。工厂系统 / OA / 脚本按下面的<b>推送地址</b>发一条 POST，群里立刻收到；
               也可以反过来订阅群里的事件，实时回调到你的系统。对接全程不需要改 IM 代码。
+              所有向导建好的东西<b>都能随时回来改</b>（列表里点「编辑」）。
             </template>
           </el-alert>
+          <div class="page-bar" style="margin-bottom:14px">
+            <el-button type="warning" @click="openTigerDialog()">🧾 泰格 POS 日报对接</el-button>
+            <span class="hint">一键建好「泰格日报」机器人和推送地址，并给出对接方（tiger-bridge）的配置说明 —— 已配置过的不会重复建。</span>
+          </div>
 
           <el-tabs v-model="intTab">
             <!-- ===== 机器人 ===== -->
@@ -1357,8 +1362,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-table-column label="创建时间" width="170">
                   <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
                 </el-table-column>
-                <el-table-column label="操作">
+                <el-table-column label="操作" width="240">
                   <template #default="{ row }">
+                    <el-button size="small" @click="openBotDialog(row)">改名</el-button>
                     <el-button size="small" @click="openBotConvDialog(row)">加入会话</el-button>
                     <el-button size="small" type="danger" @click="delBot(row)">删除</el-button>
                   </template>
@@ -1507,9 +1513,10 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     <el-tag v-else size="small" type="success">正常</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="230">
+                <el-table-column label="操作" width="290">
                   <template #default="{ row }">
                     <el-button size="small" @click="testIncoming(row)">试推</el-button>
+                    <el-button size="small" @click="openIncomingDialog(row)">编辑</el-button>
                     <el-button size="small" @click="toggleIncoming(row)">{{ row.revoked ? '启用' : '停用' }}</el-button>
                     <el-button size="small" type="danger" @click="delIncoming(row)">删除</el-button>
                   </template>
@@ -1540,9 +1547,10 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     <el-switch :model-value="row.active" @change="v => toggleOutgoing(row, v)" />
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="250">
+                <el-table-column label="操作" width="310">
                   <template #default="{ row }">
                     <el-button size="small" @click="testOutgoing(row)">发测试事件</el-button>
+                    <el-button size="small" @click="openOutgoingDialog(row)">编辑</el-button>
                     <el-button size="small" @click="rotateOutgoing(row)">换密钥</el-button>
                     <el-button size="small" type="danger" @click="delOutgoing(row)">删除</el-button>
                   </template>
@@ -5222,13 +5230,19 @@ docker compose up -d --force-recreate xiaozhi-im</div>
       </template>
     </el-dialog>
 
-    <!-- 机器人新建向导：2 步（名称 / 可选加入会话） -->
-    <el-dialog v-model="botDlg" title="新建机器人" width="520px" @close="botStep=0">
+    <!-- 机器人向导：新建 2 步（名称 / 可选加入会话）；编辑 = 只改名 -->
+    <el-dialog v-model="botDlg" :title="botForm.id ? '编辑机器人' : '新建机器人'" width="520px" @close="botStep=0">
       <el-steps :active="botStep" finish-status="success" simple style="margin-bottom:18px">
         <el-step title="名称" />
-        <el-step title="加入会话（可选）" />
+        <el-step v-if="!botForm.id" title="加入会话（可选）" />
       </el-steps>
       <div v-show="botStep === 0">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            <template v-if="botForm.id">改名立即生效，已发的消息、令牌、推送地址都不受影响；机器人账号（bot_xxx）创建后不可改。</template>
+            <template v-else>机器人是「系统的发言人」：它不能登录、不能冒充真人，只能靠 Webhook / API 令牌替外部系统说话。给它起个一看就懂的名字，如「库存预警」「泰格日报」。</template>
+          </template>
+        </el-alert>
         <el-form :model="botForm" label-width="100px">
           <el-form-item label="名称">
             <el-input v-model="botForm.name" placeholder="如：工厂助手、库存预警" maxlength="32" show-word-limit />
@@ -5236,6 +5250,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </el-form>
       </div>
       <div v-show="botStep === 1">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            这一步决定机器人「站在哪个群里说话」。也可以先跳过，之后在列表里点「加入会话」，或建推送地址时自动把它拉进目标会话。
+          </template>
+        </el-alert>
         <el-form :model="botForm" label-width="100px">
           <el-form-item label="加入会话">
             <el-select v-model="botForm.conversationId" filterable clearable placeholder="可稍后再加（选填）" style="width:100%">
@@ -5249,8 +5268,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
       </div>
       <template #footer>
         <el-button v-if="botStep > 0" @click="botStep--">上一步</el-button>
-        <el-button v-if="botStep < 1" type="primary" @click="botStep++">下一步</el-button>
-        <el-button v-if="botStep === 1" type="primary" :loading="busy" @click="saveBot">创建</el-button>
+        <el-button v-if="botStep < 1 && !botForm.id" type="primary" @click="botStep++">下一步</el-button>
+        <el-button v-if="botStep === 1 || botForm.id" type="primary" :loading="busy" @click="saveBot">{{ botForm.id ? '保存' : '创建' }}</el-button>
         <el-button v-if="botStep === 0" @click="botDlg = false">取消</el-button>
       </template>
     </el-dialog>
@@ -5281,6 +5300,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         <el-step title="完成" />
       </el-steps>
       <div v-show="tokenStep === 0">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            API 令牌给「程序」用：对方拿着它就能以你选的身份调开放接口。先想清楚给谁用、以谁的身份行事 —— 一般选一个<b>机器人</b>，而不是真人。
+          </template>
+        </el-alert>
         <el-form :model="tokenForm" label-width="100px">
           <el-form-item label="用途">
             <el-input v-model="tokenForm.name" placeholder="如：工厂V2、门店报表脚本" maxlength="64" />
@@ -5294,6 +5318,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </el-form>
       </div>
       <div v-show="tokenStep === 1">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            权限按<b>最小够用</b>勾：只发消息就只勾 message:send。令牌泄露时，权限越小损失越小；有效期同理，长期任务才选「永不过期」。
+          </template>
+        </el-alert>
         <el-form :model="tokenForm" label-width="100px">
           <el-form-item label="权限">
             <el-checkbox-group v-model="tokenForm.scopes">
@@ -5336,6 +5365,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         <el-step title="完成" />
       </el-steps>
       <div v-show="clientStep === 0">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            签名客户端和 API 令牌的区别：令牌是<b>能直接抄走的长期密码</b>，签名是每次请求现算、
+            带±5 分钟时间窗和一次性随机数 —— 对接方技术能力强、或推送走公网时优先用这种。
+          </template>
+        </el-alert>
         <el-form :model="clientForm" label-width="100px">
           <el-form-item label="用途">
             <el-input v-model="clientForm.name" placeholder="如：门店盘点回传、工厂V2 告警" maxlength="64" />
@@ -5349,6 +5384,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </el-form>
       </div>
       <div v-show="clientStep === 1">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            权限按<b>最小够用</b>勾。app_secret 下一页只显示一次，关掉就找不回（库里只有密文），对方要先准备好保存的地方再点「生成凭据」。
+          </template>
+        </el-alert>
         <el-form :model="clientForm" label-width="100px">
           <el-form-item label="权限">
             <el-checkbox-group v-model="clientForm.scopes">
@@ -5395,13 +5435,19 @@ docker compose up -d --force-recreate xiaozhi-im</div>
       </template>
     </el-dialog>
 
-    <!-- 入站推送向导：2 步（用途 / 目标） -->
-    <el-dialog v-model="incomingDlg" title="新建推送地址" width="560px" @close="incomingStep=0">
+    <!-- 入站推送向导：新建 2 步（用途 / 目标）；编辑 = 改名/换机器人/换会话/开关签名 -->
+    <el-dialog v-model="incomingDlg" :title="incomingForm.id ? '编辑推送地址' : '新建推送地址'" width="560px" @close="incomingStep=0">
       <el-steps :active="incomingStep" finish-status="success" simple style="margin-bottom:18px">
         <el-step title="用途" />
         <el-step title="目标" />
       </el-steps>
       <div v-show="incomingStep === 0">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            <template v-if="incomingForm.id">编辑只改「谁发言、推到哪」，<b>推送地址（token）不变</b>，对接方什么都不用改。</template>
+            <template v-else>「用途」写清楚是谁在推（如：库存预警、销售日报、泰格 POS），以后列表里靠它认；机器人是这条推送的「发言身份」，群里看到的消息来自它。</template>
+          </template>
+        </el-alert>
         <el-form :model="incomingForm" label-width="100px">
           <el-form-item label="用途">
             <el-input v-model="incomingForm.name" placeholder="如：库存预警、销售日报" maxlength="64" />
@@ -5414,6 +5460,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </el-form>
       </div>
       <div v-show="incomingStep === 1">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            <template v-if="incomingForm.id">换目标会话时，机器人会被自动拉进新会话；关掉签名校验会让「外泄的地址谁都能推」，一般保持开启前的状态不动。</template>
+            <template v-else>签名校验是可选保险：开启后对方每次请求都要算 HMAC 签名 —— 但绝大多数第三方系统只会自家的签名，开了它们就推不进来，<b>默认关</b>，安全性靠「地址即凭证 + 随时停用」兜底。</template>
+          </template>
+        </el-alert>
         <el-form :model="incomingForm" label-width="100px">
           <el-form-item label="推到会话">
             <el-select v-model="incomingForm.conversationId" filterable placeholder="选择群或单聊" style="width:100%">
@@ -5431,19 +5483,25 @@ docker compose up -d --force-recreate xiaozhi-im</div>
       <template #footer>
         <el-button v-if="incomingStep > 0" @click="incomingStep--">上一步</el-button>
         <el-button v-if="incomingStep < 1" type="primary" @click="incomingStep++">下一步</el-button>
-        <el-button v-if="incomingStep === 1" type="primary" :loading="busy" @click="saveIncoming">创建</el-button>
+        <el-button v-if="incomingStep === 1" type="primary" :loading="busy" @click="saveIncoming">{{ incomingForm.id ? '保存' : '创建' }}</el-button>
         <el-button v-if="incomingStep === 0" @click="incomingDlg = false">取消</el-button>
       </template>
     </el-dialog>
 
-    <!-- 出站事件订阅向导：3 步（基本信息 / 事件+范围 / 完成） -->
-    <el-dialog v-model="outgoingDlg" title="新建事件订阅" width="600px" @close="outgoingStep=0; outgoingSecret=''">
+    <!-- 出站事件订阅向导：新建 3 步（基本信息 / 事件+范围 / 完成）；编辑 = 前 2 步 -->
+    <el-dialog v-model="outgoingDlg" :title="outgoingForm.id ? '编辑事件订阅' : '新建事件订阅'" width="600px" @close="outgoingStep=0; outgoingSecret=''">
       <el-steps :active="outgoingStep" finish-status="success" simple style="margin-bottom:18px">
         <el-step title="基本信息" />
         <el-step title="事件" />
-        <el-step title="完成" />
+        <el-step v-if="!outgoingForm.id" title="完成" />
       </el-steps>
       <div v-show="outgoingStep === 0">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            <template v-if="outgoingForm.id">改地址/改用途立即生效，签名密钥不变（要换密钥在列表里点「换密钥」）。</template>
+            <template v-else>「事件订阅」是反方向的对接：群里有新消息、有人被 @、成员变动时，IM 主动把事件 POST 到你填的地址（带 HMAC 签名防伪造）。适合做同步、做机器人指令。</template>
+          </template>
+        </el-alert>
         <el-form :model="outgoingForm" label-width="100px">
           <el-form-item label="用途">
             <el-input v-model="outgoingForm.name" placeholder="如：工厂V2 回调" maxlength="64" />
@@ -5454,6 +5512,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </el-form>
       </div>
       <div v-show="outgoingStep === 1">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            只勾你用得上的事件 —— 全订阅意味着群里每条消息都会打到你的系统，量大时容易把对方接口压垮。限定范围同理。
+          </template>
+        </el-alert>
         <el-form :model="outgoingForm" label-width="100px">
           <el-form-item label="订阅事件">
             <el-checkbox-group v-model="outgoingForm.events">
@@ -5472,7 +5535,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           </el-form-item>
         </el-form>
       </div>
-      <div v-show="outgoingStep === 2" v-if="outgoingSecret">
+      <div v-show="outgoingStep === 2 && !outgoingForm.id" v-if="outgoingSecret">
         <el-result icon="success" title="订阅已创建">
           <template #sub-title>
             <div style="text-align:left;margin-top:6px">
@@ -5485,9 +5548,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </el-result>
       </div>
       <template #footer>
-        <el-button v-if="outgoingStep > 0 && outgoingStep < 2" @click="outgoingStep--">上一步</el-button>
+        <el-button v-if="outgoingStep > 0" @click="outgoingStep--">上一步</el-button>
         <el-button v-if="outgoingStep < 1" type="primary" @click="outgoingStep++">下一步</el-button>
-        <el-button v-if="outgoingStep === 1" type="primary" :loading="busy" @click="saveOutgoing">创建</el-button>
+        <el-button v-if="outgoingStep === 1" type="primary" :loading="busy" @click="saveOutgoing">{{ outgoingForm.id ? '保存' : '创建' }}</el-button>
         <el-button v-if="outgoingStep === 2" type="primary" @click="outgoingDlg = false">完成</el-button>
         <el-button v-if="outgoingStep === 0" @click="outgoingDlg = false">取消</el-button>
       </template>
@@ -5501,6 +5564,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         <el-step title="完成" />
       </el-steps>
       <div v-show="pubkeyStep === 0">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            公钥接入是最安全的一档：对方用<b>私钥</b>签名请求，私钥永远不离开对方机器；你这里只存公钥，泄露了也只影响这一个对接点。先生成密钥对，再回来贴公钥。
+          </template>
+        </el-alert>
         <el-form label-width="80px">
           <el-form-item label="用途名">
             <el-input v-model="pubkeyForm.name" placeholder="如：工厂V2 库存预警" maxlength="64" show-word-limit />
@@ -5509,6 +5577,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         </el-form>
       </div>
       <div v-show="pubkeyStep === 1">
+        <el-alert type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            贴<b>公钥</b>（BEGIN PUBLIC KEY），不是私钥 —— 私钥贴进来等于把大门钥匙挂到门口。
+          </template>
+        </el-alert>
         <el-form label-width="100px">
           <el-form-item label="公钥">
             <el-input v-model="pubkeyForm.publicKey" type="textarea" :rows="10"
@@ -5562,6 +5635,122 @@ docker compose up -d --force-recreate xiaozhi-im</div>
       <template #footer>
         <el-button @click="pubkeyTestDlg = false">关闭</el-button>
         <el-button type="primary" :loading="busy" @click="runPubkeyTest">验签</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 泰格 POS 日报对接向导：3 步（选会话 / 开通 / 对接说明） -->
+    <el-dialog v-model="tigerDlg" title="泰格 POS 日报对接" width="680px" @close="tigerStep=0">
+      <el-steps :active="tigerStep" finish-status="success" simple style="margin-bottom:18px">
+        <el-step title="推到哪" />
+        <el-step title="一键开通" />
+        <el-step title="对接说明" />
+      </el-steps>
+
+      <!-- 第 1 步：选目标会话 -->
+      <div v-show="tigerStep === 0">
+        <el-alert type="warning" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            日报推到<b>群</b>里。选之前先确认：目标群里<b>有真人</b>（只有机器人自己 = 天天推、天天没人看）。
+            不确定就先去「群组」页看一眼成员。
+          </template>
+        </el-alert>
+        <el-alert v-if="tigerExisting" type="info" :closable="false" style="margin-bottom:14px">
+          <template #title>
+            检测到已有对接：{{ tigerExisting.url }}（当前推到「{{ tigerExisting.conversation }}」）。
+            直接改下面的会话再点「开通」即可改指向（地址不变）；或
+            <el-button size="small" text type="primary" @click="tigerEditExisting">去列表编辑/停用</el-button>
+          </template>
+        </el-alert>
+        <el-form label-width="110px">
+          <el-form-item label="推到会话">
+            <el-select v-model="tigerForm.conversationId" filterable placeholder="选择日报要进的群" style="width:100%">
+              <el-option v-for="c in intMeta.conversations" :key="c.id"
+                         :label="`${c.type === 'group' ? '群' : '单聊'}｜${c.title || ('#' + c.id)}（${c.members}人）`"
+                         :value="c.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="会建什么">
+            <div class="hint" style="line-height:1.9">
+              ① 机器人「泰格日报」（已存在就复用，不会重复建）<br />
+              ② 推送地址「{{ TIGER_HOOK_NAME }}」（同名已存在则改指向，地址不变）<br />
+              ③ 机器人自动进你选的群
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <!-- 第 2 步：开通结果 + 地址 -->
+      <div v-show="tigerStep === 1">
+        <el-result icon="success" :title="tigerResult?.reused ? '对接已更新' : '对接已开通'">
+          <template #sub-title>
+            <div style="text-align:left;margin-top:6px">
+              <p>机器人「{{ tigerResult?.botName }}」已在群里就位。下面这个地址就是<b>tiger-bridge（POS 机上的采集程序）</b>要推送的目标：</p>
+              <p><code class="mono" style="word-break:break-all">{{ tigerResult?.url }}</code>
+                <el-button size="small" type="primary" text @click="copy(tigerResult?.url)">复制</el-button></p>
+              <p>
+                <el-button size="small" @click="tigerTestPush">推一张样例日报看看</el-button>
+                <span class="hint" style="margin-left:8px">收到 = 链路通了，剩下的只是把 tiger-bridge 指到这个地址</span>
+              </p>
+            </div>
+          </template>
+        </el-result>
+      </div>
+
+      <!-- 第 3 步：对接说明 -->
+      <div v-show="tigerStep === 2">
+        <el-alert type="info" :closable="false" style="margin-bottom:12px">
+          <template #title>
+            tiger-bridge 已跑在 POS 机上（Node 只读取数）。下面是它对接这套地址时的<b>配置方法与必踩坑</b>，改配置后要重启采集程序生效。
+          </template>
+        </el-alert>
+        <el-descriptions :column="1" border size="small" style="margin-bottom:12px">
+          <el-descriptions-item label="推送目标">第 2 步复制的地址（POST，JSON）</el-descriptions-item>
+          <el-descriptions-item label="取数口径">只读官方视图 pos_v_income_day / v_realtime_stock；价格用 uf_get_itemprice；绝不直写泰格业务表</el-descriptions-item>
+          <el-descriptions-item label="对账">tiger-bridge 自带熔断：与自己合计不一致时 exit 2 且不推（宁可不报，不报错的错数）</el-descriptions-item>
+          <el-descriptions-item label="日报内容">蓝卡片：销售额 / 客数 / 客单价 + 与官方日结的对账结论</el-descriptions-item>
+        </el-descriptions>
+        <el-collapse>
+          <el-collapse-item title="报文样例（tiger-bridge 推的就是这种形状）">
+            <pre class="mono" style="margin:0;padding:10px;background:var(--el-fill-color-light);border-radius:6px;overflow:auto">{
+  "title": "门店日报 · 09-17",
+  "text": "销售额 ¥40,123.45 · 客数 356 笔 · 客单价 ¥112.76\n毛利率 22.4%（口径：净销售额-成本，成本=out_qty×进价）",
+  "color": "blue",
+  "fields": [
+    {"label": "销售额", "value": "¥40,123.45", "short": true},
+    {"label": "客数", "value": "356", "short": true},
+    {"label": "客单价", "value": "¥112.76", "short": true},
+    {"label": "毛利率", "value": "22.4%", "short": true}
+  ],
+  "footer": "tiger-bridge · 泰格 POS 数据对接"
+}</pre>
+            <div class="hint" style="margin-top:6px">
+              🔴 title / text / footer / fields[].value <b>必须是字符串</b> —— 传对象会得到
+              200 成功 + 群里一条 <code class="mono">[object Object]</code>（假成功）。
+              推完必须回读消息确认内容，别只看状态码。
+            </div>
+          </el-collapse-item>
+          <el-collapse-item title="四条必踩坑（tiger-bridge 侧）">
+            <ol style="margin:0;padding-left:18px;line-height:2">
+              <li>地址前缀是 <code class="mono">/api/hooks/incoming/&lt;token&gt;</code> —— 漏 <code class="mono">/api</code> 会 404。</li>
+              <li>签名校验保持<b>关</b>：tiger-bridge 不会算 IM 的 HMAC，开了必 401。</li>
+              <li>日期参数传<b>本地时间字符串</b>（<code class="mono">2026-09-17 00:00:00</code>），绝不能传 JS Date —— UTC 转换会静默丢掉下午 4 点后的营业额。</li>
+              <li>库存看 <code class="mono">v_realtime_stock</code>，别直接查 <code class="mono">wh_stock</code>（那是永不动的账面数）。</li>
+            </ol>
+          </el-collapse-item>
+        </el-collapse>
+        <p class="hint" style="margin-top:10px">
+          以后要换群 / 换机器人 / 停用：去「入站推送」列表点「{{ TIGER_HOOK_NAME }}」的「编辑」—— 地址不变，对接方零改动。
+        </p>
+      </div>
+
+      <template #footer>
+        <el-button v-if="tigerStep > 0" @click="tigerStep--">上一步</el-button>
+        <el-button v-if="tigerStep === 0" type="primary" :loading="tigerBusy" @click="runTigerSetup">
+          {{ tigerExisting ? '改指向并开通' : '一键开通' }}
+        </el-button>
+        <el-button v-if="tigerStep === 1" type="primary" @click="tigerStep = 2">下一步：对接说明</el-button>
+        <el-button v-if="tigerStep === 2" type="primary" @click="tigerDlg = false">完成</el-button>
+        <el-button v-if="tigerStep === 0" @click="tigerDlg = false">取消</el-button>
       </template>
     </el-dialog>
   </el-container>
@@ -8451,6 +8640,18 @@ const clientStep = ref(0);
 const incomingStep = ref(0);
 const outgoingStep = ref(0);
 
+/* ====== 泰格 POS 日报对接向导（2026-10-11 #313）====== */
+// 把「建机器人 + 建入站推送 + 教对接方怎么配」压成一个三步向导。
+// 机器人/推送地址都按名字找，找到就复用 —— 向导重复打开不会建出一堆重复的。
+const TIGER_BOT_NAME = '泰格日报';
+const TIGER_HOOK_NAME = '泰格POS日报';
+const tigerDlg = ref(false);
+const tigerStep = ref(0);            // 0=选会话 1=开通中/结果 2=对接说明
+const tigerBusy = ref(false);
+const tigerForm = ref({ conversationId: null });
+const tigerResult = ref(null);       // { botName, url, hookId, reused }
+const tigerExisting = ref(null);     // 已存在的同名入站推送（进了向导先提示，避免重复建）
+
 /** 身份下拉：机器人排前面（对接一般以机器人身份发言），再接真人用户 */
 const identityOptions = computed(() => [
   ...bots.value.map((b) => ({ id: b.id, username: b.username, nickname: b.nickname, is_bot: true })),
@@ -8509,20 +8710,32 @@ async function loadIntTab() {
 async function loadPubkeys() { pubkeys.value = (await api.get('/admin/integrations/publickeys')).data; }
 async function loadClients() { clients.value = (await api.get('/admin/integrations/clients')).data; }
 
-function openBotDialog() {
-  botForm.value = { name: '', conversationId: null };
+function openBotDialog(row = null) {
+  // 传 row = 编辑模式（改名）；不传 = 新建
+  botForm.value = row
+    ? { id: row.id, name: row.nickname || '', conversationId: null }
+    : { name: '', conversationId: null };
+  botStep.value = 0;
   botDlg.value = true;
 }
 async function saveBot() {
-  if (!botForm.value.name.trim()) return ElMessage.warning('请填机器人名称');
+  const f = botForm.value;
+  if (!f.name.trim()) return ElMessage.warning('请填机器人名称');
   busy.value = true;
   try {
-    await api.post('/admin/integrations/bots', botForm.value);
-    ElMessage.success('机器人已创建');
-    botDlg.value = false;
-    await Promise.all([loadBots(), loadMeta()]);
+    if (f.id) {
+      await api.patch(`/admin/integrations/bots/${f.id}`, { name: f.name });
+      ElMessage.success('已保存');
+      botDlg.value = false;
+      await Promise.all([loadBots(), loadIncoming(), loadMeta()]);
+    } else {
+      await api.post('/admin/integrations/bots', f);
+      ElMessage.success('机器人已创建');
+      botDlg.value = false;
+      await Promise.all([loadBots(), loadMeta()]);
+    }
   } catch (e) {
-    ElMessage.error(e.response?.data?.error || '创建失败');
+    ElMessage.error(e.response?.data?.error || (f.id ? '保存失败' : '创建失败'));
   } finally { busy.value = false; }
 }
 function openBotConvDialog(row) {
@@ -8669,11 +8882,14 @@ async function delClient(row) {
   } catch (e) { ElMessage.error(e.response?.data?.error || '删除失败'); }
 }
 
-function openIncomingDialog() {
-  incomingForm.value = {
-    name: '', botId: bots.value[0]?.id || null,
-    conversationId: intMeta.value.conversations[0]?.id || null, signed: false,
-  };
+function openIncomingDialog(row = null) {
+  // 传 row = 编辑模式：改名称 / 换机器人 / 换目标会话 / 开关签名。地址(token)不变。
+  incomingForm.value = row
+    ? { id: row.id, name: row.name, botId: row.bot_id,
+        conversationId: row.conversation_id, signed: !!row.signed }
+    : { name: '', botId: bots.value[0]?.id || null,
+        conversationId: intMeta.value.conversations[0]?.id || null, signed: false };
+  incomingStep.value = 0;
   incomingDlg.value = true;
 }
 async function saveIncoming() {
@@ -8683,12 +8899,21 @@ async function saveIncoming() {
   if (!f.conversationId) return ElMessage.warning('请选择目标会话');
   busy.value = true;
   try {
-    await api.post('/admin/integrations/incoming', f);
-    ElMessage.success('推送地址已创建');
-    incomingDlg.value = false;
-    await loadIncoming();
+    if (f.id) {
+      await api.patch(`/admin/integrations/incoming/${f.id}`, {
+        name: f.name, botId: f.botId, conversationId: f.conversationId, signed: !!f.signed,
+      });
+      ElMessage.success('已保存（推送地址不变，对接方无需改动）');
+      incomingDlg.value = false;
+      await loadIncoming();
+    } else {
+      await api.post('/admin/integrations/incoming', f);
+      ElMessage.success('推送地址已创建');
+      incomingDlg.value = false;
+      await loadIncoming();
+    }
   } catch (e) {
-    ElMessage.error(e.response?.data?.error || '创建失败');
+    ElMessage.error(e.response?.data?.error || (f.id ? '保存失败' : '创建失败'));
   } finally { busy.value = false; }
 }
 async function toggleIncoming(row) {
@@ -8728,8 +8953,88 @@ async function testIncoming(row) {
   } catch (e) { ElMessage.error(e.response?.data?.error || '推送失败'); }
 }
 
-function openOutgoingDialog() {
-  outgoingForm.value = { name: '', url: '', events: [], conversationId: null };
+/* ====== 泰格 POS 日报对接向导 ====== */
+
+/** 打开向导。同名钩子已存在时先亮出来，避免重复建一套 */
+async function openTigerDialog() {
+  tigerStep.value = 0;
+  tigerResult.value = null;
+  tigerExisting.value = null;
+  tigerForm.value = { conversationId: intMeta.value.conversations[0]?.id || null };
+  await loadIncoming();
+  const hit = incoming.value.find((x) => x.name === TIGER_HOOK_NAME && !x.revoked);
+  tigerExisting.value = hit
+    ? { id: hit.id, url: fullUrl(hit.path), conversation: hit.conversation_title || ('#' + hit.conversation_id) }
+    : null;
+  tigerDlg.value = true;
+}
+
+/** 一键开通：机器人按名字复用，没有才建；入站推送同 理（改指向时地址不变） */
+async function runTigerSetup() {
+  if (!tigerForm.value.conversationId) return ElMessage.warning('请选择日报推到哪个会话');
+  tigerBusy.value = true;
+  try {
+    await loadBots();
+    let bot = bots.value.find((b) => b.nickname === TIGER_BOT_NAME);
+    const reused = !!bot;
+    if (!bot) bot = (await api.post('/admin/integrations/bots', { name: TIGER_BOT_NAME })).data;
+    await loadIncoming();
+    let hook = incoming.value.find((x) => x.name === TIGER_HOOK_NAME);
+    if (hook) {
+      const { data } = await api.patch(`/admin/integrations/incoming/${hook.id}`, {
+        botId: bot.id, conversationId: tigerForm.value.conversationId,
+      });
+      hook = data;
+    } else {
+      hook = (await api.post('/admin/integrations/incoming', {
+        name: TIGER_HOOK_NAME, botId: bot.id,
+        conversationId: tigerForm.value.conversationId, signed: false,
+      })).data;
+    }
+    tigerResult.value = { botName: bot.nickname, reused, hookId: hook.id, url: fullUrl(hook.path) };
+    tigerStep.value = 1;
+    await Promise.all([loadBots(), loadIncoming(), loadMeta()]);
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '开通失败');
+  } finally { tigerBusy.value = false; }
+}
+
+/** 推一张日报样例卡片，验证整条链路 */
+async function tigerTestPush() {
+  if (!tigerResult.value) return;
+  try {
+    await api.post(`/admin/integrations/incoming/${tigerResult.value.hookId}/send`, {
+      kind: 'card',
+      content: {
+        title: '泰格 POS 日报（样例）',
+        text: '销售额 ¥12,345.67 · 客数 123 笔 · 客单价 ¥100.37\n\n对账：与泰格官方日结口径一致 ✅',
+        color: 'blue',
+        fields: [
+          { label: '销售额', value: '¥12,345.67', short: true },
+          { label: '客数', value: '123', short: true },
+        ],
+        footer: 'tiger-bridge · 泰格 POS 数据对接',
+      },
+    });
+    ElMessage.success('样例已推送，去群里看');
+  } catch (e) { ElMessage.error(e.response?.data?.error || '推送失败'); }
+}
+
+/** 已有对接 → 跳「入站推送」标签去编辑（改会话/换机器人/停用都在那里） */
+function tigerEditExisting() {
+  tigerDlg.value = false;
+  intTab.value = 'incoming';
+}
+
+function openOutgoingDialog(row = null) {
+  // 传 row = 编辑模式（PATCH /outgoing 已有后端，这次把入口补上）
+  outgoingForm.value = row
+    ? { id: row.id, name: row.name, url: row.url,
+        events: row.events === '*' ? [] : String(row.events).split(',').filter(Boolean),
+        conversationId: row.conversation_id || null }
+    : { name: '', url: '', events: [], conversationId: null };
+  outgoingStep.value = 0;
+  outgoingSecret.value = '';
   outgoingDlg.value = true;
 }
 async function saveOutgoing() {
@@ -8738,13 +9043,22 @@ async function saveOutgoing() {
   if (!/^https?:\/\/.+/i.test(f.url.trim())) return ElMessage.warning('回调地址要以 http:// 或 https:// 开头');
   busy.value = true;
   try {
-    const { data } = await api.post('/admin/integrations/outgoing', f);
-    outgoingSecret.value = data.secret;
-    outgoingStep.value = 2;
-    ElMessage.success('订阅已创建');
-    await loadOutgoing();
+    if (f.id) {
+      await api.patch(`/admin/integrations/outgoing/${f.id}`, {
+        name: f.name, url: f.url, events: f.events, conversationId: f.conversationId,
+      });
+      ElMessage.success('已保存');
+      outgoingDlg.value = false;
+      await loadOutgoing();
+    } else {
+      const { data } = await api.post('/admin/integrations/outgoing', f);
+      outgoingSecret.value = data.secret;
+      outgoingStep.value = 2;
+      ElMessage.success('订阅已创建');
+      await loadOutgoing();
+    }
   } catch (e) {
-    ElMessage.error(e.response?.data?.error || '创建失败');
+    ElMessage.error(e.response?.data?.error || (f.id ? '保存失败' : '创建失败'));
   } finally { busy.value = false; }
 }
 async function toggleOutgoing(row, v) {
@@ -10346,6 +10660,43 @@ async function deleteAttRecord(row) {
 /* ---- 系统帮助页：可搜索问答（套工厂V2「搜索问题→解决问题」模式） ---- */
 const helpSearch = ref('');
 const helpFaq = [
+  { q: '集成对接向导建错了能改吗？怎么改？',
+    tags: '集成 对接 向导 修改 编辑 改 机器人 推送地址 入站 出站 订阅 改名',
+    a: `<p><b>都能改</b>，不用删了重建（重建会让对接方重新配置）：</p>
+      <ul>
+        <li><b>机器人</b>：集成对接 → 机器人 → 「改名」。账号（bot_xxx）不可改，其余立即生效。</li>
+        <li><b>入站推送</b>：集成对接 → 入站推送 → 「编辑」。可改用途名、换机器人、换目标会话、开关签名校验 —— <b>推送地址不变</b>，对接方零改动。换机器人时它会自动被拉进新会话。</li>
+        <li><b>事件订阅</b>：集成对接 → 事件订阅 → 「编辑」。可改用途、回调地址、订阅事件、监听范围；签名密钥不变（换密钥单独点「换密钥」，旧密钥有 24 小时宽限）。</li>
+        <li><b>令牌 / 签名凭据</b>：权限和有效期建好后不可改，但可以随时吊销 / 停用 / 重新发一对。</li>
+      </ul>
+      <p>每一步向导页面上也有说明文字，第一次接可以先读完再点下一步。</p>` },
+  { q: '泰格 POS 日报怎么对接到群里？',
+    tags: '泰格 POS 日报 对接 tiger-bridge 销售报表 推送',
+    a: `<p>集成对接页顶部点 <b>「泰格 POS 日报对接」</b>，三步走完：</p>
+      <ol>
+        <li><b>推到哪</b>：选日报要进的群（先确认群里有真人 —— 只有机器人自己等于天天推没人看）。</li>
+        <li><b>一键开通</b>：自动建好机器人「泰格日报」和推送地址「泰格POS日报」（同名已存在就复用 / 改指向，地址不变），机器人自动进群。可当场点「推一张样例日报」验证链路。</li>
+        <li><b>对接说明</b>：向导给出 tiger-bridge（POS 机上的采集程序）的配置要点和必踩坑 —— 地址带 /api 前缀、签名保持关、日期传本地字符串、库存看 v_realtime_stock。</li>
+      </ol>
+      <p>以后要换群 / 换机器人 / 停用：入站推送列表里点「泰格POS日报」的「编辑」，地址不变，对接方零改动。</p>
+      <p>数据口径：tiger-bridge 只读泰格官方视图取数（pos_v_income_day / v_realtime_stock），自带与官方日结的对账熔断，绝不直写泰格业务表。</p>` },
+  { q: '推送返回成功，但群里看不到消息',
+    tags: '推送 成功 看不到 群 无人 空白 假成功 卡片',
+    a: `<p>按命中率排序排查：</p>
+      <ol>
+        <li><b>群里有没有真人</b>：机器人 + 机器人 = 天天"成功"没人看。去「群组」页实看成员。</li>
+        <li><b>推的会话是不是想要的那个</b>：入站推送列表里 name 是你起的名字，<b>「目标会话」列才是真实去向</b>，不一致时以它为准（列表可「编辑」换会话，地址不变）。</li>
+        <li><b>是不是"假成功"</b>：HTTP 200 ≠ 内容对。title/text/fields 值必须是<b>字符串</b>，传对象会得到 200 + 群里一条 [object Object]。用列表里的「试推」对比正常卡片长什么样。</li>
+        <li><b>手机上登录的账号在不在群里</b>：账号常有重名，"群里有潘坚强"和"你在的号能看到"是两件事。</li>
+      </ol>` },
+  { q: '入站推送的「签名校验」要不要开？',
+    tags: '签名 校验 HMAC 入站 webhook 401 推不进来',
+    a: `<p><b>默认关</b>。开了之后对方每次请求都要按 IM 的规则算 HMAC-SHA256 签名 ——
+      而绝大多数第三方系统（钉钉风格的告警器、监控工具、泰格 tiger-bridge 等）只会签<b>自家协议</b>的签名，
+      开了它们就全部 401 推不进来。</p>
+      <p>不开签名也安全：地址本身就是凭证（长随机 token），在列表里随时「停用 / 删除」即可立即失效。
+      对接方技术能力强、或要跨公网长期推的，用「签名客户端」（app_id/app_secret）或「公钥接入」那两档更合适。</p>
+      <p>已经开了想关：入站推送「编辑」里关掉开关即可，地址不变。</p>` },
   { q: '外网呼入时，被叫端「来电界面根本不弹」，挂断后才显示未接',
     tags: '来电 电话 通话 界面 未接 弹窗 不弹',
     a: `<p>已在 v0.6.1 修复，根因有两个，缺一都修不好：</p>

@@ -150,6 +150,13 @@ FILES = [
     #    全绿、线上还是老考勤"，而且 required 组新校验不上线等于白做。
     'src/attendance.js',
     'src/routes/attendance.js',
+    # 🔴 2026-10-11 补：集成对接向导「可修改」这一轮（#313）。
+    #    integration.js 加了 updateBot、routes/integrations.js 加了
+    #    PATCH /bots/:id 与 PATCH /incoming/:id。这两个文件此前**从没进过清单**
+    #    （集成层跟着整包上线的）—— 漏推的后果是管理台「编辑」按钮全打 404，
+    #    而且不报错（管理台只会弹"操作失败"）。
+    'src/integration.js',
+    'src/routes/integrations.js',
 ]
 
 
