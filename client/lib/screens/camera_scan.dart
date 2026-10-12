@@ -597,6 +597,12 @@ class _CameraScanPageState extends State<CameraScanPage> {
     final unknown = name.trim().isEmpty;
     final spec = (master?['spec'] ?? '').toString();
     final unit = (master?['unit'] ?? '').toString();
+    // 供应商 / 价格三项（龙哥 2026-10-12：与扫码枪好又多版同款）。
+    // 老商档这些列为 NULL，按"—"显示，不会崩。
+    final supplier = (master?['supplier']?.toString() ?? '').trim();
+    final purchaseRaw = master?['purchase_price'];
+    final unitRaw = master?['unit_price'];
+    final specialRaw = master?['special_price'];
     final title = unknown ? '未知条码' : name;
     final sub = unknown
         ? '$code　（商档里没有，仍可按未知条码录入）'
@@ -634,6 +640,29 @@ class _CameraScanPageState extends State<CameraScanPage> {
           Text(sub,
               style: const TextStyle(color: AppColors.textSub, fontSize: 12),
               overflow: TextOverflow.ellipsis),
+          // 供应商行（龙哥特意要的，红框区上面）+ 进价/售价/特价三项。
+          if (!unknown && supplier.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
+                children: <Widget>[
+                  const Icon(Icons.store_outlined,
+                      size: 14, color: AppColors.textSub),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text('供应商：$supplier',
+                        style: const TextStyle(
+                            color: AppColors.textSub, fontSize: 12),
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                ],
+              ),
+            ),
+          if (!unknown)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: _masterPriceRow(purchaseRaw, unitRaw, specialRaw),
+            ),
           const SizedBox(height: 12),
           Row(
             children: <Widget>[
@@ -676,6 +705,44 @@ class _CameraScanPageState extends State<CameraScanPage> {
       ),
     );
   }
+
+  /// 商档价格行：固定显示**进价 / 售价 / 特价**三项（龙哥 2026-10-12，
+  /// 与扫码枪好又多版同款）。
+  ///
+  /// 特价为 0 / 没这列都显示「特价 —」（¥0.00 扎眼又不真实 —— 特价是
+  /// "现在有活动"，不是"卖 0 元"）；进价/售价 0 极罕见，照实显示数字。
+  Widget _masterPriceRow(dynamic purchase, dynamic unit, dynamic special) {
+    double? toDouble(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    final pur = toDouble(purchase);
+    final uni = toDouble(unit);
+    final spe = toDouble(special);
+    final speOff = spe == null || spe <= 0; // 没设特价
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: <Widget>[
+        _priceChip('进价', pur),
+        _priceChip('售价', uni),
+        _priceChip('特价', speOff ? null : spe),
+      ],
+    );
+  }
+
+  Widget _priceChip(String label, double? v) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceHi,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+            v == null ? '$label —' : '$label ¥${v.toStringAsFixed(2)}',
+            style: const TextStyle(color: AppColors.textSub, fontSize: 11)),
+      );
 
   /// 数量步进器：可输入、可加减（龙哥 2026-10-03 要的"直接输数量"）。
   ///
