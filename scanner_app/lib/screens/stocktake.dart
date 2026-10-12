@@ -239,9 +239,84 @@ class _StocktakePageState extends State<StocktakePage> {
         ),
       ),
     );
-    if (act == 'import') await _importMaster();
+    if (act == 'import') {
+      // 商档导入会整份替换本地底表 —— 用固定密码罩住，防误操作清空档案。
+      // 仅带内置档案的版本（好又多专版）启用此门禁。
+      if (!_hasBuiltin || await _guardMasterReplace()) await _importMaster();
+    }
     if (act == 'template') await _exportMasterTemplate();
-    if (act == 'builtin') await _restoreBuiltin();
+    if (act == 'builtin') {
+      // "恢复内置"同样会覆盖现有商档，一并罩住。
+      if (!_hasBuiltin || await _guardMasterReplace()) await _restoreBuiltin();
+    }
+  }
+
+  /// 商档替换门禁（龙哥 2026-10-12）。
+  ///
+  /// 固定口令 = 龙哥手机号。为什么是手机号：龙哥定的，好记、不会忘。
+  /// 作用：**挡住误操作**（员工手滑点了"导入"把 12.7 万条底表清空），
+  /// 不是防黑客——客户端里的密码本就可被反编译看到，这里不假装安全，
+  /// 只防"没想清楚就点"。
+  ///
+  /// 返回 true = 放行；false = 取消 / 密码错。
+  static const String _masterReplacePwd = '15858505566';
+
+  Future<bool> _guardMasterReplace() async {
+    final ctrl = TextEditingController();
+    var ok = false;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgElevated,
+        title: const Text('商档操作需要验证',
+            style: TextStyle(color: AppColors.text, fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text('此操作会整份替换 / 覆盖本地商品档案，请输入操作密码：',
+                style: TextStyle(color: AppColors.textSub, fontSize: 13)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              style: const TextStyle(color: AppColors.text),
+              decoration: InputDecoration(
+                hintText: '操作密码',
+                hintStyle: const TextStyle(color: AppColors.textWeak),
+                filled: true,
+                fillColor: AppColors.surfaceHi,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消',
+                style: TextStyle(color: AppColors.textSub)),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (ctrl.text.trim() == _masterReplacePwd) {
+                ok = true;
+                Navigator.pop(ctx);
+              } else {
+                _snack('密码错误，操作已取消');
+              }
+            },
+            child: const Text('确认'),
+          ),
+        ],
+      ),
+    );
+    return ok;
   }
 
   /// 从 CSV 导入商档。

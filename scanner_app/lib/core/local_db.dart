@@ -40,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 3;
+  static const int schemaVersion = 4;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -171,6 +171,34 @@ class LocalDb {
           created_at INTEGER
         )
       ''');
+    },
+
+    // v4：商档补四列（龙哥 2026-10-12）。
+    // 把"商档查询"对齐到 IM 客户端 0.26.68：确认卡要显示
+    // 进价 / 会员价 / 特价 / 供应商。这四列都是**可选**——老的 7 列商档
+    // （好又多版旧内置档、员工手导的 4 列模板）落库时这四项为 NULL，
+    // 界面按"没有就不显示"处理，不会崩。
+    //
+    // 🔴 加列用 PRAGMA 判存在再 ALTER（幂等）：迁移框架只在版本跳变时跑一次，
+    // 但测试里会反复 resetForTest 重开库、以及未来若有人手改 schemaVersion 回退，
+    // 重复 ALTER 会抛 "duplicate column" 把整个升级砸挂、App 起不来。
+    // 逐列判断、缺哪个加哪个，最稳。
+    (Database db) async {
+      final cols = (await db.rawQuery('PRAGMA table_info(stock_master)'))
+          .map((r) => (r['name'] as String))
+          .toSet();
+      final add = <String, String>{
+        'purchase_price': 'REAL', // 进价
+        'member_price': 'REAL', // 会员价
+        'special_price': 'REAL', // 特价
+        'supplier': 'TEXT', // 供应商名称
+      };
+      for (final entry in add.entries) {
+        if (!cols.contains(entry.key)) {
+          await db.execute(
+              'ALTER TABLE stock_master ADD COLUMN ${entry.key} ${entry.value}');
+        }
+      }
     },
   ];
 

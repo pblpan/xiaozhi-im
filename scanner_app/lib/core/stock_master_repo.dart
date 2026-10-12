@@ -275,6 +275,25 @@ class MasterCsv {
     '价格': 'unit_price',
     'price': 'unit_price',
     'unitprice': 'unit_price',
+    // 进价（采购价）
+    '进价': 'purchase_price',
+    '进货价': 'purchase_price',
+    '采购价': 'purchase_price',
+    'cost': 'purchase_price',
+    'purchaseprice': 'purchase_price',
+    // 会员价
+    '会员价': 'member_price',
+    'memberprice': 'member_price',
+    // 特价（促销价）
+    '特价': 'special_price',
+    '促销价': 'special_price',
+    'specialprice': 'special_price',
+    // 供应商
+    '供应商': 'supplier',
+    '供应商名称': 'supplier',
+    '供货商': 'supplier',
+    '厂商': 'supplier',
+    'supplier': 'supplier',
     // 数量（模板列名）
     //
     // ⚠️ 导入语义上这一列是**账面数**（系统里现在有多少），不是实盘数。
@@ -420,6 +439,10 @@ class MasterCsv {
         'spec': (m['spec'] ?? '').trim(),
         'unit': (m['unit'] ?? '').trim(),
         'unit_price': StockMasterRepo.numOf(m['unit_price'] ?? ''),
+        'purchase_price': StockMasterRepo.numOf(m['purchase_price'] ?? ''),
+        'member_price': StockMasterRepo.numOf(m['member_price'] ?? ''),
+        'special_price': StockMasterRepo.numOf(m['special_price'] ?? ''),
+        'supplier': (m['supplier'] ?? '').trim(),
         'account_qty': StockMasterRepo.numOf(m['account_qty'] ?? ''),
       });
     }
