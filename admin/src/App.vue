@@ -52,7 +52,9 @@
             <el-icon><Odometer /></el-icon><span>仪表盘</span>
           </el-menu-item>
 
-          <!-- 分类顺序按"管理员一天里的使用频度"排：先人、再日常、再对接、再业务、最后系统。 -->
+          <!-- 分类顺序按"管什么"排（龙哥 2026-10-12 重排）：管人 → 管门店生意 →
+               管消息文件 → 管手机客户端 → 管外部系统 → 管服务器本身。
+               ⚠️ 只动分组与命名，tab key（index）全部不变，功能与路由零改动。 -->
           <el-sub-menu index="g-org">
             <template #title><el-icon><User /></el-icon><span>组织与用户</span></template>
             <el-menu-item index="users">用户管理</el-menu-item>
@@ -61,23 +63,10 @@
             <el-menu-item index="orgs">组织机构</el-menu-item>
           </el-sub-menu>
 
-          <el-sub-menu index="g-office">
-            <template #title><el-icon><Calendar /></el-icon><span>日常办公</span></template>
-            <el-menu-item index="attendance">考勤管理</el-menu-item>
-            <el-menu-item index="files">文件管理</el-menu-item>
-            <el-menu-item index="messages">消息管理</el-menu-item>
-          </el-sub-menu>
-
-          <el-sub-menu index="g-link">
-            <template #title><el-icon><Connection /></el-icon><span>对外对接</span></template>
-            <el-menu-item index="integrations">集成对接</el-menu-item>
-            <el-menu-item index="upstreams">上游接口</el-menu-item>
-            <el-menu-item index="clientconfig">客户端配置</el-menu-item>
-            <el-menu-item index="push">消息推送</el-menu-item>
-          </el-sub-menu>
-
           <el-sub-menu index="g-biz">
-            <template #title><el-icon><Goods /></el-icon><span>业务模块</span></template>
+            <template #title><el-icon><Goods /></el-icon><span>门店业务</span></template>
+            <!-- 考勤从"日常办公"移入：打卡/排班/审批/薪酬是门店生意的一部分 -->
+            <el-menu-item index="attendance">考勤管理</el-menu-item>
             <!-- 盘点分组：库房减货是盘点的子功能，收在"盘点"下，不再是并列入口 -->
             <el-sub-menu index="g-inv">
               <template #title><span>盘点</span></template>
@@ -87,13 +76,33 @@
             <el-menu-item index="training">培训中心</el-menu-item>
           </el-sub-menu>
 
+          <el-sub-menu index="g-office">
+            <template #title><el-icon><ChatDotRound /></el-icon><span>消息与文件</span></template>
+            <el-menu-item index="messages">消息管理</el-menu-item>
+            <el-menu-item index="files">文件管理</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="g-client">
+            <template #title><el-icon><Cellphone /></el-icon><span>客户端与应用</span></template>
+            <!-- 原「动态模块」改名：这页管的是手机工作台长什么样（应用/分组配色/公告/版式） -->
+            <el-menu-item index="modules">应用中心</el-menu-item>
+            <!-- 客户端配置 / 消息推送从"对外对接"移入：管的是自己的手机，不是外部系统 -->
+            <el-menu-item index="clientconfig">客户端配置</el-menu-item>
+            <el-menu-item index="push">消息推送</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="g-link">
+            <template #title><el-icon><Connection /></el-icon><span>对外对接</span></template>
+            <el-menu-item index="integrations">集成对接</el-menu-item>
+            <el-menu-item index="upstreams">上游接口</el-menu-item>
+          </el-sub-menu>
+
           <el-sub-menu index="g-sys">
             <template #title><el-icon><Setting /></el-icon><span>系统</span></template>
-            <el-menu-item index="deploywizard">部署向导</el-menu-item>
-            <el-menu-item index="modules">动态模块</el-menu-item>
             <el-menu-item index="settings">系统设置</el-menu-item>
             <el-menu-item index="health">数据体检</el-menu-item>
             <el-menu-item index="license">授权管理</el-menu-item>
+            <el-menu-item index="deploywizard">部署向导</el-menu-item>
             <el-menu-item index="help">系统帮助</el-menu-item>
           </el-sub-menu>
         </el-menu>
@@ -250,7 +259,7 @@
                       （离职员工的消息、考勤记录、审批留痕）标「保留」并说明原因，
                       服务端也会拒绝清理它们。</li>
                     <li><b>集成与下发</b>：入站推送、事件订阅、公钥接入；客户端配置（含强制升级）、
-                      动态模块按人下发。</li>
+                      应用中心按人下发。</li>
                     <li><b>总览</b>：仪表盘 —— 今日新增、近 7 天活跃、异常提醒、上手向导。</li>
                   </ul>
                 </section>
@@ -685,7 +694,7 @@
                   <tr><td>消息管理</td><td>按类型 / 关键词检索消息，用于排查与审计</td></tr>
                   <tr><td>集成对接</td><td>入站推送地址、事件订阅、公钥接入（详见第六节）</td></tr>
                   <tr><td>客户端配置</td><td>下发给客户端的配置：服务器地址、功能开关、公告、强制升级；带版本快照与按范围下发</td></tr>
-                  <tr><td>动态模块</td><td>客户端首页的功能模块，可开关并指定下发给哪些人</td></tr>
+                  <tr><td>应用中心</td><td>客户端首页的功能模块，可开关并指定下发给哪些人（原「动态模块」）</td></tr>
                   <tr><td>系统设置</td><td>公司名称、好友模式（普通 / 工作，见「四之二」）、音视频中继配置、改管理员密码 —— 改完即生效，不用重启</td></tr>
                   <tr><td>系统帮助</td><td>就是本页</td></tr>
                 </tbody>
@@ -3867,7 +3876,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
         <div v-else-if="tab === 'upstreams'">
           <el-alert type="success" :closable="false" style="margin-bottom:14px">
             <template #title>
-              把内网系统的数据<b>接到客户端里</b>。在这里登记一次地址，「动态模块」的列表 / 表格 / 图表
+              把内网系统的数据<b>接到客户端里</b>。在这里登记一次地址，「应用中心」的列表 / 表格 / 图表
               就能取到真数据 —— 员工在小智里<b>点进去看</b>，不用把数字推到群里刷屏。
               客户端只提交一个<b>名字</b>，真实地址和凭据都在服务端，所以猜不到别的地址、也拿不到凭据。
             </template>
@@ -3945,7 +3954,7 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <el-empty v-if="!us.list.length" description="还没有上游。点「登记上游接口」把内网系统的地址填进来" />
 
           <div class="hint" style="margin-top:12px">
-            <b>怎么用</b>：登记完回到「动态模块」，新建一个 <code class="mono">table</code> 或
+            <b>怎么用</b>：登记完回到「应用中心」，新建一个 <code class="mono">table</code> 或
             <code class="mono">chart</code>，把「数据来源」填成上表里那条路径（例如
             <code class="mono">/api/hooks/up/tiger/report/daily?day=…</code>），再按试跑返回的字段拼列/轴。
             员工端<b>下拉刷新</b>就能看到，不用重装 App。
@@ -5916,7 +5925,7 @@ import { ref, reactive, computed, onMounted, watch, h } from 'vue';
 import { ElMessage, ElMessageBox, ElPagination } from 'element-plus';
 // 侧栏分类标题的图标。照工厂管理系统 V2 的做法：**只有一级分类标题带图标，
 // 二级叶项纯文字** —— 叶项加图标会让 19 行的小图标互相打架，反而更难扫读。
-import { Odometer, User, Calendar, Connection, Goods, Setting } from '@element-plus/icons-vue';
+import { Odometer, User, ChatDotRound, Cellphone, Connection, Goods, Setting } from '@element-plus/icons-vue';
 import api from './api';
 
 const token = ref(localStorage.getItem('xz_token') || '');
