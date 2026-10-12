@@ -1,0 +1,36 @@
+# ============================================================
+#  小智IM 服务端 —— 预装依赖版镜像（Dockerfile.prebuilt）
+#
+#  与 Dockerfile.build 的区别：这里**不再跑 npm install**。
+#  node_modules 已经在打包时随源码一起带进镜像（由 pack_docker.py 拷进来），
+#  所以 `docker compose up -d --build` 不需要联网、不需要 npm 源，
+#  在离线环境也能一键拉起。
+#
+#  ⚠️ 关于跨平台：打包机是 Windows，node_modules 里会混进 Windows 专有的
+#     `sshcrypto.node`（ssh2 的加速模块）。Linux 容器里 Node 加载它会失败，
+#     但 ssh2 内部是 try/catch 兜底、自动退回纯 JS 实现（tweetnacl）——
+#     这点已被飞牛 fpk（同一份 node_modules 跑在 ARM Linux）验证可用。
+#     pack_docker.py 打包时会顺手把 *.node 剔除，干净且不影响功能。
+# ============================================================
+FROM node:22-slim
+
+WORKDIR /app
+
+# 拷源码 + 预装依赖（node_modules 已经在上下文里）
+COPY . .
+
+# 不给 JWT_SECRET / ADMIN_PASSWORD 留构建期默认值（2026-09-16 整改）：
+# 从前这里是 change-me-xiaozhi-im 与 admin123，而本仓库有过一段 Public 历史
+# —— 谁 clone 一次就拿到了管理台密码。运行时由 docker/.env 注入；
+# 万一没注入，服务端会各自生成随机值（JWT 还会持久化，避免重启踢人）。
+ENV PORT=3602 \
+    DATA_DIR=/data \
+    ADMIN_USERNAME=admin \
+    MAX_FILE_MB=50
+
+RUN mkdir -p /data/files
+
+VOLUME ["/data"]
+EXPOSE 3602
+
+CMD ["node", "src/index.js"]

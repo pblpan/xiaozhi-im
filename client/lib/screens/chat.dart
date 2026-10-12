@@ -843,6 +843,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   _toggleFav(m);
                 },
               ),
+            // 已读回执：只有「自己发的、未撤回」消息才给入口（看别人消息谁读了是越权）
+            if (!m.deleted && m.senderId == widget.myId)
+              _menuItem(Icons.visibility_outlined, '查看已读', () {
+                _showReadReceipt(m);
+              }),
             if (!m.deleted && _canPinHere)
               _menuItem(Icons.push_pin_rounded,
                   _pinned?.id == m.id ? '取消置顶' : '置顶', () {
@@ -961,20 +966,25 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // ---------- 渲染 ----------
-
-  /// 已读水位：其他成员都读到哪（无其他成员返回 -1 = 不显示标签）
-  int get _watermark {
-    final others =
-        _readMap.entries.where((e) => e.key != widget.myId).toList();
-    if (others.isEmpty) return -1;
-    if (widget.conv.type == 'group') {
-      return others.map((e) => e.value).reduce((a, b) => a < b ? a : b);
-    }
-    return others.first.value;
+  /// 已读回执：长按自己发的消息 → 弹出"谁读了 / 谁没读"面板
+  void _showReadReceipt(Message m) {
+    Navigator.pop(context); // 先关长按菜单
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.bgElevated,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (_) => _ReadReceiptSheet(convId: widget.conv.id, msgId: m.id),
+    );
   }
 
-  /// 只在「自己发的最后一条未撤回消息」上显示已读/未读
+  // ---------- 渲染 ----------
+
+  /// 只在「自己发的最后一条未撤回消息」上常驻显示已读回执。
+  /// 单聊：对方读到哪 → 已读 / 未读；
+  /// 群聊：其他成员里多少人读到了这条 → 「已读 N/共 M」（N=已读人数，M=其他成员总数）。
   String? _readLabelFor(int i) {
     final m = _msgs[i];
     if (m.senderId != widget.myId || m.deleted) return null;
@@ -982,8 +992,16 @@ class _ChatScreenState extends State<ChatScreen> {
         .skip(i + 1)
         .any((x) => x.senderId == widget.myId && !x.deleted);
     if (hasLaterMine) return null;
-    final wm = _watermark;
-    if (wm < 0) return null;
+    final others = _readMap.entries.where((e) => e.key != widget.myId).toList();
+    if (others.isEmpty) return null;
+    if (widget.conv.type == 'group') {
+      final read = others.where((e) => e.value >= m.id).length;
+      final total = others.length;
+      // 没有任何其他成员时（理论上不会，但兜底）不显示
+      if (total == 0) return null;
+      return '已读 $read/$total';
+    }
+    final wm = others.first.value;
     return wm >= m.id ? '已读' : '未读';
   }
 
@@ -1657,4 +1675,221 @@ class _MentionPick {
   final int id;
 
   const _MentionPick(this.name, this.id);
+}
+
+/// 已读回执面板：列出一条消息的已读 / 未读成员（含头像、名字）。
+/// 服务端按"除发送者外的会话成员，last_read_id >= 消息 id"判定已读。
+/// 只对"自己发的消息"开放入口（隐私：不能看别人消息谁读了）。
+class _ReadReceiptSheet extends StatefulWidget {
+  final int convId;
+  final int msgId;
+  const _ReadReceiptSheet({ required this.convId, required this.msgId });
+
+  @override
+  State<_ReadReceiptSheet> createState() => _ReadReceiptSheetState();
+}
+
+class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
+  bool _loading = true;
+  String? _err;
+  Map<String, dynamic>? _data;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final d = await ImApi().messageReaders(widget.convId, widget.msgId);
+      if (!mounted) return;
+      setState(() {
+        _data = d;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _err = e.toString().replaceFirst('Exception: ', '');
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
+    final content = _loading
+        ? const Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 40),
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            ),
+          )
+        : _err != null
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 24),
+                  child:
+                      Text(_err!, style: const TextStyle(color: AppColors.textWeak)),
+                ),
+              )
+            : _body();
+
+    return SafeArea(
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.78,
+        ),
+        padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            _header(),
+            const SizedBox(height: 14),
+            Flexible(child: SingleChildScrollView(child: content)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _header() {
+    final sender = _data?['sender'] as Map<String, dynamic>?;
+    final readCount = _data?['readCount'] as int? ?? 0;
+    final total = _data?['total'] as int? ?? 0;
+    final isGroup = _data?['conversationType'] == 'group';
+    final kind = _data?['kind'] as String? ?? '';
+    final content = _data?['content'] as String? ?? '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text('已读回执',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppColors.brand.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text('已读 $readCount/$total',
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.brand)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '${isGroup ? "群聊" : "单聊"} · ${sender?['name'] ?? "某人"} 发送',
+          style: const TextStyle(fontSize: 12.5, color: AppColors.textWeak),
+        ),
+        if (kind == 'text' && content.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(content,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, color: AppColors.textSub)),
+          ),
+      ],
+    );
+  }
+
+  Widget _body() {
+    final rawRead = _data?['read'];
+    final rawUnread = _data?['unread'];
+    final read = rawRead is List ? rawRead.cast<Map<String, dynamic>>() : <Map<String, dynamic>>[];
+    final unread = rawUnread is List ? rawUnread.cast<Map<String, dynamic>>() : <Map<String, dynamic>>[];
+    final sections = <_ReceiptSection>[
+      _ReceiptSection('已读 ${read.length}', read, true),
+      _ReceiptSection('未读 ${unread.length}', unread, false),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final s in sections) ...[
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 8),
+            child: Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: s.read ? AppColors.brand : AppColors.textWeak,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(s.title,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.text)),
+              ],
+            ),
+          ),
+          if (s.members.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 16, bottom: 4),
+              child: Text(s.read ? '暂无人已读' : '全部已读',
+                  style: const TextStyle(fontSize: 12.5, color: AppColors.textWeak)),
+            )
+          else
+            for (final u in s.members)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  children: [
+                    UserAvatar(
+                      name: (u['name'] as String?) ?? '?',
+                      size: 34,
+                      radius: 12,
+                      imageUrl: u['avatar'] as String?,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text((u['name'] as String?) ?? '?',
+                          style: const TextStyle(fontSize: 14, color: AppColors.text)),
+                    ),
+                    if (u['isBot'] == true)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: AppColors.brand.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text('机器人',
+                            style: TextStyle(
+                                fontSize: 9.5, fontWeight: FontWeight.w700, color: AppColors.brand)),
+                      ),
+                  ],
+                ),
+              ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ReceiptSection {
+  final String title;
+  final List<Map<String, dynamic>> members;
+  final bool read;
+  const _ReceiptSection(this.title, this.members, this.read);
 }

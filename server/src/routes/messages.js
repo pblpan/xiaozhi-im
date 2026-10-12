@@ -4,7 +4,7 @@ const { verifyToken } = require('../auth');
 const events = require('../events');
 const {
   sendMessage, withFileInfo,
-  recallMessage, markRead, readState, RECALL_WINDOW_MS,
+  recallMessage, markRead, readState, readReceipt, RECALL_WINDOW_MS,
   searchMessages, conversationTitle, remarkOf,
   forwardMessage, togglePin, pinnedMessage, MENTION_ALL, mentionLike,
 } = require('../chat');
@@ -279,6 +279,22 @@ router.post('/:id/read', (req, res) => {
   try {
     res.json(markRead({ conversationId: cid, userId: uid, messageId: (req.body || {}).messageId }));
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 已读回执：发消息的人（仅本人）长按自己发的消息查看"谁读了 / 谁没读"
+// 接收人口径见 chat.readReceipt：除发送者外的会话成员，last_read_id >= 该消息 id 即已读
+router.get('/:id/messages/:msgId/readers', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const cid = Number(req.params.id);
+  const mid = Number(req.params.msgId);
+  if (!memberOf(cid, uid, res)) return;
+  const msg = db.prepare('SELECT id, sender_id FROM messages WHERE id=? AND conversation_id=?').get(mid, cid);
+  if (!msg) return res.status(404).json({ error: 'message not found' });
+  // 隐私：只有发消息的人自己能看这条消息的回执，不能看别人的
+  if (msg.sender_id !== uid) return res.status(403).json({ error: '只有发消息的人自己能查看已读回执' });
+  const r = readReceipt(mid);
+  if (!r) return res.status(404).json({ error: 'message not found' });
+  res.json(r);
 });
 
 module.exports = router;

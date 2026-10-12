@@ -345,6 +345,12 @@ class ImApi {
       await _post('/conversations/$cid/read',
           msgId == null ? const {} : {'messageId': msgId});
 
+  /// 已读回执：发消息的人（仅本人）查看某条消息"谁读了 / 谁没读"。
+  /// 返回 { messageId, conversationId, conversationType, sender, kind, content,
+  ///   createdAt, total, readCount, unreadCount, read:[...], unread:[...] }。
+  Future<Map<String, dynamic>> messageReaders(int cid, int msgId) async =>
+      await _get('/conversations/$cid/messages/$msgId/readers');
+
   /// 全局消息搜索（服务端只在「我参与的会话」里搜，已撤回/非文字不返回）
   /// 返回 { items: [...], total, keyword }
   Future<Map<String, dynamic>> searchMessages(String q,

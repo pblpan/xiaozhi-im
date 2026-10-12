@@ -1,0 +1,80 @@
+services:
+  xiaozhi-im:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.prebuilt
+    image: xiaozhi-im-server:0.26.67
+    container_name: xiaozhi-im
+    restart: unless-stopped
+    ports:
+      - "3602:3602"
+      # 局域网发现（UDP 广播应答）：客户端首装时自动找到服务器。
+      # 必须映射为 UDP；不映射的话发现服务静默失效，客户端只能手填地址。
+      - "3616:3616/udp"
+    environment:
+      - PORT=3602
+      # 密钥一律不留默认值（2026-09-16 整改）：缺失时服务端会生成随机值，
+      # JWT 密钥还会持久化到数据目录。从前这里写的是 change-me-... / admin123，
+      # 而本仓库有过一段 Public 历史 —— 那等于把登录密钥和管理台密码一起公开。
+      # 安装脚本会把强随机值写进 docker/.env。
+      - JWT_SECRET=${JWT_SECRET:-}
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - MAX_FILE_MB=50
+      # 中继地址下发给客户端（改了不用重发安装包）
+      - ICE_STUN=${ICE_STUN:-}
+      - TURN_URLS=${TURN_URLS:-}
+      - TURN_USERNAME=${TURN_USER:-xiaozhi}
+      # 中继口令**只在 .env 里给**，这里不再兜底默认值 —— 本仓库是 Public，
+      # 写在这里等于公开送人。必须与服务端 /data/turn.env 的 TURN_CREDENTIAL
+      # 一致，否则自建中继认证失败；缺了 coturn 会拒绝启动并告知补哪一行。
+      - TURN_CREDENTIAL=${TURN_PASSWORD:-}
+      # Cloudflare Realtime TURN：免端口映射，免费额度 1TB/月
+      - CF_TURN_KEY_ID=${CF_TURN_KEY_ID:-}
+      - CF_TURN_API_TOKEN=${CF_TURN_API_TOKEN:-}
+    volumes:
+      - ./data:/data
+      # 宿主机标识（只读）—— 授权机器码的指纹来源，**不要删**。
+      # 容器里的东西都不能当指纹：hostname 是容器 ID（每次重建都变）、
+      # /etc/machine-id 根本不存在（Docker 默认不挂载）、eth0 是虚拟网卡。
+      # 用它们的话，重建一次容器（升级、热更、改配置都会触发）机器码就变了，
+      # 已经激活的授权当场失效。挂载宿主机 machine-id 之后：
+      #   容器重建 → 机器码不变（授权保持）
+      #   换台机器 → 机器码必变（授权失效，防把 ./data 整个拷走白嫖）
+      - /etc/machine-id:/host/machine-id:ro
+
+  # ---------------------------------------------------------------
+  #  TURN 中继：让手机流量 / 企业网络（对称 NAT）也能接通音视频。
+  #
+  #  用 host 网络是刻意的：中继要占一段 UDP 端口（默认 49160-49200），
+  #  桥接模式得逐个映射，不如直接听宿主机。
+  #
+  #  ⚠ 前置条件（缺一不可）：
+  #    1) 本机有公网 IP（在路由器 WAN 口能看到真实公网地址）
+  #    2) 路由器把这些端口映射到本机：
+  #         3478/udp  3478/tcp  49160-49200/udp
+  #  没有公网 IP 的话，这个容器起得来也没用，外网仍打不通 —— 此时
+  #  应改用云服务器跑中继，把 TURN_URLS 指过去。
+  #  不需要音视频中继（纯内网文字/图片）的话，可直接删掉这个 service。
+  # ---------------------------------------------------------------
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    container_name: xiaozhi-im-turn
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./coturn/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    environment:
+      - TURN_EXTERNAL_IP=${TURN_EXTERNAL_IP:-}
+      # 内网地址：留空则由 entrypoint 自动探测。写上后 coturn 用
+      # "公网/内网" 双地址形式，两路都走本中继时直接在内部投递，不绕公网回环
+      - TURN_INTERNAL_IP=${TURN_INTERNAL_IP:-}
+      - TURN_USER=${TURN_USER:-xiaozhi}
+      # 同服务端：口令只在 .env 里给。缺了 entrypoint 直接报错退出，
+      # 不会带着空口令或公开默认口令把中继跑起来。
+      - TURN_PASSWORD=${TURN_PASSWORD:-}
+      - TURN_REALM=${TURN_REALM:-xiaozhi.im}
+      - TURN_MIN_PORT=${TURN_MIN_PORT:-49160}
+      - TURN_MAX_PORT=${TURN_MAX_PORT:-49200}

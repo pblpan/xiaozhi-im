@@ -84,13 +84,13 @@
               <el-menu-item index="master">商品档案</el-menu-item>
               <el-menu-item index="deduct">库房减货</el-menu-item>
             </el-sub-menu>
-            <el-menu-item index="modules">动态模块</el-menu-item>
             <el-menu-item index="training">培训中心</el-menu-item>
           </el-sub-menu>
 
           <el-sub-menu index="g-sys">
             <template #title><el-icon><Setting /></el-icon><span>系统</span></template>
             <el-menu-item index="deploywizard">部署向导</el-menu-item>
+            <el-menu-item index="modules">动态模块</el-menu-item>
             <el-menu-item index="settings">系统设置</el-menu-item>
             <el-menu-item index="health">数据体检</el-menu-item>
             <el-menu-item index="license">授权管理</el-menu-item>
@@ -1380,8 +1380,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <el-table-column prop="created_at" label="发送时间" width="170">
               <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="100">
+            <el-table-column label="操作" width="170">
               <template #default="{ row }">
+                <el-button size="small" type="primary" plain @click="openReadReceipt(row)">谁看了</el-button>
                 <el-button size="small" type="danger" @click="delMessage(row)">删除</el-button>
               </template>
             </el-table-column>
@@ -1396,6 +1397,33 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <div class="hint" style="margin-top:10px">
             提示：筛选条件就是「批量清理」的作用范围 —— 不用勾选，按条件执行，服务端会重算条数并要求二次确认。
           </div>
+          <!-- 已读回执：谁读了 / 谁没读 -->
+          <el-dialog v-model="readReceiptDlg" width="520px" :title="readReceiptTitle">
+            <div v-loading="readReceiptLoading">
+              <div v-if="readReceiptData">
+                <div style="margin-bottom:12px">
+                  <span class="hint">共 {{ readReceiptData.total }} 名接收人 · 已读 {{ readReceiptData.readCount }} 人 · 未读 {{ readReceiptData.unreadCount }} 人</span>
+                </div>
+                <div>
+                  <div style="font-weight:600;margin-bottom:6px;color:#303133">已读（{{ readReceiptData.read.length }}）</div>
+                  <div v-if="!readReceiptData.read.length" style="color:#909399;font-size:13px;padding:2px 0">暂无人已读</div>
+                  <div v-for="u in readReceiptData.read" :key="'r' + u.id" style="display:flex;align-items:center;padding:5px 0;font-size:14px;color:#303133">
+                    <span>{{ u.name }}</span>
+                    <el-tag v-if="u.isBot" size="small" type="info" style="margin-left:6px">机器人</el-tag>
+                  </div>
+                </div>
+                <div style="margin-top:14px">
+                  <div style="font-weight:600;margin-bottom:6px;color:#303133">未读（{{ readReceiptData.unread.length }}）</div>
+                  <div v-if="!readReceiptData.unread.length" style="color:#909399;font-size:13px;padding:2px 0">全部已读</div>
+                  <div v-for="u in readReceiptData.unread" :key="'u' + u.id" style="display:flex;align-items:center;padding:5px 0;font-size:14px;color:#303133">
+                    <span>{{ u.name }}</span>
+                    <el-tag v-if="u.isBot" size="small" type="info" style="margin-left:6px">机器人</el-tag>
+                  </div>
+                </div>
+              </div>
+              <div v-else-if="!readReceiptLoading" style="color:#909399;text-align:center;padding:24px">加载失败</div>
+            </div>
+          </el-dialog>
         </div>
 
         <!-- 集成对接 -->
@@ -4676,6 +4704,55 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </template>
           </el-alert>
 
+          <!-- 注册帮助：APNs 四件套怎么拿（2026-10-12 增加） -->
+          <el-collapse style="margin-bottom:14px">
+            <el-collapse-item title="注册帮助：Key ID / Team ID / Bundle ID / .p8 去哪里拿？（点开看步骤）">
+              <div class="hint" style="margin-bottom:8px">
+                前提：需要一个 <b>Apple 开发者账号</b>（个人账号 99 美元/年，约 ¥688）。
+                没有它，下面这四样一样都拿不到，iOS 推送也就无从谈起。
+              </div>
+              <ol style="line-height:1.9;padding-left:22px;margin:6px 0">
+                <li>
+                  <b>注册 / 登录开发者账号</b>：浏览器打开
+                  <a href="https://developer.apple.com/account" target="_blank" rel="noopener">developer.apple.com</a>
+                  → 用 Apple ID 登录「Account」→ 加入 <b>Apple Developer Program</b>
+                  （个人或公司，需付费并等审核通过）。
+                </li>
+                <li>
+                  <b>拿 Team ID</b>：登录后进 Account → <b>Membership</b> 页，
+                  「Team ID」就是那串 10 位字母数字（如 <code class="mono">A1B2C3D4E5</code>）。
+                </li>
+                <li>
+                  <b>建 Bundle ID（Identifiers）</b>：Account →
+                  <b>Certificates, Identifiers &amp; Profiles</b> → <b>Identifiers</b> →
+                  点 <b>+</b> → 选 <b>App IDs</b> → 填一个唯一标识（如
+                  <code class="mono">com.pblpan.xiaozhi</code>）。
+                  ⚠️ 它必须和 App 打包时用的 Bundle ID <b>完全一致</b>，否则推送会被 Apple 拒收。
+                </li>
+                <li>
+                  <b>建 APNs 密钥（Key ID + .p8）</b>：同一页面 → <b>Keys</b> →
+                  点 <b>+</b> → 勾选 <b>「Apple Push Notifications service (APNs)」</b>
+                  → Continue → Register → <b>下载 .p8 文件（只能下载这一次！）</b>，
+                  并记下页面上的 <b>Key ID</b>（10 位）。
+                </li>
+                <li>
+                  <b>回填本页</b>：把 <b>Key ID / Team ID / Bundle ID</b> 填进上面的表单，
+                  把 <b>.p8 的全部内容</b>（含 <code class="mono">-----BEGIN PRIVATE KEY-----</code>
+                  与结尾那行）整个粘进「.p8 私钥」→ 点
+                  <b>「本地自检（先试再存）」</b>，四项都识别到再点 <b>「保存并立即生效」</b>。
+                </li>
+              </ol>
+              <div class="hint">
+                💡 小贴士：<br />
+                · 一个 APNs Key 可用于该开发者账号下的<b>所有 App</b>，不必每个 App 建一个。<br />
+                · <b>.p8 丢了就再也下载不到</b> —— 只能重新建 Key（Key ID 会变，记得回来改）。<br />
+                · 「环境」按手机装的包选：App Store / TestFlight 装的选<b>生产</b>，Xcode 直连调试选<b>沙盒</b>。
+                选错的表现是「服务端说发出去了、手机一条都收不到」。<br />
+                · iOS 客户端需用同一开发者账号的证书 / 描述文件打包，APNs 才能匹配到这台设备。
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+
           <el-descriptions border :column="4" style="margin-bottom:14px">
             <el-descriptions-item label="当前状态">
               <el-tag :type="push.info?.enabled ? 'success' : 'info'" effect="plain" size="small">
@@ -5881,8 +5958,8 @@ const MENU_SUB_OF = {
   users: 'g-org', groups: 'g-org', friends: 'g-org', orgs: 'g-org',
   attendance: 'g-office', files: 'g-office', messages: 'g-office',
   integrations: 'g-link', upstreams: 'g-link', clientconfig: 'g-link', push: 'g-link',
-  master: 'g-biz', deduct: 'g-biz', modules: 'g-biz', training: 'g-biz',
-  settings: 'g-sys', license: 'g-sys', help: 'g-sys', deploywizard: 'g-sys',
+  master: 'g-biz', deduct: 'g-biz', training: 'g-biz',
+  settings: 'g-sys', license: 'g-sys', help: 'g-sys', deploywizard: 'g-sys', modules: 'g-sys',
 };
 // 首屏不进任何分组：默认全收起，侧栏一眼看完。要看什么再展开。
 const openedGroups = ref([]);
@@ -8695,6 +8772,27 @@ async function delMessage(row) {
     const { data } = await api.get('/admin/stats'); stats.value = data;
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
+// 已读回执：管理员在「消息管理」里点「谁看了」，看一条消息谁读了 / 谁没读
+const readReceiptDlg = ref(false);
+const readReceiptLoading = ref(false);
+const readReceiptData = ref(null);
+const readReceiptTitle = ref('谁看了');
+async function openReadReceipt(row) {
+  readReceiptData.value = null;
+  readReceiptLoading.value = true;
+  readReceiptTitle.value = `谁看了 · 消息 #${row.id}`;
+  readReceiptDlg.value = true;
+  try {
+    const { data } = await api.get(`/admin/messages/${row.id}/readers`);
+    readReceiptData.value = data;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '获取已读回执失败');
+    readReceiptData.value = null;
+  } finally {
+    readReceiptLoading.value = false;
   }
 }
 

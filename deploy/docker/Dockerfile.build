@@ -1,0 +1,34 @@
+# ============================================================
+#  小智IM 服务端 —— 从源码构建版（Dockerfile.build）
+#
+#  与 Dockerfile.prebuilt 的区别：这里会 `npm install --omit=dev`，
+#  即**重新按当前平台装依赖**。适合两种情况：
+#    · 想要 Linux 原生 ssh2 加速模块（而不是退回纯 JS 实现）；
+#    · 不信任打包时带来的 node_modules，想从 npm 源拉一份干净的。
+#
+#  用法（在 tar 包根目录）：
+#    docker build -t xiaozhi-im-server:<版本> -f server/Dockerfile.build server/
+#  或者在 docker-compose.yaml 里把 build.dockerfile 改指向它。
+# ============================================================
+FROM node:22-slim
+
+WORKDIR /app
+
+# 先装生产依赖（利用层缓存）
+COPY package.json ./
+RUN npm install --omit=dev
+
+# 拷贝应用（含已构建的管理后台 public/）
+COPY . .
+
+ENV PORT=3602 \
+    DATA_DIR=/data \
+    ADMIN_USERNAME=admin \
+    MAX_FILE_MB=50
+
+RUN mkdir -p /data/files
+
+VOLUME ["/data"]
+EXPOSE 3602
+
+CMD ["node", "src/index.js"]

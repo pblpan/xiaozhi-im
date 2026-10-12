@@ -233,7 +233,7 @@ class MessageBubble extends StatelessWidget {
                         fontWeight: readLabel == '已读'
                             ? FontWeight.w600
                             : FontWeight.w400,
-                        color: readLabel == '已读'
+                        color: readLabel!.startsWith('已读')
                             ? AppColors.brand
                             : AppColors.textWeak,
                       ),

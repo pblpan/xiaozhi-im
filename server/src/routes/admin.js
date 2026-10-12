@@ -16,6 +16,7 @@ const appregistry = require('../apps');
 const settings = require('../settings');
 const remote = require('../remote');
 const hub = require('../hub');
+const chat = require('../chat');
 const orgs = require('./orgs');
 const paging = require('../paging');
 // 只是借它的时区工具算"今天"的边界：容器 TZ 常是 UTC，
@@ -1002,6 +1003,15 @@ router.get('/purge-backups/:name', (req, res) => {
   const p = path.join(config.DATA_DIR, 'purge-backup', name);
   if (!fs.existsSync(p)) return res.status(404).json({ error: 'not found' });
   res.download(p, name);
+});
+
+/** 已读回执：给定消息 id，返回谁读了 / 谁没读（管理员审计，不限制发送者）。 */
+router.get('/messages/:id/readers', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const mid = Number(req.params.id);
+  const r = chat.readReceipt(mid);
+  if (!r) return res.status(404).json({ error: 'message not found' });
+  res.json(r);
 });
 
 router.delete('/messages/:id', (req, res) => {

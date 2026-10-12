@@ -402,13 +402,19 @@ function markRead({ conversationId, userId, messageId }) {
   db.prepare('UPDATE conversation_members SET last_read_id = ? WHERE conversation_id = ? AND user_id = ?')
     .run(target, conversationId, userId);
 
-  // 告诉会话内其他人"我读到哪了"（用于对方渲染已读回执）
+  // 告诉会话内所有人"我读到哪了"。
+  // 🔴 2026-10-12 修复：原来第 4 个参数传了 userId，把自己排除在外 ——
+  // 结果自己读完一条消息后，自己的会话列表和底部红点不会刷新
+  // （conversations.dart 只在收到 message:read 才重算未读角标，而自己收不到自己的）。
+  // 改成发给所有人：聊天页收到自己的事件已在 chat.dart:335 用 uid==myId 拦掉，
+  // 不会误渲染；会话列表收到后会重算角标，红点立刻消失；
+  // 还顺带修好了同一账号多端登录时红点不同步的问题。
   hub.broadcastToConversation(db, conversationId, {
     type: 'message:read',
     conversationId,
     userId,
     lastReadId: target,
-  }, userId);
+  }, null);
 
   return { conversationId, userId, lastReadId: target, changed: true };
 }
@@ -429,6 +435,56 @@ function typing({ conversationId, userId }) {
 function readState(conversationId) {
   return db.prepare('SELECT user_id, last_read_id FROM conversation_members WHERE conversation_id = ?')
     .all(conversationId);
+}
+
+/**
+ * 已读回执：给定一条消息 id，返回发送者、会话类型、以及每个"接收人"
+ * （除发送者外的会话成员）是否已读（last_read_id >= 该消息 id 即视为已读）。
+ *
+ * 口径与 markRead 完全一致——"已读"指"打开会话把水位推过这条消息"，
+ * 不是"在通知里瞥了一眼"。管理员后台「谁看了」与「发消息的人长按自己消息查看」
+ * 共用同一套口径，避免两套逻辑各算各的。
+ *
+ * 接收人不包含发送者本人：自己发的自己肯定已读，不计入"谁看了"，
+ * 这样群聊里 N/共 M 的 M 是"真正要读这条消息的其他人"。
+ */
+function readReceipt(messageId) {
+  const msg = db.prepare('SELECT id, conversation_id, sender_id, kind, content, created_at FROM messages WHERE id=?')
+    .get(messageId);
+  if (!msg) return null;
+  const conv = db.prepare('SELECT id, type FROM conversations WHERE id=?').get(msg.conversation_id);
+  const sender = db.prepare('SELECT id, username, nickname, avatar, is_bot FROM users WHERE id=?').get(msg.sender_id);
+  const members = db.prepare(`SELECT cm.user_id, cm.last_read_id, u.username, u.nickname, u.avatar, u.is_bot
+    FROM conversation_members cm JOIN users u ON u.id = cm.user_id
+    WHERE cm.conversation_id = ?`).all(msg.conversation_id);
+  const mk = (m) => ({
+    id: m.user_id,
+    name: m.nickname || m.username,
+    avatar: m.avatar || null,
+    isBot: !!m.is_bot,
+    lastReadId: m.last_read_id || 0,
+    read: (m.last_read_id || 0) >= messageId,
+  });
+  // 接收人 = 除发送者外的成员（自己发的自己肯定已读，不计入"谁看了"）
+  const recipients = members.filter((m) => m.user_id !== msg.sender_id);
+  const readList = recipients.filter((m) => (m.last_read_id || 0) >= messageId).map(mk);
+  const unreadList = recipients.filter((m) => (m.last_read_id || 0) < messageId).map(mk);
+  return {
+    messageId,
+    conversationId: msg.conversation_id,
+    conversationType: conv?.type || null,
+    sender: sender
+      ? { id: sender.id, name: sender.nickname || sender.username, avatar: sender.avatar || null, isBot: !!sender.is_bot }
+      : null,
+    kind: msg.kind,
+    content: msg.kind === 'text' ? (msg.content || '') : `[${msg.kind}]`,
+    createdAt: msg.created_at,
+    total: recipients.length,
+    readCount: readList.length,
+    unreadCount: unreadList.length,
+    read: readList,
+    unread: unreadList,
+  };
 }
 
 /**
@@ -643,7 +699,7 @@ function listFavorites({ userId, limit = 100, offset = 0 }) {
 
 module.exports = {
   sendMessage, withFileInfo,
-  recallMessage, markRead, typing, readState,
+  recallMessage, markRead, typing, readState, readReceipt,
   conversationTitle, searchMessages, remarkOf,
   forwardMessage, togglePin, pinnedMessage, canPin,
   addFavorite, removeFavorite, listFavorites,
