@@ -33,8 +33,9 @@ const ok = (name, cond, extra) => {
 
 console.log('— 出厂分组 —');
 ok('DEFAULT_GROUPS 两项', appregistry.DEFAULT_GROUPS.length === 2, appregistry.DEFAULT_GROUPS);
-// 🔴 2026-10-04：库房减货/补货撤出工作台（功能收进盘点页）→ 11 - 2 = 9 个
-ok('9 个内置应用都有出厂色', appregistry.BUILTIN_APPS.length === 9
+// 🔴 2026-10-04：库房减货/补货撤出工作台（功能收进盘点页）→ 11 - 2 = 9 个；
+// e81e626 智能助手（assistant）加入内置应用 → 10 个。
+ok('10 个内置应用都有出厂色', appregistry.BUILTIN_APPS.length === 10
   && appregistry.BUILTIN_APPS.every((a) => a.color), appregistry.BUILTIN_APPS.filter((a) => !a.color).map((a) => a.id));
 const colors = appregistry.BUILTIN_APPS.map((a) => a.color);
 ok('颜色互不重复', new Set(colors).size === colors.length, colors);

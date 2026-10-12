@@ -143,8 +143,12 @@ function stopServer() {
 
   r = await api('GET', '/api/friends', { token: admin });
   const fa = (r.body?.friends || []).map((x) => x.username).sort();
-  ok('admin 好友 = 三名员工（自动）',
-    JSON.stringify(fa) === JSON.stringify(['emp001', 'emp002', 'emp003']), JSON.stringify(fa));
+  // 🔴 2026-10-12 更新：好友补齐（backfillAllFriendships，2026-10-11 上线）在
+  // 切到 work 模式时会把**所有真人两两**补成好友 —— outsider 也是真人，
+  // 所以 admin 的自动好友 = 三名员工 + outsider（emp001 只有 3 个是因为
+  // backfill 触发时它还没建出来，之后靠组织自动互好友补齐）。
+  ok('admin 好友 = 三名员工 + outsider（自动）',
+    JSON.stringify(fa) === JSON.stringify(['emp001', 'emp002', 'emp003', 'outsider']), JSON.stringify(fa));
 
   // ---------------- 四：work 模式行为约束 ----------------
   console.log('\n【四】work 模式行为约束');
