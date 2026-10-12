@@ -81,6 +81,8 @@ class StockMasterRepo {
         'unit': (raw['unit'] ?? '').toString(),
         'unit_price': _num(raw['unit_price']),
         'account_qty': _num(raw['account_qty']),
+        // 供应商（龙哥 2026-10-12）：上游带了就带上，没带落空串。
+        'supplier': (raw['supplier'] ?? '').toString(),
       });
     }
     return out;
@@ -204,6 +206,7 @@ class StockMasterRepo {
         member_price REAL,
         special_price REAL,
         account_qty REAL,
+        supplier TEXT,
         source TEXT,
         updated_at INTEGER
       )
@@ -237,6 +240,9 @@ class StockMasterRepo {
             'member_price': e['member_price'],
             'special_price': e['special_price'],
             'account_qty': e['account_qty'],
+            // 供应商（龙哥 2026-10-12）：服务端 2026-10-10 就带了这列，
+            // 客户端这条链路没接，商档查询页永远显示不出来。
+            'supplier': e['supplier'],
           });
         }
         if (rows.isEmpty) break;
@@ -264,14 +270,16 @@ class StockMasterRepo {
     //    商档查询页"进货价"从此一直显示不出来，而同步成功、条数都对，
     //    **没有任何报错** —— 这是本轮五修里最隐蔽的一个 bug。
     //    教训：staging 表加列时，搬家 SQL 必须同一次改，两处只改一处 = 静默丢列。
+    // 🔴 2026-10-12 供应商 supplier 同款教训：staging 建表和分页行解析都带了，
+    //    搬家 SQL 又漏了 —— 三处必须一次改齐，漏一处 = 静默丢列。
     await db.transaction((txn) async {
       await txn.delete('stock_master');
       await txn.rawInsert(
         'INSERT INTO stock_master '
         '(barcode, name, spec, unit, unit_price, purchase_price, '
-        'member_price, special_price, account_qty, source, updated_at) '
+        'member_price, special_price, account_qty, supplier, source, updated_at) '
         'SELECT barcode, name, spec, unit, unit_price, purchase_price, '
-        'member_price, special_price, account_qty, source, updated_at '
+        'member_price, special_price, account_qty, supplier, source, updated_at '
         'FROM $stagingTable',
       );
     });

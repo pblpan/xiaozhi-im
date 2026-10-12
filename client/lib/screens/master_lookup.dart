@@ -287,6 +287,7 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
     'member_price': '会员价',
     'special_price': '特价',
     'account_qty': '库存',
+    'supplier': '供应商',
     'source': '来源',
     'updated_at': '更新时间',
   };
@@ -304,6 +305,7 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
     'member_price',
     'special_price',
     'account_qty',
+    'supplier',
     'source',
     'updated_at',
   ];

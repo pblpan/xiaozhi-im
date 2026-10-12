@@ -40,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 6;
+  static const int schemaVersion = 7;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -257,6 +257,16 @@ class LocalDb {
         )
       ''');
     },
+    // v7：商档补「供应商 supplier」（龙哥 2026-10-12：商档查询要能看到供应商）。
+    //
+    // 服务端 2026-10-10 就给 product_master 加了 supplier 列（导入/分页接口都带），
+    // 但客户端同步链路四处（staging 建表 / 分页行解析 / 搬家 SQL / 本地表）全没接，
+    // 同步完本地这列永远为空 —— 和 v5/v6 补进价、会员价是同一类坑：
+    // **不报错、条数也对，只是那行永远显示不出数据**。
+    // 照 v5/v6 同款幂等补列模式：老库 ALTER ADD，新库 v1 建表已含。
+    (Database db) async {
+      await _addColumn(db, 'stock_master', 'supplier', 'TEXT');
+    },
   ];
 
   /// 有序迁移列表（**仅供测试**读取）。生产代码不要碰它。
@@ -322,7 +332,7 @@ class LocalDb {
   }
 
   /// 新建库（onCreate 收到的 version 即当前 schemaVersion）。
-  /// 冷启动在 v1 时只跑 _migrations[0]；从 0 直装到 v6 会跑 [0,1,2,3,4,5]。
+  /// 冷启动在 v1 时只跑 _migrations[0]；从 0 直装到 v7 会跑 [0..6]。
   /// ⚠️ 加迁移时这句里的数字要跟着改（写死的版本号最容易变成假说明）。
   Future<void> _onCreate(Database db, int version) async {
     for (var i = 1; i <= version; i++) {
