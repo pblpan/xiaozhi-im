@@ -31,7 +31,11 @@ from fnos_auth import HOST, PASS, USER  # noqa: E402
 def connect(timeout=20):
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(HOST, username=USER, password=PASS, timeout=timeout)
+    # 只用密码鉴权：跳过 SSH agent 与 ~/.ssh 里的默认私钥。否则一旦本机
+    # 有某个格式不对的私钥，paramiko 会在尝试它时抛「Invalid private key」
+    # 直接崩在鉴权阶段，连密码都来不及试（本机 2026-10-12 实测踩到）。
+    c.connect(HOST, username=USER, password=PASS, timeout=timeout,
+              allow_agent=False, look_for_keys=False)
     return c
 
 
