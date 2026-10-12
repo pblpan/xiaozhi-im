@@ -603,10 +603,11 @@ class _CameraScanPageState extends State<CameraScanPage> {
     final unknown = name.trim().isEmpty;
     final spec = (master?['spec'] ?? '').toString();
     final unit = (master?['unit'] ?? '').toString();
-    // v4 新增：供应商 / 进价 / 会员价 / 特价（老商档这些列为 NULL，按"没有就不显示"处理）。
+    // v4 新增：供应商 / 进价 / 售价 / 特价（老商档这些列为 NULL，按"—"显示）。
+    // 供应商行是龙哥特意要的（2026-10-12）：在红框区上方，不动。
     final supplier = (master?['supplier']?.toString() ?? '').trim();
     final purchaseRaw = master?['purchase_price'];
-    final memberRaw = master?['member_price'];
+    final unitRaw = master?['unit_price'];
     final specialRaw = master?['special_price'];
     final title = unknown ? '未知条码' : name;
     final sub = unknown
@@ -645,8 +646,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
           Text(sub,
               style: const TextStyle(color: AppColors.textSub, fontSize: 12),
               overflow: TextOverflow.ellipsis),
-          // v4：商档命中时，把供应商 / 会员价 / 特价一并亮出来（对齐 IM 客户端 0.26.68）。
-          // 老商档这些列为 NULL，下面三块都会自动不显示，不会崩。
+          // 供应商行：红框区**上面**的部分，保持不动（龙哥 2026-10-12 特意要的）。
           if (!unknown && supplier.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -664,10 +664,12 @@ class _CameraScanPageState extends State<CameraScanPage> {
                 ],
               ),
             ),
+          // 红框区：进价 / 售价 / 特价 三项固定显示（龙哥 2026-10-12）。
+          // 老商档这些列为 NULL，显示"—"，不会崩。
           if (!unknown)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: _masterPriceRow(purchaseRaw, memberRaw, specialRaw),
+              child: _masterPriceRow(purchaseRaw, unitRaw, specialRaw),
             ),
           const SizedBox(height: 12),
           Row(
@@ -712,37 +714,42 @@ class _CameraScanPageState extends State<CameraScanPage> {
     );
   }
 
-  /// 商档价格行：把进价 / 会员价 / 特价里"大于 0 的"显示成小标签。
+  /// 商档价格行：固定显示**进价 / 售价 / 特价**三项（龙哥 2026-10-12 指定）。
   ///
-  /// ── 为什么只显示 >0 的 ───────────────────────────────────────
-  /// 龙哥那份 12.7 万条里，绝大多数会员价/特价是 0（没设）。全显示成
-  /// "会员价 ¥0.00" 全是噪点，反而把真正有特价的商品埋了。所以只亮非零项；
-  /// 三项都是 0 时返回空（不占地方）。
-  Widget _masterPriceRow(dynamic purchase, dynamic member, dynamic special) {
+  /// ── 特价为 0 显示「特价 —」（龙哥 2026-10-12 采纳）────────────
+  /// 没设特价的商品显示 ¥0.00 扎眼又不真实（特价是"现在有活动"，
+  /// 不是"卖 0 元"）。0 或没这列都按「—」处理；
+  /// 进价/售价 0 极罕见，照实显示数字。
+  Widget _masterPriceRow(dynamic purchase, dynamic unit, dynamic special) {
     double? toDouble(dynamic v) {
       if (v == null) return null;
       if (v is num) return v.toDouble();
       return double.tryParse(v.toString());
     }
 
-    final chips = <Widget>[];
     final pur = toDouble(purchase);
-    final mem = toDouble(member);
+    final uni = toDouble(unit);
     final spe = toDouble(special);
-    if (pur != null && pur > 0) chips.add(_priceChip('进价', pur));
-    if (mem != null && mem > 0) chips.add(_priceChip('会员价', mem));
-    if (spe != null && spe > 0) chips.add(_priceChip('特价', spe));
-    if (chips.isEmpty) return const SizedBox.shrink();
-    return Wrap(spacing: 6, runSpacing: 4, children: chips);
+    final speOff = spe == null || spe <= 0; // 没设特价
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: <Widget>[
+        _priceChip('进价', pur),
+        _priceChip('售价', uni),
+        _priceChip('特价', speOff ? null : spe),
+      ],
+    );
   }
 
-  Widget _priceChip(String label, double v) => Container(
+  Widget _priceChip(String label, double? v) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
           color: AppColors.surfaceHi,
           borderRadius: BorderRadius.circular(6),
         ),
-        child: Text('$label ¥${v.toStringAsFixed(2)}',
+        child: Text(
+            v == null ? '$label —' : '$label ¥${v.toStringAsFixed(2)}',
             style: const TextStyle(color: AppColors.textSub, fontSize: 11)),
       );
 

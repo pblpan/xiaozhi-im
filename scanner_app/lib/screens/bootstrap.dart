@@ -48,13 +48,34 @@ class _BootstrapPageState extends State<BootstrapPage> {
         return;
       }
       final n = await StockMasterRepo().countLocal();
-      if (n > 0) {
+
+      // ── 要不要（重）装内置档 ──────────────────────────────────
+      // ① 空库：首次启动，装。
+      // ② 有库但指纹对不上：覆盖安装/升级后包里的内置档换了 —— **必须重导**。
+      //    老逻辑只在空库时装，1.0.6 老用户升级到 1.0.7 后库里还是旧 7 列
+      //    数据（v4 迁移只加列、不重导），确认卡的供应商/价格全空
+      //    （2026-10-12 龙哥实测踩中）。指纹 = 文件长度 + FNV-1a，
+      //    包里这份和上次装的那份一比就知道换没换。
+      //    ⚠️ 指纹算不出来（原生异常等）时**不动老库**：宁可保守，
+      //    不能因为一次指纹抖动把员工自己导的档案清了。
+      // ③ 有库且指纹一致（或员工手动导过 CSV、指纹没变）：不重复装。
+      var needLoad = n == 0;
+      var isUpgrade = false;
+      if (!needLoad) {
+        final fp = await BuiltinMaster.fingerprint();
+        final stored = await BuiltinMaster.storedStamp();
+        needLoad = fp.isNotEmpty && fp != stored;
+        isUpgrade = needLoad;
+      }
+      if (!needLoad) {
         _go(); // 已经装过（或员工自己导过一份）：不重复装
         return;
       }
 
       if (!mounted) return;
-      setState(() => _msg = '首次启动：正在读取商品档案…');
+      setState(() => _msg = isUpgrade
+          ? '商品档案有更新，正在升级…'
+          : '首次启动：正在读取商品档案…');
 
       final r = await BuiltinMaster.load(
         clearFirst: true,

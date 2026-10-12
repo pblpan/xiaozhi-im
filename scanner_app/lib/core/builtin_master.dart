@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'gbk.dart';
 import 'local_db.dart';
@@ -22,6 +23,9 @@ import 'stock_master_repo.dart';
 class BuiltinMaster {
   /// 与 MainActivity 的 CHANNEL 必须逐字一致。
   static const MethodChannel _ch = MethodChannel('xiaozhi/share');
+
+  /// 内置档指纹的本地存储键。装过哪一版内置档，就记哪个指纹。
+  static const String _stampKey = 'xz_builtin_master_stamp';
 
   /// 这个包带不带内置档案 —— **问原生**：APK 里有没有那份 asset。
   ///
@@ -45,6 +49,53 @@ class BuiltinMaster {
     } on MissingPluginException {
       return null;
     }
+  }
+
+  /// 内置档文件的指纹：`字节数-fnv1a32`。
+  ///
+  /// ── 为什么要有指纹 ────────────────────────────────────────────
+  /// 覆盖安装后本地库**不会**自动刷新（bootstrap 老逻辑只在空库时导入）：
+  /// 1.0.6 老用户的库里还是旧 7 列数据，升级到 1.0.7 后确认卡的
+  /// 供应商/价格照样什么都不显示（2026-10-12 龙哥实测踩中）。
+  /// 有了指纹，开屏比一下"包里这份"和"上次装的那份"，不一致就重导。
+  ///
+  /// 为什么不用 SHA-256：得引 crypto 依赖；FNV-1a 十几行自带，
+  /// 对"检测同一文件换没换"足够（不需要抗碰撞，只需要敏感）。
+  /// 文件约 9.8MB，手机上读完算完约几十毫秒，开屏无感。
+  static Future<String> fingerprint() async {
+    try {
+      final p = await path();
+      if (p == null) return '';
+      return _fnvOf(await File(p).readAsBytes());
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static String _fnvOf(List<int> bytes) {
+    var h = 0x811c9dc5;
+    for (final b in bytes) {
+      h ^= b;
+      h = (h * 0x01000193) & 0xFFFFFFFF;
+    }
+    return '${bytes.length}-${h.toRadixString(16)}';
+  }
+
+  /// 上次成功装载内置档时记录的指纹；没装过（或老版本升级上来）返回 null。
+  static Future<String?> storedStamp() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      return sp.getString(_stampKey);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> _saveStamp(String v) async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString(_stampKey, v);
+    } catch (_) {}
   }
 
   /// 把内置档案装进本地底表。
@@ -81,6 +132,9 @@ class BuiltinMaster {
       purgeMissing: false,
       onProgress: onProgress,
     );
+    // 装载成功才记指纹（放在这里而不是调用方：首次启动 / 恢复内置 /
+    // 升级重导三条路都从 load() 走，谁调都不会漏记）。
+    await _saveStamp(_fnvOf(bytes));
     return MasterImportResult(
       written: n,
       skipped: parsed.skipped,
