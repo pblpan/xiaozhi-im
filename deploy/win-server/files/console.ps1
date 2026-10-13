@@ -106,6 +106,100 @@ function Test-Running {
     return $false
 }
 
+# ---------------- 一键备份 ----------------
+# NAS 上有 Docker 卷快照，Windows 上原来只能手动去拷 data 目录 —— 补上这个按钮。
+# 🔴 SQLite 在 WAL 模式下直接拷 .db 会丢没 checkpoint 的写入，所以备份前
+#    先停服务、备完自动起回（原本没在跑就保持不跑），保证拷出来的是干净快照。
+function Backup-Data {
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $zip = Join-Path $desktop "小智IM服务端备份-$stamp.zip"
+    if (Test-Path $zip) { Remove-Item $zip -Force }
+    $wasRunning = Test-Running
+    if ($wasRunning) {
+        Stop-Server | Out-Null
+        Start-Sleep -Milliseconds 800
+    }
+    $tmp = Join-Path $env:TEMP "xz-backup-$stamp"
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    # data 全拷，只排除 logs（价值低、体积大）
+    Get-ChildItem -Path $DataDir -Force | Where-Object { $_.Name -ne 'logs' } | ForEach-Object {
+        if ($_.PSIsContainer) {
+            Copy-Item $_.FullName -Destination $tmp -Recurse -Force
+        } else {
+            Copy-Item $_.FullName -Destination $tmp -Force
+        }
+    }
+    Compress-Archive -Path (Join-Path $tmp '*') -DestinationPath $zip -CompressionLevel Optimal
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    if ($wasRunning) { Start-Server | Out-Null }
+    return $zip
+}
+
+# ---------------- 一键外网（免费 · Cloudflare 快速隧道）----------------
+# 龙哥 2026-10-13：「Win 服务端的网络连接和 NAS 有很多不同，没有 NAS 方便」——
+# 这个按钮把外网接入的门槛砍到零：连 Cloudflare 账号和域名都不用，
+# cloudflared 自动下载（只下第一次，缓存在 data\tools\），起 quick tunnel
+# 把本机服务转出去，地址自动抓出来给用户复制。
+# ⚠️ 临时地址重启会变，适合试用/应急；正式用引导管理台 CF 向导配固定域名。
+# ⚠️ cloudflared 是独立进程：控制台退出它照跑（隧道要继续服务）。
+$script:cfProc = $null
+function Start-QuickTunnel {
+    $port = Get-Port
+    if (-not (Test-Running)) {
+        $r = [System.Windows.Forms.MessageBox]::Show('服务端还没启动，隧道没人可转。先启动服务端吗？', '提示', 'YesNo', 'Question')
+        if ($r -eq 'Yes') { Start-Server | Out-Null }
+        if (-not (Test-Running)) { return }
+    }
+    $toolsDir = Join-Path $DataDir 'tools'
+    if (-not (Test-Path $toolsDir)) { New-Item -ItemType Directory -Path $toolsDir -Force | Out-Null }
+    $cf = Join-Path $toolsDir 'cloudflared.exe'
+    if (-not (Test-Path $cf)) {
+        $r = [System.Windows.Forms.MessageBox]::Show('首次使用要从 GitHub 下载 cloudflared.exe（约 30MB，国内可能偏慢，只下一次）。现在下载吗？', '下载 cloudflared', 'YesNo', 'Question')
+        if ($r -ne 'Yes') { return }
+        $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile $cf -UseBasicParsing
+        } catch {
+            $form.Cursor = [System.Windows.Forms.Cursors]::Default
+            [System.Windows.Forms.MessageBox]::Show("下载失败：$($_.Exception.Message)`n也可以自己下载 cloudflared.exe 放到这个目录再试：$toolsDir", '下载失败', 'OK', 'Error')
+            return
+        }
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+    }
+    # 清掉上一次可能残留的 quick tunnel（同路径的才算，别误杀别人的 cloudflared）
+    Get-Process cloudflared -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -eq $cf } | Stop-Process -Force -ErrorAction SilentlyContinue
+    $out = Join-Path $env:TEMP 'xz-cloudflared.log'
+    if (Test-Path $out) { Remove-Item $out -Force }
+    try {
+        $script:cfProc = Start-Process -FilePath $cf -ArgumentList @('tunnel', '--url', "http://127.0.0.1:$port", '--no-autoupdate') -RedirectStandardOutput $out -RedirectStandardError $out -PassThru -WindowStyle Hidden
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("启动 cloudflared 失败：$($_.Exception.Message)", '未成功', 'OK', 'Error')
+        return
+    }
+    # 轮询日志抓 trycloudflare.com 地址（最多 40 秒）
+    $url = $null
+    for ($i = 0; $i -lt 80; $i++) {
+        Start-Sleep -Milliseconds 500
+        if ($script:cfProc -and $script:cfProc.HasExited) { break }
+        if (Test-Path $out) {
+            $m = Select-String -Path $out -Pattern '(https://[a-z0-9-]+\.trycloudflare\.com)' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($m) { $url = $m.Matches[0].Groups[1].Value; break }
+        }
+    }
+    if (-not $url) {
+        [System.Windows.Forms.MessageBox]::Show('没拿到外网地址（可能网络连不上 cloudflare）。`n诊断日志：' + $out, '未成功', 'OK', 'Warning')
+        return
+    }
+    $msg = "外网地址已就绪（免费，不用账号不用域名）：`n`n$url`n`n点「是」复制地址；然后粘到管理台「部署向导 → Cloudflare Tunnel」第 5 步，写入客户端地址候选即可。`n注意：这是临时地址，cloudflared 重启会变；长期用请按向导配固定域名。"
+    $r = [System.Windows.Forms.MessageBox]::Show($msg, '一键外网（免费）', 'YesNo', 'Information')
+    try { Set-Clipboard -Value $url } catch { }
+    Start-Process "http://127.0.0.1:$port/admin/"
+}
+
 # ---------------- 启停 ----------------
 function Start-Server {
     if (Test-Running) { return $true }
@@ -114,6 +208,8 @@ function Start-Server {
         Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $vbs + '"') -WindowStyle Hidden
     } else {
         # 兜底：直接起 node（等价 _hidden.cmd 的做法）
+        # 🔴 端口必须跟 _env.cmd 同源（.env 的 PORT）—— 写死 3602 的话，
+        #    改过端口的机器走兜底会起在错误端口上。
         $dataDirEnv = $DataDir
         $si = New-Object System.Diagnostics.ProcessStartInfo
         $si.FileName = $Node
@@ -121,7 +217,7 @@ function Start-Server {
         $si.WorkingDirectory = $Root
         $si.UseShellExecute = $false
         $si.CreateNoWindow = $true
-        $si.EnvironmentVariables['PORT'] = '3602'
+        $si.EnvironmentVariables['PORT'] = (Get-Port).ToString()
         $si.EnvironmentVariables['NODE_ENV'] = 'production'
         $si.EnvironmentVariables['DATA_DIR'] = $dataDirEnv
         $si.EnvironmentVariables['MAX_FILE_MB'] = '50'
@@ -178,8 +274,8 @@ $ColorBg = [System.Drawing.Color]::FromArgb(244, 246, 247)
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = '小智IM 服务端控制台'
-$form.Size = New-Object System.Drawing.Size(720, 620)
-$form.MinimumSize = New-Object System.Drawing.Size(720, 620)
+$form.Size = New-Object System.Drawing.Size(720, 668)
+$form.MinimumSize = New-Object System.Drawing.Size(720, 668)
 $form.StartPosition = 'CenterScreen'
 $form.BackColor = $ColorBg
 $form.Font = $FontUI
@@ -283,11 +379,11 @@ $txtLog.Font = $FontLog
 $txtLog.BorderStyle = 'FixedSingle'
 $form.Controls.Add($txtLog)
 
-# ---- 底部工具 ----
-function New-ToolButton($text, $x) {
+# ---- 底部工具（两行：第一行运维，第二行查看）----
+function New-ToolButton($text, $x, $y) {
     $b = New-Object System.Windows.Forms.Button
     $b.Text = $text
-    $b.Location = New-Object System.Drawing.Point($x, 540)
+    $b.Location = New-Object System.Drawing.Point($x, $y)
     $b.Size = New-Object System.Drawing.Size(130, 30)
     $b.FlatStyle = 'Flat'
     $b.BackColor = [System.Drawing.Color]::White
@@ -295,14 +391,18 @@ function New-ToolButton($text, $x) {
     return $b
 }
 
-$btnPwd = New-ToolButton '查看管理员密码' 16
-$btnFw = New-ToolButton '配置防火墙' 152
-$btnData = New-ToolButton '打开数据目录' 288
-$btnRefresh = New-ToolButton '刷新状态' 424
-$btnOpenLog = New-ToolButton '用记事本打开日志' 560
+$btnPwd = New-ToolButton '查看管理员密码' 16 540
+$btnFw = New-ToolButton '配置防火墙' 152 540
+$btnData = New-ToolButton '打开数据目录' 288 540
+$btnBackup = New-ToolButton '一键备份数据' 424 540
+$btnTunnel = New-ToolButton '一键外网(免费)' 560 540
+$btnRefresh = New-ToolButton '刷新状态' 16 578
+$btnOpenLog = New-ToolButton '用记事本打开日志' 152 578
 $form.Controls.Add($btnPwd)
 $form.Controls.Add($btnFw)
 $form.Controls.Add($btnData)
+$form.Controls.Add($btnBackup)
+$form.Controls.Add($btnTunnel)
 $form.Controls.Add($btnRefresh)
 $form.Controls.Add($btnOpenLog)
 
@@ -456,6 +556,17 @@ $btnData.Add_Click({
     if (Test-Path $DataDir) { Start-Process explorer.exe $DataDir }
     else { [System.Windows.Forms.MessageBox]::Show('数据目录还不存在：' + $DataDir, '提示', 'OK', 'Warning') | Out-Null }
 })
+
+$btnBackup.Add_Click({
+    try {
+        $zip = Backup-Data
+        [System.Windows.Forms.MessageBox]::Show("备份完成：`n$zip`n（数据库 / 上传文件 / 配置都在里面，不含日志）", '备份完成', 'OK', 'Information') | Out-Null
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("备份失败：$($_.Exception.Message)", '备份失败', 'OK', 'Error') | Out-Null
+    }
+})
+
+$btnTunnel.Add_Click({ Start-QuickTunnel })
 
 $btnRefresh.Add_Click({ Update-Status; Update-Log })
 

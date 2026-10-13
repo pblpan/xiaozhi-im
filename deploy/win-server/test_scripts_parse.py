@@ -94,7 +94,7 @@ def prepare_copy(stage, work):
     dst = os.path.join(work, 'install')
     shutil.copytree(stage, dst)
 
-    envf = os.path.join(dst, '_env.cmd')
+    envf = os.path.join(dst, '_sys', '_env.cmd')
     t = open(envf, 'rb').read().decode('gbk')
     t = t.replace('set "PORT=%d"' % PROD_PORT, 'set "PORT=%d"' % TEST_PORT)
     t = t.replace(r'%LOCALAPPDATA%\小智IM服务端\data',
@@ -102,22 +102,37 @@ def prepare_copy(stage, work):
     t += '\r\nset "DISCOVER_PORT=%d"\r\n' % TEST_DISCOVER
     open(envf, 'wb').write(t.encode('gbk'))
 
-    # _stop_silent.cmd 刻意不 call _env.cmd（卸载时数据目录可能已经没了），
-    # 端口是写死的 —— 副本里必须一起改，否则它会去杀线上服务。
-    stopf = os.path.join(dst, '_stop_silent.cmd')
+    # _stop_silent.cmd 刻意不 call _env.cmd（卸载时数据目录可能已经没了）：
+    # 2026-10-05 起它自己从 data\.env 读 PORT、读不到回落写死的 3602，
+    # 数据目录也是写死的 LOCALAPPDATA。两处都要按到隔离值，漏一处 =
+    # 测试副本把**线上服务杀掉**（2026-10-13 真实发生：本机 3602 被杀）。
+    stopf = os.path.join(dst, '_sys', '_stop_silent.cmd')
     t = open(stopf, 'rb').read().decode('gbk')
-    t = t.replace('":%d "' % PROD_PORT, '":%d "' % TEST_PORT)
+    t = t.replace(r'%LOCALAPPDATA%\小智IM服务端\data',
+                  os.path.join(work, 'data'))
+    t = t.replace('set "KILLPORT=%d"' % PROD_PORT,
+                  'set "KILLPORT=%d"' % TEST_PORT)
     open(stopf, 'wb').write(t.encode('gbk'))
     return dst
 
 
 def assert_isolated(dst):
-    """副本里不该再有任何指向线上端口的引用。
+    """副本里不该再有任何指向线上端口 / 真实数据目录的引用。
 
     只扫 .cmd / .vbs —— 那是**会被执行**的东西，残留一个就可能杀掉线上服务。
+    🔴 2026-10-13 教训：只查 `:3602` 漏掉了 `_stop_silent.cmd` 的
+    `set "KILLPORT=3602"`（等号不是冒号）—— 隔离替换落空 + 自查没拦住，
+    测试副本把本机线上服务杀了。现在三样都查（包括 _stop_silent.cmd
+    改写后的成品：prepare_copy 理应把它的两处都改掉，改不干净这里拦）。
     前端 js 里的 `http://192.168.1.100:3602` 是管理台帮助文案里的示例地址，
     属于业务内容，不该跟着测试端口走。
     """
+    prod_marks = [
+        ':%d' % PROD_PORT,                          # netstat / URL 里的端口
+        'KILLPORT=%d' % PROD_PORT,                  # _stop_silent.cmd 的杀端口
+        'PORT=%d' % PROD_PORT,                      # set "PORT=3602"
+        r'%LOCALAPPDATA%\小智IM服务端\data',         # 写死的真实数据目录
+    ]
     leftovers = []
     for root, _, files in os.walk(dst):
         for fn in files:
@@ -128,9 +143,16 @@ def assert_isolated(dst):
                 text = open(p, 'rb').read().decode('gbk', 'replace')
             except Exception:
                 continue
-            for m in re.finditer(r':%d\b' % PROD_PORT, text):
-                leftovers.append('%s: %s' % (os.path.relpath(p, dst),
-                                             text[max(0, m.start() - 30):m.end() + 10].strip()))
+            for mark in prod_marks:
+                start = 0
+                while True:
+                    i = text.find(mark, start)
+                    if i < 0:
+                        break
+                    leftovers.append('%s [%s]: %s' % (
+                        os.path.relpath(p, dst), mark,
+                        text[max(0, i - 30):i + len(mark) + 10].strip()))
+                    start = i + 1
     return leftovers
 
 
@@ -147,7 +169,7 @@ def run_script(dst, name, timeout, env, logfile=None):
        瞬间空转 30 圈、误判成启动失败。给一个真控制台才和客户双击时一致。
        代价是测试期间会有窗口闪现，忍了。
     """
-    path = os.path.join(dst, name)
+    path = os.path.join(dst, '_sys', name)
     argv = ['wscript.exe', path] if name.lower().endswith('.vbs') else ['cmd', '/c', path]
     if logfile:
         argv.append(logfile)
@@ -234,7 +256,7 @@ def main():
 
         logfile = os.path.join(work, 'data', 'logs', 'server.log')
         for name, extra, timeout, desc in CASES:
-            path = os.path.join(dst, name)
+            path = os.path.join(dst, '_sys', name)
             if not os.path.isfile(path):
                 check(False, '%s（%s）' % (name, desc), '文件不存在')
                 continue
