@@ -1168,11 +1168,14 @@ class _ChatScreenState extends State<ChatScreen> {
               icon: const Icon(Icons.videocam_rounded),
             ),
           ],
-          // 群聊：通话 + 群管理收进一个菜单，否则顶栏放不下 4 个图标
+          // 群聊：通话 + 群管理收进一个菜单，否则顶栏放不下 4 个图标。
+          // 🔴 入口图标必须是 ⋮（更多菜单）—— 原来用 Icons.call_rounded，
+          //    看着像"打电话"，龙哥 2026-10-13 误当成群管理图标报错。
+          //    通话的语义交给菜单里的条目（phone/videocam），入口不抢。
           if (widget.conv.type == 'group') ...[
             PopupMenuButton<String>(
-              tooltip: '群通话',
-              icon: const Icon(Icons.call_rounded),
+              tooltip: '群聊功能菜单',
+              icon: const Icon(Icons.more_vert_rounded),
               onSelected: (v) {
                 switch (v) {
                   case 'audio':
