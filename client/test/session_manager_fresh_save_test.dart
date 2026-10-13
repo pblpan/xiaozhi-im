@@ -40,7 +40,11 @@ void main() {
     final sp = await SharedPreferences.getInstance();
     await sp.clear();
     // SessionManager 是单例，上一用例可能已经给它塞了内存档案 —— 一并清。
+    // 🔴 activeId 也要清：留着的话 setServers 看到"有激活档案"就走
+    //    updateAddresses 分支，而 profiles 是空的 → _find 返回 null →
+    //    什么都没干 → length 0（CI 二轮 ③ 的 Actual 0 就是它）。
     SessionManager.instance.profiles = [];
+    SessionManager.instance.activeId = null;
   }
 
   test('① 全新安装：load() 之后 profiles 必须可写', () async {

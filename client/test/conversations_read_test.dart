@@ -40,12 +40,16 @@ void main() {
 
   setUp(() async {
     // audioplayers 通道 mock（见上方注释）
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_apGlobal, (call) async => null);
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockStreamHandler(_apEvents, MockStreamHandler.inline(
-          onListen: (args, events) {}, // 什么都不发 = 空流
-        ));
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(_apGlobal, (call) async => null);
+    messenger.setMockStreamHandler(_apEvents, MockStreamHandler.inline(
+      onListen: (args, events) {}, // 什么都不发 = 空流
+    ));
+    // 🔴 per-player 通道也要 mock：AudioPlayer._create() 会调
+    //    MethodChannel('xyz.luan/audioplayers').call('create')，CI 二轮
+    //    就是这条没 mock（global 两条挡住了，create 从这条漏出来）。
+    messenger.setMockMethodCallHandler(
+        const MethodChannel('xyz.luan/audioplayers'), (call) async => null);
     stub = await ApiStub.start();
     Config.currentUrl = stub.baseUrl;
     ImApi().setToken('tok');
@@ -101,7 +105,13 @@ void main() {
       await tester.pump(const Duration(milliseconds: 20));
       if (ok()) return;
     }
-    fail('等待超时：$why');
+    // 🔴 超时必须把现场打出来，不然只能对着"等待超时"三个字猜：
+    //    stub 到底收到了什么（404？没请求？），页面报错条写了什么。
+    final got = stub.calls.map((c) => '${c.method} ${c.path}').join(', ');
+    final errText = find.textContaining('失败').evaluate().isNotEmpty
+        ? find.textContaining('失败').evaluate().first.toString()
+        : '(页面无错误文案)';
+    fail('等待超时：$why\n    stub 收到的请求: [$got]\n    页面错误: $errText');
   }
 
   testWidgets('① markRead 广播后：红点与「有人@我」本地即时清零，角标同步归零',
