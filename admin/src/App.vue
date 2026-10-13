@@ -292,13 +292,14 @@
         <!-- 部署向导：换云服务器一键部署（frps/TURN/隧道/地址候选） -->
         <div v-else-if="tab === 'deploywizard'">
           <el-alert type="info" show-icon :closable="false" style="margin-bottom:14px;">
-            <template #title>换云服务器 / 首次部署。服务器自身有公网 IP 时选「本地公网直连」更省事；否则选「云服务器隧道」走 frps。</template>
+            <template #title>换云服务器 / 首次部署。服务器自身有公网 IP 时选「本地公网直连」更省事；没有云服务器也不想买，选「Cloudflare Tunnel」完全免费；有云服务器选「云服务器隧道」走 frps。</template>
           </el-alert>
 
           <el-form label-width="0" style="margin-bottom:14px;">
             <el-radio-group v-model="dw.shape">
               <el-radio-button value="vps">云服务器隧道（frps）</el-radio-button>
               <el-radio-button value="direct">本地公网直连（不走隧道）</el-radio-button>
+              <el-radio-button value="cf">Cloudflare Tunnel（免费 · 没有云服务器）</el-radio-button>
             </el-radio-group>
           </el-form>
 
@@ -403,7 +404,7 @@
               <el-button style="margin-top:10px;" @click="tab = 'clientconfig'">前往客户端配置 →</el-button>
             </template>
 
-            <template v-else>
+            <template v-else-if="dw.shape === 'direct'">
               <div style="font-size:13px;line-height:1.9;color:#374151;margin-bottom:10px;">
                 服务器本身有公网 IP，客户端直连即可（不走 frps 隧道）。填好下面地址，点「写入客户端地址候选」会直接发布到客户端配置中心；
                 客户端按优先级并发探测 IPv4 / IPv6，哪个通连哪个。
@@ -417,6 +418,58 @@
               <el-button @click="tab = 'clientconfig'">前往客户端配置细调 →</el-button>
             </template>
           </el-card>
+
+          <!-- ══════════ Cloudflare Tunnel（免费 · 没有云服务器的个人使用者）══════════
+               纯说明型向导：cloudflared 要用龙哥/用户自己的 Cloudflare 账号在网页上
+               建 Tunnel 拿 token，这一步服务端代办不了，所以只给按部就班的说明 +
+               最后一步复用「写入客户端地址候选」。免费口径（2026-10 核实）：
+               Tunnel 本身免费不限流量、支持 WebSocket；免费版单次上传上限 100MB。 -->
+          <template v-if="dw.shape === 'cf'">
+            <el-card shadow="never" style="margin-bottom:14px;">
+              <template #header><b>☁️ Cloudflare Tunnel · 免费接入（不用买云服务器）</b></template>
+              <div style="font-size:13px;line-height:1.9;color:#374151;">
+                原理：在你的服务器/NAS 上跑一个 <b>cloudflared</b> 小程序，它主动连到 Cloudflare，
+                外网请求经 Cloudflare 转进来 —— <b>不需要公网 IP、不需要端口映射、不需要买云服务器</b>，
+                自带 HTTPS 和 WebSocket（消息长连接就是 WS）。<b>Tunnel 流量免费、不限量</b>。
+              </div>
+              <el-divider style="margin:14px 0;" />
+              <div style="font-size:13px;line-height:2.0;color:#374151;">
+                <b>第 1 步 · 注册 Cloudflare（免费）</b><br />
+                打开 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">https://dash.cloudflare.com/sign-up</code>
+                用邮箱注册（也可用 Google/Apple/GitHub 登录），全程免费、不需要绑卡。<br /><br />
+                <b>第 2 步 · 准备一个域名（托管到 Cloudflare）</b><br />
+                正式使用需要一个域名：在哪买的都行，把域名的 DNS 服务器改成 Cloudflare 给的两个地址（添加站点时页面会一步步引导，选免费计划）。<br />
+                <span style="color:#9ca3af;">· 还没有域名只想先试试：跳过第 2 步，直接看第 3 步的「快速试用」，地址是随机的、重启会变，仅供体验。</span><br />
+                <span style="color:#9ca3af;">· 域名很便宜（几十元/年），个人用一个足够。</span><br /><br />
+                <b>第 3 步 · 建 Tunnel 并装 cloudflared</b><br />
+                Cloudflare 控制台 → <b>Zero Trust → Networks → Tunnels → Create a tunnel</b>，选 <b>Cloudflared</b>，起个名字（如 xiaozhi-im），页面会给一条带 token 的安装命令，照跑即可：<br />
+                <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">· Windows 服务器：下载 cloudflared.msi 安装，或命令行运行页面给的命令</code><br />
+                <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">· 飞牛 NAS：docker run -d --name cloudflared --restart unless-stopped cloudflare/cloudflared:latest tunnel run --token &lt;页面给的TOKEN&gt;</code><br />
+                跑起来后页面隧道状态变 <b>HEALTHY（健康）</b>。<br /><br />
+                <b>第 4 步 · 把隧道指向小智服务</b><br />
+                同一页 → <b>Public Hostname → Add a public hostname</b>：子域填 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">im</code>、选你的域名、
+                Service 类型 <b>HTTP</b>、URL 填 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">localhost:3602</code>（服务端口改过的填改过的）。保存后
+                <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">https://im.你的域名</code> 就是外网地址。<br /><br />
+                <b>两个提醒</b><br />
+                · 隧道只走<b>消息链路</b>；语音/视频通话走服务端内置的 Cloudflare 免费中继，不用额外配置。<br />
+                · CF 免费版<b>单次上传上限 100MB</b>：聊天传超大文件会碰壁，日常消息/图片/普通文件没影响。
+              </div>
+            </el-card>
+
+            <el-card shadow="never" style="margin-bottom:14px;">
+              <template #header><b>📱 客户端地址候选（Cloudflare 版）</b></template>
+              <div style="font-size:13px;line-height:1.9;color:#374151;margin-bottom:10px;">
+                内网填飞牛/NAS 的局域网地址，外网填第 4 步得到的 Cloudflare 地址。点「写入」发布到客户端配置中心，
+                客户端内网外网自动探测互备，无需更新 App。
+              </div>
+              <el-form label-width="130px" size="default" style="max-width:640px;">
+                <el-form-item label="内网 LAN"><el-input v-model="dw.cf.lan" placeholder="http://192.168.x.x:3602（同局域网用）" /></el-form-item>
+                <el-form-item label="Cloudflare 地址"><el-input v-model="dw.cf.cfUrl" placeholder="https://im.你的域名（第 4 步生成的那个）" /></el-form-item>
+              </el-form>
+              <el-button type="primary" :loading="dwCfBusy" @click="dwWriteCfAddresses">写入客户端地址候选</el-button>
+              <el-button @click="tab = 'clientconfig'">前往客户端配置细调 →</el-button>
+            </el-card>
+          </template>
 
           <!-- 健康检查 -->
           <el-card shadow="never">
@@ -6579,13 +6632,15 @@ async function loadTab() {
  */
 const dw = reactive({
   active: 0,
-  shape: 'vps', // vps = 云服务器隧道；direct = 本地公网直连（不走隧道）
+  shape: 'vps', // vps = 云服务器隧道；direct = 本地公网直连；cf = Cloudflare Tunnel（免费，没有云服务器）
   vps: { host: '', port: 22, user: 'root', password: '' },
   fnos: { host: '', port: 22, user: '', password: '' },
   ports: { server: 3602, frp: 7000, turn: 3478 },
   platform: '',
   // 本地公网直连：服务器自身的地址（带类型）
   direct: { lan: '', ipv4: '', ipv6: '' },
+  // Cloudflare Tunnel：内网地址 + 第 4 步生成的公网域名
+  cf: { lan: '', cfUrl: '' },
   hasVpsPw: false, hasFnosPw: false,
   task: { state: 'idle', steps: [], logs: [] },
   polling: null, waitBack: null,
@@ -6616,6 +6671,28 @@ async function dwWriteAddresses() {
   }
 }
 const dwIsWin = computed(() => dw.platform === 'win32');
+
+// Cloudflare Tunnel：内网 + CF 公网域名写入客户端配置中心
+// （type 'wan' 在客户端 addrTypes 白名单里，config.dart:76 钉着）
+const dwCfBusy = ref(false);
+async function dwWriteCfAddresses() {
+  const list = [];
+  if (dw.cf.lan.trim()) list.push({ url: dw.cf.lan.trim().replace(/\/+$/, ''), type: 'lan' });
+  if (dw.cf.cfUrl.trim()) list.push({ url: dw.cf.cfUrl.trim().replace(/\/+$/, ''), type: 'wan' });
+  if (!list.length) { ElMessage.warning('至少填一个地址'); return; }
+  dwCfBusy.value = true;
+  try {
+    const { data } = await api.post('/admin/client-config', {
+      payload: { serverAddresses: list },
+      note: '部署向导-Cloudflare Tunnel',
+    });
+    ElMessage.success(`已写入客户端地址候选（v${data.version}）`);
+  } catch (e) {
+    ElMessage.error('写入失败：' + (e.response?.data?.error || e.message));
+  } finally {
+    dwCfBusy.value = false;
+  }
+}
 
 async function dwEnter() {
   await dwLoadCreds();
