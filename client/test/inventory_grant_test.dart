@@ -85,6 +85,9 @@ void main() {
         'id': id,
         'username': no,
         'nickname': name,
+        // 工号必带：授权页名册从 2026-10-13 起只收"有工号的在册员工"
+        // （服务端同时会把 org_id=NULL 的管理员列进组织通讯录，授权页要滤掉）
+        'employee_no': no,
         'dept_name': '门店',
         'position_name': '理货',
       };

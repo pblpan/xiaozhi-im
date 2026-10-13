@@ -163,6 +163,25 @@ class Conversation {
   /// 服务端下发的 type 就是 'filehelper'（老服务端没有这个类型，客户端自建的
   /// Conversation 也带这个 type，所以只认 type、不依赖 is_filehelper 字段）
   bool get isFileHelper => type == 'filehelper';
+
+  /// 已读后的本地即时清零用（Bug A：读了红点要马上消，不等 WS 帧）。
+  /// 只覆盖未读相关字段，其余原样带回。
+  Conversation copyWith({int? unread, bool? hasMention}) => Conversation(
+        id: id,
+        type: type,
+        title: title,
+        avatar: avatar,
+        lastContent: lastContent,
+        lastAt: lastAt,
+        unread: unread ?? this.unread,
+        hasMention: hasMention ?? this.hasMention,
+        muted: muted,
+        announcement: announcement,
+        groupId: groupId,
+        peer: peer,
+        memberAvatars: memberAvatars,
+        memberCount: memberCount,
+      );
 }
 
 class Message {

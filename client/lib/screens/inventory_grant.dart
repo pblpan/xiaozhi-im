@@ -93,7 +93,13 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
       var rosterOk = true;
       try {
         final org = await _api.myOrg();
-        members = _maps(org['members']);
+        // 只收**有工号的在册员工**：服务端 /orgs/my 从 2026-10-13 起也会把
+        // org_id=NULL 的管理员账号列进组织通讯录（修"通讯录里看不到管理员"），
+        // 但抽盘授权是发给"被授权干活的人"的 —— 管理员本来就能进所有页面，
+        // 授不授权一个样。名册里混进管理员只会让人以为"还得给管理员授权"。
+        members = _maps(org['members'])
+            .where((m) => (m['employee_no'] as String?)?.isNotEmpty == true)
+            .toList(growable: false);
       } catch (_) {
         rosterOk = false;
       }

@@ -168,15 +168,26 @@ function stopServer() {
   // ---------------- 五：GET /orgs/my ----------------
   console.log('\n【五】我的组织');
   r = await api('GET', '/api/orgs/my', { token: emp1 });
-  ok('员工查到组织与全员',
-    r.body?.org?.name === '盛京食品厂' && r.body.members?.length === 3
-    && r.body.members.every((m) => m.employee_no), JSON.stringify(r.body));
+  // 2026-10-13：成员口径 = 在册员工 + 系统管理员（org_id=NULL 的 admin 账号）。
+  // 修的是龙哥报的"管理员在通讯录里看不到"—— 以前只按 org_id 查，admin
+  // 不占编制，于是在任何人的组织通讯录里都消失。游离普通账号（outsider，
+  // role='user' 且 org_id=NULL）仍然不列：那不是员工，列进来编制会歪。
+  const mems = r.body?.members || [];
+  ok('员工查到组织与全员（3 员工 + 管理员）',
+    r.body?.org?.name === '盛京食品厂' && mems.length === 4
+    && mems.filter((m) => m.employee_no).length === 3
+    && mems.some((m) => m.username === 'admin' && m.role === 'admin' && !m.employee_no),
+    JSON.stringify(mems));
 
   r = await api('GET', '/api/orgs/my', { token: outsider });
   ok('组织外用户查 my → org=null', r.body?.org === null, JSON.stringify(r.body));
 
   r = await api('GET', '/api/orgs/my', { token: admin });
-  ok('admin 查到自己的组织', r.body?.org?.name === '盛京食品厂', JSON.stringify(r.body));
+  ok('admin 查到组织：员工 + 自己，但不含组织外游离账号',
+    r.body?.org?.name === '盛京食品厂'
+    && (r.body.members || []).some((m) => m.username === 'admin' && m.role === 'admin')
+    && !(r.body.members || []).some((m) => m.username === 'outsider'),
+    JSON.stringify(r.body));
 
   // ---------------- 六：移除员工 ----------------
   console.log('\n【六】移除员工');
@@ -206,8 +217,11 @@ function stopServer() {
   r = await api('POST', '/api/auth/login', { body: { username: 'emp001', password: 'emp001' } });
   ok('重启后 emp001 仍可登录', r.status === 200, JSON.stringify(r.body));
   r = await api('GET', '/api/orgs/my', { token: r.body?.token });
+  // 2 员工 + 管理员（org_id=NULL，2026-10-13 起纳入成员口径）
   ok('重启后组织与成员仍在',
-    r.body?.org?.name === '盛京食品厂' && r.body.members?.length === 2, JSON.stringify(r.body));
+    r.body?.org?.name === '盛京食品厂' && r.body.members?.length === 3
+    && (r.body.members || []).some((m) => m.username === 'admin' && m.role === 'admin'),
+    JSON.stringify(r.body));
   r = await api('GET', '/api/client/bootstrap');
   ok('bootstrap 下发 work 模式', r.body?.friendMode === 'work', JSON.stringify(r.body));
 

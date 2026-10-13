@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
+import 'package:xiaozhi_im_client/core/group_candidates.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
@@ -70,19 +71,20 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
     }
   }
 
-  /// 添加成员：从好友里挑还没进群的人。
+  /// 添加成员：从候选里挑还没进群的人。
+  ///
+  /// 候选口径见 group_candidates.dart：普通模式=好友，工作模式=组织全员
+  /// （含管理员）。以前只列好友，管理员不在好友关系表里，谁都拉不进来 ——
+  /// 2026-10-13 龙哥报的 bug「管理员不能被加入群聊」。
   ///
   /// 服务端允许**任何群成员**拉人（不只是群主/管理员），这里就跟服务端一致，
   /// 不额外设门槛 —— 界面比服务端严会让"别人能拉、我却点不了"，反而更难解释。
   Future<void> _addMembers(GroupDetail d) async {
     List<User> friends;
     try {
-      final r = await ImApi().friends();
-      friends = ((r['friends'] as List?) ?? const [])
-          .map((e) => User.fromJson(e as Map<String, dynamic>))
-          .toList();
+      friends = await loadGroupCandidates();
     } catch (e) {
-      _toast('拉取好友失败: ${_msg(e)}');
+      _toast('拉取成员失败: ${_msg(e)}');
       return;
     }
     final inGroup = d.members.map((m) => m.id).toSet();

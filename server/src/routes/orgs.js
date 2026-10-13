@@ -27,7 +27,11 @@ function requireWorkMode(req, res) {
   return false;
 }
 
-const ORG_COLS = `u.id,u.username,u.nickname,u.avatar,u.signature,u.employee_no,u.dept_id,u.position_id,
+// role 一并下发：组织通讯录要把「没进组织的管理员账号」也列出来（见 /my 的
+// 说明），客户端靠这个字段区分谁不能走「移除员工」—— 管理员归用户管理关，
+// 不在组织编制的移除语义里。以前不下发，客户端只能给每个成员都挂移除按钮，
+// 点到管理员头上就是服务端 404。
+const ORG_COLS = `u.id,u.username,u.nickname,u.avatar,u.signature,u.employee_no,u.dept_id,u.position_id,u.role,
   d.name AS dept_name, p.name AS position_name`;
 const MEMBER_JOIN = `
   FROM users u
@@ -110,8 +114,19 @@ router.get('/my', (req, res) => {
   }
   if (!org) return res.json({ org: null, members: [] });
 
+  // 成员口径 = 本组织员工 + **系统管理员**（org_id=NULL 的 admin 账号）。
+  //
+  // 为什么把"没组织"的管理员也算进来（2026-10-13 龙哥报的 bug）：
+  // 管理员账号（默认「管理员」号、龙哥自己的 admin 号）的 org_id 本来就是
+  // NULL —— 组织是员工编制，管理员不占编制。以前只按 org_id 查，结果是
+  // 工作模式下组织通讯录里看不到任何管理员：同事想拉管理员进群找不到人，
+  // 管理员自己登进来也看不到同事。@人、建群、组织架构全缺这一角。
+  //
+  // 只放行 role='admin'，不放行普通游离账号（普通模式自己注册、还没录进
+  // 组织的 role='user'）：那些人不是员工，列进组织架构会出现一批查不到
+  // 部门岗位的陌生人，编制统计（MAX_MEMBERS、部门人数）也会被带歪。
   const raw = db.prepare(`SELECT ${ORG_COLS} ${MEMBER_JOIN}
-    WHERE u.org_id=? ORDER BY u.id`).all(org.id);
+    WHERE u.org_id=? OR (u.org_id IS NULL AND u.role='admin') ORDER BY u.id`).all(org.id);
   // 「组织通讯录」的功能参数（app_overrides → work_org.showEmployeeNo）：
   // 关掉时**在服务端就抹掉工号**，不是让客户端"别显示"—— 工号是登录账号，
   // 只藏不拦等于把账号名发给了所有人。

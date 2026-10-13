@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
+import 'package:xiaozhi_im_client/core/group_candidates.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
@@ -38,10 +39,10 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
   Future<void> _load() async {
     try {
-      final r = await ImApi().friends();
-      final list = ((r['friends'] as List?) ?? const [])
-          .map((e) => User.fromJson(e as Map<String, dynamic>))
-          .toList();
+      // 候选口径见 group_candidates.dart：普通模式=好友，工作模式=组织全员。
+      // 以前这里只拉好友，工作模式下管理员（不占编制、不在好友关系表里）
+      // 在任何人的建群列表里都消失 —— 2026-10-13 龙哥报的 bug。
+      final list = await loadGroupCandidates();
       if (!mounted) return;
       setState(() {
         _friends = list;

@@ -528,7 +528,11 @@ class _OrgScreenState extends State<OrgScreen> {
         ),
         // 员工没有备注语义：组织内一律显示昵称/工号
         onTap: mine ? null : () => _pick(u),
-        trailing: _isAdmin && !mine
+        // 移除按钮不给两类行：① 我自己；② 管理员（org_id=NULL 的 admin 账号，
+        // 2026-10-13 起服务端会把它们列进组织通讯录）。管理员不占员工编制，
+        // 「移除员工」对他们没有语义 —— 服务端也会 404，不如直接不显示，
+        // 免得点了报错还以为功能坏了。管理员归用户管理关，不在这里动。
+        trailing: _isAdmin && !mine && u.role != 'admin'
             ? IconButton(
                 tooltip: '移除员工',
                 icon: const Icon(Icons.person_remove_outlined,

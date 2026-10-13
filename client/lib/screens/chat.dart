@@ -12,6 +12,7 @@ import 'package:xiaozhi_im_client/core/clipboard_image.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/file_io.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
+import 'package:xiaozhi_im_client/core/read_bus.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
 import 'package:xiaozhi_im_client/core/voice.dart';
@@ -190,6 +191,10 @@ class _ChatScreenState extends State<ChatScreen> {
       final r = await ImApi().markRead(widget.conv.id);
       final lr = (r['lastReadId'] as int?) ?? 0;
       if (mounted) setState(() => _readMap[widget.myId] = lr);
+      // 上报成功即广播：会话列表本地立刻把红点清零（宽屏同屏时观感就是
+      // "读了马上消"），不用等 WS 的 message:read 帧绕回来。
+      // 只 fire 不清真值 —— 校准由订阅方的 _load() 拉服务端完成。
+      ReadBus.instance.fire(widget.conv.id);
     } catch (_) {
       // 已读上报失败不打扰用户，下次进会话会重试
     }

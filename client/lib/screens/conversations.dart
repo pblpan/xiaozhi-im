@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/badges.dart';
 import 'package:xiaozhi_im_client/core/call_service.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
+import 'package:xiaozhi_im_client/core/read_bus.dart';
 import 'package:xiaozhi_im_client/core/remote_config.dart';
 import 'package:xiaozhi_im_client/core/app_updater.dart';
 import 'package:xiaozhi_im_client/core/session_manager.dart';
@@ -47,17 +50,23 @@ class ConversationsScreenState extends State<ConversationsScreen> {
   bool _loading = true;
   String? _error;
   ApiException? _lastErr; // 最近一次错误的原始异常，UI 据此切换文案/按钮
+  /// 已读广播订阅（chat 页标记已读 → 本地即时清零红点）。见 [ReadBus]。
+  StreamSubscription<int>? _readSub;
+  /// _load 并发序号闸门：只认最后一次拉取的结果（见 _load 注释）
+  int _loadSeq = 0;
 
   @override
   void initState() {
     super.initState();
     // 切换企业（整域切换）→ 重新拉取当前激活服务器的会话 / 我 / 待处理
     SessionManager.instance.domainVersion.addListener(_onDomain);
+    _readSub = ReadBus.instance.onCleared.listen(_onCleared);
     _init();
   }
 
   @override
   void dispose() {
+    _readSub?.cancel();
     SessionManager.instance.domainVersion.removeListener(_onDomain);
     super.dispose();
   }
@@ -124,17 +133,27 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     }
   }
 
+  /// 拉会话列表并刷新角标。
+  ///
+  /// [_loadSeq] 序号闸门：`_onEvent`（message:new / message:read / …）会在短
+  /// 时间内并发触发多次 `_load`，后发出的先回来、先发出的后回来时，旧数据会把
+  /// 新数据整个覆盖掉 —— 表现是"红点刚消又闪回来"。只认最后一次的结果。
   Future<void> _load() async {
+    final seq = ++_loadSeq;
     final list = await ImApi().conversations();
-    if (!mounted) return;
+    if (!mounted || seq != _loadSeq) return;
     final convs = list.map((e) => Conversation.fromJson(e)).toList();
     setState(() {
       _all = convs;
       // 按最后活跃时间倒序
       _all.sort((a, b) => (b.lastAt ?? b.id).compareTo(a.lastAt ?? a.id));
     });
-    // 未读角标：免打扰的会话不计入（用户明确表示不想被这条打扰，
-    // 还在标签上标红点等于没听他的）
+    _recalcBadges(convs);
+  }
+
+  /// 未读角标：免打扰的会话不计入（用户明确表示不想被这条打扰，
+  /// 还在标签上标红点等于没听他的）
+  void _recalcBadges(List<Conversation> convs) {
     var n = 0;
     var at = false;
     for (final c in convs) {
@@ -143,6 +162,25 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       if (c.hasMention) at = true;
     }
     Badges.instance.setUnread(n, hasMention: at);
+  }
+
+  /// 本地即时清零（2026-10-13 龙哥报的 bug「消息已经读了，但提示小点不是
+  /// 马上消失」）：chat 页 `_markRead` HTTP 一成功就广播，这里本地把该会话
+  /// unread 归零并重算角标，**不等 WS 的 message:read 帧** —— 宽屏（桌面/
+  /// 平板）布局下聊天页与会话列表同屏，WS 往返那几百毫秒里红点一直挂着。
+  ///
+  /// 清零只负责"立刻好看"，随后 `_load()` 拉服务端真值校准：防的是旧
+  /// markRead 响应晚到的竞态（清零之后对方又发了一条，本地不能把那条也
+  /// 吞成已读）。WS 帧到达时 `_onEvent` 也会 `_load()`，双保险。
+  void _onCleared(int convId) {
+    if (!mounted) return;
+    final i = _all.indexWhere((c) => c.id == convId);
+    if (i < 0) return;
+    final c = _all[i];
+    if (c.unread == 0 && !c.hasMention) return; // 已是清零态，不动
+    setState(() => _all[i] = c.copyWith(unread: 0, hasMention: false));
+    _recalcBadges(_all);
+    _load(); // 校准：不 await，不卡本地即时反馈
   }
 
   void _onEvent(dynamic e) {
