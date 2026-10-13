@@ -483,8 +483,13 @@ router.delete('/users/:id', (req, res) => {
   for (const g of ownedGroups) {
     db.prepare('DELETE FROM groups WHERE id=?').run(g.id);
     db.prepare('DELETE FROM group_members WHERE group_id=?').run(g.id);
+    db.prepare('DELETE FROM group_join_requests WHERE group_id=?').run(g.id);
+    const polls = db.prepare('SELECT id FROM group_polls WHERE group_id=?').all(g.id);
+    for (const p of polls) db.prepare('DELETE FROM group_poll_votes WHERE poll_id=?').run(p.id);
+    db.prepare('DELETE FROM group_polls WHERE group_id=?').run(g.id);
     if (g.conversation_id) db.prepare('DELETE FROM conversation_members WHERE conversation_id=?').run(g.conversation_id);
   }
+  db.prepare('DELETE FROM group_join_requests WHERE user_id=? OR inviter_id=?').run(target, target);
   db.prepare('DELETE FROM users WHERE id=?').run(target);
   res.json({ ok: true });
 });
@@ -601,6 +606,10 @@ router.delete('/groups/:id', (req, res) => {
   const g = db.prepare('SELECT conversation_id FROM groups WHERE id=?').get(gid);
   db.prepare('DELETE FROM groups WHERE id=?').run(gid);
   db.prepare('DELETE FROM group_members WHERE group_id=?').run(gid);
+  db.prepare('DELETE FROM group_join_requests WHERE group_id=?').run(gid);
+  const polls = db.prepare('SELECT id FROM group_polls WHERE group_id=?').all(gid);
+  for (const p of polls) db.prepare('DELETE FROM group_poll_votes WHERE poll_id=?').run(p.id);
+  db.prepare('DELETE FROM group_polls WHERE group_id=?').run(gid);
   if (g) db.prepare('DELETE FROM conversation_members WHERE conversation_id=?').run(g.conversation_id);
   res.json({ ok: true });
 });
@@ -620,6 +629,10 @@ router.delete('/conversations/:id', (req, res) => {
   const g = db.prepare('SELECT id FROM groups WHERE conversation_id=?').get(cid);
   if (g) {
     db.prepare('DELETE FROM group_members WHERE group_id=?').run(g.id);
+    db.prepare('DELETE FROM group_join_requests WHERE group_id=?').run(g.id);
+    const polls = db.prepare('SELECT id FROM group_polls WHERE group_id=?').all(g.id);
+    for (const p of polls) db.prepare('DELETE FROM group_poll_votes WHERE poll_id=?').run(p.id);
+    db.prepare('DELETE FROM group_polls WHERE group_id=?').run(g.id);
     db.prepare('DELETE FROM groups WHERE id=?').run(g.id);
   }
   db.prepare('DELETE FROM conversations WHERE id=?').run(cid);

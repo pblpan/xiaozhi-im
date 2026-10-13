@@ -41,7 +41,7 @@ function mentionLike(id) {
 
 /** 允许的消息类型（audio=语音，content 存时长秒数；card=结构化卡片，content 存 JSON；
  *  call=通话记录，content 存 {mode,status,duration,caller,callee} JSON） */
-const KINDS = ['text', 'image', 'file', 'emoji', 'audio', 'card', 'call'];
+const KINDS = ['text', 'image', 'file', 'emoji', 'audio', 'card', 'call', 'poll'];
 
 /** 卡片配色：外部系统只需给语义色名，具体色值由客户端决定（换肤不用改对接方） */
 const CARD_COLORS = ['blue', 'green', 'orange', 'red', 'purple', 'gray'];
@@ -206,6 +206,23 @@ function mutedUntilOf(conversationId, userId) {
 }
 
 /**
+ * 全员禁言下这个人能不能发言。
+ * 豁免名单 = 群主 + 群内管理员 + 系统管理员（与单人禁言的"能禁言的人"一致 ——
+ * 能管群的人必须永远能说话，否则通知群发不出公告就名存实亡）。
+ * 返回 null 表示没被全员禁言拦（继续走单人禁言判断）。
+ */
+function mutedAllBlock(conversationId, userId) {
+  const g = db.prepare('SELECT id, owner_id, muted_all FROM groups WHERE conversation_id = ?').get(conversationId);
+  if (!g || !g.muted_all) return null;
+  if (g.owner_id === userId) return false;
+  const m = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(g.id, userId);
+  if (m?.role === 'admin') return false;
+  const isSysAdmin = db.prepare('SELECT role FROM users WHERE id = ?').get(userId)?.role === 'admin';
+  if (isSysAdmin) return false;
+  return true; // 普通成员 → 被拦
+}
+
+/**
  * 消息内容的"一句话预览"（通知栏正文用）。
  *
  * 只在服务端做这一层，是因为**只有服务端知道 kind 是什么**：客户端各语言版本、
@@ -224,6 +241,16 @@ function previewOf(m) {
         const c = JSON.parse(m.content || '{}');
         return '[卡片]' + (c.title ? ' ' + c.title : '');
       } catch { return '[卡片]'; }
+    }
+    case 'poll': {
+      // 预览带上投票标题（群列表/通知栏里"[投票] 周末聚餐报名"比光秃秃的 [投票] 有用）
+      try {
+        const c = JSON.parse(m.content || '{}');
+        const p = c.pollId
+          ? db.prepare('SELECT title FROM group_polls WHERE id=?').get(c.pollId)
+          : null;
+        return '[投票]' + (p?.title ? ' ' + p.title : '');
+      } catch { return '[投票]'; }
     }
     default: return '[消息]';
   }
@@ -297,6 +324,10 @@ function sendMessage({ conversationId, senderId, kind, content, fileId, mentions
   if (muted > Date.now()) {
     const mins = Math.ceil((muted - Date.now()) / 60000);
     throw new Error(`你已被禁言，还需 ${mins} 分钟`);
+  }
+  // 全员禁言：普通成员一律不能发言（群主/管理员/系统管理员豁免）
+  if (mutedAllBlock(conversationId, senderId) === true) {
+    throw new Error('群主已开启全员禁言，暂时无法发言');
   }
 
   const k = kind || 'text';

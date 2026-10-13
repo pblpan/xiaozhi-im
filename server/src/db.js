@@ -194,6 +194,12 @@ ensureColumn('conversations', 'pinned_message_id', 'pinned_message_id INTEGER');
 ensureColumn('conversation_members', 'muted', 'muted INTEGER NOT NULL DEFAULT 0');
 // 机器人：特殊用户，不可登录、可被拉进群、可发消息（password_hash 存 '!' 使其永远验证失败）
 ensureColumn('users', 'is_bot', 'is_bot INTEGER NOT NULL DEFAULT 0');
+// 全员禁言（0=关闭 1=开启）：开启后普通成员不能发言，群主/群管理员/系统管理员不受限
+ensureColumn('groups', 'muted_all', 'muted_all INTEGER NOT NULL DEFAULT 0');
+// 群名片（群内昵称，只在本群显示；NULL = 未设置，显示真实昵称）
+ensureColumn('group_members', 'nickname', 'nickname TEXT');
+// 加群方式：free=成员拉人直接进（现状），approval=需群主/管理员审批
+ensureColumn('groups', 'join_mode', "join_mode TEXT NOT NULL DEFAULT 'free'");
 // ⚠️ employee_no / org_id 这两列的迁移在**下方「组织机构」段**里（跟着 orgs 建表一起）。
 //    以前这里也写了一份，两处完全相同 —— ensureColumn 幂等所以不会出错，
 //    但重复代码会让"这列到底在哪加的"变得难查（改了一处忘了另一处也很自然）。
@@ -1127,6 +1133,55 @@ CREATE TABLE IF NOT EXISTS group_courses (
   PRIMARY KEY (group_id, course_id)
 );
 CREATE INDEX IF NOT EXISTS idx_group_courses_course ON group_courses (course_id);
+`);
+
+// ---------------------------------------------------------------------------
+// 加群审批（群设置 join_mode='approval' 时，普通成员拉的人先挂这里等点头）
+// 一个群一个人最多一条 pending（批准/拒绝后可再次被拉），所以 UNIQUE 到 (group_id,user_id)
+// 会挡"拒绝后再拉"，故只对 pending 做应用层防重（groups.js 查了再插）。
+// 群删除时随 groups 级联清理（本库无外键，靠 admin 删群逻辑手动删，见下）。
+// ---------------------------------------------------------------------------
+db.exec(`
+CREATE TABLE IF NOT EXISTS group_join_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  inviter_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at INTEGER NOT NULL,
+  handled_by INTEGER,
+  handled_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_gjr_group ON group_join_requests (group_id, status);
+`);
+
+// ---------------------------------------------------------------------------
+// 群投票 / 接龙（QQ 群投票口径：标题 + 选项 + 可多选 + 可匿名，作为消息卡片发到群里）
+// votes 主键含 option_index —— 一个用户在一个投票下可以投多个选项（多选），
+// 单选时应用层保证只写一行。content 里只存 pollId，计票以本表为准（两处真相原则）。
+// ---------------------------------------------------------------------------
+db.exec(`
+CREATE TABLE IF NOT EXISTS group_polls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  conversation_id INTEGER NOT NULL,
+  creator_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  options TEXT NOT NULL,
+  multi INTEGER NOT NULL DEFAULT 0,
+  anonymous INTEGER NOT NULL DEFAULT 0,
+  closed INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  closed_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS group_poll_votes (
+  poll_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  option_index INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (poll_id, user_id, option_index)
+);
+CREATE INDEX IF NOT EXISTS idx_gpv_poll ON group_poll_votes (poll_id);
 `);
 
 // 智能薪酬（复刻钉钉，2026-10-11）：

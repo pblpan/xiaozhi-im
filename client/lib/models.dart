@@ -502,6 +502,9 @@ class GroupMember {
   final int mutedUntil; // 禁言到期时间戳，0 = 未禁言
   final int? joinedAt;
   final bool isBot;
+  /// 群名片原始值（null = 没设过）。nickname 是"群名片 || 真实昵称"的映射结果，
+  /// 编辑名片时要回填原始值而不是映射值 —— 所以单独带一份。
+  final String? groupNickname;
 
   const GroupMember({
     required this.id,
@@ -512,6 +515,7 @@ class GroupMember {
     this.mutedUntil = 0,
     this.joinedAt,
     this.isBot = false,
+    this.groupNickname,
   });
 
   factory GroupMember.fromJson(Map<String, dynamic> m) => GroupMember(
@@ -523,6 +527,7 @@ class GroupMember {
         mutedUntil: (m['muted_until'] ?? 0) as int,
         joinedAt: m['joined_at'],
         isBot: m['is_bot'] == true || m['is_bot'] == 1,
+        groupNickname: m['group_nickname'] as String?,
       );
 
   String get display =>
@@ -564,6 +569,11 @@ class GroupDetail {
   String get name => (group['name'] ?? '') as String;
   String? get announcement => group['announcement'] as String?;
   int get conversationId => (group['conversation_id'] ?? 0) as int;
+  /// 全员禁言（群主/管理员开关；开启后普通成员不能发言）
+  bool get mutedAll => group['muted_all'] == 1 || group['muted_all'] == true;
+  /// 加群方式：free=成员拉人直接进，approval=需群主/管理员审批
+  String get joinMode => (group['join_mode'] ?? 'free') as String;
+  bool get needApproval => joinMode == 'approval';
 }
 
 /// 好友申请（待我处理）：申请人资料 + 认证附言 + 申请时间

@@ -89,6 +89,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 我在群里的管理权限（群主/管理员）
   bool _canManage = false;
 
+  /// 群主开了全员禁言（普通成员不能发言；豁免口径同服务端：能管群的人能说话）
+  bool _mutedAll = false;
+
   /// 我已收藏的消息 id 集合（长按菜单显示"收藏/取消收藏"）
   final Set<int> _favIds = {};
 
@@ -152,7 +155,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// 群聊：拉成员（@选择器用）、公告、我的管理权限
+  /// 群聊：拉成员（@选择器用）、公告、我的管理权限、全员禁言状态
   Future<void> _loadGroup() async {
     final gid = widget.conv.groupId;
     if (gid == null) return;
@@ -164,11 +167,18 @@ class _ChatScreenState extends State<ChatScreen> {
         _members = g.members;
         _canManage = g.canManage;
         _announcement = g.announcement;
+        _mutedAll = g.mutedAll;
       });
     } catch (_) {
       // 群信息拉取失败不影响聊天
     }
   }
+
+  /// 我现在被全员禁言拦着吗（普通成员 + 群开了全员禁言）。
+  /// _canManage 与服务端 isAdmin 同口径（群内管理员/群主/系统管理员），
+  /// 直接拿它当豁免判据，不会出现"服务端能发、界面却锁死"的两张皮。
+  bool get _mutedHere =>
+      widget.conv.type == 'group' && _mutedAll && !_canManage;
 
   /// 我收藏过的消息 id（长按菜单据此显示"收藏 / 取消收藏"）
   Future<void> _loadFavs() async {
@@ -1171,6 +1181,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   case 'video':
                     _startGroupCall(true);
                     break;
+                  case 'poll':
+                    _createPoll();
+                    break;
                   case 'manage':
                     _openGroupManage();
                     break;
@@ -1199,6 +1212,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 PopupMenuDivider(),
+                PopupMenuItem(
+                  value: 'poll',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.how_to_vote_outlined, size: 20),
+                    title: Text('发起投票'),
+                  ),
+                ),
                 PopupMenuItem(
                   value: 'panel',
                   child: ListTile(
@@ -1234,7 +1256,33 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               _topBars(),
               Expanded(child: _body()),
-              _composer(canSend),
+              // 全员禁言：普通成员看到"全体成员已被禁言"提示条替代输入区。
+              // 只换界面不换逻辑——就算绕过界面，服务端也会拦（两条腿都要有）。
+              if (_mutedHere)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Row(
+                    children: const [
+                      Icon(Icons.volume_off_rounded,
+                          size: 17, color: AppColors.textWeak),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text('群主已开启全员禁言，暂时无法发言',
+                            style: TextStyle(
+                                fontSize: 13, color: AppColors.textWeak)),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                _composer(canSend),
               if (_showEmoji)
                 EmojiPanel(
                   key: _emojiPanelKey,
@@ -1348,6 +1396,9 @@ class _ChatScreenState extends State<ChatScreen> {
         return '[表情] ${m.content ?? ''}';
       case 'card':
         return '[卡片] ${m.card?.title ?? ''}';
+      case 'poll':
+        // content 是 {"pollId":N}，直接展示会露出一串 JSON
+        return '[投票]';
       case 'call':
         return m.call?.label ?? '[通话]';
       default:
@@ -1383,6 +1434,23 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
     );
+  }
+
+  /// 发起投票（QQ 群投票口径）：标题 + 2~10 个选项 + 多选/匿名开关。
+  /// 成功后服务端会往群里发一条 poll 卡片消息，这里刷新列表就能看到。
+  Future<void> _createPoll() async {
+    final gid = widget.conv.groupId;
+    if (gid == null) return;
+    final created = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.bgElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) => _PollCreateSheet(groupId: gid),
+    );
+    if (created == true && mounted) _loadMsgs();
   }
 
   Widget _body() {
@@ -1442,6 +1510,9 @@ class _ChatScreenState extends State<ChatScreen> {
               fileProgress: _fileProgress[m.id],
               imageUrls: gallery,
               imageIndex: galleryIdx[i] ?? 0,
+              pollGroupId: widget.conv.groupId,
+              pollCanManage: _canManage,
+              onPollChanged: _loadMsgs,
             ),
           ],
         );
@@ -1897,4 +1968,161 @@ class _ReceiptSection {
   final List<Map<String, dynamic>> members;
   final bool read;
   const _ReceiptSection(this.title, this.members, this.read);
+}
+
+/// 发起投票的底部弹窗：标题 + 动态增删的选项 + 多选/匿名开关。
+/// 校验与服务端同口径：标题 ≤60 字、2~10 个选项、每项 ≤30 字 ——
+/// 前端先拦一遍省得点了发送才报错。
+class _PollCreateSheet extends StatefulWidget {
+  final int groupId;
+  const _PollCreateSheet({required this.groupId});
+
+  @override
+  State<_PollCreateSheet> createState() => _PollCreateSheetState();
+}
+
+class _PollCreateSheetState extends State<_PollCreateSheet> {
+  final _titleC = TextEditingController();
+  final _opts = <TextEditingController>[
+    TextEditingController(), TextEditingController(),
+  ];
+  bool _multi = false;
+  bool _anonymous = false;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _titleC.dispose();
+    for (final c in _opts) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  String _msg(Object e) => e.toString().replaceFirst('Exception: ', '');
+
+  void _toast(String s) => ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(s), duration: const Duration(seconds: 2)));
+
+  Future<void> _submit() async {
+    final title = _titleC.text.trim();
+    if (title.isEmpty) {
+      _toast('标题不能为空');
+      return;
+    }
+    if (title.length > 60) {
+      _toast('标题最长 60 个字');
+      return;
+    }
+    final options = _opts.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
+    if (options.length < 2) {
+      _toast('至少填 2 个选项');
+      return;
+    }
+    if (options.any((o) => o.length > 30)) {
+      _toast('每个选项最长 30 个字');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await ImApi().createPoll(widget.groupId,
+          title: title, options: options, multi: _multi, anonymous: _anonymous);
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (e) {
+      _toast(_msg(e));
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+            18, 16, 18, 16 + MediaQuery.of(context).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('发起投票',
+                style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _titleC,
+              autofocus: true,
+              maxLength: 60,
+              decoration: const InputDecoration(
+                hintText: '投票标题（如：团建吃什么）',
+                counterText: '',
+              ),
+            ),
+            const SizedBox(height: 6),
+            for (var i = 0; i < _opts.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _opts[i],
+                        maxLength: 30,
+                        decoration: InputDecoration(
+                          hintText: '选项 ${i + 1}',
+                          counterText: '',
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    // 前两项是骨架，不给出入口；至少留 2 个选项
+                    if (_opts.length > 2)
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.remove_circle_outline_rounded,
+                            size: 19, color: AppColors.textWeak),
+                        onPressed: () => setState(() {
+                          _opts[i].dispose();
+                          _opts.removeAt(i);
+                        }),
+                      ),
+                  ],
+                ),
+              ),
+            if (_opts.length < 10)
+              TextButton.icon(
+                onPressed: () => setState(
+                    () => _opts.add(TextEditingController())),
+                icon: const Icon(Icons.add_rounded, size: 17),
+                label: const Text('添加选项', style: TextStyle(fontSize: 13)),
+              ),
+            const SizedBox(height: 4),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('可多选', style: TextStyle(fontSize: 14)),
+              value: _multi,
+              onChanged: (v) => setState(() => _multi = v),
+            ),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('匿名投票', style: TextStyle(fontSize: 14)),
+              subtitle: const Text('只显示票数，不显示谁投的',
+                  style: TextStyle(fontSize: 12, color: AppColors.textSub)),
+              value: _anonymous,
+              onChanged: (v) => setState(() => _anonymous = v),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: _busy ? null : _submit,
+                child: Text(_busy ? '发送中…' : '发到群里'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

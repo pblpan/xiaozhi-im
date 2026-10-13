@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -15,6 +16,7 @@ import 'package:xiaozhi_im_client/core/voice.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/cached_image.dart';
+import 'package:xiaozhi_im_client/widgets/poll_bubble.dart';
 
 class MessageBubble extends StatelessWidget {
   final Message msg;
@@ -54,6 +56,14 @@ class MessageBubble extends StatelessWidget {
   final List<String> imageUrls;
   final int imageIndex;
 
+  /// 群投票卡片（kind=poll）：所在群的 id（投票接口按群路由）。
+  /// 不传（单聊）则投票卡片降级为一条提示文本 —— 单聊本来就不该有投票。
+  final int? pollGroupId;
+  /// 当前用户能否管理投票（群主/管理员 → 卡片上出「结束投票」）
+  final bool pollCanManage;
+  /// 投票数据变了（投了票/改票/结束）→ 外层刷新消息列表预览
+  final VoidCallback? onPollChanged;
+
   const MessageBubble({
     super.key,
     required this.msg,
@@ -70,6 +80,9 @@ class MessageBubble extends StatelessWidget {
     this.fileProgress,
     this.imageUrls = const [],
     this.imageIndex = 0,
+    this.pollGroupId,
+    this.pollCanManage = false,
+    this.onPollChanged,
   });
 
   String get _displayName => msg.displayFileName;
@@ -120,6 +133,8 @@ class MessageBubble extends StatelessWidget {
       body = _cardBubble(context);
     } else if (msg.kind == 'call') {
       body = _callBubble(context);
+    } else if (msg.kind == 'poll') {
+      body = _pollBubble(context);
     } else if (msg.kind == 'file') {
       body = _fileCard(context);
     } else {
@@ -441,6 +456,43 @@ class MessageBubble extends StatelessWidget {
       default:
         return const Color(0xFF3B82F6);
     }
+  }
+
+  /// 群投票卡片：content 里只有 {"pollId":N}，详情和计票由 PollBubble
+  /// 现拉（计票以服务端为准，卡片不存数据）。单聊没有群 id，降级为提示文本。
+  Widget _pollBubble(BuildContext context) {
+    final gid = pollGroupId;
+    if (gid == null) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        constraints: const BoxConstraints(maxWidth: 260),
+        decoration: BoxDecoration(
+          color: AppColors.bgElevated,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Text('[投票]',
+            style: TextStyle(fontSize: 13, color: AppColors.textSub)),
+      );
+    }
+    var pollId = 0;
+    try {
+      pollId = (Map<String, dynamic>.from(
+              (const JsonDecoder().convert(msg.content ?? '{}')) as Map))
+          ['pollId'] as int? ?? 0;
+    } catch (_) {
+      pollId = 0;
+    }
+    if (pollId <= 0) {
+      return const Text('[投票]（数据缺失）',
+          style: TextStyle(fontSize: 13, color: AppColors.textWeak));
+    }
+    return PollBubble(
+      key: ValueKey('poll-$pollId'),
+      groupId: gid,
+      pollId: pollId,
+      canManage: pollCanManage,
+      onChanged: onPollChanged,
+    );
   }
 
   /// 通话记录气泡：一行「图标 + 文案」。

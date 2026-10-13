@@ -540,12 +540,14 @@ class ImApi {
   Future<Map<String, dynamic>> groupDetail(int gid) async =>
       await _get('/groups/$gid');
 
-  /// 改群名 / 群公告（群主或管理员）
+  /// 改群名 / 群公告 / 全员禁言 / 加群验证（群主或管理员）
   Future<Map<String, dynamic>> updateGroup(int gid,
-      {String? name, String? announcement}) async {
+      {String? name, String? announcement, bool? mutedAll, String? joinMode}) async {
     final b = <String, dynamic>{};
     if (name != null) b['name'] = name;
     if (announcement != null) b['announcement'] = announcement;
+    if (mutedAll != null) b['mutedAll'] = mutedAll;
+    if (joinMode != null) b['joinMode'] = joinMode;
     return await _patch('/groups/$gid', b);
   }
 
@@ -595,6 +597,48 @@ class ImApi {
 
   Future<void> unlinkGroupCourse(int gid, int courseId) async =>
       await _delete('/groups/$gid/courses/$courseId');
+
+  // ---- 群功能 v2（2026-10-13：全员禁言 / 群名片 / 加群审批 / 群投票）----
+
+  /// 改群设置（name / announcement / mutedAll / joinMode 任意组合）
+  Future<Map<String, dynamic>> setMyGroupNickname(int gid, String nickname) async =>
+      await _patch('/groups/$gid/members/me', {'nickname': nickname});
+
+  /// 群主/管理员改他人群名片
+  Future<Map<String, dynamic>> setMemberNickname(int gid, int uid, String nickname) async =>
+      await _patch('/groups/$gid/members/$uid/nickname', {'nickname': nickname});
+
+  /// 待审批的入群申请：{ items: [...] }
+  Future<List<dynamic>> joinRequests(int gid) async =>
+      (await _get('/groups/$gid/joinRequests'))['items'] as List<dynamic>? ?? [];
+
+  Future<void> approveJoinRequest(int gid, int reqId) async =>
+      await _post('/groups/$gid/joinRequests/$reqId/approve', const {});
+
+  Future<void> rejectJoinRequest(int gid, int reqId) async =>
+      await _post('/groups/$gid/joinRequests/$reqId/reject', const {});
+
+  /// 建投票（同时往群里发一条 poll 卡片消息）→ { pollId }
+  Future<Map<String, dynamic>> createPoll(int gid, {
+    required String title,
+    required List<String> options,
+    bool multi = false,
+    bool anonymous = false,
+  }) async =>
+      await _post('/groups/$gid/polls', {
+        'title': title, 'options': options, 'multi': multi, 'anonymous': anonymous,
+      });
+
+  /// 投票详情 + 计票
+  Future<Map<String, dynamic>> pollDetail(int gid, int pollId) async =>
+      await _get('/groups/$gid/polls/$pollId');
+
+  /// 投票（单选传一项；改票直接传新选项，服务端清旧票）
+  Future<Map<String, dynamic>> votePoll(int gid, int pollId, List<int> optionIndexes) async =>
+      await _post('/groups/$gid/polls/$pollId/vote', {'options': optionIndexes});
+
+  Future<void> closePoll(int gid, int pollId) async =>
+      await _post('/groups/$gid/polls/$pollId/close', const {});
 
   /// 全部群（仅系统管理员）—— 用来进那些自己不在里面的群
   Future<List<dynamic>> allGroups() async =>

@@ -12,7 +12,7 @@ function uidOf(req, res) {
 
 /** 取群 + 我在群里的角色，非成员返回 null 并已回 403 */
 function loadGroup(gid, uid, res) {
-  const g = db.prepare('SELECT id,name,owner_id,avatar,conversation_id,created_at,announcement FROM groups WHERE id=?').get(gid);
+  const g = db.prepare('SELECT id,name,owner_id,avatar,conversation_id,created_at,announcement,muted_all,join_mode FROM groups WHERE id=?').get(gid);
   if (!g) { res.status(404).json({ error: 'not found' }); return null; }
   const me = db.prepare('SELECT role,muted_until FROM group_members WHERE group_id=? AND user_id=?').get(gid, uid);
   if (!me) { res.status(403).json({ error: 'not a group member' }); return null; }
@@ -107,9 +107,17 @@ router.get('/:groupId', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const gid = Number(req.params.groupId);
   const ctx = loadGroup(gid, uid, res); if (!ctx) return;
-  const members = db.prepare(`SELECT u.id,u.username,u.nickname,u.avatar,u.is_bot,m.role,m.muted_until,m.joined_at
+  // ⚠️ u.nickname 与 m.nickname 撞名：必须起别名，不然 sqlite 取最后一名，
+  //    真实昵称被群名片悄悄覆盖。下发的 nickname = 群名片 || 真实昵称（客户端零改动），
+  //    另给 groupNickname / realNickname 两个字段让需要区分的地方用。
+  const members = db.prepare(`SELECT u.id,u.username,u.avatar,u.is_bot,m.role,m.muted_until,m.joined_at,
+      m.nickname AS group_nickname, u.nickname AS real_nickname
     FROM group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=?`).all(gid)
-    .map((m) => ({ ...m, is_bot: !!m.is_bot }));
+    .map((m) => ({
+      ...m,
+      is_bot: !!m.is_bot,
+      nickname: (m.group_nickname && m.group_nickname.trim()) || m.real_nickname,
+    }));
   res.json({
     group: ctx.g,
     members,
@@ -140,12 +148,39 @@ router.patch('/:groupId', (req, res) => {
     if (a.length > 500) return res.status(400).json({ error: '群公告最长 500 个字' });
     sets.push('announcement = ?'); args.push(a || null);
   }
+  if (body.mutedAll !== undefined) {
+    sets.push('muted_all = ?'); args.push(body.mutedAll ? 1 : 0);
+  }
+  if (typeof body.joinMode === 'string') {
+    if (!['free', 'approval'].includes(body.joinMode)) {
+      return res.status(400).json({ error: 'joinMode 只能是 free 或 approval' });
+    }
+    sets.push('join_mode = ?'); args.push(body.joinMode);
+  }
   if (!sets.length) return res.status(400).json({ error: '没有要修改的内容' });
 
   args.push(gid);
   db.prepare(`UPDATE groups SET ${sets.join(', ')} WHERE id = ?`).run(...args);
   notifyGroup(ctx.g.conversation_id, gid, 'profile');
-  res.json({ ok: true, group: db.prepare('SELECT id,name,announcement FROM groups WHERE id=?').get(gid) });
+  res.json({ ok: true, group: db.prepare('SELECT id,name,announcement,muted_all,join_mode FROM groups WHERE id=?').get(gid) });
+});
+
+// ---------- 群名片（群内昵称） ----------
+
+/** 设置我自己的群名片（空串 = 清除，回退真实昵称）。
+ *  🔴 必须注册在 `/:groupId/members/:userId` **之前** —— Express 按注册顺序
+ *     匹配，放后面的话 'me' 会被 :userId 吃掉（Number('me')=NaN → 查库查不到，
+ *     回 404「该用户不在群里」，看起来像灵异故障）。 */
+router.patch('/:groupId/members/me', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  const raw = String(req.body?.nickname ?? '').trim();
+  if (raw.length > 20) return res.status(400).json({ error: '群名片最长 20 个字' });
+  db.prepare('UPDATE group_members SET nickname=? WHERE group_id=? AND user_id=?')
+    .run(raw || null, gid, uid);
+  notifyGroup(ctx.g.conversation_id, gid, 'member');
+  res.json({ ok: true, nickname: raw || null });
 });
 
 // 设/撤管理员、禁言/解除（群主；管理员仅可禁言普通成员）
@@ -252,13 +287,62 @@ router.post('/:groupId/leave', (req, res) => {
   res.json({ ok: true });
 });
 
-// 拉人入群（群成员均可拉人）
+// ---------- 群名片（群内昵称） ----------
+
+/** 群主/管理员改任何成员的群名片（QQ 口径：管理员有权规范群内称呼） */
+router.patch('/:groupId/members/:userId/nickname', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const target = Number(req.params.userId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  if (!ctx.isAdmin) return res.status(403).json({ error: '只有群主或管理员可以改他人群名片' });
+  if (target === ctx.g.owner_id) return res.status(400).json({ error: '不能改群主的群名片' });
+  const tm = db.prepare('SELECT role FROM group_members WHERE group_id=? AND user_id=?').get(gid, target);
+  if (!tm) return res.status(404).json({ error: '该用户不在群里' });
+  const raw = String(req.body?.nickname ?? '').trim();
+  if (raw.length > 20) return res.status(400).json({ error: '群名片最长 20 个字' });
+  db.prepare('UPDATE group_members SET nickname=? WHERE group_id=? AND user_id=?')
+    .run(raw || null, gid, target);
+  notifyGroup(ctx.g.conversation_id, gid, 'member');
+  hub.broadcastToUser(target, { type: 'group:updated', groupId: gid, conversationId: ctx.g.conversation_id, action: 'me' });
+  res.json({ ok: true, nickname: raw || null });
+});
+
+// ---------- 加群审批 ----------
+
+/**
+ * 审批模式（join_mode='approval'）下普通成员拉人不再直接进群，
+ * 而是挂到 group_join_requests 等群主/管理员点头 —— 防"陌生人混进来"。
+ * 群主/管理员拉人仍然直接进（能管群的人不需要自己审批自己）。
+ */
 router.post('/:groupId/members', (req, res) => {
   const uid = uidOf(req, res); if (uid === null) return;
   const gid = Number(req.params.groupId);
   const ctx = loadGroup(gid, uid, res); if (!ctx) return;
   const userId = Number(req.body?.userId);
   if (!db.prepare('SELECT id FROM users WHERE id=?').get(userId)) return res.status(404).json({ error: 'user not found' });
+
+  // 审批模式：普通成员拉的人先进申请池，群主/管理员点头才算进群。
+  // （被拉人已在群里/已在待审中都不重复挂；管理员拉人仍直接进 —— 管群的人
+  //   不需要给"自己拉的人"再走一道自己批的手续。）
+  if (ctx.g.join_mode === 'approval' && !ctx.isAdmin) {
+    if (db.prepare('SELECT 1 FROM group_members WHERE group_id=? AND user_id=?').get(gid, userId)) {
+      return res.json({ ok: true, duplicated: true });
+    }
+    if (db.prepare("SELECT 1 FROM group_join_requests WHERE group_id=? AND user_id=? AND status='pending'").get(gid, userId)) {
+      return res.json({ ok: true, pending: true });
+    }
+    db.prepare('INSERT INTO group_join_requests (group_id,user_id,inviter_id,created_at) VALUES (?,?,?,?)')
+      .run(gid, userId, uid, Date.now());
+    // 通知群里所有能审批的人（群主 + 管理员）
+    const approvers = db.prepare(`SELECT user_id FROM group_members WHERE group_id=? AND (role IN ('owner','admin') OR user_id=?)`)
+      .all(gid, ctx.g.owner_id);
+    for (const a of approvers) {
+      hub.broadcastToUser(a.user_id, { type: 'group:join_request', groupId: gid, conversationId: ctx.g.conversation_id, userId, inviterId: uid });
+    }
+    return res.json({ ok: true, pending: true });
+  }
+
   // 2 步写入要原子（审计 P1-2）：group_members 与 conversation_members 必须在同一事务。
   // 只插前者的话，这人能在"群成员列表"里看到群，却收不到任何群消息
   // （发消息是按 conversation_members 投递的），而界面不会给任何提示 —— 极难排查。
@@ -283,6 +367,227 @@ router.post('/:groupId/members', (req, res) => {
     selfId: uid,
     data: { groupId: gid, userId, operatorId: uid },
   });
+  res.json({ ok: true });
+});
+
+/** 待审批列表（群主/管理员）：申请人/邀请人信息一起带出来，审批时看得清是谁拉谁 */
+router.get('/:groupId/joinRequests', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  if (!ctx.isAdmin) return res.status(403).json({ error: '只有群主或管理员可以查看入群申请' });
+  const rows = db.prepare(`
+    SELECT r.id, r.user_id, r.inviter_id, r.created_at,
+           u.nickname AS user_nickname, u.username AS user_username, u.avatar AS user_avatar,
+           i.nickname AS inviter_nickname, i.username AS inviter_username
+      FROM group_join_requests r
+      JOIN users u ON u.id = r.user_id
+      LEFT JOIN users i ON i.id = r.inviter_id
+     WHERE r.group_id = ? AND r.status = 'pending'
+     ORDER BY r.id DESC`).all(gid);
+  res.json({ items: rows, total: rows.length });
+});
+
+/** 审批：通过。把人真正拉进群（同一套事务写入，与直接拉人一致） */
+router.post('/:groupId/joinRequests/:reqId/approve', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  if (!ctx.isAdmin) return res.status(403).json({ error: '只有群主或管理员可以审批' });
+  const r = db.prepare("SELECT * FROM group_join_requests WHERE id=? AND group_id=? AND status='pending'")
+    .get(Number(req.params.reqId), gid);
+  if (!r) return res.status(404).json({ error: '申请不存在或已处理' });
+  const target = r.user_id;
+  if (!db.prepare('SELECT id FROM users WHERE id=?').get(target)) {
+    // 申请人已被删号：标记拒绝，别让这条申请永远挂着
+    db.prepare("UPDATE group_join_requests SET status='rejected', handled_by=?, handled_at=? WHERE id=?").run(uid, Date.now(), r.id);
+    return res.status(404).json({ error: '申请人已不存在' });
+  }
+
+  db.exec('BEGIN');
+  try {
+    if (!db.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id=?').get(gid, target)) {
+      db.prepare('INSERT INTO group_members (group_id,user_id,role,joined_at) VALUES (?,?,?,?)').run(gid, target, 'member', Date.now());
+    }
+    if (!db.prepare('SELECT user_id FROM conversation_members WHERE conversation_id=? AND user_id=?').get(ctx.g.conversation_id, target)) {
+      db.prepare('INSERT INTO conversation_members (conversation_id,user_id) VALUES (?,?)').run(ctx.g.conversation_id, target);
+    }
+    db.prepare("UPDATE group_join_requests SET status='approved', handled_by=?, handled_at=? WHERE id=?").run(uid, Date.now(), r.id);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: e.message });
+  }
+  notifyGroup(ctx.g.conversation_id, gid, 'member');
+  hub.broadcastToUser(target, { type: 'group:invited', groupId: gid, conversationId: ctx.g.conversation_id });
+  events.emit('member.joined', {
+    conversationId: ctx.g.conversation_id,
+    selfId: uid,
+    data: { groupId: gid, userId: target, operatorId: uid, via: 'approval' },
+  });
+  res.json({ ok: true });
+});
+
+/** 审批：拒绝 */
+router.post('/:groupId/joinRequests/:reqId/reject', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  if (!ctx.isAdmin) return res.status(403).json({ error: '只有群主或管理员可以审批' });
+  const r = db.prepare("SELECT id,user_id FROM group_join_requests WHERE id=? AND group_id=? AND status='pending'")
+    .get(Number(req.params.reqId), gid);
+  if (!r) return res.status(404).json({ error: '申请不存在或已处理' });
+  db.prepare("UPDATE group_join_requests SET status='rejected', handled_by=?, handled_at=? WHERE id=?").run(uid, Date.now(), r.id);
+  hub.broadcastToUser(r.user_id, { type: 'group:join_result', groupId: gid, conversationId: ctx.g.conversation_id, approved: false });
+  res.json({ ok: true });
+});
+
+/* ============================================================
+ * 群投票 / 接龙
+ *
+ * content 只存 pollId（JSON {"pollId":N}），计票以 group_poll_votes
+ * 为准 —— 投票数据在消息里放一份就成"两处真相"，改选项/关闭投票后
+ * 消息卡片还是旧数据。客户端渲染卡片时按 pollId 现拉现算。
+ * ============================================================ */
+
+/** 校验选项数组：2~10 项、每项非空 ≤30 字 */
+function validPollOptions(raw) {
+  if (!Array.isArray(raw)) return null;
+  const opts = raw.map((o) => String(o ?? '').trim()).filter(Boolean);
+  if (opts.length < 2 || opts.length > 10) return null;
+  if (opts.some((o) => o.length > 30)) return null;
+  return opts;
+}
+
+function shapePoll(p, uid, { withVotes = false } = {}) {
+  const options = JSON.parse(p.options);
+  const votes = db.prepare('SELECT user_id, option_index FROM group_poll_votes WHERE poll_id=?').all(p.id);
+  const counts = options.map((_, i) => votes.filter((v) => v.option_index === i).length);
+  const mine = votes.filter((v) => v.user_id === uid).map((v) => v.option_index);
+  const out = {
+    id: p.id,
+    groupId: p.group_id,
+    title: p.title,
+    options,
+    counts,
+    total: votes.length,
+    multi: !!p.multi,
+    anonymous: !!p.anonymous,
+    closed: !!p.closed,
+    createdAt: p.created_at,
+    closedAt: p.closed_at,
+    myVotes: mine,
+    mine: p.creator_id === uid, // 我是发起人 → 客户端给「结束投票」按钮
+    // 匿名投票只给数量不给名单（投了谁保密是匿名存在的意义）
+    voters: p.anonymous ? undefined : options.map((_, i) =>
+      votes.filter((v) => v.option_index === i).map((v) => v.user_id)),
+  };
+  if (withVotes) return out;
+  return out;
+}
+
+/** 建投票（任何群成员），同时往群里发一条 poll 消息卡片 */
+router.post('/:groupId/polls', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  const b = req.body || {};
+  const title = String(b.title ?? '').trim();
+  if (!title) return res.status(400).json({ error: '标题不能为空' });
+  if (title.length > 60) return res.status(400).json({ error: '标题最长 60 个字' });
+  const options = validPollOptions(b.options);
+  if (!options) return res.status(400).json({ error: '选项需要 2~10 个、每项 30 字以内' });
+
+  // 全员禁言拦不拦建投票？拦 —— 投票也是一种"发言"（会推给全群），
+  // 但豁免名单之外的人本来就发不了消息，口径保持一致。
+  // （sendMessage 里也会再拦一次，这里提前拦是省得留下"投票建成了消息发不出"的半成品。）
+  // mutedAllBlock 在 chat.js 内部，这里用同口径现查：
+  if (ctx.g.muted_all && !ctx.isAdmin) {
+    return res.status(403).json({ error: '群主已开启全员禁言，暂时无法发起投票' });
+  }
+
+  const info = db.prepare(`INSERT INTO group_polls
+    (group_id,conversation_id,creator_id,title,options,multi,anonymous,created_at)
+    VALUES (?,?,?,?,?,?,?,?)`)
+    .run(gid, ctx.g.conversation_id, uid, title, JSON.stringify(options), b.multi ? 1 : 0, b.anonymous ? 1 : 0, Date.now());
+  const pollId = info.lastInsertRowid;
+
+  // 消息卡片：复用 sendMessage 的落库/推送/事件链（kind='poll' 已注册进 KINDS）
+  try {
+    const chat = require('../chat');
+    chat.sendMessage({
+      conversationId: ctx.g.conversation_id,
+      senderId: uid,
+      kind: 'poll',
+      content: JSON.stringify({ pollId }),
+    });
+  } catch (e) {
+    // 消息失败不回滚投票本身（投票数据已落库，可在群里手动转发卡片），但要如实报错
+    return res.status(500).json({ error: `投票已创建但卡片消息发送失败: ${e.message}` });
+  }
+  res.json({ ok: true, pollId });
+});
+
+/** 投票详情 + 计票（群成员可看） */
+router.get('/:groupId/polls/:pollId', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  const p = db.prepare('SELECT * FROM group_polls WHERE id=? AND group_id=?').get(Number(req.params.pollId), gid);
+  if (!p) return res.status(404).json({ error: '投票不存在' });
+  res.json({ poll: shapePoll(p, uid) });
+});
+
+/** 投票（单选时先清掉旧票；已关闭/已撤销选项都拒绝） */
+router.post('/:groupId/polls/:pollId/vote', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  const p = db.prepare('SELECT * FROM group_polls WHERE id=? AND group_id=?').get(Number(req.params.pollId), gid);
+  if (!p) return res.status(404).json({ error: '投票不存在' });
+  if (p.closed) return res.status(400).json({ error: '投票已结束' });
+  const options = JSON.parse(p.options);
+  const picks = Array.isArray(req.body?.options) ? req.body.options.map(Number) : [];
+  if (!picks.length) return res.status(400).json({ error: '至少选一项' });
+  if (picks.some((i) => !Number.isInteger(i) || i < 0 || i >= options.length)) {
+    return res.status(400).json({ error: '选项不合法' });
+  }
+  const unique = [...new Set(picks)];
+  if (!p.multi && unique.length > 1) return res.status(400).json({ error: '这是单选投票' });
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM group_poll_votes WHERE poll_id=? AND user_id=?').run(p.id, uid);
+    const now = Date.now();
+    for (const i of unique) {
+      db.prepare('INSERT INTO group_poll_votes (poll_id,user_id,option_index,created_at) VALUES (?,?,?,?)').run(p.id, uid, i, now);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: e.message });
+  }
+  // 广播给全群刷新计票（不广播投票人，客户端按需拉详情）
+  hub.broadcastToConversation(db, ctx.g.conversation_id, {
+    type: 'group:poll_updated', groupId: gid, pollId: p.id,
+  }, null);
+  res.json({ ok: true, poll: shapePoll(p, uid) });
+});
+
+/** 关闭投票（创建者或群主/管理员），关闭后仍可看结果 */
+router.post('/:groupId/polls/:pollId/close', (req, res) => {
+  const uid = uidOf(req, res); if (uid === null) return;
+  const gid = Number(req.params.groupId);
+  const ctx = loadGroup(gid, uid, res); if (!ctx) return;
+  const p = db.prepare('SELECT * FROM group_polls WHERE id=? AND group_id=?').get(Number(req.params.pollId), gid);
+  if (!p) return res.status(404).json({ error: '投票不存在' });
+  if (p.creator_id !== uid && !ctx.isAdmin) return res.status(403).json({ error: '只有发起人或群主/管理员可以结束投票' });
+  if (!p.closed) {
+    db.prepare('UPDATE group_polls SET closed=1, closed_at=? WHERE id=?').run(Date.now(), p.id);
+    hub.broadcastToConversation(db, ctx.g.conversation_id, {
+      type: 'group:poll_updated', groupId: gid, pollId: p.id,
+    }, null);
+  }
   res.json({ ok: true });
 });
 

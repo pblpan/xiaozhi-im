@@ -3,9 +3,11 @@ import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/group_candidates.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/models.dart';
+import 'package:xiaozhi_im_client/screens/join_requests.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 
-/// 群管理：改群名/公告、设管理员、禁言、踢人、转让群主、退群。
+/// 群管理：改群名/公告、设管理员、禁言、踢人、转让群主、退群，
+/// 以及 2026-10-13 新增的全员禁言 / 加群验证 / 入群审批 / 群名片。
 /// 权限由服务端裁决，这里只做界面上的可用性收敛。
 class GroupManageScreen extends StatefulWidget {
   final int groupId;
@@ -20,6 +22,10 @@ class GroupManageScreen extends StatefulWidget {
 class _GroupManageScreenState extends State<GroupManageScreen> {
   GroupDetail? _d;
   bool _loading = true;
+  /// 待审批的入群申请数（只拉一次做角标，进审批页会重算）
+  int _pendingJoins = 0;
+  /// 开关操作进行中（防止连点把开关打回去）
+  bool _switching = false;
 
   @override
   void initState() {
@@ -35,6 +41,13 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
         _d = GroupDetail.fromJson(d);
         _loading = false;
       });
+      // 待审批数拉失败不打扰（只是个角标）
+      if (_d?.canManage == true) {
+        try {
+          final n = (await ImApi().joinRequests(widget.groupId)).length;
+          if (mounted) setState(() => _pendingJoins = n);
+        } catch (_) {}
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -170,6 +183,43 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
     await _act(() => ImApi().updateGroup(widget.groupId, announcement: v));
   }
 
+  /// 全员禁言 / 加群验证开关（服务端 PATCH /groups/:id，失败弹提示并回弹）
+  Future<void> _toggleSwitch(String kind, bool value) async {
+    if (_switching) return;
+    setState(() => _switching = true);
+    try {
+      if (kind == 'mutedAll') {
+        await ImApi().updateGroup(widget.groupId, mutedAll: value);
+      } else {
+        await ImApi().updateGroup(widget.groupId, joinMode: value ? 'approval' : 'free');
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) _toast(_msg(e));
+    } finally {
+      if (mounted) setState(() => _switching = false);
+    }
+  }
+
+  /// 设置我自己的群名片（空 = 清除）
+  Future<void> _editMyNickname() async {
+    final d = _d!;
+    final me = d.members.firstWhere((m) => m.id == widget.myId);
+    final ctrl = TextEditingController(text: me.groupNickname ?? '');
+    final v = await _inputDialog('我的群名片', ctrl, hint: '群内显示的名字（留空用真实昵称）');
+    if (v == null) return;
+    await _act(() => ImApi().setMyGroupNickname(widget.groupId, v));
+  }
+
+  /// 群主/管理员改他人群名片
+  Future<void> _editMemberNickname(GroupMember m) async {
+    final ctrl = TextEditingController(text: m.groupNickname ?? '');
+    final v = await _inputDialog('修改「${m.display}」的群名片', ctrl,
+        hint: '留空恢复真实昵称');
+    if (v == null) return;
+    await _act(() => ImApi().setMemberNickname(widget.groupId, m.id, v));
+  }
+
   Future<String?> _inputDialog(String title, TextEditingController ctrl,
       {String? hint, int maxLines = 1}) async {
     final v = await showDialog<String>(
@@ -236,6 +286,12 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
             ),
             const SizedBox(height: 8),
             const Divider(height: 1, color: AppColors.divider),
+            if (d.canManage)
+              _item(Icons.drive_file_rename_outline_rounded, '修改群名片',
+                  () async {
+                Navigator.pop(ctx);
+                await _editMemberNickname(m);
+              }),
             if (d.isOwner)
               _item(
                 m.role == 'admin' ? Icons.remove_moderator_outlined : Icons.shield_outlined,
@@ -387,6 +443,79 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                     ),
                   ),
                 ],
+
+                // ---- 群管理开关（群主/管理员）----
+                if (d.canManage) ...[
+                  _sectionTitle('群管理'),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.volume_off_rounded, size: 21),
+                    title: const Text('全员禁言', style: TextStyle(fontSize: 14.5)),
+                    subtitle: const Text('开启后只有群主和管理员能发言',
+                        style: TextStyle(fontSize: 12.5, color: AppColors.textSub)),
+                    value: d.mutedAll,
+                    onChanged: _switching ? null : (v) => _toggleSwitch('mutedAll', v),
+                  ),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.verified_user_outlined, size: 21),
+                    title: const Text('加群验证', style: TextStyle(fontSize: 14.5)),
+                    subtitle: const Text('成员拉人需要群主或管理员同意',
+                        style: TextStyle(fontSize: 12.5, color: AppColors.textSub)),
+                    value: d.needApproval,
+                    onChanged: _switching ? null : (v) => _toggleSwitch('join', v),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.how_to_reg_outlined, size: 21),
+                    title: const Text('入群申请', style: TextStyle(fontSize: 14.5)),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_pendingJoins > 0)
+                          Container(
+                            margin: const EdgeInsets.only(right: 4),
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.danger,
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                            child: Text('$_pendingJoins',
+                                style: const TextStyle(
+                                    fontSize: 11, color: Colors.white)),
+                          ),
+                        const Icon(Icons.chevron_right_rounded,
+                            size: 20, color: AppColors.textWeak),
+                      ],
+                    ),
+                    onTap: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => JoinRequestsScreen(
+                              groupId: widget.groupId, groupName: d.name),
+                        ),
+                      );
+                      if (mounted) _load();
+                    },
+                  ),
+                ],
+
+                // ---- 我的群名片 ----
+                _sectionTitle('我的群名片'),
+                ListTile(
+                  leading: const Icon(Icons.drive_file_rename_outline_rounded, size: 21),
+                  title: Builder(builder: (c) {
+                    final me = d.members.where((m) => m.id == widget.myId).toList();
+                    final nick = me.isNotEmpty ? me.first.groupNickname : null;
+                    return Text(
+                      (nick == null || nick.isEmpty) ? '未设置（显示真实昵称）' : nick,
+                      style: const TextStyle(fontSize: 14.5),
+                    );
+                  }),
+                  subtitle: const Text('只在本群显示，别人看到的名字',
+                      style: TextStyle(fontSize: 12.5, color: AppColors.textSub)),
+                  trailing: const Icon(Icons.chevron_right_rounded,
+                      size: 20, color: AppColors.textWeak),
+                  onTap: _editMyNickname,
+                ),
 
                 // ---- 成员 ----
                 _sectionTitle('群成员（${d.members.length}）'),
