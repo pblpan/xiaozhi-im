@@ -66,11 +66,15 @@ void main() {
 
   /// 把三个必需路由装上。conversations 路由是**有状态的**：第一次拉取返回
   /// 未读，之后返回 0 —— 模拟"markRead 已落库"的服务端真值。
+  /// 把三个必需路由装上。conversations 路由是**有状态的**：第一次拉取返回
+  /// 未读，之后返回 0 —— 模拟"markRead 已落库"的服务端真值。
+  /// 🔴 路径必须带 **/api 前缀**（ImApi 拼的就是 /api/xxx；stub 按
+  ///    req.uri.path 精确匹配，漏前缀 = 永远 404，页面卡在错误条上）。
   void stubBasics({int firstUnread = 3, bool firstMention = true}) {
     var convCalls = 0;
-    stub.on('GET', '/auth/me',
+    stub.on('GET', '/api/auth/me',
         (_) => {'user': {'id': 7, 'username': 'me', 'nickname': '我', 'role': 'user'}});
-    stub.on('GET', '/conversations', (_) {
+    stub.on('GET', '/api/conversations', (_) {
       convCalls++;
       final unread = convCalls == 1 ? firstUnread : 0;
       return [
@@ -78,7 +82,7 @@ void main() {
         convJson(102, '李四', 0),
       ];
     });
-    stub.on('GET', '/friends', (_) => {'friends': <dynamic>[], 'pending': <dynamic>[]});
+    stub.on('GET', '/api/friends', (_) => {'friends': <dynamic>[], 'pending': <dynamic>[]});
   }
 
   Future<void> pumpUntil(WidgetTester tester, bool Function() ok,
@@ -126,10 +130,10 @@ void main() {
     expect(Badges.instance.unread.value, 0);
 
     // ---- 校准：清零后会再拉一次服务端真值（双保险，不是本地撒谎）----
-    await pumpUntil(t, () => stub.hits('GET', '/conversations') >= 2,
+    await pumpUntil(t, () => stub.hits('GET', '/api/conversations') >= 2,
         why: '清零后应触发一次校准拉取');
     await t.pump();
-    expect(stub.hits('GET', '/conversations'), 2);
+    expect(stub.hits('GET', '/api/conversations'), 2);
     expect(find.text('3'), findsNothing, reason: '服务端确认已读，不能闪回来');
     expect(Badges.instance.unread.value, 0);
   });
@@ -145,7 +149,7 @@ void main() {
 
     expect(find.text('3'), findsOneWidget, reason: '没命中任何会话，未读不该动');
     expect(Badges.instance.unread.value, 3);
-    expect(stub.hits('GET', '/conversations'), 1,
+    expect(stub.hits('GET', '/api/conversations'), 1,
         reason: '没有可清零的会话，不该多打一次校准请求');
   });
 
@@ -160,7 +164,7 @@ void main() {
     ReadBus.instance.fire(101); // 本来就是 0 未读
     await t.pump();
 
-    expect(stub.hits('GET', '/conversations'), 1,
+    expect(stub.hits('GET', '/api/conversations'), 1,
         reason: '清零态重复广播不该触发额外拉取');
     expect(Badges.instance.unread.value, 0);
   });
