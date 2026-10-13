@@ -102,7 +102,9 @@ dependencies:
   # 🔴 **版本号锁死，不要写成 caret**（同 video_player 的理由）：本机跑不了
   #    pub get，本地类型检查用的是 _pubfetch.py 解出来的**这一套闭包**，
   #    写成 caret 会让 CI 解出别的版本，本地预检对不上号。
-  wakelock_plus: 1.8.1
+  # 🔴 **只能 1.8.0，不能 1.8.1**：1.8.1 把 dbus 拉到 ^0.8.0，而 desktop_drop
+  #    0.8.4 要求 dbus ^0.7.10 —— 两包共存的版本解不开（CI 第八轮 Pub get 全红）。
+  wakelock_plus: 1.8.0
 
   # ── 蓝牙价签打印：**故意不引蓝牙包** ──────────────────────────────
   # 原先引了 flutter_blue_plus，后来弃用：它的 FlutterBluePlus License 白纸黑字
