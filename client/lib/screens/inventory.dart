@@ -292,8 +292,8 @@ class _InventoryPageState extends State<InventoryPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('从服务端拉取条码 / 名称 / 规格 / 单价。\n'
-                '扫出来的每一行靠它显示成人看得懂的名字，差异表靠它算金额。\n'
+            const Text(                '从服务端拉取条码 / 名称 / 规格 / 单价。\n'
+                '扫出来的每一行靠它显示，差异表靠它算金额。\n'
                 '差异本身是三遍实盘互比（复盘比初盘、抽盘比复盘），不靠账面数。'),
             const SizedBox(height: 14),
             ValueListenableBuilder<double?>(
