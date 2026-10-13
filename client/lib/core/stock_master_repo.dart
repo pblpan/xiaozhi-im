@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/local_db.dart';
+import 'package:xiaozhi_im_client/core/wake_lock.dart';
 
 /// 商品档案（商档）的本地仓库：从泰格拉下来，落进本地 `stock_master` 表。
 ///
@@ -179,6 +180,28 @@ class StockMasterRepo {
     void Function(int done, int total)? onProgress,
     int pageSize = 2000,
     // 只为测试可注入假实现；生产不传，走 ImApi 的真实接口。
+    Future<Map<String, dynamic>> Function()? countCall,
+    Future<Map<String, dynamic>> Function(int page, int pageSize)? pageCall,
+  }) async {
+    // 🔴 下载商档期间屏幕常亮（龙哥 2026-10-13：息屏 = Doze = CPU/网络挂起，
+    //    几万行的分页拉取必被打断）。盘点/拣货/商档查询三处入口都走本函数，
+    //    保活收在这里 = 一处覆盖全部；成功/失败/取消都必须把控制权还回去。
+    await WakeLock.enable();
+    try {
+      return await _syncFromServerImpl(
+        onProgress: onProgress,
+        pageSize: pageSize,
+        countCall: countCall,
+        pageCall: pageCall,
+      );
+    } finally {
+      await WakeLock.disable();
+    }
+  }
+
+  static Future<int> _syncFromServerImpl({
+    void Function(int done, int total)? onProgress,
+    int pageSize = 2000,
     Future<Map<String, dynamic>> Function()? countCall,
     Future<Map<String, dynamic>> Function(int page, int pageSize)? pageCall,
   }) async {

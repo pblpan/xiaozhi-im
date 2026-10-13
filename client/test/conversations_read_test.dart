@@ -110,12 +110,21 @@ void main() {
 
   /// 🔴 排干 `_refreshPendingCount()` 的 in-flight 请求。它是 fire-and-forget，
   /// HTTP 客户端给每个请求挂了 15s 超时 Timer —— 用例断言跑完时它还挂着，
-  /// flutter_test 会判 "A Timer is still pending" 直接判死（CI 第五轮 ②③）。
-  /// runAsync 借真实时间让请求完成、Timer 被 cancel，回到假时钟时干干净净。
+  /// flutter_test 会判 "A Timer is still pending" 直接判死（CI 第五、七轮 ②③）。
+  ///
+  /// 🔴 固定睡 300ms 不够（第七轮实证）：这个请求排在 me()/_load() 的 await
+  ///    链后面，pumpUntil 退出时它可能**还没发出去** —— 睡完 Timer 照样挂。
+  ///    所以先轮询等 stub 真的收到 friends 请求，再给一段真实时间让回包
+  ///    走完（回包完成时 .timeout 的 Timer 才会被 cancel）。
   /// ① 不需要它：pumpUntil 的 runAsync 顺带就把请求排干了。
   /// （🔴 必须定义在 ②③ 之前 —— Dart 局部函数在声明前引用直接
   ///   referenced_before_declaration，CI 第六轮就是这样红的。）
-  Future<void> _drainPending(WidgetTester t) async {
+  Future<void> drainPending(WidgetTester t) async {
+    for (var i = 0; i < 40; i++) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      if (stub.hits('GET', '/api/friends') >= 1) break;
+    }
     await t.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 300)));
     await t.pump();
@@ -164,7 +173,7 @@ void main() {
     expect(Badges.instance.unread.value, 3);
     expect(stub.hits('GET', '/api/conversations'), 1,
         reason: '没有可清零的会话，不该多打一次校准请求');
-    await _drainPending(t);
+    await drainPending(t);
   });
 
   testWidgets('③ 已是清零态的会话再广播：不发校准请求（去重，别把服务端打爆）',
@@ -181,6 +190,6 @@ void main() {
     expect(stub.hits('GET', '/api/conversations'), 1,
         reason: '清零态重复广播不该触发额外拉取');
     expect(Badges.instance.unread.value, 0);
-    await _drainPending(t);
+    await drainPending(t);
   });
 }

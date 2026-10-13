@@ -8,6 +8,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'wake_lock.dart';
+
 /// 应用内在线更新（龙哥 2026-10 需求）：
 /// - Android：下载 APK → 调起系统安装器（需 REQUEST_INSTALL_PACKAGES）
 /// - Windows：下载 exe → 调起安装（安装器自身处理 UAC / 运行中进程）
@@ -101,6 +103,9 @@ class AppUpdater {
 
     String? filePath;
     try {
+      // 🔴 下载期间屏幕常亮（龙哥 2026-10-13：息屏 = Doze = 网络挂起 = 下载必断）。
+      //    进度弹窗本来就在屏上，钉住屏幕不突兀；结束/失败/取消都必须还回去。
+      await WakeLock.enable();
       final tmp = await getTemporaryDirectory();
       final fname = p.basename(Uri.parse(url).path);
       final ext = p.extension(fname).isNotEmpty ? p.extension(fname) : '.tmp';
@@ -139,6 +144,8 @@ class AppUpdater {
       }
     } catch (e) {
       error.value = '下载出错：$e';
+    } finally {
+      await WakeLock.disable();
     }
 
     // 关掉进度框（如果还开着）

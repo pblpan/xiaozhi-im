@@ -94,6 +94,16 @@ dependencies:
   # 直接发送。只有桌面端有实现，Android 上包照样能编（无入口即无影响）。
   desktop_drop: 0.8.4
 
+  # 下载保活（龙哥 2026-10-13 报：更新系统/下载商档息屏就中断）：
+  # Android 息屏进 Doze → CPU/网络被挂起 → HTTP 流必断。
+  # 修法 = 下载期间屏幕常亮（FLAG_KEEP_SCREEN_ON，**不需要任何 Android 权限**），
+  # 两处下载本来就有进度弹窗在屏上，体验自然；Windows 走 SetThreadExecutionState。
+  #
+  # 🔴 **版本号锁死，不要写成 caret**（同 video_player 的理由）：本机跑不了
+  #    pub get，本地类型检查用的是 _pubfetch.py 解出来的**这一套闭包**，
+  #    写成 caret 会让 CI 解出别的版本，本地预检对不上号。
+  wakelock_plus: 1.8.1
+
   # ── 蓝牙价签打印：**故意不引蓝牙包** ──────────────────────────────
   # 原先引了 flutter_blue_plus，后来弃用：它的 FlutterBluePlus License 白纸黑字
   # 写着 "For for-profit organizations, a commercial license is required"，
