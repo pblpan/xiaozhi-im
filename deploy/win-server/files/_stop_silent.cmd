@@ -18,7 +18,18 @@ set "XZ_DATA=%LOCALAPPDATA%\小智IM服务端\data"
 if exist "%XZ_DATA%\.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%XZ_DATA%\.env") do (
   if /i "%%a"=="PORT" set "KILLPORT=%%b"
 )
+rem 2026-10-13: 客户覆盖安装时仍报 node.exe 被占用 —— 单次 taskkill
+rem 存在静默失败的可能（句柄释放慢 / 被重新拉起）。改成最多 3 轮：
+rem 杀完等 1 秒再查，端口还在听就再杀。用 ping 做延时（静默调用无控制台，
+rem timeout 命令会因输入重定向直接报错）。最后仍在听则返回 1，
+rem 安装器拿到非 0 会弹窗明说，不再静默。
+set "TRIES=0"
+:retry_kill
 set "PID="
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%KILLPORT% " ^| findstr "LISTENING"') do set "PID=%%a"
-if defined PID taskkill /F /PID !PID! >nul 2>&1
-exit /b 0
+if not defined PID exit /b 0
+taskkill /F /PID !PID! >nul 2>&1
+set /a TRIES+=1
+if %TRIES% GEQ 3 exit /b 1
+ping -n 2 127.0.0.1 >nul
+goto retry_kill

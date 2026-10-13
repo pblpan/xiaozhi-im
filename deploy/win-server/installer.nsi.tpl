@@ -249,12 +249,25 @@ Function .onInit
   IfFileExists "$INSTDIR\_sys\_stop_silent.cmd" 0 xz_init_try_legacy
     DetailPrint "正在停止旧版本服务端 …"
     nsExec::ExecToLog 'cmd /c ""$INSTDIR\_sys\_stop_silent.cmd""'
+    Pop $R0
+    ${If} $R0 != 0
+      ; nsExec 失败时返回字符串 "error"，成功返回退出码 "0"/"1" —— 必须字符串比较
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION "旧服务端可能仍在运行（自动停止未成功，返回：$R0）。$\r$\n$\r$\n继续安装可能提示「无法打开要写入的文件」。$\r$\n建议：先在控制台点「停止服务端」，或重启电脑后再运行本安装程序。$\r$\n$\r$\n仍要继续安装吗？" IDYES xz_init_warn1_go
+      Abort
+      xz_init_warn1_go:
+    ${EndIf}
     Sleep 1200
     Goto xz_init_done
   xz_init_try_legacy:
   IfFileExists "$INSTDIR\_stop_silent.cmd" 0 xz_init_done
     DetailPrint "正在停止旧版本服务端 …"
     nsExec::ExecToLog 'cmd /c ""$INSTDIR\_stop_silent.cmd""'
+    Pop $R0
+    ${If} $R0 != 0
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION "旧服务端可能仍在运行（自动停止未成功，返回：$R0）。$\r$\n$\r$\n继续安装可能提示「无法打开要写入的文件」。$\r$\n建议：先在控制台点「停止服务端」，或重启电脑后再运行本安装程序。$\r$\n$\r$\n仍要继续安装吗？" IDYES xz_init_warn2_go
+      Abort
+      xz_init_warn2_go:
+    ${EndIf}
     Sleep 1200
   xz_init_done:
 
@@ -427,11 +440,25 @@ Section "Uninstall"
   ; 同样两个位置都试：新版在 _sys\，老版本摊在安装根。
   IfFileExists "$INSTDIR\_sys\_stop_silent.cmd" 0 xz_un_try_legacy
     nsExec::ExecToLog 'cmd /c ""$INSTDIR\_sys\_stop_silent.cmd""'
+    Pop $R0
+    ${If} $R0 != 0
+      IfSilent xz_un_warn1_go
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION "旧服务端可能仍在运行（自动停止未成功，返回：$R0）。$\r$\n$\r$\n继续卸载可能提示文件被占用。$\r$\n建议先在控制台点「停止服务端」或重启电脑后再卸载。$\r$\n$\r$\n仍要继续卸载吗？" IDYES xz_un_warn1_go
+      Abort
+      xz_un_warn1_go:
+    ${EndIf}
     Sleep 1200
     Goto xz_un_stopped
   xz_un_try_legacy:
   IfFileExists "$INSTDIR\_stop_silent.cmd" 0 xz_un_stopped
     nsExec::ExecToLog 'cmd /c ""$INSTDIR\_stop_silent.cmd""'
+    Pop $R0
+    ${If} $R0 != 0
+      IfSilent xz_un_warn2_go
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION "旧服务端可能仍在运行（自动停止未成功，返回：$R0）。$\r$\n$\r$\n继续卸载可能提示文件被占用。$\r$\n建议先在控制台点「停止服务端」或重启电脑后再卸载。$\r$\n$\r$\n仍要继续卸载吗？" IDYES xz_un_warn2_go
+      Abort
+      xz_un_warn2_go:
+    ${EndIf}
     Sleep 1200
   xz_un_stopped:
 
