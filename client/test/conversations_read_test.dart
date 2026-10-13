@@ -108,6 +108,19 @@ void main() {
   fail('等待超时：$why\n    stub 收到的请求: [$got]\n    页面文本: [$texts]');
   }
 
+  /// 🔴 排干 `_refreshPendingCount()` 的 in-flight 请求。它是 fire-and-forget，
+  /// HTTP 客户端给每个请求挂了 15s 超时 Timer —— 用例断言跑完时它还挂着，
+  /// flutter_test 会判 "A Timer is still pending" 直接判死（CI 第五轮 ②③）。
+  /// runAsync 借真实时间让请求完成、Timer 被 cancel，回到假时钟时干干净净。
+  /// ① 不需要它：pumpUntil 的 runAsync 顺带就把请求排干了。
+  /// （🔴 必须定义在 ②③ 之前 —— Dart 局部函数在声明前引用直接
+  ///   referenced_before_declaration，CI 第六轮就是这样红的。）
+  Future<void> _drainPending(WidgetTester t) async {
+    await t.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 300)));
+    await t.pump();
+  }
+
   testWidgets('① markRead 广播后：红点与「有人@我」本地即时清零，角标同步归零',
       (t) async {
     stubBasics();
@@ -170,15 +183,4 @@ void main() {
     expect(Badges.instance.unread.value, 0);
     await _drainPending(t);
   });
-
-  /// 🔴 排干 `_refreshPendingCount()` 的 in-flight 请求。它是 fire-and-forget，
-  /// HTTP 客户端给每个请求挂了 15s 超时 Timer —— 用例断言跑完时它还挂着，
-  /// flutter_test 会判 "A Timer is still pending" 直接判死（CI 第五轮 ②③）。
-  /// runAsync 借真实时间让请求完成、Timer 被 cancel，回到假时钟时干干净净。
-  /// ① 不需要它：pumpUntil 的 runAsync 顺带就把请求排干了。
-  Future<void> _drainPending(WidgetTester t) async {
-    await t.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 300)));
-    await t.pump();
-  }
 }
