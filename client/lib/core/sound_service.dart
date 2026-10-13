@@ -33,8 +33,18 @@ class SoundService {
   /// 当前登录用户 id，用于过滤「自己发的消息不响」
   int myId = 0;
 
-  final AudioPlayer _msgPlayer = AudioPlayer();
-  final AudioPlayer _tonePlayer = AudioPlayer();
+  /// 🔴 播放器**懒构造**：字段初始化的 AudioPlayer 会在单例第一次被触碰时
+  ///    就激活 audioplayers 的平台通道（global + 每实例动态 uuid 的 events
+  ///    通道），而会话页挂载就会碰到这个单例 —— 单元测试环境没有平台实现，
+  ///    MissingPluginException 直接把整个 widget 测试判死（CI 三轮教训：
+  ///    global method / global events / per-player create / per-player
+  ///    events 逐条 mock 都堵不完，动态 uuid 根本没法预先注册）。
+  ///    推迟到真正要响的时候再建：产品行为不变（真机第一次响慢几毫秒无感），
+  ///    测试里没人触发播放，通道永远不会被激活。
+  AudioPlayer? _msgPlayerImpl;
+  AudioPlayer? _tonePlayerImpl;
+  AudioPlayer get _msgPlayer => _msgPlayerImpl ??= AudioPlayer();
+  AudioPlayer get _tonePlayer => _tonePlayerImpl ??= AudioPlayer();
 
   Uint8List? _msgBytes;
   Uint8List? _ringBytes;

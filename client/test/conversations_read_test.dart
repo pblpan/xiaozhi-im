@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xiaozhi_im_client/api.dart';
@@ -27,29 +26,15 @@ void main() {
   // SharedPreferences，没有 mock 会在测试结束后抛 MissingPluginException。
   SharedPreferences.setMockInitialValues({});
 
-  // 🔴 会话页的字段初始化器会触碰 SoundService 单例 → 构造 AudioPlayer →
-  //    激活 audioplayers 的全局通道，测试环境没有平台实现直接
-  //    MissingPluginException（CI 2026-10-13 首跑 3 条全挂的根因）。
-  //    把两条全局通道 mock 掉：init/方法调用返回 null，事件流给空流。
-  //    ⚠️ 必须放在 setUp 里注册 —— flutter_test 的 mock handler
-  //    **每个用例结束自动清空**，放 main() 顶层只对第一个用例有效。
-  const _apGlobal = MethodChannel('xyz.luan/audioplayers.global');
-  const _apEvents = EventChannel('xyz.luan/audioplayers.global/events');
+  // 🔴 会话页链路触碰的平台通道（此前的 audioplayers 三连炸）已通过
+  //    SoundService 懒构造根治，无需 mock；保留这段注释占位说明历史。
 
   late ApiStub stub;
 
   setUp(() async {
-    // audioplayers 通道 mock（见上方注释）
-    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(_apGlobal, (call) async => null);
-    messenger.setMockStreamHandler(_apEvents, MockStreamHandler.inline(
-      onListen: (args, events) {}, // 什么都不发 = 空流
-    ));
-    // 🔴 per-player 通道也要 mock：AudioPlayer._create() 会调
-    //    MethodChannel('xyz.luan/audioplayers').call('create')，CI 二轮
-    //    就是这条没 mock（global 两条挡住了，create 从这条漏出来）。
-    messenger.setMockMethodCallHandler(
-        const MethodChannel('xyz.luan/audioplayers'), (call) async => null);
+    // audioplayers 通道已不需要 mock —— SoundService 改成懒构造后
+    // （2026-10-13，见 sound_service.dart 注释），页面挂载不再创建
+    // AudioPlayer，三条平台通道永远不会被激活。产品行为不变。
     stub = await ApiStub.start();
     Config.currentUrl = stub.baseUrl;
     ImApi().setToken('tok');
@@ -105,13 +90,18 @@ void main() {
       await tester.pump(const Duration(milliseconds: 20));
       if (ok()) return;
     }
-    // 🔴 超时必须把现场打出来，不然只能对着"等待超时"三个字猜：
-    //    stub 到底收到了什么（404？没请求？），页面报错条写了什么。
-    final got = stub.calls.map((c) => '${c.method} ${c.path}').join(', ');
-    final errText = find.textContaining('失败').evaluate().isNotEmpty
-        ? find.textContaining('失败').evaluate().first.toString()
-        : '(页面无错误文案)';
-    fail('等待超时：$why\n    stub 收到的请求: [$got]\n    页面错误: $errText');
+  // 🔴 超时必须把现场打出来，不然只能对着"等待超时"三个字猜：
+  //    stub 到底收到了什么（404？没请求？），页面上渲染了哪些文本。
+  final got = stub.calls.map((c) => '${c.method} ${c.path}').join(', ');
+  final texts = find.byType(Text)
+      .evaluate()
+      .map((e) {
+        final w = e.widget as Text;
+        return w.data ?? '(rich)';
+      })
+      .take(12)
+      .join(' | ');
+  fail('等待超时：$why\n    stub 收到的请求: [$got]\n    页面文本: [$texts]');
   }
 
   testWidgets('① markRead 广播后：红点与「有人@我」本地即时清零，角标同步归零',
