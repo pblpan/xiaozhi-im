@@ -158,12 +158,22 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
       );
       return;
     }
-    await Settings.setServers(lan: lan, wan: wan, mode: _mode);
-    // 保存后强制重探一次，让右上角当前地址立刻生效
-    await Config.resolveNow();
-    // 地址变了：重新拉服务器模式（工作/普通），导航形态可能要跟着变
-    Workspace.refresh();
-    if (mounted) Navigator.pop(context, true);
+    // 🔴 失败必须喊出来（龙哥 2026-10-13：全新安装点保存"毫无反应"，
+    //    排查半天才发现是 addProfile 对 const 列表抛了没人接的异常）。
+    //    静默失败是最难查的一类 bug —— 弹窗别关，把原因亮在脸上。
+    try {
+      await Settings.setServers(lan: lan, wan: wan, mode: _mode);
+      // 保存后强制重探一次，让右上角当前地址立刻生效
+      await Config.resolveNow();
+      // 地址变了：重新拉服务器模式（工作/普通），导航形态可能要跟着变
+      Workspace.refresh();
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('保存失败：$e')),
+      );
+    }
   }
 
   @override

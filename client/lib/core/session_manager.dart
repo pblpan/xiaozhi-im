@@ -39,7 +39,12 @@ class SessionManager {
   static const _kActive = 'xz_active_id';
 
   /// 所有企业档案。
-  List<ServerProfile> profiles = const [];
+  ///
+  /// 🔴 初始化用**可写**空列表，不能用 `const []`：全新安装 + 局域网没扫到时
+  /// load() 会把 profiles 留成不可变列表，之后 addProfile 一 add 就抛
+  /// UnsupportedError，而调用链上没人接异常 —— 表现是服务器设置里"点保存
+  /// 毫无反应"（龙哥 2026-10-13 实测）。所有写入点都必须保证列表可写。
+  List<ServerProfile> profiles = [];
 
   /// 激活档案 id。
   String? activeId;
@@ -137,6 +142,10 @@ class SessionManager {
     for (final pr in profiles) {
       pr.active = pr.id == activeId;
     }
+    // 出口归一化：不管上面哪条分支（JSON 解码 / 旧键迁移 / 局域网发现）给的，
+    // 出去时必须是一份**可写**列表。不可变列表会让后续 addProfile/removeProfile
+    // 抛 UnsupportedError，且保存链上没人接 —— "点保存没反应"就是这么来的。
+    profiles = List<ServerProfile>.of(profiles);
     await _applyActive(connect: connect, emitDomain: false);
     profilesVersion.value++;
   }
@@ -148,7 +157,7 @@ class SessionManager {
     final wan = p.getString('xz_wan_url') ?? '';
     final mode = p.getString('xz_net_mode') ?? Config.modeAuto;
     final token = p.getString('xz_token');
-    if (lan.isEmpty && wan.isEmpty) return const [];
+    if (lan.isEmpty && wan.isEmpty) return []; // 🔴 不能返回 const []：见 profiles 字段注释
     return [
       ServerProfile(
         id: ServerProfile.newId(),
@@ -210,6 +219,10 @@ class SessionManager {
   Future<ServerProfile> addProfile(ServerProfile profile,
       {bool makeActive = false}) async {
     profile.normalizeAddresses();
+    // 🔴 总闸：profiles 可能还是某条路径留下的不可变列表（const []）。
+    //    对它 add/remove 会抛 UnsupportedError，且保存链上没人接异常，
+    //    用户看到的就是"点保存没反应"。这里统一换成可写列表再写。
+    profiles = List<ServerProfile>.of(profiles);
     profiles.add(profile);
     if (makeActive || activeId == null) {
       await setActive(profile.id, connect: true);
@@ -222,6 +235,7 @@ class SessionManager {
 
   /// 删除企业档案。若删的是激活项，自动切到剩下的第一个。
   Future<void> removeProfile(String id) async {
+    profiles = List<ServerProfile>.of(profiles); // 同 addProfile：保证可写
     profiles.removeWhere((x) => x.id == id);
     _badges.remove(id);
     _linkStates.remove(id);
