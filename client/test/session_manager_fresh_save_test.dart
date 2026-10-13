@@ -31,8 +31,20 @@ void main() {
 
   const lan = 'http://192ff4e040e3b.hn.takir';
 
-  test('① 全新安装：load() 之后 profiles 必须可写', () async {
+  /// 🔴 SharedPreferences.getInstance() 是**进程内单例**：setMockInitialValues
+  ///    只对"还没建过实例"的进程有效。前一个用例写进 mock store 的服务器
+  ///    档案会漏进后一个用例（CI 2026-10-13 上 ② 看到 ① 的档案、
+  ///    isEmpty 挂掉的根因）。所以每个用例开头都要手动清一次。
+  Future<void> freshPrefs() async {
     SharedPreferences.setMockInitialValues({});
+    final sp = await SharedPreferences.getInstance();
+    await sp.clear();
+    // SessionManager 是单例，上一用例可能已经给它塞了内存档案 —— 一并清。
+    SessionManager.instance.profiles = [];
+  }
+
+  test('① 全新安装：load() 之后 profiles 必须可写', () async {
+    await freshPrefs();
     final sm = SessionManager.instance;
     await sm.load(); // 无旧键、扫描扫不到 → 空档案（真实环境约 4s）
     expect(sm.profiles, isEmpty);
@@ -48,7 +60,7 @@ void main() {
   });
 
   test('② 全新安装：Settings.setServers 存得下第一家服务器', () async {
-    SharedPreferences.setMockInitialValues({});
+    await freshPrefs();
     final sm = SessionManager.instance;
     await sm.load();
     expect(sm.profiles, isEmpty);
@@ -72,7 +84,7 @@ void main() {
   });
 
   test('③ 已有档案时改地址仍然只走 updateAddresses（不回退）', () async {
-    SharedPreferences.setMockInitialValues({});
+    await freshPrefs();
     final sm = SessionManager.instance;
     await sm.load();
     await Settings.setServers(lan: lan, wan: '', mode: Config.modeAuto);

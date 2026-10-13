@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xiaozhi_im_client/api.dart';
@@ -26,13 +27,34 @@ void main() {
   // SharedPreferences，没有 mock 会在测试结束后抛 MissingPluginException。
   SharedPreferences.setMockInitialValues({});
 
+  // 🔴 会话页的字段初始化器会触碰 SoundService 单例 → 构造 AudioPlayer →
+  //    激活 audioplayers 的全局通道，测试环境没有平台实现直接
+  //    MissingPluginException（CI 2026-10-13 首跑 3 条全挂的根因）。
+  //    把两条全局通道 mock 掉：init/方法调用返回 null，事件流给空流。
+  //    ⚠️ 必须放在 setUp 里注册 —— flutter_test 的 mock handler
+  //    **每个用例结束自动清空**，放 main() 顶层只对第一个用例有效。
+  const _apGlobal = MethodChannel('xyz.luan/audioplayers.global');
+  const _apEvents = EventChannel('xyz.luan/audioplayers.global/events');
+
   late ApiStub stub;
 
   setUp(() async {
+    // audioplayers 通道 mock（见上方注释）
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_apGlobal, (call) async => null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(_apEvents, MockStreamHandler.inline(
+          onListen: (args, events) {}, // 什么都不发 = 空流
+        ));
     stub = await ApiStub.start();
     Config.currentUrl = stub.baseUrl;
     ImApi().setToken('tok');
     Badges.instance.clear();
+    // SharedPreferences.getInstance() 是进程内单例：setMockInitialValues
+    // 只对"还没建过实例"的进程有效，前一个用例写进 mock store 的档案会
+    // 漏进后一个用例（CI 上 ② 看到 ① 的服务器档案就是它）。手动清。
+    final sp = await SharedPreferences.getInstance();
+    await sp.clear();
     // 🔴 故意不往 Storage 写 token：SocketService.connect() 读不到 token 会
     //    直接返回，测试里就不会真去连 WS。连不上会挂重连定时器，
     //    flutter_test 结束时会判 "A Timer is still pending" 失败，
