@@ -312,6 +312,33 @@ function notifyPush(full) {
   } catch { /* 推送绝不能影响消息本身 */ }
 }
 
+/**
+ * 断线期间错过的消息（WS 重连后补推用）。
+ *
+ * 背景（龙哥 2026-10-14 报：PC 与手机聊天记录对不上、丢两条）：
+ * hub.send() 对 readyState 不是 OPEN 的 socket 是**静默丢弃**的 —— 没有离线队列；
+ * 客户端重连成功后也不会补拉。于是"断线窗口内"别人发来的消息就永久丢了，
+ * 除非用户手动重新打开会话页（chat 页的 _loadMsgs 才会拉到）。
+ *
+ * 补推口径：afterId 是**连接自己申报的**"我已见过的最大消息 id"（客户端维护，
+ * 见 client/lib/socket.dart 的 maxSeenMessageId）。服务端不猜、也不按
+ * last_read_id 算 —— "已读未读"是产品语义，"见过没有"才是投递语义，
+ * 两者不是一回事（把已读消息也补回来是安全的：客户端按 id 幂等去重）。
+ *
+ * 包含自己其他端发的消息：多端同步需要（手机发的，PC 要能收到）。
+ * LIMIT 500 防极端情况（半年不上线）一次推爆连接。
+ */
+function missedMessages(userId, afterId) {
+  const after = Number(afterId) || 0;
+  const rows = db.prepare(`SELECT m.* FROM messages m
+      JOIN conversation_members cm
+        ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
+      WHERE m.id > ? AND m.deleted = 0
+      ORDER BY m.id ASC LIMIT 500`)
+    .all(userId, after);
+  return rows.map(withFileInfo);
+}
+
 function sendMessage({ conversationId, senderId, kind, content, fileId, mentions }) {
   const conv = db.prepare('SELECT id FROM conversations WHERE id = ?').get(conversationId);
   if (!conv) throw new Error('conversation not found');
@@ -736,6 +763,6 @@ module.exports = {
   addFavorite, removeFavorite, listFavorites,
   normalizeMentions, mutedUntilOf, parseMentions, serializeMentions, mentionLike,
   normalizeCard,
-  previewOf, unreadCount, notifyPush,
+  previewOf, unreadCount, notifyPush, missedMessages,
   RECALL_WINDOW_MS, KINDS, CARD_COLORS, MAX_TEXT_LEN, MENTION_ALL,
 };

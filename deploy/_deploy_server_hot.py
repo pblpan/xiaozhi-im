@@ -103,6 +103,13 @@ FILES = [
     #    groups.js。chat.js 此前**从没进过清单** —— 它是消息发送的总入口，
     #    推不上去就是"新会话类型能建、消息行为还是旧的"，而且不报错。
     'src/chat.js',
+    # 🔴 2026-10-14 补：call.js / ws.js 此前**从没进过清单** ——
+    #    call.js 的 invite 自愈（userCall 脏数据不再永久挡人）和 ws.js 的
+    #    sync 补推帧（重连后按 afterId 补拉消息）改了却推不上去，线上还是
+    #    10-12 的旧版：表现为"超时后再发起通话 win 端无反应""重连丢消息"，
+    #    而且不报错。护栏（git status 比对）早就喊过，一直没加。
+    'src/call.js',
+    'src/ws.js',
     # 🔴 2026-10-11 补：智能薪酬新文件（salary.js 是**新文件**，不在清单里就
     #    根本不会上传 —— routes/attendance.js require 它会直接 500，整个考勤
     #    管理端全挂，比"功能没上线"严重得多）。db.js 带上新的两张薪酬表。
@@ -142,6 +149,11 @@ FILES = [
     'src/index.js',
     'src/deploylib.js',
     'src/routes/deploy_wizard.js',
+    # 🔴 2026-10-14 晚：filelog.js 是**新文件**（服务模式文件日志）。
+    #    index.js 顶部 require 了它 —— 不进清单的后果就是容器起不来
+    #    （resolveForCJSWithHooks MODULE_NOT_FOUND → 无限重启循环）。
+    #    已实际踩到并修复：新增 src/ 文件必须同批进这里。
+    'src/filelog.js',
     # 🔴 2026-10-10 补：考勤「打卡点位 + 地理围栏防伪」这一轮。
     #    attendance.js 是围栏判定引擎（haversine / validateFence / clock 落防伪字段），
     #    routes/attendance.js 是路由（/clock 接定位参数 + /locations 点位 CRUD

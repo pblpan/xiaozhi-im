@@ -41,7 +41,27 @@ if ([string]::IsNullOrWhiteSpace($AppRoot)) {
 $Node = Join-Path $Root 'node\node.exe'
 $App  = Join-Path $Root 'app'
 
-# 内部脚本目录：后台启动服务端.vbs / 配置防火墙.cmd 都在这里。
+# ---------------- Windows 服务 ----------------
+# 服务名固定（安装/卸载/状态查询都用它），显示名给用户看。
+$ServiceName = 'XiaozhiIMServer'
+$ServiceDisplay = '小智IM 服务端'
+
+function Get-ServiceState {
+    # not-installed / stopped / running / startpending / stoppending …
+    $s = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if (-not $s) { return 'not-installed' }
+    return $s.Status.ToString().ToLower()
+}
+
+function Test-ServiceMode { return (Get-ServiceState) -ne 'not-installed' }
+
+# ⚠️ 服务**注册/卸载**的实体不在这里，在同目录的 svc_tool.ps1（提权子进程跑它）。
+#    曾经放在本脚本里、由按钮提权重拉本脚本 —— 那条链在 2026-10-14 炸过：
+#    装机文件因打包脚本双 BOM，首行 # 注释失效、param 块没绑上，
+#    提权进程把整个 UI 又拉了起来，服务却没注册。拆成专用小脚本后，
+#    "只干活不起界面"这件事不再依赖 900 行 UI 脚本的正确解析。
+
+# 内部脚本目录：后台启动服务端.vbs / 配置防火墙.cmd / svc_tool.ps1 都在这里。
 # （直接跑源码树里的 .ps1 时 _sys\ 不存在，那就退回安装根。）
 $SysDir = Join-Path $Root '_sys'
 if (-not (Test-Path $SysDir)) { $SysDir = $Root }
@@ -201,8 +221,18 @@ function Start-QuickTunnel {
 }
 
 # ---------------- 启停 ----------------
+# 服务模式下（注册过 Windows 服务）启停走 Start/Stop-Service ——
+# 用户看到的按钮和行为完全一样，不用关心背后是服务还是用户进程。
 function Start-Server {
     if (Test-Running) { return $true }
+    if (Test-ServiceMode) {
+        try { Start-Service -Name $ServiceName -ErrorAction SilentlyContinue } catch { }
+        for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep -Milliseconds 500
+            if (Test-Running) { return $true }
+        }
+        return $false
+    }
     $vbs = Join-Path $SysDir '后台启动服务端.vbs'
     if (Test-Path $vbs) {
         Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $vbs + '"') -WindowStyle Hidden
@@ -234,6 +264,14 @@ function Start-Server {
 function Stop-Server {
     $pid2 = Get-ServerPid
     if ($pid2 -le 0) { return $true }
+    if (Test-ServiceMode) {
+        try { Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue } catch { }
+        for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Milliseconds 300
+            if (-not (Test-Running)) { return $true }
+        }
+        return $false
+    }
     try { Stop-Process -Id $pid2 -Force -ErrorAction Stop } catch { }
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Milliseconds 300
@@ -279,7 +317,16 @@ $form.MinimumSize = New-Object System.Drawing.Size(720, 668)
 $form.StartPosition = 'CenterScreen'
 $form.BackColor = $ColorBg
 $form.Font = $FontUI
-$form.Icon = [System.Drawing.SystemIcons]::Application
+
+# 真图标：任务栏、窗口标题栏、托盘都用它。
+# 为什么不能图省事用 SystemIcons：托盘里一个"通用应用"样子的图标，
+# 用户根本注意不到 —— "关掉窗口找不着软件"一半是这么来的。
+$IcoFile = Join-Path $Root 'console.ico'
+$AppIcon = [System.Drawing.SystemIcons]::Application
+if (Test-Path $IcoFile) {
+    try { $AppIcon = New-Object System.Drawing.Icon($IcoFile) } catch { }
+}
+$form.Icon = $AppIcon
 
 # ---- 状态卡 ----
 $statusPanel = New-Object System.Windows.Forms.Panel
@@ -379,7 +426,7 @@ $txtLog.Font = $FontLog
 $txtLog.BorderStyle = 'FixedSingle'
 $form.Controls.Add($txtLog)
 
-# ---- 底部工具（两行：第一行运维，第二行查看）----
+# ---- 底部工具（三行：运维 / 数据 / 服务）----
 function New-ToolButton($text, $x, $y) {
     $b = New-Object System.Windows.Forms.Button
     $b.Text = $text
@@ -391,24 +438,40 @@ function New-ToolButton($text, $x, $y) {
     return $b
 }
 
+# 第一行：日常运维
 $btnPwd = New-ToolButton '查看管理员密码' 16 540
 $btnFw = New-ToolButton '配置防火墙' 152 540
 $btnData = New-ToolButton '打开数据目录' 288 540
-$btnBackup = New-ToolButton '一键备份数据' 424 540
-$btnTunnel = New-ToolButton '一键外网(免费)' 560 540
-$btnRefresh = New-ToolButton '刷新状态' 16 578
-$btnOpenLog = New-ToolButton '用记事本打开日志' 152 578
+# 第二行：数据 / 外网 / 刷新
+$btnBackup = New-ToolButton '一键备份数据' 16 576
+$btnTunnel = New-ToolButton '一键外网(免费)' 152 576
+$btnRefresh = New-ToolButton '刷新状态' 288 576
+# 第三行：Windows 服务（龙哥 2026-10-14：要能以服务进程跑、开机自启不用登录）
+$btnSvcReg = New-ToolButton '注册为服务' 16 612
+$btnSvcUnreg = New-ToolButton '卸载服务' 152 612
+$btnOpenLog = New-ToolButton '用记事本打开日志' 288 612
 $form.Controls.Add($btnPwd)
 $form.Controls.Add($btnFw)
 $form.Controls.Add($btnData)
 $form.Controls.Add($btnBackup)
 $form.Controls.Add($btnTunnel)
 $form.Controls.Add($btnRefresh)
+$form.Controls.Add($btnSvcReg)
+$form.Controls.Add($btnSvcUnreg)
 $form.Controls.Add($btnOpenLog)
+
+# 服务状态标签（紧跟第三行按钮，一眼能看到当前是不是服务模式）
+$lblSvc = New-Object System.Windows.Forms.Label
+$lblSvc.Text = 'Windows 服务：检测中…'
+$lblSvc.ForeColor = $ColorWeak
+$lblSvc.Location = New-Object System.Drawing.Point(424, 618)
+$lblSvc.Size = New-Object System.Drawing.Size(264, 20)
+$lblSvc.TextAlign = 'MiddleLeft'
+$form.Controls.Add($lblSvc)
 
 # ---- 托盘 ----
 $tray = New-Object System.Windows.Forms.NotifyIcon
-$tray.Icon = [System.Drawing.SystemIcons]::Application
+$tray.Icon = $AppIcon
 $tray.Text = '小智IM 服务端控制台'
 $tray.Visible = $true
 $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
@@ -443,6 +506,32 @@ function Update-Status {
     }
     $ver = Get-ServerVersion
     $form.Text = '小智IM 服务端控制台' + $(if ($ver) { '  v' + $ver } else { '' })
+
+    # ---- Windows 服务状态（随 2 秒定时器刷；Get-Service 是本地查询，~10ms 级）----
+    $svc = Get-ServiceState
+    if ($svc -eq 'not-installed') {
+        $lblSvc.Text = 'Windows 服务：未注册（用户进程方式）'
+        $lblSvc.ForeColor = $ColorWeak
+        $btnSvcReg.Enabled = $true
+        $btnSvcUnreg.Enabled = $false
+        $chkAuto.Enabled = $true
+    } else {
+        $svcCn = switch ($svc) {
+            'running' { '运行中' }
+            'stopped' { '已停止' }
+            default { $svc }
+        }
+        $lblSvc.Text = "Windows 服务：$svcCn（自启由服务接管）"
+        $lblSvc.ForeColor = $(if ($svc -eq 'running') {
+            [System.Drawing.Color]::FromArgb(22, 163, 74) } else { $ColorWeak })
+        $btnSvcReg.Enabled = $false
+        $btnSvcUnreg.Enabled = $true
+        # 服务模式下开机自启由服务 start=auto 接管，复选框只作展示（禁点）
+        $chkAuto.Enabled = $false
+        $chkAuto.Checked = $true
+    }
+    # 托盘悬停提示带运行状态（不用点开就知道服务活着没）
+    $tray.Text = '小智IM 服务端 · ' + $(if ($pidNow -gt 0) { '运行中' } else { '已停止' })
 }
 
 $script:lastLogText = ''
@@ -575,6 +664,53 @@ $btnOpenLog.Add_Click({
     else { [System.Windows.Forms.MessageBox]::Show('还没有日志文件。', '提示', 'OK', 'Information') | Out-Null }
 })
 
+# ---- Windows 服务：注册 / 卸载（提权干活，界面不整体提权）----
+# 为什么走 Start-Process -Verb RunAs 再拉一个**专用小脚本**：注册要写 HKLM、
+# 改数据目录 ACL，必须管理员；而日常用控制台不该被 UAC 烦。所以只在这两个
+# 按钮上提权，弹一次 UAC，干完自动退出，结果由那个脚本自己弹框报给用户。
+#
+# 🔴🔴 参数必须拼成**一条带引号的字符串**再传给 -ArgumentList，不能用数组：
+#     数组形式会被 Start-Process 用空格**无引号**拼接，路径里一带空格
+#     （C:\Program Files\小智IM服务端\...）就断成两截，提权进程收到一个
+#     残缺的 -File 路径 → 2026-10-14 线上就是这么裂的。
+function Invoke-SvcTool {
+    param([string]$Act)
+    $tool = Join-Path $SysDir 'svc_tool.ps1'
+    if (-not (Test-Path $tool)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "找不到服务工具脚本：`r`n$tool`r`n`r`n请重新安装服务端。", '无法操作', 'OK', 'Warning') | Out-Null
+        return
+    }
+    # 每个参数值都自带一对双引号 —— 这是唯一稳的写法
+    $argline = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden' +
+               ' -File "' + $tool + '"' +
+               ' -Action ' + $Act +
+               ' -AppRoot "' + $Root + '"' +
+               ' -DataDir "' + $DataDir + '"' +
+               ' -Port ' + (Get-Port).ToString()
+    try {
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argline
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("提权失败：$($_.Exception.Message)", '未成功', 'OK', 'Warning') | Out-Null
+    }
+}
+
+$btnSvcReg.Add_Click({
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "把小智IM 服务端注册为 Windows 服务：`r`n`r`n· 开机自启 —— 不用先登录 Windows`r`n· 崩溃自动重启（5 / 10 / 30 秒三档）`r`n· 以系统服务运行，注销、关窗口都不影响`r`n`r`n接下来会弹 UAC（需要管理员权限）。`r`n注册后日常启停仍在本控制台操作，用法和现在一样。`r`n`r`n数据目录：$DataDir",
+        '注册为 Windows 服务', 'YesNo', 'Question')
+    if ($r -ne 'Yes') { return }
+    Invoke-SvcTool 'Register'
+})
+
+$btnSvcUnreg.Add_Click({
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "卸载 Windows 服务（会先停止服务）。`r`n`r`n之后服务端回到「用户进程」方式：用本控制台启动，`r`n或开始菜单 → 高级工具 → 后台启动服务端。`r`n聊天记录等数据不受影响。`r`n`r`n接下来会弹 UAC（需要管理员权限）。",
+        '卸载 Windows 服务', 'YesNo', 'Question')
+    if ($r -ne 'Yes') { return }
+    Invoke-SvcTool 'Unregister'
+})
+
 $miShow.Add_Click({ $form.Show(); $form.WindowState = 'Normal'; $form.Activate() })
 $miTrayStart.Add_Click({ Start-Server | Out-Null; Update-Status })
 $miTrayStop.Add_Click({ Stop-Server | Out-Null; Update-Status })
@@ -583,6 +719,17 @@ $tray.Add_DoubleClick({ $form.Show(); $form.WindowState = 'Normal'; $form.Activa
 
 # 关窗口 = 最小化到托盘（服务不停）；真要退出走托盘右键
 $script:reallyExit = $false
+
+# 最小化按钮同样进托盘（龙哥 2026-10-14：两个窗口没法最小化到消息栏）——
+# 任务栏上留一个图标不如收进托盘，鼠标悬停还能看到运行状态。
+$form.Add_Resize({
+    if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
+        $form.Hide()
+        $tray.ShowBalloonTip(1500, '小智IM 服务端控制台',
+            '已最小化到托盘，服务继续运行。双击托盘图标可恢复。', 'Info')
+    }
+})
+
 $form.Add_FormClosing({
     param($sender, $e)
     if (-not $script:reallyExit) {

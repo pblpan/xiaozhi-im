@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏小图标。系统会把小图标当**蒙版**用：只有 alpha 通道生效，
+     所以这里必须是纯白（#FFFFFFFF）剪影，不能带彩色 —— 带彩色会被
+     系统抹成一块灰白方块，看着像"图标坏了"。
+     尺寸按 24dp 设计（通知栏标准），路径用圆角气泡 + 三个点表示"消息"。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,3C6.48,3 2,6.58 2,11c0,2.35 1.32,4.45 3.42,5.83L4.6,20.4c-0.2,0.58 0.35,1.1 0.89,0.85l4.29,-1.96c0.72,0.14 1.47,0.21 2.22,0.21 5.52,0 10,-3.58 10,-8s-4.48,-8 -10,-8zM12,17.5c-0.68,0 -1.35,-0.06 -2,-0.18l-3.86,1.77 0.83,-2.6C5.02,15.4 4,13.79 4,11c0,-3.31 3.58,-6 8,-6s8,2.69 8,6 -3.58,6.5 -8,6.5z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8.5,11m-1.2,0a1.2,1.2 0 1,0 2.4,0a1.2,1.2 0 1,0 -2.4,0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,11m-1.2,0a1.2,1.2 0 1,0 2.4,0a1.2,1.2 0 1,0 -2.4,0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M15.5,11m-1.2,0a1.2,1.2 0 1,0 2.4,0a1.2,1.2 0 1,0 -2.4,0" />
+</vector>

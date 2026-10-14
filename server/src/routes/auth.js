@@ -181,14 +181,14 @@ router.post('/register', (req, res) => {
     return res.status(403).json({ error: '工作模式下由管理员统一添加员工账号' });
   }
   const { username, password, nickname } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'username & password required' });
-  if (username.length < 3) return res.status(400).json({ error: 'username too short' });
+  if (!username || !password) return res.status(400).json({ error: '请填写账号和密码' });
+  if (username.length < 3) return res.status(400).json({ error: '账号至少需要 3 个字符' });
   // 注册限流：批量灌账号是刷数据的常见手段（审计 P1-1 顺带覆盖）。
   if (registerByIp.isBlocked(ipOf(req))) {
     return tooMany(res, Math.ceil(REGISTER_WINDOW_MS / 1000), '注册过于频繁，请稍后再试');
   }
   registerByIp.allow(ipOf(req));
-  if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) return res.status(409).json({ error: 'username taken' });
+  if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) return res.status(409).json({ error: '该账号已被注册' });
   const info = db.prepare('INSERT INTO users (username, password_hash, nickname, role, created_at) VALUES (?,?,?,?,?)')
     .run(username, hashPassword(password), nickname || username, 'user', Date.now());
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
@@ -234,7 +234,10 @@ router.post('/login', (req, res) => {
 
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (!user || !verifyPassword((req.body || {}).password || '', user.password_hash)) {
-    return res.status(401).json({ error: 'invalid credentials' });
+    // 中文文案：客户端虽然有错误映射层（core/errors.dart），服务端直接给中文
+    // 双保险 —— 旧版本 App / 管理台 / 第三方调用看到的也是人话。
+    // 刻意不说"账号不存在"还是"密码错"：那句本身就是账号枚举的敲门砖。
+    return res.status(401).json({ error: '账号或密码错误' });
   }
   // 登上了：清掉该账号的失败计数（本人输对了就不该再被锁）。
   // IP 计数**故意不清** —— 否则攻击者用一个能登的账号成功一次，

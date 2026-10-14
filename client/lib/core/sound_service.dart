@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models.dart';
 import '../socket.dart';
+import 'notifier.dart';
 
 /// 通话提示音类型
 enum CallTone { none, incoming, outgoing }
@@ -100,6 +102,11 @@ class SoundService {
       if (raw is! Map) return;
       final m = Message.fromJson(Map<String, dynamic>.from(raw));
       if (myId > 0 && m.senderId == myId) return; // 自己（含自己其他设备）发的不响
+      // 🔴 Android 且 App 在后台时不在这里响 —— 那一声由通知通道放
+      //    （系统通知音，不依赖 App 的音频输出，见 core/notifier.dart）。
+      //    两头都放就是双响。**只限 Android**：桌面端缩到托盘/最小化
+      //    时该响还是要响（那边没有通知通道这一套）。
+      if (Platform.isAndroid && !MessageNotifier.instance.isForeground) return;
       unawaited(playMessage());
     });
   }

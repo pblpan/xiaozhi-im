@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'core/app_version.dart';
 import 'core/config.dart';
+import 'core/errors.dart';
 import 'core/remote_models.dart';
 import 'core/session_manager.dart';
 import 'core/storage.dart';
@@ -106,13 +107,13 @@ class ImApi {
     } on TimeoutException {
       throw const ApiException('连接超时，请检查网络或切换服务器');
     } on http.ClientException catch (e) {
-      throw ApiException('网络异常：${e.message}');
+      throw ApiException(friendlySystemError(e));
     } on HandshakeException catch (e) {
-      throw ApiException('TLS 握手失败：${e.message}');
+      throw ApiException(friendlySystemError(e));
     } on HttpException catch (e) {
-      throw ApiException('HTTP 异常：${e.message}');
+      throw ApiException(friendlySystemError(e));
     } on FormatException catch (e) {
-      throw ApiException('响应解析失败：${e.message}');
+      throw ApiException(friendlySystemError(e));
     }
   }
 
@@ -131,7 +132,9 @@ class ImApi {
     try {
       final body = jsonDecode(r.body);
       if (body is Map) {
-        msg = body['error']?.toString() ?? '请求失败';
+        // 服务端几十个路由里散着英文错误码（invalid credentials 等），
+        // 这里统一中文化再抛 —— 界面上不许出现英文错误（龙哥要求）。
+        msg = friendlyError(body['error']?.toString() ?? '请求失败');
         code = body['code']?.toString();
         data = Map<String, dynamic>.from(body);
       } else {

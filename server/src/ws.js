@@ -1,7 +1,7 @@
 const { WebSocketServer } = require('ws');
 const hub = require('./hub');
 const { verifyToken } = require('./auth');
-const { sendMessage, recallMessage, markRead, typing } = require('./chat');
+const { sendMessage, recallMessage, markRead, typing, missedMessages } = require('./chat');
 const call = require('./call');
 const remote = require('./remote');
 const friends = require('./routes/friends');
@@ -78,6 +78,22 @@ function init(server) {
               mentions: frame.mentions,
             });
             hub.send(ws, { type: 'message:new', message: msg });
+            break;
+          }
+          // 断线补推：客户端重连后申报"我已见过的最大消息 id"，
+          // 服务端把之后落库的消息补发一遍。
+          // 为什么必须有：hub.send() 对非 OPEN 的 socket 是静默丢弃、没有离线队列，
+          // 而客户端重连成功后也不会自己去补拉 —— 断线窗口内的消息就此人间蒸发
+          // （2026-10-14 龙哥报的"PC 和手机记录对不上、丢两条"就是这个）。
+          // 与通话/好友申请的补推同一模式，见连接建立处的注释。
+          // 补推的都是历史消息，客户端按 id 幂等去重，重复收到不会渲染两遍。
+          case 'sync': {
+            const afterId = Number(frame.afterId) || 0;
+            const missed = missedMessages(userId, afterId);
+            for (const m of missed) {
+              hub.send(ws, { type: 'message:new', message: m });
+            }
+            hub.send(ws, { type: 'sync:done', count: missed.length });
             break;
           }
           // 撤回：内部已广播给会话全体（含发起端，用于多端同步），无需再回执

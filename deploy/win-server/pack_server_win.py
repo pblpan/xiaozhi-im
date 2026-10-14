@@ -293,18 +293,34 @@ def stage(version):
     print('      %s\\ 内部脚本 %d 个（含中文的走 GBK，纯 ASCII 桥接脚本保持 ASCII）'
           % (APP_SYS, n))
 
-    # --- 服务端控制台（PowerShell WinForms）---
+    # --- 服务端控制台 + 服务工具（PowerShell 脚本，UTF-8 单 BOM）---
     # ⚠️ .ps1 的编码规则跟 .cmd 完全不同：必须是 **UTF-8 带 BOM**。
     #    PowerShell 5.1 读无 BOM 的 .ps1 会按系统 ANSI(GBK) 解释 → 中文全乱。
     #    这里刻意不走 write_cmd（那个函数是给 cmd/vbs 用的 GBK 逻辑）。
-    src_ps1 = os.path.join(FILES, 'console.ps1')
-    if not os.path.isfile(src_ps1):
-        raise SystemExit('缺少服务端控制台脚本：%s' % src_ps1)
-    text_ps1 = open(src_ps1, encoding='utf-8').read().replace('__VERSION__', version)
-    with open(os.path.join(sysdir, 'console.ps1'), 'w', encoding='utf-8-sig',
-              newline='\r\n') as f:
-        f.write(text_ps1.replace('\r\n', '\n'))
-    print('      %s\\console.ps1（UTF-8 BOM，PowerShell 5.1 才能正确读中文）' % APP_SYS)
+    # 🔴🔴 读必须用 **utf-8-sig**（剥掉源文件里已有的 BOM），写再用 utf-8-sig
+    #    （补回恰好一个）。曾经这里读成 utf-8 —— 那个编解码器**不剥 BOM**，
+    #    源文件开头的 EF BB BF 会变成字符串里一个不可见的 U+FEFF 字符，
+    #    写出时 utf-8-sig 又补一个 BOM → 装机文件是 **双 BOM**。
+    #    PowerShell 5.1 剥掉第一个后，第二个 U+FEFF 贴在首行 `#` 注释前面，
+    #    首行不再是注释 → 报「无法将"#"项识别为 cmdlet」（截图里那个刷屏的
+    #    提权 PowerShell 窗口就是这么来的）；紧接着第 19 行的 param( 因不在
+    #    脚本首位也被当命令执行 → 再报一条。UI 居然还能起来（错误不致命），
+    #    所以这个 bug 潜伏了很久，直到"注册服务"按钮提权重拉本脚本才暴露。
+    #    实测复现：双 BOM 小样本跑起来两条错误一字不差。
+    for ps1name in ('console.ps1', 'svc_tool.ps1'):
+        src_ps1 = os.path.join(FILES, ps1name)
+        if not os.path.isfile(src_ps1):
+            raise SystemExit('缺少 PowerShell 脚本：%s' % src_ps1)
+        text_ps1 = open(src_ps1, encoding='utf-8-sig').read().replace('__VERSION__', version)
+        with open(os.path.join(sysdir, ps1name), 'w', encoding='utf-8-sig',
+                  newline='\r\n') as f:
+            f.write(text_ps1.replace('\r\n', '\n'))
+        print('      %s\\%s（UTF-8 单 BOM，PowerShell 5.1 才能正确读中文）' % (APP_SYS, ps1name))
+
+    # --- 控制台图标（窗口标题栏 + 任务栏 + 托盘共用）---
+    # 托盘不用真图标的后果：通知区里一个"通用应用"样子的图标，用户根本注意不到 ——
+    # "关了窗口找不着软件"一半是这么来的（龙哥 2026-10-14）。
+    shutil.copy2(ICON, os.path.join(STAGE, 'console.ico'))
 
     # --- 交付说明（随包一份，客户翻目录时看得到）---
     write_text_gbk(os.path.join(STAGE, '版本说明.txt'), f"""小智IM 服务端（Windows 版）  v{version}
@@ -330,11 +346,22 @@ def stage(version):
     · 实时运行日志                  · 打开管理后台
     · 查看管理员密码                · 配置防火墙
     · 打开数据目录                  · 最小化到托盘（服务不停）
+    · 注册为 Windows 服务           · 卸载服务
 
   管理账号 admin，初始密码在控制台里点「查看管理员密码」。
 
+【注册为 Windows 服务（可选，2026-10-14 新增）】
+  想让服务端"开机自启、不用先登录 Windows、以系统服务方式运行"：
+  控制台里点「注册为服务」（会弹一次 UAC）。之后：
+    · 开机自启由服务接管（控制台上的开机自启开关会自动禁用）
+    · 崩溃自动重启（5 / 10 / 30 秒三档）
+    · 日常启停仍用控制台，用法和原来完全一样
+    · 日志写在 数据目录\\logs\\server.log（服务没有控制台，node 自己写文件）
+  不想用了：控制台点「卸载服务」，回到"用户进程"方式。
+
 【安装目录里有什么】
   小智IM 服务端控制台.exe   ← 日常就用这一个（双击即开面板）
+  console.ico              控制台窗口 / 托盘图标
   node\\  app\\              服务端本体 + 内置的 Node 运行时
   _sys\\                     内部脚本（.cmd / .vbs / 控制台脚本），平时不用动
   数据**不在这里** —— 见上面「装在哪」
@@ -345,6 +372,11 @@ def stage(version):
     · 启动服务端.cmd       前台运行，关窗口即停
     · 查看运行日志.cmd     看日志（data\\logs\\server.log）
   （这些脚本的实体都在安装目录的 _sys\\ 子目录里。）
+
+  ⚠️ 不要在 PowerShell 里手动运行 _sys\\console.ps1 —— 那个脚本是给
+     「小智IM 服务端控制台.exe」用 -File 方式拉起的。用别的方式执行
+     （比如把脚本内容粘进 PowerShell）会满屏"无法将 # 识别为 cmdlet"
+     的报错，服务端也起不来。日常入口永远是桌面那个控制台。
 
 【排障】
   · 服务起不来      → 控制台看日志最后几行

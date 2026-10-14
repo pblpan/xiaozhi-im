@@ -28,6 +28,9 @@ class MainActivity : FlutterActivity() {
 
     private var channel: MethodChannel? = null
 
+    /// 通知通道（原生 → Dart 的点击回调用它，别和分享那个混）
+    private var notifyChannel: MethodChannel? = null
+
     /// 蓝牙打印机。持有 Activity 引用（要申请运行时权限），所以在这里建。
     private val btPrinter: BluetoothPrinter by lazy { BluetoothPrinter(this) }
 
@@ -35,6 +38,52 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channel = ch
+
+        // 新消息通知 / 图标角标。通道名与 Dart 侧 core/notifier.dart 的
+        // 'xiaozhi/notify' 必须逐字一致（写错 = 通知静默失效，且不报错）。
+        MessageNotifier.init(applicationContext)
+        MessageNotifier.bindActivity(this)
+        // 冷启动：App 没活进程，用户点通知把它拉起来 → intent 在 onCreate 就到了，
+        // 但那时 Dart 还没接上通道。先存进 pendingTapConv，等 Dart 来问
+        // （getInitialNotification）时再取走 —— 与 getInitialShare 同一套路。
+        MessageNotifier.onNotificationIntent(intent)
+        notifyChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, MessageNotifier.CHANNEL
+        )
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MessageNotifier.CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    // 申请通知权限（Android 13+ 弹系统窗）。异步，返回"当前是否已授权"。
+                    "ensurePermission" -> result.success(MessageNotifier.ensurePermission())
+                    "hasPermission" -> result.success(MessageNotifier.hasPermission())
+                    "showMessage" -> {
+                        val conv = call.argument<Int>("conversationId") ?: 0
+                        val title = call.argument<String>("title") ?: "新消息"
+                        val body = call.argument<String>("body") ?: ""
+                        val number = call.argument<Int>("number") ?: 1
+                        // Dart 传 "alert"/"quiet"：后台到达要震+弹条，前台只更新角标
+                        val alert = (call.argument<String>("mode") ?: "alert") == "alert"
+                        if (conv <= 0) {
+                            result.error("bad_args", "conversationId 缺失", null)
+                        } else {
+                            MessageNotifier.showMessage(conv, title, body, number, alert)
+                            result.success(true)
+                        }
+                    }
+                    "cancelFor" -> {
+                        MessageNotifier.cancelFor(call.argument<Int>("conversationId") ?: 0)
+                        result.success(true)
+                    }
+                    "cancelAll" -> {
+                        MessageNotifier.cancelAll()
+                        result.success(true)
+                    }
+                    // 冷启动时先到的通知点击：Dart 接上通道后来问一次
+                    "getInitialNotification" ->
+                        result.success(MessageNotifier.consumePendingTap())
+                    else -> result.notImplemented()
+                }
+            }
 
         // 蓝牙价签 / 标签机。经典蓝牙 SPP，见 BluetoothPrinter.kt。
         // 通道名与 Dart 侧 core/bt_printer.dart 的 'xiaozhi/btprint' 必须逐字一致。
@@ -183,12 +232,39 @@ class MainActivity : FlutterActivity() {
         // 必须存下来：getInitialShare 读的就是这份 intent，
         // 不 setIntent 的话"分享进来后又被重建"会读到上一次的旧数据。
         setIntent(intent)
-        if (!isShare(intent)) return
+        if (!isShare(intent)) {
+            // 不是分享，就看是不是通知栏点进来的
+            val conv = MessageNotifier.onNotificationIntent(intent)
+            if (conv > 0) {
+                notifyChannel?.invokeMethod("onNotificationTap", conv)
+            }
+            return
+        }
         Thread {
             val payload = collect(intent)
             // invokeMethod 只能在主线程调，这里必须切回去
             runOnUiThread { channel?.invokeMethod("onShare", payload) }
         }.start()
+    }
+
+    /// 通知权限弹窗的结果。异步回来，推给 Dart 记着（拒了要给用户一句提示）
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == MessageNotifier.REQ_POST_NOTIFICATIONS) {
+            val ok = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            notifyChannel?.invokeMethod("permissionResult", ok)
+        }
+    }
+
+    override fun onDestroy() {
+        // 防泄漏：Activity 销毁后不再持着它（通知权限弹窗要用）
+        MessageNotifier.bindActivity(null)
+        super.onDestroy()
     }
 
     private fun isShare(i: Intent?): Boolean {

@@ -282,7 +282,16 @@ function invite({ conversationId, callerId, calleeId, calleeIds, mode }) {
     conversationId, callerId, calleeId, calleeIds,
   );
 
-  if (userCall.has(callerId)) throw new Error('你正在通话中，请先挂断');
+  if (userCall.has(callerId)) {
+    // 自愈：userCall 里存的是**已经不存在或已结束**的通话时，这是脏数据
+    // （异常路径漏清了 cleanup），直接摘掉放行 —— 否则用户会被一句
+    // "你正在通话中"永久挡住，而界面上什么都没有，表现为"点了没反应"。
+    const stale = calls.get(userCall.get(callerId));
+    if (stale && stale.state !== 'ended') {
+      throw new Error('你正在通话中，请先挂断');
+    }
+    userCall.delete(callerId);
+  }
 
   // 群里已经有一通在跑 → 转成"加入"，而不是开第二通
   const existing = roomOf(cid);

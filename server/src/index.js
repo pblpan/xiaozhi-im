@@ -7,6 +7,16 @@ require('./db'); // 确保表结构与种子初始化
 const { init: initWs } = require('./ws');
 const dispatcher = require('./dispatcher');
 const license = require('./license');
+const filelog = require('./filelog');
+
+// Windows 服务模式没有控制台，stdout 会进黑洞 —— 注册服务时会在环境里设
+// XZ_LOG_FILE，这里发现就镜像一份日志到文件。没设（前台/后台启动）则零影响。
+const filelogResult = filelog.init(process.env.XZ_LOG_FILE);
+if (filelogResult.enabled) {
+  console.log(`[小智IM] 文件日志已启用：${filelogResult.file}`);
+} else if (filelogResult.reason) {
+  console.warn(`[小智IM] 文件日志启用失败（不影响服务）：${filelogResult.reason}`);
+}
 
 const app = express();
 

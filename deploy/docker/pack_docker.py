@@ -20,6 +20,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import tarfile
@@ -95,6 +96,21 @@ def stage(version):
             shutil.copy2(s, os.path.join(stage_root, fn))
     # deploy.sh 给执行权限（Linux 客户机直接 ./deploy.sh）
     os.chmod(os.path.join(stage_root, 'deploy.sh'), 0o755)
+    # 🔴 镜像标签重写为本次打包版本：compose 里写死的 image: 标签不重写的话，
+    #    客户机 `docker compose up -d --build` 会把新代码打成旧版本号镜像
+    #    （0.26.68 那次就是这么交付出去的），deploy.sh rebuild 分支 grep 的也是它。
+    compose_dst = os.path.join(stage_root, 'docker-compose.yaml')
+    with open(compose_dst, encoding='utf-8') as f:
+        compose_txt = f.read()
+    new_compose, n_sub = re.subn(
+        r'(image:\s*xiaozhi-im-server:)[0-9][0-9.]*',
+        r'\g<1>%s' % version, compose_txt)
+    if n_sub:
+        with open(compose_dst, 'w', encoding='utf-8', newline='') as f:
+            f.write(new_compose)
+        print('      镜像标签已重写为 xiaozhi-im-server:%s（%d 处）' % (version, n_sub))
+    else:
+        print('      ⚠️ compose 里没找到 image: xiaozhi-im-server:* 行，标签未重写')
 
     # --- coturn 中继配置 ---
     coturn_src = os.path.join(ROOT, 'deploy', 'coturn')

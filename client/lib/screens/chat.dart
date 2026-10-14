@@ -12,6 +12,7 @@ import 'package:xiaozhi_im_client/core/clipboard_image.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/file_io.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
+import 'package:xiaozhi_im_client/core/notifier.dart';
 import 'package:xiaozhi_im_client/core/read_bus.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/time.dart';
@@ -111,6 +112,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _ctrl.addListener(_onTextChanged);
     _loadMsgs();
     SocketService().stream.listen(_onEvent);
+    // 告诉通知服务"我正在看这条会话"：① 来消息不再弹通知；
+    // ② 顺手撤掉通知栏里这条会话的旧通知（人点进来了，那条已是旧闻）
+    MessageNotifier.instance.setOpenConversation(widget.conv.id);
   }
 
   @override
@@ -123,6 +127,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _ctrl.dispose();
     _scrollC.dispose();
     _focus.dispose();
+    MessageNotifier.instance.setOpenConversation(null);
     super.dispose();
   }
 
@@ -132,6 +137,11 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       final list =
           (d['messages'] as List? ?? []).map((e) => Message.fromJson(e)).toList();
+      // 历史里可能有比 socket 见过的更新的消息（断线期间落的库）——
+      // 一并记账，重连补推时按最大值算缺口，别把刚拉到的历史再补一遍。
+      for (final m in list) {
+        SocketService.noteMessage(m.id);
+      }
       final members = d['members'] as List? ?? [];
       final pinnedRaw = d['pinned'];
       setState(() {
@@ -1042,9 +1052,23 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// 发起通话（video=false 为语音）。失败原因直接弹提示，不静默。
   Future<void> _startCall(bool video) async {
-    final pid = _peerId;
-    if (pid == null) {
-      _toast('无法识别通话对象，请下拉刷新会话列表');
+    var pid = _peerId;
+    // peer 兜底：dm 会话在服务端只有单成员（自己↔自己、或对方已被删）时
+    // /conversations 下发的 peer 是 null，直接摆烂就没法通话了。
+    // 消息列表里对方发过的任何一条都能反推出 senderId —— 比"刷新列表"
+    // 这种把用户当猴耍的提示有用得多。
+    if (pid == null && widget.conv.type == 'dm') {
+      for (final m in _msgs) {
+        if (m.senderId != widget.myId && m.senderId > 0) {
+          pid = m.senderId;
+          break;
+        }
+      }
+    }
+    if (pid == null || pid == widget.myId) {
+      _toast(pid == widget.myId
+          ? '这是你和自己的会话，不能发起通话'
+          : '找不到通话对象，请下拉刷新会话列表');
       return;
     }
     final err = await CallService().startCall(
@@ -1082,7 +1106,11 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _senderName(Message m) {
     if (m.senderId == widget.myId) return null;
     for (final mem in _members) {
-      if (mem.id == m.senderId) return mem.display;
+      if (mem.id == m.senderId) {
+        // 顺手喂给通知服务：群聊通知正文要「张三: 内容」
+        MessageNotifier.instance.noteUser(mem.id, mem.display);
+        return mem.display;
+      }
     }
     return widget.peerName;
   }

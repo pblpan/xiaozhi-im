@@ -345,6 +345,11 @@ class CallService {
     bool group = false,
     String? groupName,
   }) async {
+    // 守卫文案要分场景：有来电正在响（我是被叫、还没接）时只说"正在通话中"，
+    // 用户会到处找通话界面去挂断 —— 实际啥界面都没有，感知就是"点了没反应"。
+    if (phase.value == CallPhase.incoming) {
+      return '有来电正在响铃，请先接听或挂断';
+    }
     if (phase.value != CallPhase.idle) return '你正在通话中，请先挂断';
     if (SocketService().state.value != ConnState.online) return '未连接到服务器，无法呼叫';
 
@@ -389,6 +394,9 @@ class CallService {
     required bool video,
     String? groupName,
   }) async {
+    if (phase.value == CallPhase.incoming) {
+      return '有来电正在响铃，请先接听或挂断';
+    }
     if (phase.value != CallPhase.idle) return '你正在通话中，请先挂断';
     if (SocketService().state.value != ConnState.online) return '未连接到服务器，无法加入';
 
@@ -1379,9 +1387,34 @@ class CallService {
     _pushed = true;
     nav
         .push(MaterialPageRoute(
-          fullscreenDialog: true,
-          builder: (_) => const CallScreen(),
-        ))
-        .then((_) => _pushed = false);
+      fullscreenDialog: true,
+      builder: (_) => const CallScreen(),
+    ))
+        .then((_) {
+      _pushed = false;
+      // 🔴 关掉通话窗口 ≠ 通话结束。用户按返回键/点关闭图标把界面收掉后，
+      //    phase 还停在 connecting/active，再点通话就被"正在通话中"挡住 ——
+      //    而界面上已经没有任何可挂断的入口，用户感知就是"无反应"。
+      //    （2026-10-14 实测复现：媒体连不上干等 → 关窗 → 再发起全程无反应。）
+      //    所以关窗即挂断：通知服务端 + 本地复位，两端都回到干净状态。
+      if (phase.value != CallPhase.idle && phase.value != CallPhase.ended) {
+        _diag('通话界面被关闭 → 自动挂断并复位');
+        unawaited(_hangupAndReset());
+      }
+    });
+  }
+
+  /// 关窗自动挂断：告知服务端 + 本地 teardown + 立即回 idle（不等 1.2 秒）。
+  Future<void> _hangupAndReset() async {
+    final s = session.value;
+    if (s != null && s.callId.isNotEmpty) {
+      SocketService().send({'type': 'call:hangup', 'callId': s.callId});
+    }
+    _endTimer?.cancel();
+    _ending = false;
+    await _teardown();
+    phase.value = CallPhase.idle;
+    session.value = null;
+    status.value = '';
   }
 }

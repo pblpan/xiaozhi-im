@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
@@ -466,6 +467,54 @@ function clearTurnCredentials() {
   }
 }
 
+/**
+ * CF 签发接口的 HTTP POST —— 刻意**不用 fetch**：
+ *
+ * 2026-10-14 实测（Windows 服务端，node v22.22.2）：本机 DNS 对
+ * rtc.live.cloudflare.com 同时返回 AAAA，但机器没有 IPv6 出口，
+ * undici 默认路径会先在 v6 上白等 ~2s 才回落 v4，整次请求 3s 上下；
+ * 服务端事件循环一忙（WS/SQLite）就冲过原来 5s 的 AbortController，
+ * 表现为「凭据是好的，却每次都是 fetch failed」。
+ *
+ * https.request + family:4 直接绕开 IPv6 弯路，同环境实测 1.2s 稳定返回；
+ * 超时同时放到 15s（家宽/弱网留余量）。签发结果有 50 分钟缓存，
+ * 慢一点无所谓，但绝不能假失败。
+ */
+function cfSignPost(urlStr, token, ttlSeconds, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    // 协议随 URL：真 CF 是 https；测试里用本地 http 服务假扮签发接口
+    // （test/cf_turn_test.js），写死 https 会把测试打挂。
+    const mod = u.protocol === 'http:' ? require('http') : https;
+    const body = JSON.stringify({ ttl: ttlSeconds });
+    const req = mod.request(
+      {
+        protocol: u.protocol,
+        host: u.hostname,
+        port: u.port || (u.protocol === 'http:' ? 80 : 443),
+        path: u.pathname + u.search,
+        method: 'POST',
+        family: 4, // 🔴 见上面注释：没有 IPv6 出口的机器，v6 尝试纯属白等
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => { data += c; });
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      }
+    );
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`CF 签发接口超时（${timeoutMs}ms）`));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
 /** 向 Cloudflare 签发一组 TURN 凭据；失败时退回上一批（过期了也比没有强） */
 async function cfTurnServers() {
   if (!cfEnabled()) return null;
@@ -477,24 +526,24 @@ async function cfTurnServers() {
     '/' +
     encodeURIComponent(CF_TURN_KEY_ID) +
     '/credentials/generate';
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 5000);
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${CF_TURN_API_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ ttl: Math.max(60, Math.min(86400, CF_TURN_TTL)) }),
-      signal: ctl.signal,
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      _cfLastError = `HTTP ${res.status} ${body.slice(0, 160)}`;
+    const { status, body } = await cfSignPost(
+      url,
+      CF_TURN_API_TOKEN,
+      Math.max(60, Math.min(86400, CF_TURN_TTL)),
+      15000
+    );
+    if (status < 200 || status >= 300) {
+      _cfLastError = `HTTP ${status} ${body.slice(0, 160)}`;
       return _cfCache.servers;
     }
-    const data = await res.json();
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      _cfLastError = '响应不是合法 JSON';
+      return _cfCache.servers;
+    }
     const raw = data && data.iceServers;
     // 不同 SDK 版本返回对象或数组，统一成数组
     const arr = Array.isArray(raw) ? raw : raw ? [raw] : [];
@@ -512,8 +561,6 @@ async function cfTurnServers() {
   } catch (e) {
     _cfLastError = String((e && e.message) || e).slice(0, 160);
     return _cfCache.servers;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

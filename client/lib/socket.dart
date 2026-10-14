@@ -49,6 +49,23 @@ class SocketService {
   /// 不追求省电 —— 外网/移动网络下，快 20 秒发现断线，就少漏一通来电。
   static const _heartbeatEvery = Duration(seconds: 20);
 
+  /// 全局"已见过的最大消息 id"（断线补推的申报值）。
+  ///
+  /// 为什么要它：服务端 hub.send() 对不在 OPEN 状态的 socket 是**静默丢弃**的，
+  /// 没有离线队列；重连成功后客户端原先也不会补拉 —— 断线窗口内别人发来的消息
+  /// 就此永久丢失，除非手动重开会话页（2026-10-14 龙哥报的"PC 和手机记录
+  /// 对不上、丢两条"）。现在每次连上（收到 connected 帧）就带这个值向服务端
+  /// 发 `sync`，之后的落库消息会被补发，聊天页按 id 幂等去重。
+  ///
+  /// 放在这一层（而不是聊天页）记账：不管用户当时停在哪个页面，只要 socket
+  /// 见过这条消息，重连时就不该再补一遍。只增不减。
+  static int maxSeenMessageId = 0;
+
+  /// 记一条见过的消息 id。
+  static void noteMessage(int id) {
+    if (id > maxSeenMessageId) maxSeenMessageId = id;
+  }
+
   /// 超过这个时长没收到任何数据 → 判定连接已死，主动重建。
   /// 留 2.5 个心跳周期的余量，避免网络抖动时误杀。
   static const _deadAfter = Duration(seconds: 50);
@@ -107,11 +124,23 @@ class SocketService {
           _lastFrameAt = DateTime.now();
           _tries = 0;
           if (state.value != ConnState.online) state.value = ConnState.online;
+          dynamic frame;
           try {
-            _ctrl.add(jsonDecode(e));
+            frame = jsonDecode(e);
           } catch (_) {
             /* 非 JSON 帧忽略 */
+            return;
           }
+          if (frame is Map) {
+            // 连接刚建立：向服务端申报已知最大消息 id，请求补发断线期间落库的消息。
+            if (frame['type'] == 'connected') _requestSync();
+            // 全局记账：每条消息都推进 maxSeenMessageId（补推时按它算缺口）。
+            if (frame['type'] == 'message:new') {
+              final m = frame['message'];
+              if (m is Map && m['id'] is int) noteMessage(m['id'] as int);
+            }
+          }
+          _ctrl.add(frame);
         },
         onError: (_) => _scheduleRetry(),
         onDone: () => _scheduleRetry(),
@@ -197,6 +226,13 @@ class SocketService {
       }
       _open(t);
     });
+  }
+
+  /// 向服务端申报已知最大消息 id，请求补发之后落库的消息。
+  /// 冷启动（maxSeenMessageId == 0）不发：那时各聊天页会自己拉历史。
+  void _requestSync() {
+    if (maxSeenMessageId <= 0) return;
+    send({'type': 'sync', 'afterId': maxSeenMessageId});
   }
 
   /// 手动重连（例如切换服务器地址后）

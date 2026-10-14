@@ -9,6 +9,7 @@ import 'api.dart';
 import 'core/call_service.dart';
 import 'core/config.dart';
 import 'core/integrity.dart';
+import 'core/notifier.dart';
 import 'core/remote_config.dart';
 import 'core/scan_feedback.dart';
 import 'screens/remote.dart';
@@ -20,6 +21,7 @@ import 'core/background_link.dart';
 import 'core/theme.dart';
 import 'core/tray_service.dart';
 import 'core/workspace.dart';
+import 'socket.dart';
 import 'screens/home_shell.dart';
 import 'screens/login.dart';
 import 'screens/setup_server.dart';
@@ -57,6 +59,9 @@ void main() async {
   await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
   await SoundService().init(); // 读提示音开关 + 预加载音频
   SoundService().attach(); // 全局监听新消息，收到就响一声
+  // 新消息通知 + 桌面图标角标（仅 Android）。与 SoundService 挂同一条流：
+  // socket 收到 message:new 时响一声（前台）+ 弹通知（后台）。
+  MessageNotifier.instance.attach();
   // 扫码反馈（成功「嘀」/ 失败「嗡-嗡」+ 触感）。**必须在这里预加载**：
   // AudioPlayer 第一次播 asset 要走一轮 rootBundle 解码（100~300ms），
   // 不预热的话第一枪会慢半拍，员工以为没扫上就会重复扫。
@@ -103,7 +108,22 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) Workspace.refresh();
+    // 前台/后台切换：通知要据此决定"震+弹条"还是"只更新角标"。
+    // inactive（拉通知栏、来电横幅）是瞬时态，不当成后台 ——
+    // 否则用户拉一下通知栏，下一条消息就会又震又弹，纯打扰。
+    if (state == AppLifecycleState.resumed) {
+      MessageNotifier.instance.setForeground(true);
+    } else if (state == AppLifecycleState.paused) {
+      MessageNotifier.instance.setForeground(false);
+    }
+    if (state == AppLifecycleState.resumed) {
+      // 🔴 回前台必须探活：socket 的文档写着"回到前台时调用"，但之前
+      //    全项目没有任何调用点 —— 移动网络下 NAT 映射早过期了，连接看着
+      //    是 online 实际收不到任何帧，用户回到 App 一片死寂，
+      //    还以为是"后台收不到消息"。poke 会ping并按需重连。
+      SocketService().poke();
+      Workspace.refresh();
+    }
   }
 
   @override

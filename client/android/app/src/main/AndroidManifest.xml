@@ -36,6 +36,12 @@
          两行都要 —— 只声明 FINE 时部分机型请求弹窗只给"精确"选项，被拒后没有降级路径。 -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- 新消息通知：Android 13（API 33）起发通知要**运行时**授权，
+         不在清单里声明的话，系统连弹窗都不会弹、通知直接静默丢弃。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 通知到来时震动。注意：Android 8 起震动由通知通道控制，
+         但这条权限在 8 以下仍然要，且缺了它部分机型连通道震动都不生效。 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <application
         android:label="小智IM"
         android:name="${applicationName}"

@@ -6,6 +6,7 @@ import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/badges.dart';
 import 'package:xiaozhi_im_client/core/call_service.dart';
 import 'package:xiaozhi_im_client/core/media.dart';
+import 'package:xiaozhi_im_client/core/notifier.dart';
 import 'package:xiaozhi_im_client/core/read_bus.dart';
 import 'package:xiaozhi_im_client/core/remote_config.dart';
 import 'package:xiaozhi_im_client/core/app_updater.dart';
@@ -61,14 +62,68 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     // 切换企业（整域切换）→ 重新拉取当前激活服务器的会话 / 我 / 待处理
     SessionManager.instance.domainVersion.addListener(_onDomain);
     _readSub = ReadBus.instance.onCleared.listen(_onCleared);
+    // 通知栏点消息进来 → 打开对应会话。冷启动时点击可能比首次 _load 先到，
+    // 所以 _load 结束还会再消费一次（见 _consumeNotifyTap）。
+    MessageNotifier.instance.tap.addListener(_onNotifyTap);
+    // 通知权限被拒 → 只提示一次，告诉用户去哪打开（否则他会以为
+    // "后台还是没提示"是 App 坏了，其实是权限没给）
+    MessageNotifier.instance.denied.addListener(_onPermDenied);
     _init();
   }
 
   @override
   void dispose() {
     _readSub?.cancel();
+    MessageNotifier.instance.tap.removeListener(_onNotifyTap);
+    MessageNotifier.instance.denied.removeListener(_onPermDenied);
     SessionManager.instance.domainVersion.removeListener(_onDomain);
     super.dispose();
+  }
+
+  bool _deniedHintShown = false;
+
+  void _onPermDenied() {
+    if (_deniedHintShown) return;
+    _deniedHintShown = true;
+    _toast('通知权限没打开，后台收不到消息提醒。请在系统设置里允许「小智IM」发通知');
+  }
+
+  /// 通知栏点击 → 跳到那条会话。宽屏时改成选中（跟点列表项行为一致）
+  void _onNotifyTap() {
+    if (!mounted) return;
+    final convId = MessageNotifier.instance.consumeTap();
+    if (convId == null) return;
+    // 不用 where(...).firstOrNull —— 那是 package:collection 的扩展，
+    // 项目里统一用显式循环（见 share_target.dart 同款注释）。
+    Conversation? c;
+    for (final e in _all) {
+      if (e.id == convId) {
+        c = e;
+        break;
+      }
+    }
+    if (c != null) {
+      _openChat(c);
+      return;
+    }
+    // 列表里没有（刚被删的群 / 冷启动还没加载完）→ 拉一次再找
+    _load().then((_) {
+      if (!mounted) return;
+      Conversation? c2;
+      for (final e in _all) {
+        if (e.id == convId) {
+          c2 = e;
+          break;
+        }
+      }
+      if (c2 != null) _openChat(c2);
+    });
+  }
+
+  /// _load 成功后消费一次待处理的点击（冷启动路径：点击比首页先到）
+  void _consumeNotifyTap() {
+    if (MessageNotifier.instance.tap.value == null) return;
+    _onNotifyTap();
   }
 
   /// 数据域切换（切到另一家企业）时，只重拉数据、不重连/不重复订阅 WS。
@@ -87,6 +142,9 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       final me = await ImApi().me();
       _myId = me['user']['id'];
       SoundService().myId = _myId; // 提示音靠它过滤「自己发的消息不响」
+      MessageNotifier.instance.myId = _myId; // 通知同理：自己发的不弹
+      // 登录成功后才申请通知权限 —— 没登录就问，用户会莫名其妙
+      unawaited(MessageNotifier.instance.arm());
       await SocketService().connect();
       await _load();
       _refreshPendingCount(); // 待处理好友申请数：拉不到不影响主流程
@@ -101,6 +159,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
         await CallService().resetAll();
     await SoundService().reset(); // 清掉 myId 与正在响的提示音
         Badges.instance.clear(); // 同上：token 失效也要清角标
+        MessageNotifier.instance.reset(); // 通知栏残留 + 角标一起清
         if (mounted) {
           Navigator.pushReplacement(
               context, MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -126,6 +185,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       final me = await ImApi().me();
       _myId = me['user']['id'];
       SoundService().myId = _myId;
+      MessageNotifier.instance.myId = _myId; // 切企业后跟着换
       await _load();
       _refreshPendingCount();
     } catch (_) {
@@ -149,6 +209,10 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       _all.sort((a, b) => (b.lastAt ?? b.id).compareTo(a.lastAt ?? a.id));
     });
     _recalcBadges(convs);
+    // 喂给通知服务：标题 / 类型 / 免打扰（它自己拿不到这些）
+    MessageNotifier.instance.noteConversations(convs);
+    // 冷启动时点通知进来的：列表刚就位，这下能跳了
+    _consumeNotifyTap();
   }
 
   /// 未读角标：免打扰的会话不计入（用户明确表示不想被这条打扰，
