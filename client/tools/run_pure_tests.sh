@@ -19,18 +19,34 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT="$(cd "$HERE/.." && pwd)"
 DART="${DART:-$CLIENT/../../tools/flutter/bin/dart.bat}"
+# 🔴 2026-10-01 SDK 挪进了 flutter_sdk2/，旧 tools/flutter 没了 ——
+#    这个脚本没跟着改，结果自测一直在报 "No such file or directory"
+#    （看起来像"测试挂了"，其实是 runner 自己找不到 dart）。
+#    与 tools/dart_typecheck/run.sh 的自动回退保持同一套写法。
+if [ ! -e "$DART" ] && [ -e "$CLIENT/../../tools/flutter_sdk2/flutter/bin/dart.bat" ]; then
+  DART="$CLIENT/../../tools/flutter_sdk2/flutter/bin/dart.bat"
+fi
 
 # 只有这几份是纯 Dart（零 Flutter / 零 IO）。加新的纯文件时记得也加到这里。
+# 价签那一套（排版/模板/GBK 码表）也是零 Flutter 依赖的纯 Dart。
+# 🔴 gbk_table 必须在：gbk.dart 与 gbk_encode.dart 都相对引用它，
+#    漏了它自测连编译都过不去（报 URI 找不到，而不是断言失败）。
 PURE_FILES=(
   inventory_rules.dart
   csv_fmt.dart
   qty_fmt.dart
   simple_rules.dart
   simple_export.dart
+  gbk.dart
+  gbk_encode.dart
+  gbk_table.dart
+  price_tag.dart
+  price_tag_template.dart
 )
 PROBES=(
   simple_selftest.dart
   simple_export_selftest.dart
+  price_tag_selftest.dart
 )
 
 # 🔴 用**每次唯一**的临时目录，不要 rm -rf 再建：

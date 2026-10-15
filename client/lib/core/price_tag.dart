@@ -17,6 +17,7 @@
 library;
 
 import 'gbk_encode.dart';
+import 'price_tag_template.dart';
 
 /// 标签纸常用**宽度**（毫米）。
 ///
@@ -48,6 +49,8 @@ class PriceTagItem {
     required this.name,
     this.spec = '',
     this.price = 0,
+    this.memberPrice = 0,
+    this.originPrice = 0,
     this.unit = '元',
     this.copies = 1,
   });
@@ -62,6 +65,14 @@ class PriceTagItem {
 
   /// 售价（元）。
   final double price;
+
+  /// 会员价（元）。0 或 <=0 表示"没有会员价"，模板里对应那行整行跳过 ——
+  /// 印一个「会员价 ￥0.00」出去比不印更糟，顾客会以为会员白送。
+  final double memberPrice;
+
+  /// 原价（元）。促销标签上被划掉的那个数。<= 售价时视为"没做促销"，
+  /// 同样整行跳过（原价 5 块、售价 8 块的标签会当场被顾客拍下来）。
+  final double originPrice;
 
   /// 计价单位（「元」「kg」「箱」…）。只影响屏幕预览，打印的一律带 ￥。
   final String unit;
@@ -93,6 +104,8 @@ class PriceTagPrinter {
   static const int _esc = 0x1B;
   static const int _gs = 0x1D;
 
+  static int _clamp(int v, int lo, int hi) => v < lo ? lo : (v > hi ? hi : v);
+
   List<int> _take() {
     final b = List<int>.from(_bytes);
     _bytes.clear();
@@ -113,10 +126,18 @@ class PriceTagPrinter {
   ///
   /// 🔴 不设这一步，58 以上的纸**右边会有一段打不出来**（默认值只到 40mm）。
   ///    这是"面单/标签机"最常见的第一大坑。
+  ///
+  /// 🔴🔴 指令字必须是**大写 `GS W`(1D 57)**，不是小写 `GS w`(1D 77)。
+  ///    小写那个是**条码宽度**（`GS w n`，只收 1 个参数），
+  ///    2026-10-16 之前这里一直发的是 1D 77 带**两个**字节：
+  ///    打印机把第一个字节当条码宽度、第二个字节当普通 ASCII 打出去 ——
+  ///    表现是"每张标签底部莫名其妙多印一个字符"，而纸宽其实从没设上过
+  ///    （所以 58mm 纸右边那一段还是会打不出来）。顺带把 40mm 纸的
+  ///    条码宽度改掉，更糟。两件事必须分开，各用各的指令。
   List<int> setWidth(int dots) {
     _bytes
       ..add(_gs)
-      ..add(0x77) // GS w
+      ..add(0x57) // GS W（大写）
       ..add(dots % 256)
       ..add((dots ~/ 256) % 256);
     return _take();
@@ -190,6 +211,138 @@ class PriceTagPrinter {
       ..addAll(data)
       ..add(0); // NUL 结尾
     return _take();
+  }
+
+  /// 条码宽度（`GS w n`，2~6）。
+  ///
+  /// 🔴 这是小写 `w`，跟上面 [setWidth] 的大写 `W` 是两条不同的指令。
+  ///    窄了扫不出来，宽了 13 位 EAN 会冲出纸边，默认 3 是折中。
+  List<int> barcodeWidth(int n) {
+    var w = n;
+    if (w < 2) w = 2;
+    if (w > 6) w = 6;
+    _bytes
+      ..add(_gs)
+      ..add(0x77)
+      ..add(w);
+    return _take();
+  }
+
+  /// 条码高度（`GS h n`），单位点。
+  ///
+  /// 出厂默认通常只有 50~80 点，贴在货架上拿扫码枪隔 20cm 扫经常读不出来。
+  /// 价签条码一律给到 100 点以上。
+  List<int> barcodeHeight(int dots) {
+    var h = dots;
+    if (h < 1) h = 1;
+    if (h > 255) h = 255;
+    _bytes
+      ..add(_gs)
+      ..add(0x68)
+      ..add(h);
+    return _take();
+  }
+
+  /// 条码底下那串数字印不印（`GS H n`：0 = 不印，2 = 印在下方）。
+  ///
+  /// 模板里条码元素自己会再印一行数字时，这个要关掉 ——
+  /// 否则一个条码底下挂两串数字，看着像印重了。
+  List<int> barcodeHri(bool on) {
+    _bytes
+      ..add(_gs)
+      ..add(0x48)
+      ..add(on ? 2 : 0);
+    return _take();
+  }
+
+  /// 加粗 / 取消加粗（`ESC E n`）。
+  ///
+  /// 🔴 加粗是**状态**不是一次性开关，用完必须关掉：
+  ///    开了不关，后面条码、下一张标签全会是粗的（粗条码扫不出来）。
+  List<int> bold({bool on = true}) {
+    _bytes
+      ..add(_esc)
+      ..add(0x45)
+      ..add(on ? 1 : 0);
+    return _take();
+  }
+
+  /// 反白（黑底白字，`GS B n`）。
+  ///
+  /// 促销标签的主流做法：正价是白底黑字、促销价是黑底白字，隔两米也分得出来。
+  /// 只靠"字号大一点"在货架上是分辨不出来的。
+  /// 同样是状态，用完必须关。
+  List<int> reverse({bool on = true}) {
+    _bytes
+      ..add(_gs)
+      ..add(0x42)
+      ..add(on ? 1 : 0);
+    return _take();
+  }
+
+  /// 下划线（`ESC - n`）。
+  ///
+  /// 用来给"原价"划一道 —— 划掉的价格表示已作废，这是促销标签的行规。
+  List<int> underline({bool on = true}) {
+    _bytes
+      ..add(_esc)
+      ..add(0x2D)
+      ..add(on ? 1 : 0);
+    return _take();
+  }
+
+  /// 二维码（`GS ( k` 序列）。
+  ///
+  /// ESC/POS 的 QR 不是一条指令，是**四步**：选模型 → 设模块大小 → 存数据 → 打印。
+  /// 少任何一步都印不出来（或印出一个扫不出的方块），且不报错。
+  ///
+  /// ⚠️ 很老/很便宜的标签机不支持 QR，会当成乱码打一串字符出来。
+  ///    所以模板里 QR 是**可选项**，默认的内置模板都不带它。
+  List<int> qrcode(String data, {int moduleSize = 6}) {
+    final payload = GbkEncode.encode(data);
+    final a = <int>[];
+    // ① 选模型：Model2（n1=50）
+    a
+      ..addAll(_gsK(4, 49, 65, <int>[50, 0]))
+      // ② 模块大小（每个点 1~16）
+      ..addAll(_gsK(3, 49, 67, <int>[_clamp(moduleSize, 1, 16)]))
+      // ③ 纠错等级 M（49）—— Q 太密、老机器扫不动，L 又太脆
+      ..addAll(_gsK(3, 49, 69, <int>[49]))
+      // ④ 存数据
+      ..addAll(_gsK(payload.length + 3, 49, 80, <int>[48, ...payload]))
+      // ⑤ 打印
+      ..addAll(_gsK(3, 49, 81, <int>[48]));
+    return a;
+  }
+
+  /// 拼一条 `GS ( k pL pH cn fn <params>`。
+  ///
+  /// 🔴 pL/pH 是**整条指令的字节数**（含 cn/fn/params），低字节在前。
+  ///    只把数据长度填进去会让打印机一直等后续字节，表现是"卡住不动"，
+  ///    比报错难排查得多。
+  List<int> _gsK(int bodyLen, int cn, int fn, List<int> params) {
+    final n = bodyLen;
+    return <int>[
+      _gs,
+      0x28, // (
+      0x6B, // k
+      n & 0xFF,
+      (n >> 8) & 0xFF,
+      cn,
+      fn,
+      ...params,
+    ];
+  }
+
+  /// 一条横线。
+  ///
+  /// ESC/POS 没有画线指令 —— 得力那类软件打印出来的线，本质也是**用字符铺满一行**。
+  /// 这里用 `_`（下划线字符）铺满整行宽度，视觉上就是一条线。
+  /// 用 `_` 而不是 `-`：连续的下划线字符在大多数字体里是**首尾相接**的，
+  /// 减号中间有断口，看着像虚线。
+  List<int> line([int? widthDots]) {
+    final cols = (widthDots ?? _label.dots) ~/ 12; // 12 = 一个西文字符的点宽
+    return text('_' * (cols < 1 ? 1 : cols));
   }
 
   /// 送一段文本，按 **GBK** 编码。
@@ -269,6 +422,168 @@ class PriceTagPrinter {
     out.addAll(cut());
     return out;
   }
+
+  /// 按**模板**印一整批。
+  ///
+  /// 与 [render] 的区别：[render] 是写死的"品名/规格/大价/条码"，
+  /// 这里是"模板说什么就印什么"。新增模板不用改这个方法。
+  List<int> renderWithTemplate(List<PriceTagItem> items, PriceTagTemplate tpl) {
+    final out = <int>[];
+    final w = tpl.widthMm * 8;
+    out
+      ..addAll(init())
+      ..addAll(setWidth(w))
+      ..addAll(setLineSpacing(0));
+    var seq = 0;
+    for (final it in items) {
+      for (var c = 0; c < it.totalCopies; c++) {
+        seq++;
+        out
+          ..addAll(tagBytes(tpl, it, seq: seq))
+          ..addAll(feed(1));
+      }
+    }
+    out.addAll(cut());
+    return out;
+  }
+
+  /// 印一张（模板版）。元素里取到空内容的会**整行跳过**。
+  List<int> tagBytes(PriceTagTemplate tpl, PriceTagItem item,
+      {int seq = 1, String dateText = ''}) {
+    final a = <int>[];
+    final w = tpl.widthMm * 8;
+    for (final e in tpl.elements) {
+      a.addAll(_elementBytes(e, item,
+          widthDots: w, seq: seq, dateText: dateText));
+    }
+    return a;
+  }
+
+  List<int> _elementBytes(TagElement e, PriceTagItem item,
+      {required int widthDots, required int seq, required String dateText}) {
+    if (e.kind == TagElementKind.line) {
+      return <int>[...align(0), ...line(widthDots), ...feed(1)];
+    }
+
+    if (e.kind == TagElementKind.barcode) {
+      if (item.barcode.isEmpty) return const <int>[];
+      return <int>[
+        ...align(_alignCode(e.align)),
+        ...barcodeHeight(e.barcodeHeight),
+        ...barcodeHri(e.hri),
+        ...barcode(item.barcode),
+        ...feed(1),
+        // 🔴 复位：条码高度/HRI 是状态，不复位的话下一张的条码会跟着变高
+        ...barcodeHeight(80),
+        ...barcodeHri(false),
+      ];
+    }
+
+    if (e.kind == TagElementKind.qrcode) {
+      if (item.barcode.isEmpty) return const <int>[];
+      return <int>[...align(_alignCode(e.align)), ...qrcode(item.barcode), ...feed(1)];
+    }
+
+    // ── text ──
+    final s = tagFieldText(e, item,
+        scaleX: e.scaleX, widthDots: widthDots, seq: seq, dateText: dateText);
+    if (s.isEmpty) return const <int>[]; // 空值整行跳过
+    final a = <int>[];
+    a
+      ..addAll(align(_alignCode(e.align)))
+      ..addAll(scale(x: e.scaleX, y: e.scaleY));
+    if (e.bold) a.addAll(bold(on: true));
+    if (e.reverse) a.addAll(reverse(on: true));
+    if (e.underline) a.addAll(underline(on: true));
+    a
+      ..addAll(text(s))
+      ..addAll(feed(1));
+    // 🔴 加粗/反白/下划线/放大全是状态，用完一律关掉 ——
+    //    粗条码扫不出来，反白跑到下一行会把整行涂黑。
+    if (e.underline) a.addAll(underline(on: false));
+    if (e.reverse) a.addAll(reverse(on: false));
+    if (e.bold) a.addAll(bold(on: false));
+    a.addAll(scale(x: 1, y: 1));
+    return a;
+  }
+
+  static int _alignCode(TagAlign a) {
+    switch (a) {
+      case TagAlign.left:
+        return 0;
+      case TagAlign.center:
+        return 1;
+      case TagAlign.right:
+        return 2;
+    }
+  }
+
+  /// 某个文本元素**此刻**该印什么。返回空串 = 这一行整个不印。
+  ///
+  /// 🔴 "取到空就不印"是硬性规矩，不是省事：
+  ///    印一句「会员价 ￥0.00」出去，顾客会当真去要那个价 ——
+  ///    印一句假话，比不印糟糕得多。
+  static String tagFieldText(
+    TagElement e,
+    PriceTagItem item, {
+    required int scaleX,
+    required int widthDots,
+    int seq = 0,
+    String dateText = '',
+  }) {
+    switch (e.field) {
+      case TagField.name:
+        return clipToWidth(item.name, scaleX, widthDots);
+      case TagField.spec:
+        return clipToWidth(item.spec, scaleX, widthDots);
+      case TagField.price:
+        return fmtPrice(item.price);
+      case TagField.memberPrice:
+        // 会员价 <= 0 视为"这个商品没有会员价"，整行跳过
+        if (item.memberPrice <= 0) return '';
+        return '会员 ${fmtPrice(item.memberPrice)}';
+      case TagField.originPrice:
+        // 原价不高于售价 = 没做促销，划掉一个更低的原价是骗人
+        if (item.originPrice <= item.price) return '';
+        return '原价 ${fmtPrice(item.originPrice)}';
+      case TagField.unit:
+        // 「元」不印：价格本身就带 ￥
+        return (item.unit.isEmpty || item.unit == '元') ? '' : item.unit;
+      case TagField.barcode:
+        return item.barcode;
+      case TagField.date:
+        return dateText;
+      case TagField.seq:
+        return 'No.$seq';
+      case TagField.fixed:
+        return clipToWidth(e.fixedText, scaleX, widthDots);
+    }
+  }
+
+  /// 按"打印出来占多少点"截断。
+  ///
+  /// 🔴 上限必须**跟着放大倍数走**：2 倍字号的一行只能放一半字。
+  ///    原来固定写死 16 的后果是 —— 小字时右边空一大截，大字时直接冲出纸边，
+  ///    而冲出去的部分在热敏纸上不是"看不见"，是**挤成一团糊**。
+  ///    模板体系里放大倍数是用户自己调的，写死上限必然出事。
+  static String clipToWidth(String s, int scaleX, int widthDots) {
+    final t = s.trim();
+    final sc = scaleX < 1 ? 1 : scaleX;
+    final cap = widthDots ~/ (12 * sc); // 一行能放几个西文字符
+    if (cap < 1 || t.isEmpty) return '';
+    var used = 0;
+    final buf = StringBuffer();
+    for (final r in t.runes) {
+      final w = _runeWidth(r);
+      if (used + w > cap) break;
+      buf.write(String.fromCharCode(r));
+      used += w;
+    }
+    return buf.toString().trim();
+  }
+
+  /// 一个字符占几个西文宽。中日韩全角一律按 2 算（这是热敏打印机的字形宽度约定）。
+  static int _runeWidth(int r) => r > 0x2E7F ? 2 : 1;
 
   /// 屏幕预览用的纯文本（排版改了这里应该跟着变；测试也钉着它）。
   String preview(List<PriceTagItem> items, {String header = '', int width = 28}) {

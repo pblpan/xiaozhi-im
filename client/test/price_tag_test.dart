@@ -3,6 +3,13 @@ import 'package:xiaozhi_im_client/core/gbk.dart' show Gbk;
 import 'package:xiaozhi_im_client/core/gbk_encode.dart' show GbkEncode;
 import 'package:xiaozhi_im_client/core/price_tag.dart'
     show LabelSize, PriceTagItem, PriceTagPrinter;
+import 'package:xiaozhi_im_client/core/price_tag_template.dart'
+    show
+        kBuiltinTagTemplates,
+        PriceTagTemplate,
+        TagElement,
+        TagElementKind,
+        TagField;
 
 /// 价签的"看得见的部分"：字节序列。
 ///
@@ -70,9 +77,14 @@ void main() {
 
     test('58mm 的纸必须显式设宽度，否则右边打不出来', () {
       // 58 × 8 点/mm = 464 → 小端两字节 D0 01。
+      //
+      // 🔴 指令字必须是 **0x57（GS W 大写）**，不是 0x77（GS w 小写）。
+      //    小写那条是「条码宽度」，只收 1 个参数；这里发 2 个字节过去，
+      //    打印机把第二个字节当普通字符印出来 —— 纸宽其实从来没设上过。
+      //    这两条断言钉的就是这个字，改成小写立刻红。
       expect(
         PriceTagPrinter(label: LabelSize.mm58).setWidth(464),
-        <int>[0x1D, 0x77, 0xD0, 0x01],
+        <int>[0x1D, 0x57, 0xD0, 0x01],
       );
     });
 
@@ -80,8 +92,19 @@ void main() {
       // 75mm = 600 点 → 0x0258。
       expect(
         PriceTagPrinter(label: LabelSize.mm75).setWidth(600),
-        <int>[0x1D, 0x77, 0x58, 0x02],
+        <int>[0x1D, 0x57, 0x58, 0x02],
       );
+    });
+
+    test('条码宽度与打印区宽度是两条不同的指令，不能混', () {
+      // 打印区宽度 = GS W(0x57) 带 2 字节；条码宽度 = GS w(0x77) 带 1 字节。
+      // 混用的后果是"纸上有多余字符"或"条码宽到冲出纸边"。
+      expect(PriceTagPrinter().setWidth(320).elementAt(1), 0x57);
+      expect(PriceTagPrinter().barcodeWidth(3).elementAt(1), 0x77);
+      expect(PriceTagPrinter().barcodeWidth(3).length, 3);
+      // 条码宽度钳在 2~6：1 太窄扫不出来，7 以上 13 位 EAN 会冲出纸边
+      expect(PriceTagPrinter().barcodeWidth(1).last, 2);
+      expect(PriceTagPrinter().barcodeWidth(99).last, 6);
     });
 
     test('放大倍数的 x 在低 4 位、y 在高 4 位', () {
@@ -163,7 +186,7 @@ void main() {
       final p = PriceTagPrinter(label: LabelSize.mm58);
       final out = p.render(<PriceTagItem>[item]);
       expect(out.sublist(0, 3), <int>[0x1B, 0x40, 0x1D]);
-      expect(out.take(4).toList(), <int>[0x1B, 0x40, 0x1D, 0x77]);
+      expect(out.take(4).toList(), <int>[0x1B, 0x40, 0x1D, 0x57]);
       expect(out.sublist(out.length - 7), <int>[0x1B, 0x64, 0x03, 0x1D, 0x56, 0x42, 0x00]);
     });
 
@@ -234,6 +257,185 @@ void main() {
       expect(pv, contains('净重500g'));
       expect(pv, contains('6901234567890'));
       expect(pv, contains('￥9.90'));
+    });
+  });
+
+  // ══ 模板（2026-10-16）══
+  //
+  // 模板这一层没有打印机可以验，**只能靠断言把字节钉住**。
+  // 每一条都要回答"什么坏情况会让我红"，否则等于给改动发一张通行证。
+  group('模板', () {
+    final item = PriceTagItem(
+      barcode: '6901234567890',
+      name: '有机鸡蛋',
+      spec: '净重500g',
+      price: 9.9,
+      memberPrice: 8.8,
+      originPrice: 12.0,
+      unit: '盒',
+    );
+
+    PriceTagPrinter printerFor(PriceTagTemplate t) =>
+        PriceTagPrinter(label: LabelSize(t.name, t.widthMm));
+
+    test('内置 6 套模板，每套都要真能印出东西（撞到一个就是"点一下就报错"）', () {
+      expect(kBuiltinTagTemplates.length, 6);
+      final ids = <String>{};
+      for (final t in kBuiltinTagTemplates) {
+        expect(ids.add(t.id), isTrue, reason: '模板 id 重复：${t.id}');
+        expect(t.elements, isNotEmpty, reason: '${t.name} 没有元素');
+        final s = Gbk.decode(printerFor(t).tagBytes(t, item));
+        expect(s, contains('￥'), reason: '${t.name} 没把价格印出来');
+        expect(s, contains('6901234567890'), reason: '${t.name} 没印条码/条码数字');
+      }
+    });
+
+    test('模板 JSON 往返：存进去读出来还是同一套排版', () {
+      for (final t in kBuiltinTagTemplates) {
+        final back = PriceTagTemplate.fromJson(t.toJson());
+        expect(back, isNotNull, reason: '${t.name} 读不回来');
+        expect(back!.widthMm, t.widthMm);
+        expect(back.heightMm, t.heightMm);
+        expect(back.elements.length, t.elements.length);
+        for (var i = 0; i < t.elements.length; i++) {
+          final a = t.elements[i];
+          final b = back.elements[i];
+          expect(b.kind, a.kind);
+          expect(b.field, a.field);
+          expect(b.scaleX, a.scaleX);
+          expect(b.scaleY, a.scaleY);
+          expect(b.bold, a.bold);
+          expect(b.reverse, a.reverse, reason: '${t.name} 反白丢了，促销模板就不促销了');
+          expect(b.underline, a.underline);
+          expect(b.align, a.align);
+          expect(b.hri, a.hri, reason: '${t.name} 条码数字开关丢了');
+        }
+      }
+    });
+
+    test('没有会员价的商品，会员价那一行整个不印（不印"会员 ￥0.00"）', () {
+      final tpl = kBuiltinTagTemplates.firstWhere((t) => t.id == 'builtin_member');
+      const plain = PriceTagItem(barcode: '6901234567890', name: '有机鸡蛋', price: 9.9);
+      expect(Gbk.decode(printerFor(tpl).tagBytes(tpl, plain)).contains('会员'), isFalse,
+          reason: '印一句「会员 ￥0.00」出去，顾客会当真');
+      expect(Gbk.decode(printerFor(tpl).tagBytes(tpl, item)), contains('会员'));
+    });
+
+    test('原价不高于售价 = 没做促销，原价那一行不印', () {
+      const e = TagElement(kind: TagElementKind.text, field: TagField.originPrice);
+      final tpl = PriceTagTemplate(
+          id: 'x', name: 'x', widthMm: 50, heightMm: 30, elements: const [e]);
+      final p = printerFor(tpl);
+      const same = PriceTagItem(barcode: '1', name: 'a', price: 9.9, originPrice: 9.9);
+      expect(Gbk.decode(p.tagBytes(tpl, same)).contains('原价'), isFalse,
+          reason: '划掉一个更低的原价，是骗人');
+      expect(Gbk.decode(p.tagBytes(tpl, item)), contains('原价'));
+    });
+
+    test('放大 2 倍的字，一行只能放一半（截断必须跟着放大倍数走）', () {
+      // 🔴 这串有 20 个字：必须长到**会被截断**才测得到截断逻辑。
+      //    用短串的话两个分支都原样返回，这条断言永远绿 ——
+      //    2026-10-16 就被这个骗过一次（12 字的串，1 倍本来也放得下）。
+      const s = '有机鸡蛋很好吃真的很好吃再来一份打包带走';
+      final a = PriceTagPrinter.clipToWidth(s, 1, 400);
+      final b = PriceTagPrinter.clipToWidth(s, 2, 400);
+      // 400 点 ÷ 12 = 33 个西文位 → 1 倍放 16 个汉字，2 倍放 8 个
+      expect(a.length, 16);
+      expect(b.length, 8);
+      // 反过来的坏情况：上限写死的话，大字会冲出纸边、挤成一团糊
+      expect(b.length * 2, lessThanOrEqualTo(a.length));
+      // 截断必须是"从前面截"，抠中间一段等于把商品名改了
+      expect(s.startsWith(a), isTrue);
+      expect(s.startsWith(b), isTrue);
+    });
+
+    test('加粗/反白/下划线用完必须关掉，不然会污染下一行（和下一张）', () {
+      const e = TagElement(
+        kind: TagElementKind.text,
+        field: TagField.price,
+        bold: true,
+        reverse: true,
+        underline: true,
+      );
+      final tpl = PriceTagTemplate(
+          id: 'x', name: 'x', widthMm: 50, heightMm: 30, elements: const [e]);
+      final bytes = printerFor(tpl).tagBytes(tpl, item);
+      // 每条都成对出现：开了必须有对应的关
+      expect(hasSeq(bytes, const <int>[0x1B, 0x45, 0x01]), isTrue, reason: '没开加粗');
+      expect(hasSeq(bytes, const <int>[0x1B, 0x45, 0x00]), isTrue, reason: '加粗没关');
+      expect(hasSeq(bytes, const <int>[0x1D, 0x42, 0x01]), isTrue, reason: '没开反白');
+      expect(hasSeq(bytes, const <int>[0x1D, 0x42, 0x00]), isTrue, reason: '反白没关');
+      expect(hasSeq(bytes, const <int>[0x1B, 0x2D, 0x01]), isTrue, reason: '没开下划线');
+      expect(hasSeq(bytes, const <int>[0x1B, 0x2D, 0x00]), isTrue, reason: '下划线没关');
+    });
+
+    test('条码高度/HRI 用完复位，否则下一张的条码跟着变高', () {
+      const e = TagElement(
+          kind: TagElementKind.barcode, barcodeHeight: 160, hri: false);
+      final tpl = PriceTagTemplate(
+          id: 'x', name: 'x', widthMm: 50, heightMm: 30, elements: const [e]);
+      final bytes = printerFor(tpl).tagBytes(tpl, item);
+      expect(hasSeq(bytes, const <int>[0x1D, 0x68, 160]), isTrue);
+      expect(hasSeq(bytes, const <int>[0x1D, 0x68, 80]), isTrue, reason: '高度没复位');
+      expect(hasSeq(bytes, const <int>[0x1D, 0x48, 0x00]), isTrue, reason: 'HRI 没复位');
+    });
+
+    test('模板批打印：开头复位+设宽，结尾切纸', () {
+      final tpl = kBuiltinTagTemplates.first;
+      final out = printerFor(tpl).renderWithTemplate(<PriceTagItem>[item], tpl);
+      expect(out.take(4).toList(), <int>[0x1B, 0x40, 0x1D, 0x57]);
+      expect(out.sublist(out.length - 7),
+          <int>[0x1B, 0x64, 0x03, 0x1D, 0x56, 0x42, 0x00]);
+    });
+
+    test('份数＝多印一遍（模板版也一样）', () {
+      final tpl = kBuiltinTagTemplates.first;
+      final one = printerFor(tpl)
+          .renderWithTemplate(<PriceTagItem>[item], tpl);
+      final two = printerFor(tpl).renderWithTemplate(<PriceTagItem>[
+        PriceTagItem(
+          barcode: item.barcode,
+          name: item.name,
+          spec: item.spec,
+          price: item.price,
+          unit: item.unit,
+          copies: 2,
+        ),
+      ], tpl);
+      expect(two.length, greaterThan(one.length * 1.6));
+      expect(two.length, lessThan(one.length * 2.4));
+    });
+
+    test('空模板不崩（只是印出来是白纸），但不允许存进库里', () {
+      final tpl = PriceTagTemplate(
+          id: 'e', name: 'e', widthMm: 50, heightMm: 30, elements: const <TagElement>[]);
+      expect(printerFor(tpl).tagBytes(tpl, item), isEmpty);
+      // 空模板存进去再读出来 == null：存一个打不出东西的模板没有意义
+      expect(PriceTagTemplate.fromJson(tpl.toJson()), isNull);
+    });
+
+    test('纸宽跟着模板走：40mm 的模板按 40mm 设宽（不是打印机的默认值）', () {
+      final tpl = kBuiltinTagTemplates.firstWhere((t) => t.id == 'builtin_jumbo');
+      final out = printerFor(tpl).renderWithTemplate(<PriceTagItem>[item], tpl);
+      // 75mm = 600 点 → 小端 58 02
+      expect(hasSeq(out, const <int>[0x1D, 0x57, 0x58, 0x02]), isTrue);
+    });
+
+    test('每个内置模板里的元素都合法（放大倍数在上限内）', () {
+      for (final t in kBuiltinTagTemplates) {
+        for (final e in t.elements) {
+          expect(e.scaleX, inInclusiveRange(1, 8));
+          expect(e.scaleY, inInclusiveRange(1, 8));
+          expect(e.barcodeHeight, inInclusiveRange(1, 255));
+          if (e.kind != TagElementKind.text) {
+            continue;
+          }
+          // 固定文字必须有内容，否则模板里躺一个什么都不印的元素
+          if (e.field == TagField.fixed) {
+            expect(e.fixedText, isNotEmpty);
+          }
+        }
+      }
     });
   });
 }

@@ -40,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 7;
+  static const int schemaVersion = 8;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -266,6 +266,32 @@ class LocalDb {
     // 照 v5/v6 同款幂等补列模式：老库 ALTER ADD，新库 v1 建表已含。
     (Database db) async {
       await _addColumn(db, 'stock_master', 'supplier', 'TEXT');
+    },
+
+    // v8：价签模板（龙哥 2026-10-16：价签打印要有模板，对标得力标签软件）。
+    //
+    // 🔴 内置模板**不入库**：它们是代码里的常量（kBuiltinTagTemplates），
+    //    入库的结果就是"改了代码里的模板，老机器上还是旧的那一版"，
+    //    而这个表本来就只存用户自己另存/新建的那些。
+    //
+    // 两张表分开：模板一张、键值一张（键值存"上次选的模板 id"这类偏好）。
+    // 别把偏好塞进模板表 —— 那样"删掉一个模板"就要连带删偏好行，
+    // 而偏好根本不该随模板共存亡。
+    (Database db) async {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS price_tag_template (
+          id         TEXT PRIMARY KEY,
+          name       TEXT NOT NULL,
+          json       TEXT NOT NULL,
+          updated_at INTEGER
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS price_tag_kv (
+          k TEXT PRIMARY KEY,
+          v TEXT
+        )
+      ''');
     },
   ];
 
