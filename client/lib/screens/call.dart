@@ -263,10 +263,17 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   /// 一个参会者的格子：有画面就渲染视频，没有就显示头像 + 名字
+  ///
+  /// 🔴 修复（2026-10-15）：渲染条件原来写 `s.video && hasVideo`。
+  ///    s.video 是**会话级**开关，本机摄像头不可用时 _prepareLocal 会把它
+  ///    降级成 false（通话变语音）—— 于是即使对方的视频轨已经到达
+  ///    （hasVideo=true），格子也渲染头像，表现就是"通话通了但看不到
+  ///    对面画面"（Win 无摄像头时必然复现）。hasVideo 才是这一路有没有
+  ///    画面的权威判据，与本端摄像头解耦。
   Widget _tile(CallPeer p, CallSession s) => ValueListenableBuilder<bool>(
         valueListenable: p.videoOn,
         builder: (_, hasVideo, __) {
-          if (s.video && hasVideo) {
+          if (hasVideo) {
             final link = _c.rendererFor(p.userId);
             if (link != null) {
               return Stack(

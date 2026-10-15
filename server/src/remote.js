@@ -225,6 +225,11 @@ function request({ controllerId, hostId }) {
   if (bHost) return { error: '对方正在其他远程协助会话中' };
   const bCtrl = busy(controllerId);
   if (bCtrl) return { error: '你还有一个未结束的远程协助会话' };
+  // 🔴 修复（2026-10-15）：对方不在线（客户端没开/掉线）时立刻告知，
+  //    而不是让他干等 45 秒振铃超时。被控端收不到邀请 = 永远不会有回应。
+  if (!hub.isUserOnline(hostId)) {
+    return { error: '对方不在线，无法发起远程协助' };
+  }
 
   const id = genId();
   const s = {
@@ -428,6 +433,12 @@ function redeem({ userId, code, device }) {
   if (hit.expires_at && hit.expires_at < Date.now()) return { error: '访问码已过期' };
   if (hit.single_use && hit.use_count > 0) return { error: '该访问码已被使用过' };
   if (hit.user_id === userId) return { error: '不能用访问码连接自己' };
+  // 🔴 修复（2026-10-15）：对方不在线时立刻告知。必须放在**扣使用次数
+  //    之前** —— 否则一次性码会被"对方没开客户端"白白烧掉，用户还得
+  //    重新生成码；此前是放行后干等 MAX_SESSION_MS 再收掉。
+  if (!hub.isUserOnline(hit.user_id)) {
+    return { error: '对方不在线（客户端未运行或网络已断开），稍后再试' };
+  }
 
   const bHost = busy(hit.user_id);
   if (bHost) return { error: '对方正在其他远程协助会话中' };
@@ -461,8 +472,8 @@ function redeem({ userId, code, device }) {
   }
 
   // 撤销窗口：窗口内被控端可拒绝；到点没反对就自动放行。
-  // 这里**不会因为对方不在线就跳过** —— 不在线时他也收不到画面请求，
-  // 放行后如果没人响应 failSession 会把它收掉。
+  // 对方不在线的情况已在上面挡掉（且没扣使用次数）；真出现"在线但
+  // 没人响应"，放行后 failSession 会把它收掉。
   s.timer = setTimeout(() => {
     if (s.status !== STATUS.REQUESTING) return;
     // 无人值守自动同意：这是它的全部意义（人不在也要能连）

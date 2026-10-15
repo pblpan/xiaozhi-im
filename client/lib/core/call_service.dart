@@ -1271,6 +1271,9 @@ class CallService {
         if (s != null) {
           s.video = false;
           camOn.value = false;
+          // 说清楚"降级"对双方分别意味着什么，避免用户以为画面是对方挂了
+          _diag('本机摄像头不可用，通话降级为语音：对方看不到你，'
+              '但对方若有摄像头你仍然看得到对方');
         }
       } catch (_) {
         return '无法访问摄像头和麦克风，请检查权限';
@@ -1282,6 +1285,8 @@ class CallService {
       if (s != null) {
         s.video = false;
         camOn.value = false;
+        _diag('本机未取到视频轨，通话按语音进行：对方看不到你，'
+            '但对方若有摄像头你仍然看得到对方');
       }
     }
     return null;

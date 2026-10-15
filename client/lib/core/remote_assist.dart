@@ -184,8 +184,12 @@ class RemoteAssistService {
     return s > 0 ? s : _myId;
   }
 
-  bool get isHost =>
-      session.value != null && session.value!.hostId == _me;
+  bool get isHost {
+    final s = session.value;
+    if (s == null) return false;
+    // 收到 remote:invite 即被控端（服务端只发给 hostId）；_me 比对作为兜底。
+    return _hostByFrame || s.hostId == _me;
+  }
 
   bool get isController => session.value?.controllerId == _me;
 
@@ -209,6 +213,16 @@ class RemoteAssistService {
   /// _hostStart 幂等标志：无人值守时本地倒计时 + 服务端 remote:authed
   /// 两条路都会触发共享，不加标志会重复 getDisplayMedia / createOffer。
   bool _hostStarting = false;
+
+  /// 以帧定角色：收到 `remote:invite` 即认定"我是被控端"。
+  ///
+  /// 🔴 修复（2026-10-15）：服务端的 remote:invite 只广播给 hostId
+  ///    （remote.js request()/redeem() 两处都是 broadcastToUser(hostId)），
+  ///    所以"收到邀请"本身就是权威的角色判定，不再依赖 _me 是否预热成功。
+  ///    此前 isHost 纯靠 hostId == _me 比对，而 _me 拉 /me 失败时恒为 0
+  ///    —— 被控端收得到邀请也不弹框、无人值守也不自动开始，表现就是
+  ///    "发起了却永远超时"。
+  bool _hostByFrame = false;
 
   // ICE 缓存：同一次会话里不必反复拉
   List<Map<String, dynamic>>? _ice;
@@ -258,6 +272,9 @@ class RemoteAssistService {
     switch (type) {
       case 'remote:invite':
         // 先确保 myId 再判角色：否则"我是被控端还是控制端"可能判错
+        // 🔴 修复（2026-10-15）：invite 帧只发给被控端，置 _hostByFrame，
+        //    角色判定不再押在 _me 上（_me 拉不到时恒 0 → 不弹框/不自动开始）。
+        _hostByFrame = true;
         unawaited(_onInviteAsync(Map<String, dynamic>.from(raw['session'] as Map)));
         break;
       case 'remote:session':
@@ -438,6 +455,42 @@ class RemoteAssistService {
 
   // ------------------------------------------------------------ 被控端采集
 
+  /// 采集桌面画面。
+  ///
+  /// 🔴 修复（2026-10-15）：flutter_webrtc 原生的 getDisplayMedia 依赖
+  ///    sources_ 缓存（只有 getDesktopSources / updateDesktopSources 会填），
+  ///    而"source 找不到就退第一个屏幕"的兜底只编进了 Linux
+  ///    （flutter_screen_capture.cc 的 `#ifdef __linux__` 分支）——
+  ///    Windows 上不先枚举直接采集必报 `source not found!`，
+  ///    被控端静默失败（remote:end host_end、控制端干等超时）。
+  ///    所以桌面平台先枚举、再显式指定 screen 源；移动端走 MediaProjection，
+  ///    不需要这一步。
+  Future<MediaStream> _captureScreen() async {
+    String? screenId;
+    if (WebRTC.platformIsDesktop) {
+      try {
+        final sources =
+            await desktopCapturer.getSources(types: [SourceType.Screen]);
+        for (final s in sources) {
+          if (s.type == SourceType.Screen && s.id.isNotEmpty) {
+            screenId = s.id;
+            break;
+          }
+        }
+      } catch (e) {
+        _log('枚举桌面源失败（$e），按默认源采集');
+      }
+    }
+    // 桌面采集。**不要**同时要音频 —— 远控场景里麦克风采集既没必要
+    // 又会让系统弹出多余的权限提示，反而增加被拒绝的概率。
+    return navigator.mediaDevices.getDisplayMedia(<String, dynamic>{
+      'video': screenId != null
+          ? <String, dynamic>{'deviceId': <String, dynamic>{'exact': screenId}}
+          : true,
+      'audio': false,
+    });
+  }
+
   Future<void> _hostStart() async {
     // 无人值守时本地倒计时 + 服务端 remote:authed 两条路都会触发，
     // 不加这个标志会重复弹采集框 / 重复 createOffer。
@@ -445,12 +498,7 @@ class RemoteAssistService {
     _hostStarting = true;
     try {
       phase.value = RemotePhase.connecting;
-      // 桌面采集。**不要**同时要音频 —— 远控场景里麦克风采集既没必要
-      // 又会让系统弹出多余的权限提示，反而增加被拒绝的概率。
-      final stream = await navigator.mediaDevices.getDisplayMedia(<String, dynamic>{
-        'video': true,
-        'audio': false,
-      });
+      final stream = await _captureScreen();
       _localScreen = stream;
 
       await _ensureRenderer();
@@ -479,7 +527,10 @@ class RemoteAssistService {
       });
       _log('已发送共享offer，等待对方接入');
     } catch (e) {
-      _log('开始共享失败：$e');
+      // 失败必须留痕：diag 栏（远程页底部）会展示这句话，
+      // 不能再像以前那样只有 debugPrint、release 版里什么都看不到。
+      _log('开始共享失败：$e'
+          '（如提示 source not found，请重启客户端后重试）');
       phase.value = RemotePhase.ended;
       SocketService().send({'type': 'remote:end', 'sessionId': session.value?.id});
       await _teardown();
@@ -727,6 +778,7 @@ class RemoteAssistService {
   // ------------------------------------------------------------ 收尾
 
   Future<void> _teardown({String reason = ''}) async {
+    _hostByFrame = false;
     try {
       _dc?.close();
     } catch (_) {}
