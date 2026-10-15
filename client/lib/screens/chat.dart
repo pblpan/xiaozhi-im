@@ -99,6 +99,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 记录上一次输入框内容，用于识别"刚输入了 @"
   String _lastText = '';
 
+  /// 附件按钮的位置（下拉菜单要锚在它下面）
+  final GlobalKey _attachKey = GlobalKey();
+
   /// 表情面板展开中
   bool _showEmoji = false;
   final _emojiPanelKey = GlobalKey<EmojiPanelState>();
@@ -582,27 +585,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _sendDropped(DropDoneDetails d) async {
     if (d.files.isEmpty) return;
     setState(() => _dragHover = false);
-    var ok = 0;
-    final failed = <String>[];
-    setState(() => _busy = true);
-    try {
-      for (final f in d.files) {
-        try {
-          await _sendFile(File(f.path), toastDone: false);
-          ok++;
-        } catch (_) {
-          failed.add(f.name);
-        }
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+    final b = await _sendPaths(d.files.map((f) => f.path).toList());
     if (!mounted) return;
-    if (ok == 0) {
-      _toast('发送失败：${failed.join('、')}');
-    } else if (failed.isNotEmpty) {
-      _toast('已发送 $ok 个，${failed.length} 个失败');
-    }
+    _reportBatch(b, total: d.files.length);
   }
 
   /// Windows 才包 DropTarget：拖文件进聊天窗直接发送
@@ -639,18 +624,35 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Ctrl+V：剪贴板里是图片就直接发图（有图优先于文本粘贴）。
+  /// Ctrl+V：剪贴板里有文件就发文件，有图就发图，都没有才放行给系统粘贴文本。
   /// 挂在输入框上游的 Focus 上 —— 按键从焦点节点冒泡上来，这里先拿到，
   /// 认下（handled）系统就不会再走默认的文本粘贴。
+  ///
+  /// 🔴 顺序必须是「文件 → 图片 → 放行」：在资源管理器里复制文件时剪贴板里
+  ///    一条位图都没有，只认图的旧实现会把文件粘贴当成"剪贴板空的"放过去，
+  ///    Ctrl+V 变成粘进一段看不懂的东西，文件本身永远发不出去（龙哥 2026-10-16）。
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent e) {
     if (!_isWin) return KeyEventResult.ignored;
     if (e is! KeyDownEvent) return KeyEventResult.ignored;
     if (e.logicalKey != LogicalKeyboardKey.keyV) return KeyEventResult.ignored;
     if (!HardwareKeyboard.instance.isControlPressed) return KeyEventResult.ignored;
+
+    final files = readClipboardFiles();
+    if (files.isNotEmpty) {
+      unawaited(_pasteFiles(files));
+      return KeyEventResult.handled;
+    }
     final png = readClipboardImage();
     if (png == null) return KeyEventResult.ignored; // 没图 → 放行，正常粘贴文本
     _sendPngBytes(png);
     return KeyEventResult.handled;
+  }
+
+  /// 粘贴文件：一条提示说清"发了几个、几个没成"，不逐个弹提示。
+  Future<void> _pasteFiles(List<String> paths) async {
+    final b = await _sendPaths(paths);
+    if (!mounted) return;
+    _reportBatch(b, total: paths.length);
   }
 
   /// 打开截图编辑器（框选 → 可标注 → 发送）
@@ -682,39 +684,129 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// 选文件发送（file_picker 默认允许多选，一次可以挑一堆）。
+  /// 点附件按钮是**下拉菜单**，不是直接弹文件框（龙哥 2026-10-16）。
   ///
-  /// 逐个独立上传、逐个记账：第 3 个失败不影响前 2 个已经发出去的。
+  /// 原来一个回形针点下去就直接开"所有文件"的选择器：想发照片的人得在一堆
+  /// 文档里翻，而截图/图片/视频这些更常用的入口全被藏在同一个框的类型过滤里。
+  /// 现在按微信/企微的口径拆开：图片、视频、文件各走各的，Windows 再加截图。
+  Future<void> _openAttachMenu() async {
+    // 菜单锚在按钮上、往下展开：按钮在输入区最左边，往上弹会被消息列表压住
+    final obj = _attachKey.currentContext?.findRenderObject();
+    final box = obj is RenderBox ? obj : null;
+    final pos = box == null ? Offset.zero : box.localToGlobal(Offset.zero);
+    final bottom = pos.dy + (box?.size.height ?? 42) + 6;
+    final picked = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(pos.dx, bottom, pos.dx, bottom),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      items: <PopupMenuEntry<String>>[
+        const PopupMenuItem<String>(
+          value: 'image',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 6),
+            leading: Icon(Icons.image_rounded, size: 20),
+            title: Text('图片'),
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'video',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 6),
+            leading: Icon(Icons.movie_rounded, size: 20),
+            title: Text('视频'),
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'file',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 6),
+            leading: Icon(Icons.insert_drive_file_rounded, size: 20),
+            title: Text('文件'),
+          ),
+        ),
+        // 截图只有 Windows 有（WinScreen 走 GDI 抓屏）；Android 上不显示，
+        // 免得菜单里躺一个点了只会报错的项。
+        if (_isWin)
+          const PopupMenuItem<String>(
+            value: 'shot',
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 6),
+              leading: Icon(Icons.crop_rounded, size: 20),
+              title: Text('截图'),
+            ),
+          ),
+      ],
+    );
+    if (!mounted || picked == null) return;
+    switch (picked) {
+      case 'shot':
+        await _startScreenshot();
+        return;
+      case 'image':
+        await _attach(FileType.image);
+        return;
+      case 'video':
+        await _attach(FileType.video);
+        return;
+      case 'file':
+        await _attach(FileType.any);
+        return;
+    }
+  }
+
+  /// 选若干文件发送（file_picker 默认允许多选，一次可以挑一堆）。
+  ///
+  /// 🔴 file_picker 12.x 的 `FilePicker.pickFiles()` 直接返回 `List<PlatformFile>`
+  ///    （取消 = 空列表，不再是 null），`FilePicker.platform` 这一层在 12 里
+  ///    已经没有了 —— 照旧写法会直接编译不过。
+  Future<void> _attach(FileType type) async {
+    final files = await FilePicker.pickFiles(type: type);
+    final paths = files.map((f) => f.path).whereType<String>().toList();
+    if (paths.isEmpty) return;
+    final b = await _sendPaths(paths);
+    if (!mounted) return;
+    _reportBatch(b, total: paths.length);
+  }
+
+  /// 一堆路径逐个独立发送、逐个记账：第 3 个失败不影响前 2 个已经发出去的。
   /// 传 10 个文件因为其中一个坏了就全部回滚，比失败本身更让人恼火。
-  void _attach() async {
-    final files = await FilePicker.pickFiles();
-    if (files.isEmpty) return;
-    setState(() => _busy = true);
+  ///
+  /// 🔴 抽出来是为了让「菜单 / 拖拽 / Ctrl+V 粘贴」三条入口共用同一套记账口径 ——
+  ///    各写一遍的结果就是有的会提示"已发送 3 个"，有的一声不吭。
+  Future<_SendBatch> _sendPaths(List<String> paths) async {
     var ok = 0;
     var compressed = 0;
     final failed = <String>[];
+    setState(() => _busy = true);
     try {
-      for (final picked in files) {
-        final path = picked.path;
-        if (path == null) continue;
+      for (final path in paths) {
         try {
-          if (await _sendFile(File(path))) compressed++;
+          // toastDone=false：批量发送时每个都弹一次"已发送"是噪音，
+          // 全部发完由 _reportBatch 汇总成一句话（有几个失败也一并说清）
+          if (await _sendFile(File(path), toastDone: false)) compressed++;
           ok++;
         } catch (_) {
-          failed.add(picked.name);
+          failed.add(p.basename(path));
         }
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-    if (!mounted) return;
-    if (ok == 0) {
-      _toast('发送失败：${failed.join('、')}');
+    return _SendBatch(ok: ok, compressed: compressed, failed: failed);
+  }
+
+  void _reportBatch(_SendBatch b, {int total = 0}) {
+    if (b.ok == 0) {
+      _toast('发送失败：${b.failed.join('、')}');
       return;
     }
-    final tail = failed.isEmpty ? '' : '（${failed.length} 个失败：${failed.join('、')}）';
-    _toast(ok > 1 ? '已发送 $ok 个文件$tail' : '已发送$tail');
-    if (compressed > 0) _toast('其中 $compressed 个走外网已压缩上传');
+    final tail = b.failed.isEmpty ? '' : '（${b.failed.length} 个失败：${b.failed.join('、')}）';
+    _toast(b.ok > 1 ? '已发送 ${b.ok}/$total 个$tail' : '已发送$tail');
+    if (b.compressed > 0) _toast('其中 ${b.compressed} 个走外网已压缩上传');
   }
 
   String _msg(Object e) => e.toString().replaceFirst('Exception: ', '');
@@ -1621,19 +1713,18 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              // 附件 = 下拉菜单（图片 / 视频 / 文件 / 截图），不是直接弹文件框。
+              // 截图原来单独占一个圆按钮，现在收进菜单 —— 输入区少一个按钮，
+              // 手机上才有地方放输入框。
               _roundButton(
+                key: _attachKey,
                 icon: _busy
                     ? Icons.hourglass_top_rounded
                     : Icons.attach_file_rounded,
-                onTap: _busy ? null : _attach,
+                // 下拉箭头是给用户的承诺：点这个是展开菜单，不是弹文件框
+                suffix: _busy ? null : Icons.arrow_drop_down_rounded,
+                onTap: _busy ? null : _openAttachMenu,
               ),
-              // 截图（框选 → 可标注/OCR → 发送）。只有 Windows 有；
-              // Android 上不显示，输入区不挤
-              if (_isWin)
-                _roundButton(
-                  icon: Icons.crop_rounded,
-                  onTap: _busy ? null : _startScreenshot,
-                ),
               const SizedBox(width: 8),
               _micButton(),
               const SizedBox(width: 8),
@@ -1731,9 +1822,17 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
 
-  Widget _roundButton(
-          {required IconData icon, VoidCallback? onTap, Color? color}) =>
+  /// [suffix] 是按钮右下角那枚小箭头 —— 有它才像"下拉菜单"，
+  /// [key] 用来让菜单锚在按钮下方（见 _openAttachMenu）。
+  Widget _roundButton({
+    Key? key,
+    required IconData icon,
+    IconData? suffix,
+    VoidCallback? onTap,
+    Color? color,
+  }) =>
       Material(
+        key: key,
         color: AppColors.surface,
         shape: const CircleBorder(),
         child: InkWell(
@@ -1742,7 +1841,20 @@ class _ChatScreenState extends State<ChatScreen> {
           child: SizedBox(
             width: 42,
             height: 42,
-            child: Icon(icon, size: 21, color: color ?? AppColors.textSub),
+            child: suffix == null
+                ? Icon(icon, size: 21, color: color ?? AppColors.textSub)
+                : Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Icon(icon, size: 20, color: color ?? AppColors.textSub),
+                      // 箭头压在主图标下方偏右：图标本体仍居中，箭头只是个提示
+                      Positioned(
+                        right: 3,
+                        bottom: 3,
+                        child: Icon(suffix, size: 15, color: color ?? AppColors.textSub),
+                      ),
+                    ],
+                  ),
           ),
         ),
       );
@@ -2156,4 +2268,23 @@ class _PollCreateSheetState extends State<_PollCreateSheet> {
       ),
     );
   }
+}
+
+/// 一批文件发送的结果。
+///
+/// 菜单选文件、拖拽、Ctrl+V 粘贴这三个入口共用一个形状 —— 否则"有的会提示
+/// 已发送 3 个、有的一声不吭"这种不一致，最后一定没人修，因为它不算 bug。
+class _SendBatch {
+  const _SendBatch({
+    required this.ok,
+    required this.compressed,
+    required this.failed,
+  });
+
+  final int ok;
+
+  /// 其中走外网被压缩上传的个数
+  final int compressed;
+
+  final List<String> failed;
 }

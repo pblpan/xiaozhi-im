@@ -24,6 +24,65 @@ Uint8List? readClipboardImage() {
   }
 }
 
+/// 剪贴板里**复制的文件/文件夹路径**（Windows 资源管理器 Ctrl+C 走 CF_HDROP）。
+///
+/// 🔴 为什么必须单独支持它：Ctrl+V 在聊天里"能贴图"不等于"能贴文件"。
+///    在资源管理器里选中三个文件按 Ctrl+C，剪贴板里放的是 CF_HDROP(=15)，
+///    **里面一张位图都没有** —— 只认 CF_DIB/PNG 的旧实现会当成"没内容"放行，
+///    于是 Ctrl+V 变成把文件名（如果有的话）粘进输入框，文件本身永远发不出去。
+///
+/// 只返回**真正存在的文件**（文件夹跳过，目录不可作为消息附件发送）。
+/// 非 Windows / 剪贴板里没有文件 / 读不出来 → 返回空列表。
+List<String> readClipboardFiles() {
+  if (!Platform.isWindows) return const <String>[];
+  try {
+    return _readFiles();
+  } catch (_) {
+    return const <String>[];
+  }
+}
+
+List<String> _readFiles() {
+  if (_openClipboard(0) == 0) return const <String>[];
+  try {
+    if (_isAvailable(15 /* CF_HDROP */) == 0) return const <String>[];
+    final raw = _globalBytes(_getData(15));
+    if (raw == null || raw.length < 20) return const <String>[];
+
+    // DROPFILES: DWORD pFiles; POINT pt(8); BOOL fNC(4); BOOL fWide(4);
+    // —— fWide 在偏移 16：非 0 表示后面是 UTF-16 文件名，0 表示本地代码页。
+    //    简体中文机上的 CF_HDROP 几乎都是宽字符，窄字符那一路按空处理掉。
+    final bd = ByteData.sublistView(raw);
+    final offset = bd.getUint32(0, Endian.little);
+    final wide = bd.getInt32(16, Endian.little) != 0;
+    if (offset <= 0 || offset >= raw.length || !wide) return const <String>[];
+
+    // 文件名列表是**连续**的 UTF-16 串，两串之间一个 \0，结尾两个 \0。
+    // 逐个读码元，遇到 \0 就收一个名字，连着两个 \0 就结束。
+    final names = <String>[];
+    final buf = StringBuffer();
+    var end = offset;
+    var blanks = 0;
+    while (end + 1 < raw.length) {
+      final code = bd.getUint16(end, Endian.little);
+      end += 2;
+      if (code == 0) {
+        if (buf.isNotEmpty) names.add(buf.toString());
+        buf.clear();
+        if (++blanks >= 2) break;
+      } else {
+        blanks = 0;
+        buf.writeCharCode(code);
+      }
+    }
+    if (buf.isNotEmpty) names.add(buf.toString());
+
+    return names.where((p) => p.trim().isNotEmpty).where(FileSystemEntity.isFileSync).toList();
+  } finally {
+    _closeClipboard();
+  }
+}
+
 /// 把 PNG 字节写进 Windows 剪贴板（截图编辑器的「复制」用，对标 QQ 截图）。
 ///
 /// 注册格式 "PNG" 而不是 CF_DIB：截图工具/浏览器都认这个，粘贴出去是无损的。
