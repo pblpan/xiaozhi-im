@@ -254,6 +254,14 @@ function request({ controllerId, hostId }) {
     type: 'remote:invite',
     session: publicInfo(s),
   });
+  // ⚠️ 控制端也必须拿到 session：他后续所有信令（offer/answer/ice）都带
+  // sessionId，本地没有 session 就发不出信令，服务端也会因 sessionId 为空
+  // 全部拒收 —— 表现为"发起了但永远连不上"。
+  // （2026-10-15 修复：此前只通知被控端，控制端 session 恒为 null）
+  hub.broadcastToUser(controllerId, {
+    type: 'remote:session',
+    session: publicInfo(s),
+  });
   return { sessionId: id };
 }
 
@@ -466,6 +474,11 @@ function redeem({ userId, code, device }) {
   }, ABORT_WINDOW_MS);
 
   hub.broadcastToUser(s.hostId, { type: 'remote:invite', session: publicInfo(s) });
+  // 同 request()：控制端也要在本地建立 session，否则 redeem 后的信令全部发不出
+  hub.broadcastToUser(s.controllerId, {
+    type: 'remote:session',
+    session: publicInfo(s),
+  });
   return { sessionId: id, hostId: s.hostId, hostName: nameOf(s.hostId) };
 }
 

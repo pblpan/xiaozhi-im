@@ -174,10 +174,20 @@ class RemoteAssistService {
   final ValueNotifier<String> diag = ValueNotifier<String>('');
 
   /// 当前是否处于**被控**状态。UI 拿它决定要不要显示"正在被协助"警示条。
-  bool get isHost =>
-      session.value != null && session.value!.hostId == SoundService().myId;
+  ///
+  /// 🔴 修复（2026-10-15）：原先直接读 `SoundService().myId`，而那个值
+  ///    默认 0、只有进过会话列表页才被赋值 —— 从远程页直接进时 isHost
+  ///    恒 false，被控端收得到邀请也不弹框、不共享（"双向无反应"的一半）。
+  ///    现在改为：本地确保过的 _myId 优先，SoundService 的作为同步补充。
+  int get _me {
+    final s = SoundService().myId;
+    return s > 0 ? s : _myId;
+  }
 
-  bool get isController => session.value?.controllerId == SoundService().myId;
+  bool get isHost =>
+      session.value != null && session.value!.hostId == _me;
+
+  bool get isController => session.value?.controllerId == _me;
 
   final RTCVideoRenderer remoteRenderer = RTCVideoRenderer();
   bool _rendererReady = false;
@@ -191,14 +201,40 @@ class RemoteAssistService {
   bool _started = false;
   StreamSubscription<dynamic>? _sub;
 
+  /// 本地缓存的"我是谁"。SoundService().myId 只在会话列表页加载后才赋值，
+  /// 远程协助可能从任意入口进，所以这里自己兜一份：start() 时预热，
+  /// 每次会话帧到来前再确保一次（_ensureMyId）。
+  int _myId = 0;
+
+  /// _hostStart 幂等标志：无人值守时本地倒计时 + 服务端 remote:authed
+  /// 两条路都会触发共享，不加标志会重复 getDisplayMedia / createOffer。
+  bool _hostStarting = false;
+
   // ICE 缓存：同一次会话里不必反复拉
   List<Map<String, dynamic>>? _ice;
   DateTime? _iceAt;
+
+  /// 确保"我是谁"已加载。有网时拉 /me 并同步给 SoundService（别的模块也受益）。
+  Future<void> _ensureMyId() async {
+    if (_me > 0) return;
+    try {
+      final me = await ImApi().me();
+      final id = (me['user'] is Map) ? (me['user']['id'] as int?) : null;
+      if (id != null && id > 0) {
+        _myId = id;
+        SoundService().myId = id;
+      }
+    } catch (_) {
+      // 拉不到就先靠 SoundService 的旧值；再不行角色判定失败时会走
+      // "无响应"路径，但至少不会崩
+    }
+  }
 
   void start() {
     if (_started) return;
     _started = true;
     _sub = SocketService().stream.listen(_onFrame);
+    unawaited(_ensureMyId());
   }
 
   void dispose() {
@@ -221,7 +257,19 @@ class RemoteAssistService {
 
     switch (type) {
       case 'remote:invite':
-        _onInvite(Map<String, dynamic>.from(raw['session'] as Map));
+        // 先确保 myId 再判角色：否则"我是被控端还是控制端"可能判错
+        unawaited(_onInviteAsync(Map<String, dynamic>.from(raw['session'] as Map)));
+        break;
+      case 'remote:session':
+        // 控制端侧的 session 落地帧（服务端 request/redeem 成功后补发）。
+        // 🔴 修复（2026-10-15）：此前控制端本地 session 恒为 null，
+        //    isController 判不出来、后续信令 sessionId 为 null 被服务端
+        //    全部拒收 —— 表现就是"发起了却永远超时"。
+        unawaited(_onSessionFrame(Map<String, dynamic>.from(raw['session'] as Map)));
+        break;
+      case 'remote:redeem:ok':
+        // 兼容帧：session 已由 remote:session 落地，这里只记一笔日志
+        _log('访问码兑换成功，等待对方撤销窗口结束');
         break;
       case 'remote:accept':
         // 主机同意了（attended）或撤销窗口已过（unattended）→ 等着收 offer
@@ -252,6 +300,39 @@ class RemoteAssistService {
       default:
         break;
     }
+  }
+
+  Future<void> _onInviteAsync(Map<String, dynamic> s) async {
+    await _ensureMyId();
+    _onInvite(s);
+  }
+
+  /// 控制端侧的 session 落地：本地建立 session，让 isController 与后续
+  /// 信令的 sessionId 有着落。无人值守的撤销窗口期同样走 requesting。
+  Future<void> _onSessionFrame(Map<String, dynamic> s) async {
+    await _ensureMyId();
+    final prev = session.value;
+    final next = RemoteSession(
+      id: asStr(s['sessionId']),
+      hostId: asInt(s['hostId']) ?? 0,
+      controllerId: asInt(s['controllerId']),
+      mode: asStr(s['mode']).isEmpty ? 'attended' : asStr(s['mode']),
+      abortDeadline: s['abortDeadline'] is int
+          ? DateTime.fromMillisecondsSinceEpoch(s['abortDeadline'] as int)
+          : null,
+      hostName: asStr(s['hostName']),
+      controllerName: asStr(s['controllerName']),
+    );
+    // 已在同一会话里就别重置 phase（避免 accept/offer 途中被打回 requesting）
+    if (prev?.id == next.id) {
+      session.value = next;
+      return;
+    }
+    session.value = next;
+    if (phase.value == RemotePhase.idle || phase.value == RemotePhase.ended) {
+      phase.value = RemotePhase.requesting;
+    }
+    _log('已进入协助会话（${next.unattended ? '无人值守' : '有人值守'}），等待建立连接');
   }
 
   void _onInvite(Map<String, dynamic> s) {
@@ -297,7 +378,14 @@ class RemoteAssistService {
       return '未连接到服务器，无法发起远程协助';
     }
     if (hostId == SoundService().myId) return '不能远程协助自己';
+    await _ensureMyId();
+    if (hostId == _me) return '不能远程协助自己';
     SocketService().send({'type': 'remote:invite', 'hostId': hostId});
+    // 本地先把相位立起来：控制页要立刻显示"等待中"。
+    // session 本身等服务端 remote:session 帧落地（信令的 sessionId 靠它）。
+    if (phase.value == RemotePhase.idle || phase.value == RemotePhase.ended) {
+      phase.value = RemotePhase.requesting;
+    }
     // 结果通过 remote:invite / error 帧回来，这里不阻塞等
     return null;
   }
@@ -307,7 +395,11 @@ class RemoteAssistService {
     if (SocketService().state.value != ConnState.online) {
       return '未连接到服务器，无法连接';
     }
+    await _ensureMyId();
     SocketService().send({'type': 'remote:redeem', 'code': code.trim()});
+    if (phase.value == RemotePhase.idle || phase.value == RemotePhase.ended) {
+      phase.value = RemotePhase.requesting;
+    }
     return null;
   }
 
@@ -347,6 +439,10 @@ class RemoteAssistService {
   // ------------------------------------------------------------ 被控端采集
 
   Future<void> _hostStart() async {
+    // 无人值守时本地倒计时 + 服务端 remote:authed 两条路都会触发，
+    // 不加这个标志会重复弹采集框 / 重复 createOffer。
+    if (_hostStarting) return;
+    _hostStarting = true;
     try {
       phase.value = RemotePhase.connecting;
       // 桌面采集。**不要**同时要音频 —— 远控场景里麦克风采集既没必要
@@ -387,6 +483,8 @@ class RemoteAssistService {
       phase.value = RemotePhase.ended;
       SocketService().send({'type': 'remote:end', 'sessionId': session.value?.id});
       await _teardown();
+    } finally {
+      _hostStarting = false;
     }
   }
 
@@ -400,13 +498,11 @@ class RemoteAssistService {
         data['sdp']?.toString() ?? '',
         data['type']?.toString() ?? 'offer',
       ));
-      // 只收不发：控制端不需要把自己的画面给对方
-      await pc.addTransceiver(
-        kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
-        init: RTCRtpTransceiverInit(
-          direction: TransceiverDirection.RecvOnly,
-        ),
-      );
+      // ⚠️ 不要再 addTransceiver(RecvOnly)：setRemoteDescription 后
+      // unified-plan 的 transceiver 已按 offer 的 m-line 对齐，这里再
+      // addTransceiver 会 append 一条没有对应 offer m-line 的 recvonly，
+      // answer 出来是畸形 SDP，对端 setRemoteDescription 直接失败。
+      // offer 里被控端已经 addTrack(video)，answer 会自动带上 recvonly。
       final answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       SocketService().send({

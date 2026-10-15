@@ -213,6 +213,15 @@ async function main() {
   ok('邀请里带了发起人的名字（被控端要能认出是谁）', inv.session.controllerName === '协助的老李');
   ok('路人收不到别人的邀请', await c1.none('remote:invite', 500));
 
+  // 🔴 回归断言（2026-10-15 修复"远程控制双向无反应"）：
+  // 控制端必须收到 remote:session 落地帧。此前服务端只通知被控端，
+  // 控制端本地 session 恒为 null → isController 恒 false、后续信令
+  // sessionId 为 null 被服务端全部拒收，表现为"发起了却永远超时"。
+  const sess = await b1.next('remote:session');
+  ok('控制端收到 session 落地帧（回归：双向无响应）', sess.session?.sessionId === sid,
+    `实际 ${JSON.stringify(sess).slice(0, 120)}`);
+  ok('session 帧里控制端认得出自己', sess.session?.controllerId === B.id);
+
   // ⚠️ 这个会话此刻还停在 requesting（还没人同意）。
   // 客户端那层确实会拦（phase != active 就丢控制指令），但服务端**不能依赖
   // 客户端自觉**：SDP 一旦允许提前协商，就等于"先把连接建好再等同意"，
@@ -334,6 +343,10 @@ async function main() {
   b1.send({ type: 'remote:redeem', code: code2, device: 'Windows 11' });
   const ro = await b1.next('remote:redeem:ok');
   ok('兑换成功并拿到会话号', !!ro.sessionId);
+  // 回归断言：redeem 后控制端同样要收到 session 落地帧（2026-10-15）
+  const rsess = await b1.next('remote:session');
+  ok('兑换后控制端收到 session 落地帧（回归：远程码超时）', !!rsess.session?.sessionId,
+    `实际 ${JSON.stringify(rsess).slice(0, 120)}`);
   const inv4 = await a1.next('remote:invite');
   ok('无人值守也要通知被控端（不是悄悄就控了）', !!inv4.session);
   ok('模式标注为 unattended', inv4.session.mode === 'unattended');

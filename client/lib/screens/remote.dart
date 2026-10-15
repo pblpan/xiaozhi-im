@@ -1105,7 +1105,11 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                                     Text(
                                       p == RemotePhase.ended
                                           ? '会话已结束'
-                                          : _phaseText(p),
+                                          : p == RemotePhase.requesting
+                                              ? (svc.session.value?.unattended == true
+                                                  ? '已发出连接，等待对方撤销窗口结束…'
+                                                  : '等待对方同意…')
+                                              : _phaseText(p),
                                       style: const TextStyle(color: Colors.white, fontSize: 14),
                                     ),
                                   ],

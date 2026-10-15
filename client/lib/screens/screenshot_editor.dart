@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'package:xiaozhi_im_client/core/clipboard_image.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/core/win_screen.dart';
 
@@ -97,69 +99,101 @@ class _ScreenshotEditorPageState extends State<ScreenshotEditorPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: _loading
-          ? const Center(
-              child: SizedBox(
-                  width: 26,
-                  height: 26,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70)))
-          : LayoutBuilder(builder: (context, box) {
-              final disp = _displayRect(box.biggest);
-              return Stack(
-                children: [
-                  Positioned.fromRect(
-                    rect: disp,
-                    child: RawImage(image: _img, fit: BoxFit.fill),
-                  ),
-                  Positioned.fromRect(
-                    rect: disp,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTapUp: _tool == 'text' && _annotating
-                          ? (d) => _placeText(d.localPosition, disp)
-                          : null,
-                      onPanStart: _tool == 'text' ? null : (d) => _onPanStart(d.localPosition, disp),
-                      onPanUpdate: _tool == 'text' ? null : (d) => _onPanUpdate(d.localPosition, disp),
-                      onPanEnd: _tool == 'text' ? null : (_) => _onPanEnd(),
-                      child: CustomPaint(
-                        painter: _EditorPainter(
-                          img: _img,
-                          sel: _annotating ? null : _sel,
-                          selDragging: _dragFrom != null && !_annotating,
-                          dragFrom: _dragFrom,
-                          strokes: _annotating ? _strokes : const [],
-                          drawing: _annotating ? _drawing : null,
-                          mosaic: _mosaic,
-                          dispRect: disp,
+      // ESC 取消（对标 QQ 截图）：任何时候按 Esc 都退出，不拦其他键
+      body: Focus(
+        autofocus: true,
+        onKeyEvent: (node, event) {
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.escape) {
+            Navigator.pop(context);
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: _loading
+            ? const Center(
+                child: SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70)))
+            : LayoutBuilder(builder: (context, box) {
+                final disp = _displayRect(box.biggest);
+                return Stack(
+                  children: [
+                    Positioned.fromRect(
+                      rect: disp,
+                      child: RawImage(image: _img, fit: BoxFit.fill),
+                    ),
+                    Positioned.fromRect(
+                      rect: disp,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTapUp: _tool == 'text' && _annotating
+                            ? (d) => _placeText(d.localPosition, disp)
+                            : null,
+                        onPanStart: _tool == 'text' ? null : (d) => _onPanStart(d.localPosition, disp),
+                        onPanUpdate: _tool == 'text' ? null : (d) => _onPanUpdate(d.localPosition, disp),
+                        onPanEnd: _tool == 'text' ? null : (_) => _onPanEnd(),
+                        child: CustomPaint(
+                          painter: _EditorPainter(
+                            img: _img,
+                            sel: _annotating ? null : _sel,
+                            selDragging: _dragFrom != null && !_annotating,
+                            dragFrom: _dragFrom,
+                            strokes: _annotating ? _strokes : const [],
+                            drawing: _annotating ? _drawing : null,
+                            mosaic: _mosaic,
+                            dispRect: disp,
+                          ),
+                          child: const SizedBox.expand(),
                         ),
-                        child: const SizedBox.expand(),
                       ),
                     ),
-                  ),
-                  Positioned(
-                    left: 0, right: 0, bottom: 0,
-                    child: _toolbar(disp),
-                  ),
-                  if (_ocrBusy)
-                    Positioned.fill(
-                      child: Container(
-                        color: Colors.black38,
-                        child: const Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              CircularProgressIndicator(color: Colors.white70),
-                              SizedBox(height: 10),
-                              Text('正在识别文字…',
-                                  style: TextStyle(color: Colors.white70, fontSize: 13)),
-                            ],
+                    // 框选时跟随显示选区尺寸（QQ 截图的手感）
+                    if (!_annotating && _sel != null)
+                      Positioned(
+                        left: (_sel!.right + 6)
+                            .clamp(4.0, (box.maxWidth - 90).clamp(4.0, double.infinity)),
+                        top: (_sel!.bottom + 4)
+                            .clamp(4.0, (box.maxHeight - 30).clamp(4.0, double.infinity)),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.black87,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '${_sel!.width.toInt()} × ${_sel!.height.toInt()}',
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 11.5),
                           ),
                         ),
                       ),
+                    Positioned(
+                      left: 0, right: 0, bottom: 0,
+                      child: _toolbar(disp),
                     ),
-                ],
-              );
-            }),
+                    if (_ocrBusy)
+                      Positioned.fill(
+                        child: Container(
+                          color: Colors.black38,
+                          child: const Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                CircularProgressIndicator(color: Colors.white70),
+                                SizedBox(height: 10),
+                                Text('正在识别文字…',
+                                    style: TextStyle(color: Colors.white70, fontSize: 13)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              }),
+      ),
     );
   }
 
@@ -253,21 +287,29 @@ class _ScreenshotEditorPageState extends State<ScreenshotEditorPage> {
       return Container(
         color: Colors.black54,
         padding: EdgeInsets.fromLTRB(12, 8, 12, 8 + MediaQuery.of(context).padding.bottom),
-        child: Row(children: [
-          _tBtn('取消', () => Navigator.pop(context)),
-          const Spacer(),
-          _tBtn('重选', () => setState(() => _sel = null)),
-          const SizedBox(width: 6),
-          _tBtn('复制文字', _ocrBusy ? null : () => _ocrSelection(disp)),
-          const SizedBox(width: 6),
-          _tBtn('标注 →', _sel == null || (_sel?.width ?? 0) < 6
-              ? null
-              : () => _enterAnnotate(disp)),
-          const SizedBox(width: 6),
-          _tBtn('发送', _sel == null || (_sel?.width ?? 0) < 6
-              ? null
-              : () => _finish(crop: true), primary: true),
-        ]),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          reverse: true,
+          child: Row(children: [
+            _tBtn('取消', () => Navigator.pop(context)),
+            const SizedBox(width: 6),
+            _tBtn('重选', () => setState(() => _sel = null)),
+            const SizedBox(width: 6),
+            _tBtn('复制文字', _ocrBusy ? null : () => _ocrSelection(disp)),
+            const SizedBox(width: 6),
+            _tBtn('标注 →', _sel == null || (_sel?.width ?? 0) < 6
+                ? null
+                : () => _enterAnnotate(disp)),
+            const SizedBox(width: 6),
+            _tBtn('保存', _sel == null || (_sel?.width ?? 0) < 6 ? null : () => _saveToFile(crop: true, disp: disp)),
+            const SizedBox(width: 6),
+            _tBtn('复制', _sel == null || (_sel?.width ?? 0) < 6 ? null : () => _copyToClipboard(crop: true, disp: disp)),
+            const SizedBox(width: 6),
+            _tBtn('发送', _sel == null || (_sel?.width ?? 0) < 6
+                ? null
+                : () => _finish(crop: true, disp: disp), primary: true),
+          ]),
+        ),
       );
     }
     return Container(
@@ -309,6 +351,10 @@ class _ScreenshotEditorPageState extends State<ScreenshotEditorPage> {
           }),
           const SizedBox(width: 6),
           _tBtn('复制文字', _ocrBusy ? null : _ocrAnnotated),
+          const SizedBox(width: 6),
+          _tBtn('保存', () => _saveToFile(crop: false)),
+          const SizedBox(width: 6),
+          _tBtn('复制', () => _copyToClipboard(crop: false)),
           const SizedBox(width: 6),
           _tBtn('发送', () => _finish(crop: false), primary: true),
         ]),
@@ -379,30 +425,86 @@ class _ScreenshotEditorPageState extends State<ScreenshotEditorPage> {
     _buildMosaic();
   }
 
-  /// 导出当前底图 + 笔迹为 PNG 文件，交给聊天页发送
-  Future<void> _finish({required bool crop}) async {
+  /// 把当前画面（框选的选区 / 标注后的整图 + 全部笔迹）渲染成 PNG 文件。
+  /// 发送 / 保存 / 复制三个动作共用这一个出口，保证"看到什么拿出去什么"。
+  ///
+  /// [crop] true=只导 [disp] 里的选区（框选模式）；false=导当前整图（标注模式）。
+  /// 失败返回 null（调用方给 toast）。
+  ///
+  /// 🔴 修复（2026-10-15）：旧版「发送」在框选模式下直接导全屏截图，
+  ///    crop 参数根本没实现 —— 用户框了半张图，发出去却是整个桌面。
+  Future<File?> _exportPng({required bool crop, Rect? disp}) async {
     final img = _img;
-    if (img == null) return;
+    if (img == null) return null;
     try {
+      var w = img.width, h = img.height;
+      var srcRect = Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble());
+      if (crop) {
+        final sel = _sel;
+        final d = disp;
+        if (sel == null || sel.width < 6 || d == null) return null;
+        // 选区是组件坐标，要按显示比换算回图片像素
+        final sx = img.width / d.width, sy = img.height / d.height;
+        w = (sel.width * sx).round().clamp(1, 8192);
+        h = (sel.height * sy).round().clamp(1, 8192);
+        srcRect = Rect.fromLTWH((sel.left - d.left) * sx,
+            (sel.top - d.top) * sy, sel.width * sx, sel.height * sy);
+      }
       final rec = ui.PictureRecorder();
-      final c = Canvas(rec, Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()));
-      c.drawImage(img, Offset.zero, Paint());
-      _paintStrokes(c);
-      final out = await rec.endRecording().toImage(img.width, img.height);
+      final c = ui.Canvas(rec, Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()));
+      c.drawImageRect(img, srcRect, Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint());
+      if (!crop) _paintStrokes(c);
+      final out = await rec.endRecording().toImage(w, h);
       final bd = await out.toByteData(format: ui.ImageByteFormat.png);
-      if (bd == null) return;
+      if (bd == null) return null;
       final dir = await getTemporaryDirectory();
       final f = File(p.join(
           dir.path, 'shot_${DateTime.now().millisecondsSinceEpoch}.png'));
       await f.writeAsBytes(bd.buffer.asUint8List());
-      if (!mounted) return;
-      Navigator.pop(context, f);
+      return f;
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('导出失败: $e'), duration: const Duration(seconds: 2)));
-      }
+      if (mounted) _toast('导出失败: $e');
+      return null;
     }
+  }
+
+  /// 发送：导出后把文件交回聊天页（pop 返回值即 File）
+  Future<void> _finish({required bool crop, Rect? disp}) async {
+    final f = await _exportPng(crop: crop, disp: disp);
+    if (f == null) return;
+    if (!mounted) return;
+    Navigator.pop(context, f);
+  }
+
+  /// 保存到本地（对标 QQ 截图的「保存」）：弹系统另存为对话框。
+  /// file_picker 的 saveFile 直接把 bytes 写到用户选的位置，不用自己 copy。
+  Future<void> _saveToFile({required bool crop, Rect? disp}) async {
+    final f = await _exportPng(crop: crop, disp: disp);
+    if (f == null) return;
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final suggested =
+        '截图_${now.year}${two(now.month)}${two(now.day)}_${two(now.hour)}${two(now.minute)}${two(now.second)}.png';
+    try {
+      final uri = await FilePickerPlatform.instance.saveFile(
+        dialogTitle: '保存截图',
+        fileName: suggested,
+        bytes: await f.readAsBytes(),
+        mimeType: 'image/png',
+      );
+      if (uri == null) return; // 用户取消了保存
+      _toast('已保存');
+    } catch (e) {
+      _toast('保存失败: $e');
+    }
+  }
+
+  /// 复制到剪贴板（对标 QQ 截图的「复制」）：别处直接 Ctrl+V 能粘出去
+  Future<void> _copyToClipboard({required bool crop, Rect? disp}) async {
+    final f = await _exportPng(crop: crop, disp: disp);
+    if (f == null) return;
+    final ok = writeClipboardPng(await f.readAsBytes());
+    _toast(ok ? '已复制到剪贴板' : '复制失败（剪贴板被其他程序占用，请重试）');
   }
 
   /// OCR 当前画面（标注模式=整张；框选模式=选区）

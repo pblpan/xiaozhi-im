@@ -1405,10 +1405,32 @@ class CallService {
   }
 
   /// 关窗自动挂断：告知服务端 + 本地 teardown + 立即回 idle（不等 1.2 秒）。
+  ///
+  /// 🔴 修复（2026-10-15）：这里原先发的是 `call:hangup` —— 服务端没有这个
+  ///    帧类型，静默丢弃。关窗只是本地复位，服务端会话和参与者原样留着：
+  ///    ① 对端看到"人还在通话里"；② 自己下次发起被 busy 判据拦下
+  ///    （"你正在通话中"）→ 龙哥感知就是"视频通话无法接通"。
+  ///    现在按通话阶段发正确的帧：还没接通发 call:cancel，已接通发 call:end。
   Future<void> _hangupAndReset() async {
     final s = session.value;
     if (s != null && s.callId.isNotEmpty) {
-      SocketService().send({'type': 'call:hangup', 'callId': s.callId});
+      // 三种未决状态对应服务端三种帧，发错服务端要么抛错要么静默丢弃：
+      //   outgoing   主叫未接通 → call:cancel（服务端只认主叫）
+      //   incoming   被叫未接听 → call:reject（cancel 只认主叫，会抛错）
+      //   connecting/active 已进房 → call:end（任何参与方都可）
+      String type;
+      if (phase.value == CallPhase.outgoing) {
+        type = 'call:cancel';
+      } else if (phase.value == CallPhase.incoming) {
+        type = 'call:reject';
+      } else {
+        type = 'call:end';
+      }
+      SocketService().send({
+        'type': type,
+        'callId': s.callId,
+        'reason': 'window-closed',
+      });
     }
     _endTimer?.cancel();
     _ending = false;

@@ -24,6 +24,53 @@ Uint8List? readClipboardImage() {
   }
 }
 
+/// 把 PNG 字节写进 Windows 剪贴板（截图编辑器的「复制」用，对标 QQ 截图）。
+///
+/// 注册格式 "PNG" 而不是 CF_DIB：截图工具/浏览器都认这个，粘贴出去是无损的。
+/// 返回 false 时调用方提示用户（常见原因是剪贴板被别的程序占着）。
+bool writeClipboardPng(Uint8List png) {
+  if (!Platform.isWindows) return false;
+  if (png.isEmpty) return false;
+  try {
+    return _write(png);
+  } catch (_) {
+    return false;
+  }
+}
+
+bool _write(Uint8List png) {
+  // 申请可移动的全局内存，把 PNG 字节拷进去。剪贴板要求句柄可移动，
+  // 用 GlobalAlloc 而不是 malloc —— 交给系统后由系统负责释放。
+  final hMem = _globalAlloc(0x2000 /* GMEM_MOVEABLE */, png.length);
+  if (hMem == 0) return false;
+  final hp = Pointer<Void>.fromAddress(hMem);
+  final locked = _globalLock(hp);
+  if (locked == nullptr) {
+    _globalFree(hp);
+    return false;
+  }
+  locked.asTypedList(png.length).setRange(0, png.length, png);
+  _globalUnlock(hp);
+
+  // 剪贴板必须最终由本线程打开：打不开就是被别的程序占着，直接失败
+  if (_openClipboard(0) == 0) {
+    _globalFree(hp);
+    return false;
+  }
+  try {
+    _emptyClipboard();
+    // 失败时句柄归系统所有（SetClipboardData 成功即转移所有权，
+    // 失败要我们自己释放，否则泄漏一块全局内存）
+    if (_setClipboardData(_regFormat('PNG'), hMem) == 0) {
+      _globalFree(hp);
+      return false;
+    }
+    return true;
+  } finally {
+    _closeClipboard();
+  }
+}
+
 Uint8List? _read() {
   // OpenClipboard(NULL)：关联到调用线程；被别的程序占着会失败 → 当没图
   if (_openClipboard(0) == 0) return null;
@@ -57,6 +104,16 @@ final int Function(int) _openClipboard = _user32
     .lookupFunction<Int32 Function(IntPtr), int Function(int)>('OpenClipboard');
 final int Function() _closeClipboard =
     _user32.lookupFunction<Int32 Function(), int Function()>('CloseClipboard');
+// —— 写剪贴板用（截图编辑器「复制」）——
+final int Function() _emptyClipboard =
+    _user32.lookupFunction<Int32 Function(), int Function()>('EmptyClipboard');
+final int Function(int, int) _setClipboardData = _user32.lookupFunction<
+    IntPtr Function(Uint32, IntPtr), int Function(int, int)>('SetClipboardData');
+final int Function(int, int) _globalAlloc = _kernel32.lookupFunction<
+    IntPtr Function(Uint32, IntPtr), int Function(int, int)>('GlobalAlloc');
+final int Function(Pointer<Void>) _globalFree = _kernel32
+    .lookupFunction<IntPtr Function(Pointer<Void>), int Function(Pointer<Void>)>(
+        'GlobalFree');
 final int Function(int) _isAvailable = _user32.lookupFunction<
     Int32 Function(Uint32), int Function(int)>('IsClipboardFormatAvailable');
 final int Function(int) _getData = _user32.lookupFunction<

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api.dart';
@@ -7,6 +9,7 @@ import '../core/module_schema.dart';
 import '../core/session_manager.dart';
 import '../core/theme.dart';
 import '../core/config.dart';
+import '../core/workbench_cache.dart';
 import '../widgets/module_renderer.dart';
 import 'module_page.dart';
 
@@ -132,11 +135,17 @@ Color workbenchAppColor(Map<String, dynamic> app) {
 class _WorkbenchPageState extends State<WorkbenchPage> {
   bool _loading = true;
   String? _error;
+  /// 网络刷新失败、正在显示缓存数据时的提示（龙哥 2026-10-15 要求：
+  /// 外网差也要能进不需要联网的应用，但不能让人以为看到的就是最新）
+  bool _stale = false;
   List<Map<String, dynamic>> _apps = const [];
   List<Map<String, dynamic>> _groups = const [];
   List<Map<String, dynamic>> _notices = const [];
   final TextEditingController _q = TextEditingController();
   String _kw = '';
+
+  /// 当前企业（profile）的缓存键。多企业各一份缓存，切过去立刻有画面。
+  String get _profileKey => SessionManager.instance.active?.id ?? 'default';
 
   @override
   void initState() {
@@ -147,7 +156,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     });
     // 切换企业（整域切换）→ 重新拉取这台服务器的应用/分组/公告
     SessionManager.instance.domainVersion.addListener(_onDomain);
-    _load();
+    // 缓存优先：先把上次的清单画出来，再去网络刷新。
+    // 外网再差，不需要联网的应用（盘点/商档查询这类本地功能）也点得进去。
+    unawaited(_restoreThenRefresh());
   }
 
   @override
@@ -163,11 +174,44 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     _load();
   }
 
+  /// 先读缓存渲染，再后台刷新。首次无缓存时行为与原来一致（转圈等网络）。
+  Future<void> _restoreThenRefresh() async {
+    final cached = await WorkbenchCache.instance.read(_profileKey);
+    if (!mounted) return;
+    if (cached != null) {
+      final apps = ((cached['apps'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      if (apps.isNotEmpty) {
+        setState(() {
+          _apps = apps;
+          _groups = ((cached['groups'] as List?) ?? const [])
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+          _notices = ((cached['notices'] as List?) ?? const [])
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+          _loading = false;
+          _error = null;
+        });
+      }
+    }
+    await _load();
+  }
+
   Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // 已有清单时不显示整页转圈（会把已渲染的内容挡住，白闪一下很吵）；
+    // 只有首次（没有缓存）才转圈。
+    final hadList = _apps.isNotEmpty;
+    if (!hadList) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final r = await ImApi().clientApps();
       final raw = (r['apps'] as List?) ?? const [];
@@ -193,25 +237,41 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         list.add(m);
       }
       if (!mounted) return;
+      final groups = ((r['groups'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      final notices = ((r['notices'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
       setState(() {
         _apps = list;
         // 分组清单跟着下发，客户端不写死组名（管理员可以在管理台改）
-        _groups = ((r['groups'] as List?) ?? const [])
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
+        _groups = groups;
         // 公告：没配就是空列表，客户端不编一条默认的出来
-        _notices = ((r['notices'] as List?) ?? const [])
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
+        _notices = notices;
         _loading = false;
+        _error = null;
+        _stale = false;
       });
+      await WorkbenchCache.instance.write(
+        _profileKey,
+        apps: list,
+        groups: groups,
+        notices: notices,
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        if (_apps.isNotEmpty) {
+          // 有缓存：继续显示缓存，只置 stale 提示，不弹错误页
+          _stale = true;
+          _error = null;
+        } else {
+          _error = e.toString();
+        }
       });
     }
   }
@@ -300,6 +360,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final sections = _sections;
     return CustomScrollView(
       slivers: [
+        // 缓存提示条：网络刷新失败但正在显示上次的清单（龙哥 2026-10-15：
+        // 外网差也要能进本地应用，但不能让人以为缓存就是最新数据）
+        if (_stale)
+          SliverToBoxAdapter(
+            child: Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppSemantic.of(context).warning.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(AppRadii.md),
+              ),
+              child: Row(children: [
+                Icon(Icons.cloud_off_rounded,
+                    size: 15, color: AppSemantic.of(context).warning),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('网络不稳，显示的是上次的清单，下拉可重试',
+                      style: TextStyle(fontSize: 12)),
+                ),
+              ]),
+            ),
+          ),
         // 顶部公告位
         if (_notices.isNotEmpty) _noticeSliver(),
         // 搜索框（应用多的时候"翻格子"是体力活，企微/飞书都有这一条）
@@ -529,16 +612,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  /// 分组标题栏：组名 + 右侧该组的应用数。
+  /// 分组标题栏：组名居中 + 右侧该组的应用数。
   ///
   /// 带上数量是为了让"这一组的边界在哪"一眼可辨 —— 只有一行小标题贴着
   /// 下一组的网格时，管理员很难判断上排那两个格子到底归谁。
   /// 标题上方留 20 的间距，避免两组贴在一起看不出分段。
+  ///
+  /// 🔴 标题居中（龙哥 2026-10-15 要求，对齐钉钉工作台）：钉钉的分组标题
+  ///    是居中的，左对齐看着"像文档目录而不像工作台"。
   Widget _sectionTitleBar(String t, {int count = 0}) {
     final sem = AppSemantic.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 20, 14, 10),
-      child: Row(
+      child: Stack(
+        alignment: Alignment.center,
         children: [
           Text(t,
               style: TextStyle(
@@ -546,35 +633,50 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   fontWeight: FontWeight.w600,
                   color: sem.muted,
                   letterSpacing: 0.5)),
-          if (count > 0) ...[
-            const SizedBox(width: 8),
-            Text('$count',
-                style: TextStyle(fontSize: 12, color: sem.muted.withOpacity(0.65))),
-          ],
+          if (count > 0)
+            Positioned(
+              right: 0,
+              child: Text('$count',
+                  style: TextStyle(
+                      fontSize: 12, color: sem.muted.withOpacity(0.65))),
+            ),
         ],
       ),
     );
   }
 
   /// 统一的彩色图标网格。
-  /// 统一的彩色图标网格。
   ///
   /// 🔴 列数要按**扣掉左右边距之后**的宽度算。不扣的话，宽屏刚好卡在阈值上
   /// 会出现"格子被挤出屏幕边缘"的半列。
+  ///
+  /// 🔴 钉钉工作台样式（龙哥 2026-10-15 要求）：整组应用包在一个圆角白卡片里，
+  ///    格子本身不再带边框/底色 —— "分组即卡片"，一组的边界一眼可辨，
+  ///    也不会出现四列小方框挤在一起的那种"表格感"。
   Widget _grid(List list) {
+    final sem = AppSemantic.of(context);
     return LayoutBuilder(builder: (ctx, c) {
-      // 网格自带左右 14 的边距（格子不再贴着屏幕边，那也是"排版乱"的一部分）
+      // 卡片自带左右 14 的外边距（不贴屏幕边）；网格内部左右 8 是格子与卡边的呼吸
       final inner = (c.maxWidth - 28).clamp(0.0, double.infinity);
-      return GridView.count(
-        key: ValueKey('grid_$_kw'),
-        crossAxisCount: workbenchColumns(inner),
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        mainAxisSpacing: 14,
-        crossAxisSpacing: 14,
-        childAspectRatio: 1 / 1.15,
-        children: list.map((a) => _card(a as Map<String, dynamic>)).toList(),
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 14),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: sem.cardBg,
+          borderRadius: BorderRadius.circular(AppRadii.lg),
+          border: Border.all(color: sem.cardBorder),
+        ),
+        child: GridView.count(
+          key: ValueKey('grid_$_kw'),
+          crossAxisCount: workbenchColumns(inner),
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 8,
+          childAspectRatio: 1 / 1.12,
+          children: list.map((a) => _card(a as Map<String, dynamic>)).toList(),
+        ),
       );
     });
   }
@@ -582,20 +684,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   /// 一个应用格子：彩色圆底图标 + 名称 + 角标。
   /// desc 不在这里显示 —— 一排四列带两行小字的格子，图标就被挤扁了，
   /// 而 desc 的作用是"起疑心"，不是"解释"（点击就进去了）。
+  ///
+  /// 🔴 格子本身透明无边框（2026-10-15 钉钉样式）：分组的外框由 _grid 的
+  ///    圆角白卡片统一承担，格子里再画边框会出现"卡中卡"的双层框。
   Widget _card(Map<String, dynamic> app) {
-    final sem = AppSemantic.of(context);
     final badge = (app['badge'] ?? '').toString();
     final color = workbenchAppColor(app);
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadii.md),
       onTap: () => _open(app),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-        decoration: BoxDecoration(
-          color: sem.cardBg,
-          borderRadius: BorderRadius.circular(AppRadii.md),
-          border: Border.all(color: sem.cardBorder),
-        ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
         child: // 🔴 这里必须写 StackFit.expand + Alignment.center。
             //
             // Stack 默认 fit=loose、alignment=topStart：它的尺寸是"最大非定位
