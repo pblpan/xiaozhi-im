@@ -92,11 +92,110 @@ String friendDisplayName(Map<String, dynamic> f) {
   return (f['username'] ?? '').toString();
 }
 
-class _ConnectTabState extends State<_ConnectTab> {
+/// 「这台手机能不能被远程操作」的自检卡。
+///
+/// Android 上远程控制必须开无障碍服务（系统出于安全考虑不给 App 别的口子），
+/// 而这个开关只有用户能在系统设置里拨 —— 所以这里不做任何"代开"的企图，
+/// 只负责：① 说清现在是开是关；② 给一条直达设置页的路。
+///
+/// 桌面端不显示：Windows 的注入是 App 自带能力，不需要用户做任何事。
+class _HostAbilityCard extends StatelessWidget {
+  const _HostAbilityCard({
+    required this.ready,
+    required this.loading,
+    required this.onOpen,
+  });
+
+  final bool ready;
+  final bool loading;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      // 左侧竖条用颜色区分状态（绿=可用 / 黄=还没开），
+      // 不挤 _Card 的通用形状 —— 那个组件被好几处共用，不该为这一处加参数
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(width: 3, color: ready ? AppColors.online : AppColors.warn),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Icon(
+                          ready
+                              ? Icons.check_circle_rounded
+                              : Icons.settings_accessibility_rounded,
+                          size: 18,
+                          color: ready ? AppColors.online : AppColors.warn,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          ready ? '本机可被远程操作' : '本机还不能被人远程操作',
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w600),
+                        ),
+                        const Spacer(),
+                        if (loading)
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                      ]),
+                      const SizedBox(height: 8),
+                      Text(
+                        ready
+                            ? '别人协助你时可以直接操作这台手机的屏幕（点击、滑动、打字、按返回键）。'
+                            : '手机系统不允许 App 自己制造触摸事件，只能用系统提供的无障碍能力。'
+                                '开一次就好，之后不用再管；不开启则别人只能看画面、操作不了。',
+                        style: const TextStyle(
+                            fontSize: 12.5,
+                            color: AppColors.textSub,
+                            height: 1.5),
+                      ),
+                      if (!ready) ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: onOpen,
+                          icon: const Icon(Icons.settings_rounded, size: 17),
+                          label: const Text('去开启（设置 → 无障碍）'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
   final _code = TextEditingController();
   final _target = TextEditingController();
   String? _msg;
   bool _busy = false;
+
+  /// 本机"能不能被远程操作"的能力探针（只有 Android 需要真的问一次）
+  final InputInjector _injector = createInputInjector();
+  bool _hostReady = false;
+  bool _hostReadyLoading = true;
 
   /// 通讯录好友（选人来发起协助）。
   ///
@@ -112,14 +211,49 @@ class _ConnectTabState extends State<_ConnectTab> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadFriends();
+    _loadHostAbility();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _code.dispose();
     _target.dispose();
     super.dispose();
+  }
+
+  /// 从系统设置页切回来时再问一次：用户可能在那里刚把开关拨开，
+  /// 不问的话这一页会一直显示"还没开"，得杀进程重进才刷新。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_loadHostAbility());
+  }
+
+  Future<void> _loadHostAbility() async {
+    if (WebRTC.platformIsDesktop) {
+      // Windows 的注入能力是自带的（Win32 SendInput），不需要用户开任何开关
+      if (mounted) setState(() { _hostReady = true; _hostReadyLoading = false; });
+      return;
+    }
+    await _injector.refreshAbility();
+    if (!mounted) return;
+    setState(() {
+      _hostReady = _injector.supported;
+      _hostReadyLoading = false;
+    });
+  }
+
+  Future<void> _openHostSettings() async {
+    final ok = await _injector.openAccessibilitySettings();
+    if (!mounted || ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('这台手机没法直接打开无障碍设置页，请到「设置 → 无障碍」'
+            '里找到「小智IM 远程协助」手动开启'),
+      ),
+    );
   }
 
   Future<void> _loadFriends() async {
@@ -209,6 +343,16 @@ class _ConnectTabState extends State<_ConnectTab> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // 被控能力自检。
+        // 🔴 这一块必须摆在**最上面**：以前只有别人发起请求时才会提到它，
+        //    而那一刻往往已经在连线流程里了 —— 用户要么手忙脚乱地去设置里翻，
+        //    要么干脆拒绝掉这次协助。提前摆出来，他可以在没人找他的时候就开好。
+        if (!WebRTC.platformIsDesktop)
+          _HostAbilityCard(
+            ready: _hostReady,
+            loading: _hostReadyLoading,
+            onOpen: _openHostSettings,
+          ),
         _Card(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1023,40 +1167,10 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   }
 
   // ---- 指针 ----
-
-  void _onHover(PointerHoverEvent e, BoxConstraints box) {
-    if (!_ctrlMode) return;
-    _svc.sendPointer(_nx(e.localPosition, box), _ny(e.localPosition, box));
-  }
-
-  void _onDown(PointerDownEvent e, BoxConstraints box) {
-    if (!_ctrlMode) return;
-    _svc.sendPointer(_nx(e.localPosition, box), _ny(e.localPosition, box));
-    _svc.sendMouseDown(_btnOf(e.buttons));
-  }
-
-  void _onUp(PointerUpEvent e, BoxConstraints box) {
-    if (!_ctrlMode) return;
-    _svc.sendMouseUp(_btnOf(e.buttons));
-  }
-
-  void _onWheel(PointerScrollEvent e, BoxConstraints box) {
-    if (!_ctrlMode) return;
-    // 浏览器/触控板的滚动量通常是 100 上下，这里折成一格
-    final step = e.scrollDelta.dy > 0 ? -1 : 1;
-    _svc.sendWheel(step);
-  }
-
-  double _nx(Offset p, BoxConstraints box) =>
-      (p.dx / box.maxWidth).clamp(0.0, 1.0);
-  double _ny(Offset p, BoxConstraints box) =>
-      (p.dy / box.maxHeight).clamp(0.0, 1.0);
-
-  RemoteMouseButton _btnOf(int buttons) {
-    if (buttons & kSecondaryButton != 0) return RemoteMouseButton.right;
-    if (buttons & kTertiaryButton != 0) return RemoteMouseButton.middle;
-    return RemoteMouseButton.left;
-  }
+  //
+  // 🔴 指针处理已经整体搬到 _RemoteStage（见那里）。
+  //    留在这一层会踩同一个坑：坐标按**整个容器**换算，
+  //    而画面只是中间一条 —— 点在黑边上（或放大后）落点就偏了。
 
   // ---- 键盘 ----
 
@@ -1092,70 +1206,521 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                 onToggle: (v) => setState(() => _ctrlMode = v),
               ),
               Expanded(
-                child: Center(
-                  child: LayoutBuilder(builder: (_, box) {
-                    return Listener(
-                      onPointerHover: (e) => _onHover(e, box),
-                      onPointerDown: (e) => _onDown(e, box),
-                      onPointerUp: (e) => _onUp(e, box),
-                      onPointerSignal: (sig) {
-                        if (sig is PointerScrollEvent) _onWheel(sig, box);
-                      },
-                      child: Focus(
-                        focusNode: _focus,
-                        onKeyEvent: _onKey,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            RTCVideoView(
-                              svc.remoteRenderer,
-                              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                            ),
-                            if (p != RemotePhase.active)
-                              Container(
-                                color: Colors.black54,
-                                alignment: Alignment.center,
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (p != RemotePhase.ended)
-                                      const SizedBox(
-                                        width: 26, height: 26,
-                                        child: CircularProgressIndicator(strokeWidth: 2),
-                                      ),
-                                    const SizedBox(height: 14),
-                                    Text(
-                                      p == RemotePhase.ended
-                                          ? '会话已结束'
-                                          : p == RemotePhase.requesting
-                                              ? (svc.session.value?.unattended == true
-                                                  ? '已发出连接，等待对方撤销窗口结束…'
-                                                  : '等待对方同意…')
-                                              : _phaseText(p),
-                                      style: const TextStyle(color: Colors.white, fontSize: 14),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            // UU-a：连接还在，但网络波动正在退避重连。
-                            // 画面是静止的最后一帧，不盖一层用户会以为软件卡死。
-                            ValueListenableBuilder<bool>(
-                              valueListenable: svc.reconnecting,
-                              builder: (_, rc, __) => (rc && p == RemotePhase.active)
-                                  ? const _ReconnectOverlay()
-                                  : const SizedBox.shrink(),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }),
+                child: Focus(
+                  focusNode: _focus,
+                  onKeyEvent: _onKey,
+                  child: _RemoteStage(
+                    svc: svc,
+                    ctrlMode: _ctrlMode,
+                    phase: p,
+                    unattended: svc.session.value?.unattended == true,
+                  ),
                 ),
               ),
               _DiagBar(),
             ]);
           },
         ),
+      ),
+    );
+  }
+}
+
+// ============================================================ 控制端画布
+
+/// 控制端画布：缩放 / 平移 / 指针坐标换算。
+///
+/// 🔴 2026-10-16 龙哥的原话：「在手机端控制界面画面不能放大，
+///    在那么小的画面里看都看不清怎么控制？」
+///    在此之前这一块同时踩了两个坑：
+///     ① 画面 Contain 居中直接铺满 —— 手机竖屏看一台 16:9 的电脑，
+///        就是中间一条小带子，既不能放大也不能挪；
+///     ② 更要命的是坐标：点的位置除以的是**整个容器**的宽高，
+///        而画面只占中间一条。点在黑边上算出来照样是 0..1 之间的值，
+///        于是"点标题栏"其实落到了屏幕正中 —— 现象就是"点了没反应"。
+///
+/// 现在：
+///   · 画面按真实宽高 contain 到一个矩形，外面套 InteractiveViewer
+///     （双指缩放 1x~8x，放大后可拖动看四周）；
+///   · 指针坐标先逆变换回"视频矩形内坐标"，再除以矩形尺寸，
+///     落在矩形外的点一律丢弃 —— 点在黑边上不该被当成点击；
+///   · 拖动的语义按"当前有没有放大"自动切换（见 _dragIsPan）：
+///     1x 时拖动=移动鼠标（老手感不变），放大后拖动=平移画面，
+///     否则想挪一下视角就把人家桌面拖出一大片选区。
+class _RemoteStage extends StatefulWidget {
+  const _RemoteStage({
+    required this.svc,
+    required this.ctrlMode,
+    required this.phase,
+    required this.unattended,
+  });
+
+  final RemoteAssistService svc;
+  final bool ctrlMode;
+  final RemotePhase phase;
+  final bool unattended;
+
+  @override
+  State<_RemoteStage> createState() => _RemoteStageState();
+}
+
+/// ---- 画布几何（纯函数，独立成顶层是为了能直接单测）----
+///
+/// 远程控制里最阴的坑就是坐标：算错一格，用户看到的就是"点了没反应"，
+/// 而代码里看不出任何异常。所以这两个函数不依赖任何 Flutter 状态，
+/// 测试可以直接喂数进来验（见 test/remote_stage_test.dart）。
+
+/// 视频按真实宽高 contain 到容器里之后的矩形（含居中留黑边）。
+Rect remoteVideoRect(Size box, Size? videoSize) {
+  final target = (videoSize == null || videoSize.width <= 0 ||
+          videoSize.height <= 0)
+      ? const Size(16, 9) // 首帧没到时先按最常见的 16:9 摆着
+      : videoSize;
+  final s = math.min(box.width / target.width, box.height / target.height);
+  final w = target.width * s;
+  final h = target.height * s;
+  return Rect.fromLTWH((box.width - w) / 2, (box.height - h) / 2, w, h);
+}
+
+/// 舞台坐标 → 对端屏幕的归一化坐标（0..1）。
+///
+/// 逆变换是解析算的：InteractiveViewer 的矩阵形如 p' = s*p + t，
+/// 所以 p = (p' - t) / s。缩放恒 > 0，不存在不可逆的情况。
+/// 落在画面矩形外（黑边）返回 null —— 点在黑边上不该被当成点击。
+Offset? remoteNormFromStage(
+    Offset p, Rect videoRect, double scale, Offset pan) {
+  if (scale <= 0) return null;
+  final inChild = Offset((p.dx - pan.dx) / scale, (p.dy - pan.dy) / scale);
+  final nx = (inChild.dx - videoRect.left) / videoRect.width;
+  final ny = (inChild.dy - videoRect.top) / videoRect.height;
+  if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null;
+  return Offset(nx, ny);
+}
+
+/// 一次"可能变成点击"的按下。单指轻点=左键、长按=右键、拖动=移动/平移，
+/// 全靠按下时记的这几个数在抬起那一刻判定。
+class _PressRecord {
+  _PressRecord({required this.time, required this.local, required this.button});
+
+  final DateTime time;
+  final Offset local;
+  final RemoteMouseButton button;
+
+  /// 已经把「按下」发给对端了。放大态下不发；鼠标态下发。
+  /// 抬起（或手势升级成双指缩放）时，只要 sent 为真就必须补一个抬起，
+  /// 否则对端鼠标永远卡在按下状态 —— 拖选、按住菜单全跟着坏。
+  bool sent = false;
+  bool moved = false;
+  bool consumed = false; // 已经被当作"这一次手势"处理掉了（比如长按已触发）
+}
+
+class _RemoteStageState extends State<_RemoteStage> {
+  final TransformationController _tf = TransformationController();
+
+  /// 最新一帧的真实像素尺寸。首帧之前是 null —— 那时按 16:9 先摆着，
+  /// 收到首帧再按真实比例重排（不会跳，因为只影响 contain 的矩形）。
+  Size? _videoSize;
+
+  final Map<int, _PressRecord> _presses = <int, _PressRecord>{};
+
+  // 手势判定的两个阈值。
+  // 移动超过 10 逻辑像素就不算"点击"了（手指本来就抖，卡太紧会点不出）；
+  // 长按 600ms 与 iOS/Android 系统长按一致，用户不用重新学。
+  static const double _tapSlop = 10;
+  static const int _longPressMs = 600;
+
+  RemoteAssistService get _svc => widget.svc;
+
+  @override
+  void initState() {
+    super.initState();
+    _svc.remoteRenderer.addListener(_onRenderer);
+    _tf.addListener(_onTransform);
+  }
+
+  @override
+  void dispose() {
+    _svc.remoteRenderer.removeListener(_onRenderer);
+    _tf.removeListener(_onTransform);
+    _tf.dispose();
+    super.dispose();
+  }
+
+  void _onRenderer() {
+    final w = _svc.remoteRenderer.videoWidth;
+    final h = _svc.remoteRenderer.videoHeight;
+    if (w <= 0 || h <= 0) return;
+    final next = Size(w.toDouble(), h.toDouble());
+    if (_videoSize == next) return;
+    if (!mounted) return;
+    setState(() => _videoSize = next);
+  }
+
+  void _onTransform() {
+    // 只为了让缩放比例那几个 UI 跟着变；坐标换算不依赖 setState
+    if (mounted) setState(() {});
+  }
+
+  // ------------------------------------------------------------ 变换读写
+
+  /// Matrix4 是列主序：storage[0]=m00（缩放）、storage[12]/[13]=tx/ty。
+  /// InteractiveViewer 只做"缩放+平移"，所以直接读这两个位置就够了 ——
+  /// 不必引 getMaxScaleOnAxis/getTranslation 那些名字在不同版本里漂过的 API。
+  double get _scale => _tf.value.entry(0, 0);
+
+  Offset get _pan => Offset(_tf.value.entry(0, 3), _tf.value.entry(1, 3));
+
+  /// 放大了才把拖动当平移（1x 时拖动就是移动鼠标，那是老手感）
+  bool get _dragIsPan => _scale > 1.01 && !WebRTC.platformIsDesktop;
+
+  /// 画面在容器里的真实矩形（contain）。
+  /// 这一句就是修"点哪儿都不准"的关键：以前算的是整个容器。
+  Rect _videoRect(Size box) => remoteVideoRect(box, _videoSize);
+
+  /// 舞台坐标 → 对端屏幕的归一化坐标。落在画面矩形外（黑边）返回 null。
+  Offset? _toNorm(Offset p, Size box) =>
+      remoteNormFromStage(p, _videoRect(box), _scale, _pan);
+
+  void _applyMatrix(Matrix4 m) {
+    _tf.value = m;
+  }
+
+  /// 缩放到指定倍数，以 focal（舞台坐标）为中心。
+  ///
+  /// 必须自己夹边界：InteractiveViewer 在 constrained:false 下不会帮你夹，
+  /// 不夹的话缩到 2x 能把画面拖到容器外面去，只剩一片黑。
+  Matrix4 _matrixAt(double scale, Offset focal, Size box) {
+    final s = scale.clamp(1.0, 8.0);
+    // p' = s*p + t，要让 focal 这个点在缩放前后不动：t = focal - s*focal
+    var tx = focal.dx - s * focal.dx;
+    var ty = focal.dy - s * focal.dy;
+    // 夹住：缩放后的画面必须仍然铺满容器（tx∈[w(1-s), 0]）
+    tx = tx.clamp(box.width * (1 - s), 0.0);
+    ty = ty.clamp(box.height * (1 - s), 0.0);
+    return Matrix4.identity()
+      ..setEntry(0, 0, s)
+      ..setEntry(1, 1, s)
+      ..setEntry(0, 3, tx)
+      ..setEntry(1, 3, ty);
+  }
+
+  void _zoomBy(double step, Size box) {
+    final center = Offset(box.width / 2, box.height / 2);
+    _applyMatrix(_matrixAt(_scale + step, center, box));
+  }
+
+  void _reset() {
+    _applyMatrix(Matrix4.identity());
+  }
+
+  // ------------------------------------------------------------ 指针
+
+  void _onDown(PointerDownEvent e, Size box) {
+    if (!widget.ctrlMode) return;
+    // 屏上已经有手指就不登记：第二根手指几乎一定是缩放手势，
+    // 把它当控制会造出一串奇怪的点击
+    if (_presses.isNotEmpty) return;
+    final rec = _PressRecord(
+      time: DateTime.now(),
+      local: e.localPosition,
+      button: _btnOf(e.buttons),
+    );
+    _presses[e.pointer] = rec;
+    if (_dragIsPan) return; // 放大态：抬手时才知道是点击还是平移
+    final n = _toNorm(e.localPosition, box);
+    if (n == null) return;
+    _svc.sendPointer(n.dx, n.dy);
+    _svc.sendMouseDown(rec.button);
+    rec.sent = true;
+  }
+
+  void _onMove(PointerMoveEvent e, Size box) {
+    if (!widget.ctrlMode) return;
+    final rec = _presses[e.pointer];
+    if (rec != null && (rec.local - e.localPosition).distance > _tapSlop) {
+      rec.moved = true;
+    }
+    // 多指 = 用户在缩放/双指平移，不再是"控制"。
+    // 🔴 这一步必须把已经发出去的「按下」补一个「抬起」：
+    //    捏合缩放的前半段（第一根手指落下）在鼠标态里就是一次真实的按下，
+    //    不补的话对端鼠标卡在按下状态，桌面被拖出一大片选区。
+    if (_presses.length >= 2) {
+      for (final r in _presses.values) {
+        if (r.sent && !r.consumed) {
+          _svc.sendMouseUp(r.button);
+          r.consumed = true;
+        }
+      }
+      return;
+    }
+    if (_dragIsPan) return;
+    if (rec != null && rec.consumed) return;
+    final n = _toNorm(e.localPosition, box);
+    if (n == null) return;
+    _svc.sendPointer(n.dx, n.dy);
+  }
+
+  void _onUp(PointerUpEvent e, Size box) {
+    if (!widget.ctrlMode) {
+      _presses.remove(e.pointer);
+      return;
+    }
+    final rec = _presses.remove(e.pointer);
+    if (_dragIsPan) {
+      // 放大态下 down/up 都没发过，只有"轻点/长按"才补一次点击。
+      // 但如果这条记录在鼠标态里已经按下了（中途切进放大态），必须补抬起。
+      if (rec != null && rec.sent && !rec.consumed) {
+        _svc.sendMouseUp(rec.button);
+        rec.consumed = true;
+      }
+      if (rec == null || rec.moved || rec.consumed) return;
+      final n = _toNorm(e.localPosition, box);
+      if (n == null) return;
+      final held = DateTime.now().difference(rec.time).inMilliseconds;
+      final btn = held >= _longPressMs
+          ? RemoteMouseButton.right
+          : RemoteMouseButton.left;
+      _svc.sendPointer(n.dx, n.dy);
+      _svc.sendMouseDown(btn);
+      _svc.sendMouseUp(btn);
+      return;
+    }
+    // 🔴 抬起必须用按下时记下的键。
+    //    PointerUpEvent 的 buttons 是**事件之后**的按键状态（也就是 0），
+    //    照它换算是恒为 left —— 右键点了就松不开，对端右键菜单会一直挂着。
+    _svc.sendMouseUp(rec?.button ?? RemoteMouseButton.left);
+  }
+
+  /// 指针被取消（系统手势打断、手指滑出屏幕）时不会再来 up，
+  /// 不清掉就会让下一次 up 拿到一条过期记录
+  void _onCancel(PointerCancelEvent e) {
+    _presses.remove(e.pointer);
+  }
+
+  void _onHover(PointerHoverEvent e, Size box) {
+    if (!widget.ctrlMode) return;
+    final n = _toNorm(e.localPosition, box);
+    if (n == null) return;
+    _svc.sendPointer(n.dx, n.dy);
+  }
+
+  void _onSignal(PointerSignalEvent sig, Size box) {
+    if (!widget.ctrlMode) return;
+    if (sig is! PointerScrollEvent) return;
+    // Ctrl+滚轮 = 缩放本地画面（和看图软件的习惯一致）；
+    // 裸滚轮 = 发给对端滚屏，这是远控的本来用途
+    final ctrl = HardwareKeyboard.instance.isControlPressed;
+    final step = sig.scrollDelta.dy > 0 ? -0.25 : 0.25;
+    if (ctrl) {
+      _applyMatrix(_matrixAt(_scale + step, sig.localPosition, box));
+      return;
+    }
+    _svc.sendWheel(sig.scrollDelta.dy > 0 ? -1 : 1);
+  }
+
+  RemoteMouseButton _btnOf(int buttons) {
+    if (buttons & kSecondaryButton != 0) return RemoteMouseButton.right;
+    if (buttons & kTertiaryButton != 0) return RemoteMouseButton.middle;
+    return RemoteMouseButton.left;
+  }
+
+  // ------------------------------------------------------------ 构建
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.phase;
+    return LayoutBuilder(builder: (_, c) {
+      final box = Size(c.maxWidth, c.maxHeight);
+      final r = _videoRect(box);
+      return Stack(
+        children: [
+          // 黑底：contain 留出来的边也是界面的一部分，不能透出下面的白
+          Positioned.fill(child: Container(color: Colors.black)),
+          Positioned.fill(
+            child: Listener(
+              onPointerHover: (e) => _onHover(e, box),
+              onPointerDown: (e) => _onDown(e, box),
+              onPointerMove: (e) => _onMove(e, box),
+              onPointerUp: (e) => _onUp(e, box),
+              onPointerCancel: _onCancel,
+              onPointerSignal: (s) => _onSignal(s, box),
+              child: InteractiveViewer(
+                transformationController: _tf,
+                // 缩放范围：1x 起步（不能缩小到比容器还小，那只会多出黑边），
+                // 8x 足够看清桌面上的小字
+                minScale: 1,
+                maxScale: 8,
+                // 🔴 constrained:false 是关键：
+                //    默认的 true 会把子件钉死在视口大小，
+                //    那样放大后拖不动（能放大但看不了四周 = 等于没用）
+                constrained: false,
+                child: SizedBox(
+                  width: box.width,
+                  height: box.height,
+                  child: Stack(children: [
+                    Positioned.fromRect(
+                      rect: r,
+                      child: RTCVideoView(
+                        _svc.remoteRenderer,
+                        objectFit:
+                            RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+          if (p != RemotePhase.active)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black54,
+                alignment: Alignment.center,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (p != RemotePhase.ended)
+                      const SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    const SizedBox(height: 14),
+                    Text(
+                      p == RemotePhase.ended
+                          ? '会话已结束'
+                          : p == RemotePhase.requesting
+                              ? (widget.unattended
+                                  ? '已发出连接，等待对方撤销窗口结束…'
+                                  : '等待对方同意…')
+                              : _phaseText(p),
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          // UU-a：连接还在，但网络波动正在退避重连。
+          // 画面是静止的最后一帧，不盖一层用户会以为软件卡死。
+          if (p == RemotePhase.active)
+            ValueListenableBuilder<bool>(
+              valueListenable: _svc.reconnecting,
+              builder: (_, rc, __) => rc
+                  ? const Positioned.fill(child: _ReconnectOverlay())
+                  : const SizedBox.shrink(),
+            ),
+          // 缩放控制条：放在画面右下角，不占顶栏（顶栏空间已经很紧）
+          Positioned(
+            right: 10,
+            bottom: 10,
+            child: _ZoomBar(
+              scale: _scale,
+              onZoomIn: () => _zoomBy(0.5, box),
+              onZoomOut: () => _zoomBy(-0.5, box),
+              onReset: _reset,
+            ),
+          ),
+          // 放大了才提示手势用法，1x 时不用教
+          if (_scale > 1.01 && p == RemotePhase.active)
+            Positioned(
+              left: 10,
+              top: 10,
+              child: _GestureHint(pan: _dragIsPan, ctrlMode: widget.ctrlMode),
+            ),
+        ],
+      );
+    });
+  }
+}
+
+/// 右下角缩放条。三个按钮 + 当前倍数，倍数平时不显眼，放大了才变亮。
+class _ZoomBar extends StatelessWidget {
+  const _ZoomBar({
+    required this.scale,
+    required this.onZoomIn,
+    required this.onZoomOut,
+    required this.onReset,
+  });
+
+  final double scale;
+  final VoidCallback onZoomIn;
+  final VoidCallback onZoomOut;
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final on = scale > 1.01;
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        _btn(Icons.remove_rounded, scale > 1.01 ? onZoomOut : null),
+        SizedBox(
+          width: 44,
+          child: Center(
+            child: Text(
+              '${scale.toStringAsFixed(1)}x',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: on ? Colors.white : Colors.white70,
+              ),
+            ),
+          ),
+        ),
+        _btn(Icons.add_rounded, scale < 7.99 ? onZoomIn : null),
+        _btn(Icons.fit_screen_rounded, on ? onReset : null),
+      ]),
+    );
+  }
+
+  Widget _btn(IconData icon, VoidCallback? onTap) {
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        // 到头了就置灰，不要"点了没反应"
+        color: onTap == null ? Colors.white30 : Colors.white,
+        tooltip: icon == Icons.remove_rounded
+            ? '缩小'
+            : icon == Icons.add_rounded
+                ? '放大'
+                : '复位到适应窗口',
+        icon: Icon(icon),
+        onPressed: onTap,
+      ),
+    );
+  }
+}
+
+/// 放大后的手势说明。这几句话是"教一次就会"的，不常驻。
+class _GestureHint extends StatelessWidget {
+  const _GestureHint({required this.pan, required this.ctrlMode});
+
+  final bool pan;
+  final bool ctrlMode;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = !ctrlMode
+        ? '双指缩放 · 拖动看四周'
+        : pan
+            ? '双指缩放 · 拖动看四周 · 单点=单击 · 长按=右键'
+            : '双指缩放 · 拖动=移动鼠标 · 单点=单击';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(color: Colors.white70, fontSize: 11.5),
       ),
     );
   }
@@ -1429,6 +1994,11 @@ Future<void> showRemoteRequestDialog(BuildContext context) async {
   if (s == null) return;
 
   final injector = createInputInjector();
+  // 🔴 必须**先问一次**再判断：Android 的无障碍开关用户可以随时在系统设置里
+  //    开关，injector 建好时它还不知道当前到底是开着还是关着。
+  //    不问就直接拿 supported，会拿到一个恒 false 的初值，
+  //    于是弹窗上永远写着"此设备不支持远程控制" —— 明明是能开的。
+  await injector.refreshAbility();
   final canControl = injector.supported;
 
   if (!context.mounted) return;
@@ -1442,6 +2012,7 @@ Future<void> showRemoteRequestDialog(BuildContext context) async {
         canControl: canControl,
         injectHint: injector.hint,
         deadline: s.abortDeadline,
+        injector: injector,
       );
     },
   );
@@ -1453,6 +2024,7 @@ class _RemoteRequestSheet extends StatefulWidget {
     required this.unattended,
     required this.canControl,
     required this.injectHint,
+    required this.injector,
     this.deadline,
   });
 
@@ -1460,23 +2032,58 @@ class _RemoteRequestSheet extends StatefulWidget {
   final bool unattended;
   final bool canControl;
   final String injectHint;
+  final InputInjector injector;
   final DateTime? deadline;
 
   @override
   State<_RemoteRequestSheet> createState() => _RemoteRequestSheetState();
 }
 
-class _RemoteRequestSheetState extends State<_RemoteRequestSheet> {
+class _RemoteRequestSheetState extends State<_RemoteRequestSheet>
+    with WidgetsBindingObserver {
   Timer? _t;
   int _left = 0;
+  bool _canControl = false;
 
   @override
   void initState() {
     super.initState();
+    _canControl = widget.canControl;
+    // 用户从系统设置页切回来时，App 会走 resumed —— 这是唯一可靠的
+    // "他可能刚改完开关"的信号。靠它再问一次，弹窗上的话就能跟着变，
+    // 不然用户开了回来还得杀进程重进才生效（那种体验等于没做）。
+    WidgetsBinding.instance.addObserver(this);
     final d = widget.deadline;
     if (d != null) {
       _tick();
       _t = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    unawaited(_recheck());
+  }
+
+  Future<void> _recheck() async {
+    await widget.injector.refreshAbility();
+    if (!mounted) return;
+    setState(() => _canControl = widget.injector.supported);
+  }
+
+  /// 拉起系统无障碍设置页。跳不过去的 ROM 要给一句实话，
+  /// 不然用户会以为点了没反应。
+  Future<void> _openSettings() async {
+    final ok = await widget.injector.openAccessibilitySettings();
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('这台手机没法直接打开无障碍设置页，请到「设置 → 无障碍」'
+              '里找到「小智IM 远程协助」手动开启'),
+        ),
+      );
     }
   }
 
@@ -1495,6 +2102,7 @@ class _RemoteRequestSheetState extends State<_RemoteRequestSheet> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _t?.cancel();
     super.dispose();
   }
@@ -1513,13 +2121,21 @@ class _RemoteRequestSheetState extends State<_RemoteRequestSheet> {
           const SizedBox(height: 12),
           Text(
             '同意后对方将看到你的屏幕'
-            '${widget.canControl ? '，并且可以操作你的鼠标键盘' : '（此设备不支持远程控制，对方只能看）'}。',
+            '${_canControl ? '，并且可以操作你的${widget.injector.controlObject}' : '（此设备暂不支持被远程控制，对方只能看画面）'}。',
             style: const TextStyle(fontSize: 13, color: AppColors.textSub, height: 1.6),
           ),
-          if (!widget.canControl) ...[
+          if (!_canControl) ...[
             const SizedBox(height: 8),
             Text(widget.injectHint,
                 style: const TextStyle(fontSize: 12, color: AppColors.warn, height: 1.5)),
+            const SizedBox(height: 10),
+            // 给一条能直接走出去的路。只解释"为什么不行"而不给按钮，
+            // 用户得自己猜去哪儿开 —— 那是把系统规则转嫁给用户。
+            OutlinedButton.icon(
+              onPressed: _openSettings,
+              icon: const Icon(Icons.settings_accessibility_rounded, size: 18),
+              label: const Text('去开启（设置 → 无障碍）'),
+            ),
           ],
           if (widget.unattended && _left > 0) ...[
             const SizedBox(height: 12),

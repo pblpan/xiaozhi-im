@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  远程协助「被控端」无障碍服务的声明。
+
+  这个文件不是可选的配置 —— 没有它，系统设置里的辅助功能列表里
+  根本不会出现小智IM，用户连"去开启"这一步都做不到。
+
+  每一项都是"最小权限"：
+    · canPerformGestures          —— 唯一真正必需的：模拟手指手势（点击/滑动/滚动）
+    · canRetrieveWindowContent    —— 找输入框用的（打字要定位到当前焦点控件）
+    · 其余全部不申请              —— 不要监听别人窗口的文字内容，
+                                    不要过滤通知，不要截获按键。
+                                    远控只需要"能点"，不需要"能读"。
+                                    多要一项就多一条被系统/用户质疑的理由。
+
+  ⚠️ flagRequestTouchExplorationMode 之类的开关一律不加：
+     它们会把用户本机的 TalkBack 行为一起改掉，属于副作用远大于收益。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/remote_input_service_desc"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100" />

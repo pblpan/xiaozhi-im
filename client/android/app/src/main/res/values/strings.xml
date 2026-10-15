@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 无障碍服务的名字与说明：用户在「设置 → 无障碍」里看到的就是这两句。
+         它们同时是用户对"我要不要开"这件事的唯一依据 ——
+         写得含糊（比如只写"辅助功能"）会让人不敢开；
+         写得越界（比如"读取屏幕内容"）会让人不敢装。 -->
+    <string name="remote_input_service_label">小智IM 远程协助</string>
+    <string name="remote_input_service_desc">开启后，别人可以在远程协助里操作这台手机（点击、滑动、打字、按返回键）。
+        不用于朗读或读取你的屏幕文字，只在你主动发起共享时才会被使用。</string>
+</resources>

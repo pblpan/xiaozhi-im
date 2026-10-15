@@ -1,9 +1,11 @@
 package com.example.xiaozhi_im_client
 
+import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -135,6 +137,104 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "checkIntegrity" -> result.success(AppIntegrity.check(applicationContext))
+                    else -> result.notImplemented()
+                }
+            }
+
+        // 远程协助：屏幕采集的前台服务（被控端）。
+        // 必须在 getDisplayMedia 之前拉起来 —— Android 14 起没有它，
+        // getMediaProjection() 会直接抛 SecurityException。
+        // 通道名与 Dart 侧 core/remote_capture.dart 必须逐字一致。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, RemoteCaptureService.CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> {
+                        RemoteCaptureService.start(applicationContext)
+                        result.success(true)
+                    }
+                    "stop" -> {
+                        RemoteCaptureService.stop(applicationContext)
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        // 远程协助：输入注入（被控端）。
+        // 通道名与 Dart 侧 core/remote_input.dart 必须逐字一致
+        // （写错 = 「去开启」点了没反应，且不报错）。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, RemoteInputService.CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    // 无障碍服务是否已开启。这个开关只有用户能在系统设置里动，
+                    // App 没有资格代劳 —— 所以这里只回答"开没开"。
+                    "isEnabled" -> result.success(RemoteInputService.isConnected())
+                    "openSettings" -> {
+                        // 直接打开系统无障碍设置页。ACTION_ACCESSIBILITY_SETTINGS
+                        // 在部分国产 ROM 上会落到"无障碍"总列表，
+                        // 用户再点进去找名字就行（比我们自己猜路径稳）。
+                        runOnUiThread {
+                            try {
+                                startActivity(
+                                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                                result.success(true)
+                            } catch (e: Exception) {
+                                // 有的 ROM 没有这个页面。必须给 Dart 一个确定的
+                                // false，让它提示"请手动到设置里开"，
+                                // 否则用户会以为点了一下什么都没发生。
+                                result.success(false)
+                            }
+                        }
+                    }
+                    "tap" -> {
+                        val x = call.argument<Double>("x") ?: 0.0
+                        val y = call.argument<Double>("y") ?: 0.0
+                        result.success(RemoteInputService.tap(x.toFloat(), y.toFloat()))
+                    }
+                    "longPress" -> {
+                        val x = call.argument<Double>("x") ?: 0.0
+                        val y = call.argument<Double>("y") ?: 0.0
+                        result.success(RemoteInputService.longPress(x.toFloat(), y.toFloat()))
+                    }
+                    "drag" -> {
+                        val x1 = call.argument<Double>("x1") ?: 0.0
+                        val y1 = call.argument<Double>("y1") ?: 0.0
+                        val x2 = call.argument<Double>("x2") ?: 0.0
+                        val y2 = call.argument<Double>("y2") ?: 0.0
+                        val ms = call.argument<Int>("ms") ?: 300
+                        result.success(
+                            RemoteInputService.drag(
+                                x1.toFloat(), y1.toFloat(),
+                                x2.toFloat(), y2.toFloat(),
+                                ms.toLong(),
+                            )
+                        )
+                    }
+                    "scroll" -> {
+                        val x = call.argument<Double>("x") ?: 0.5
+                        val y = call.argument<Double>("y") ?: 0.5
+                        val delta = call.argument<Int>("delta") ?: 1
+                        result.success(RemoteInputService.scroll(x.toFloat(), y.toFloat(), delta))
+                    }
+                    // 返回 / 主页 / 最近任务：走系统全局动作，
+                    // 与手指点导航栏三个键完全等价
+                    "back" -> result.success(
+                        RemoteInputService.global(AccessibilityService.GLOBAL_ACTION_BACK)
+                    )
+                    "home" -> result.success(
+                        RemoteInputService.global(AccessibilityService.GLOBAL_ACTION_HOME)
+                    )
+                    "recents" -> result.success(
+                        RemoteInputService.global(AccessibilityService.GLOBAL_ACTION_RECENTS)
+                    )
+                    "enter" -> result.success(RemoteInputService.enter())
+                    "type" -> {
+                        val t = call.argument<String>("text") ?: ""
+                        result.success(RemoteInputService.typeChar(t))
+                    }
+                    "backspace" -> result.success(RemoteInputService.backspace())
                     else -> result.notImplemented()
                 }
             }

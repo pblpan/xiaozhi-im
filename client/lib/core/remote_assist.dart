@@ -24,6 +24,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../api.dart';
 import '../socket.dart';
 import 'input_inject.dart';
+import 'remote_capture.dart';
 import 'remote_models.dart';
 import 'rtc_video_degrader.dart';
 import 'sound_service.dart';
@@ -507,6 +508,11 @@ class RemoteAssistService {
   ///    所以桌面平台先枚举、再显式指定 screen 源；移动端走 MediaProjection，
   ///    不需要这一步。
   Future<MediaStream> _captureScreen() async {
+    // 🔴 Android 14（API 34）起，没有正在运行的 mediaProjection 前台服务，
+    //    下面的 getDisplayMedia 会直接抛 SecurityException ——
+    //    现象是"权限都给了、画面永远是黑的"，光看异常根本猜不到原因。
+    //    所以必须先把它拉起来（桌面端这一句是空操作）。
+    await RemoteCapture.ensure();
     String? screenId;
     if (WebRTC.platformIsDesktop) {
       try {
@@ -941,6 +947,10 @@ class RemoteAssistService {
 
   Future<void> _teardown({String reason = ''}) async {
     _hostByFrame = false;
+    // 🔴 会话结束必须撤掉屏幕采集的前台服务，否则那条"正在共享屏幕"的常驻通知
+    //    会一直挂着 —— 用户会以为被人在背后偷偷录屏。
+    //    这一句刻意放在最前面：下面任何一步抛异常都不该把通知留在状态栏上。
+    unawaited(RemoteCapture.release());
     // 收尾：清掉退避重连状态，避免定时器在会话结束后还跑
     _reconnecting = false;
     _reconnectTimer?.cancel();

@@ -42,6 +42,20 @@
     <!-- 通知到来时震动。注意：Android 8 起震动由通知通道控制，
          但这条权限在 8 以下仍然要，且缺了它部分机型连通道震动都不生效。 -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 远程协助「被控端」（手机被别人控制）需要的两条。
+         ① 屏幕采集：Android 10（API 29）起 MediaProjection 必须在前台跑，
+            Android 14（API 34）起更是强制要求一个 mediaProjection 类型的
+            前台服务 —— 缺了它，getMediaProjection() 直接抛 SecurityException，
+            现象是"点开始共享，画面永远是黑的"。
+            ② 输入注入：Android 明确禁止普通 App 伪造触摸事件，唯一合法的
+            通路是无障碍服务。系统会在设置里让用户亲手开一次 —— 那是 Android
+            有意设的关卡，不是我们绕不过去的坑。
+            ⚠️ 这两条都不在运行时申请（系统权限不给 App 弹窗的资格），
+               只能由用户在「设置 → 无障碍」里开。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
+        tools:targetApi="34" />
     <application
         android:label="小智IM"
         android:name="${applicationName}"
@@ -107,6 +121,33 @@
                 （"Failed to find configured root" / "Couldn't find meta-data"）。
              ⚠️ exported=false + grantUriPermissions=true 是标准组合：
                 别人拿不到我们没主动给出去的地址。 -->
+        <!-- 屏幕采集前台服务（被控端）。
+             foregroundServiceType=mediaProjection 是 Android 14 的硬要求；
+             老平台不认识这个属性会自动忽略，所以不用包 targetApi。
+             exported=false：这是自己的内部服务，别的应用不该能拉起它。 -->
+        <service
+            android:name=".RemoteCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- 远程控制的输入执行器（被控端）。
+             BIND_ACCESSIBILITY_SERVICE 是系统级的绑定权限：只有系统设置能
+             把它开起来，普通 App 拿不到 —— 这行少了的话，用户在无障碍列表里
+             根本看不到这一项。
+             ⚠️ label 与 description 直接决定用户敢不敢开，别写含糊。 -->
+        <service
+            android:name=".RemoteInputService"
+            android:exported="true"
+            android:label="@string/remote_input_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/remote_input_service_config" />
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.sharefiles"

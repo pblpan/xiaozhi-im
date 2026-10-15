@@ -168,6 +168,9 @@ class WindowsInputInjector extends InputInjector {
   bool get supported => Platform.isWindows;
 
   @override
+  String get controlObject => '鼠标键盘';
+
+  @override
   String get hint => 'Windows 端可直接远程控制';
 
   @override
