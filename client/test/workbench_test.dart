@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
+import 'package:xiaozhi_im_client/core/workbench_cache.dart';
 import 'package:xiaozhi_im_client/screens/workbench.dart';
 
 import 'support/api_stub.dart';
@@ -27,6 +28,9 @@ void main() {
   //   修法是补 mock，而不是把 _h 改回去 —— 改回去等于把
   //   「切企业后所有请求 401」那个 bug 请回来。
   SharedPreferences.setMockInitialValues({});
+  // 关掉工作台缓存：渲染测试钉的是"服务端说什么就长什么样"，缓存是离线增强，
+  // 不该进这条契约路径（否则 mock 的 SharedPreferences 跨用例残留会污染断言）。
+  WorkbenchCache.enabled = false;
 
   late ApiStub stub;
 

@@ -25,12 +25,21 @@ class WorkbenchCache {
   WorkbenchCache._();
   static final WorkbenchCache instance = WorkbenchCache._();
 
+  /// 🔴 测试开关：工作台渲染测试钉的是"服务端说什么就长什么样"的契约，
+  /// 而缓存是离线/性能增强（在真实 App 里才需要）。让缓存参与测试会污染断言
+  /// （mock 的 SharedPreferences 在同一进程内跨用例残留，旧公告会被读出来），
+  /// 所以测试 setUp 把它关掉——关掉后 read 永远返回 null、write 变 no-op，
+  /// 工作台回到"只信服务端下发"的纯净路径，和加缓存前的行为完全一致。
+  static bool enabled = true;
+
   static const _prefix = 'workbench_cache_v1_';
 
   String _key(String profileId) => '$_prefix$profileId';
 
   /// 读缓存。没有/损坏返回 null（损坏按没有处理：坏数据不该拦住正常刷新）。
+  /// 关闭时直接返回 null（测试用）。
   Future<Map<String, dynamic>?> read(String profileId) async {
+    if (!enabled) return null;
     try {
       final p = await SharedPreferences.getInstance();
       final raw = p.getString(_key(profileId));
@@ -44,12 +53,14 @@ class WorkbenchCache {
   }
 
   /// 写缓存。三段清单 + 时间戳。写失败无所谓（下次刷新会盖）。
+  /// 关闭时不写（测试用：避免留下 pending 异步 + 跨用例污染）。
   Future<void> write(
     String profileId, {
     required List<Map<String, dynamic>> apps,
     required List<Map<String, dynamic>> groups,
     required List<Map<String, dynamic>> notices,
   }) async {
+    if (!enabled) return;
     try {
       final p = await SharedPreferences.getInstance();
       await p.setString(
