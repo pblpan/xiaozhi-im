@@ -186,6 +186,12 @@ FILES = [
     #    漏推 = hooks 上去了、localdata 还是旧的，接口直接 500。
     #    （和上面 master/approval 那次是同一类坑：新文件不在清单 = 功能没上线且不报错）
     'src/localdata.js',
+    # 🔴 2026-10-16 又漏了一个（正是"手工清单会漏"的活例子）：
+    #    routes/hooks.js 本身也不在清单里 —— 它从第三期（上游接口）之后
+    #    就没再被推过。这次加了 /local 路由，结果 localdata.js 推上去了、
+    #    hooks 还是旧的，线上 /api/hooks/local/* 一律 404 "not found"
+    #    （而 module-sources 是 200 —— 只看管理台那半边根本发现不了）。
+    'src/routes/hooks.js',
 ]
 
 
