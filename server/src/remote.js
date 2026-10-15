@@ -42,6 +42,22 @@ const ABORT_WINDOW_MS = Number(process.env.REMOTE_ABORT_WINDOW_MS || 10 * 1000);
 /** 单次会话硬上限：4 小时，防忘记断开导致长期被控 */
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;
 
+/**
+ * 掉线宽限期（远程协助 · UU-a 服务端）。
+ *
+ * 外网 / 内网穿透下 WebSocket 抖动是常态。老逻辑是"任一方 socket 一断就
+ * 立刻 endSession"，结果是：被控端网络抖一下，屏幕共享与控制权瞬间被撤，
+ * 对面还在却必须重新敲门才能恢复 —— 体验远差于 UU 等远控的"自动重连"。
+ *
+ * 改为：任一方掉线先进入宽限窗口，期间对方重连回来就继续会话（客户端自己
+ * 做 ICE 重协商把屏幕接回来），宽限期内未回来才真正结束。
+ *
+ * 安全上无额外风险：会话本就已在 active（控制权已被显式授予），宽限只是
+ * "别在短暂抖动时把已授权的控制权立刻撤掉"；任一方显式 end() 仍即时生效。
+ * 可用 REMOTE_OFFLINE_GRACE_MS 覆盖（测试压到几秒，免得每个用例干等）。
+ */
+const REMOTE_OFFLINE_GRACE_MS = Number(process.env.REMOTE_OFFLINE_GRACE_MS || 20 * 1000);
+
 /** 访问码长度：9 位数字（和主流远控一致的手感） */
 const CODE_LEN = 9;
 
@@ -142,6 +158,10 @@ function peerOf(s, userId) {
 function cleanup(s) {
   if (s.timer) clearTimeout(s.timer);
   if (s.maxTimer) clearTimeout(s.maxTimer);
+  if (s.offlineTimers) {
+    for (const t of s.offlineTimers.values()) clearTimeout(t);
+    s.offlineTimers.clear();
+  }
   sessions.delete(s.id);
   for (const uid of [s.hostId, s.controllerId]) {
     if (uid && userSession.get(uid) === s.id) userSession.delete(uid);
@@ -370,18 +390,55 @@ function relay({ sessionId, userId, type, data }) {
   return {};
 }
 
-/** 掉线处理：任一方掉线就拆会话，绝不留下"无人看管的控制权" */
+/**
+ * 掉线处理（UU-a）：进入宽限期而不是直接拆会话。
+ *
+ * 已授权的远程协助会话，短暂网络抖动不该立刻结束 —— 让掉线方有窗口重连，
+ * 客户端再 ICE 重协商把屏幕共享接回来（借鉴 UU 远控的"自动重连"）。
+ * 宽限期内未回来才 endSession(OFFLINE)，绝不留下"无人看管的控制权"久驻。
+ */
 function handleOffline(userId) {
   const sid = userSession.get(userId);
   if (!sid) return;
   const s = sessions.get(sid);
   if (!s || s.status === STATUS.ENDED) return;
-  endSession(s, END_REASON.OFFLINE);
+  // 已经在为这个人跑宽限定时器，不去重复挂
+  if (s.offlineTimers && s.offlineTimers.has(userId)) return;
+  if (!s.offlineTimers) s.offlineTimers = new Map();
+
+  const peer = peerOf(s, userId);
+  if (peer) {
+    hub.broadcastToUser(peer, { type: 'remote:peer-offline', sessionId: s.id, userId });
+  }
+
+  const t = setTimeout(() => {
+    if (s.offlineTimers) s.offlineTimers.delete(userId);
+    // 双保险：定时器触发时人真没回来才拆（WS 可能刚好在这毫秒重连上）
+    if (hub.userSockets.has(userId)) return;
+    endSession(s, END_REASON.OFFLINE);
+  }, REMOTE_OFFLINE_GRACE_MS);
+  s.offlineTimers.set(userId, t);
 }
 
-/** 在线（可能重连）：暂不自动恢复 —— 会话已因掉线结束，
- *  让控制端重新敲门更安全，也避免"网络抖动后控制权悄悄回来了"。 */
-function handleOnline() { /* 有意留空 */ }
+/**
+ * 在线（重连回来）：取消宽限定时器，恢复会话，并通知对方。
+ *
+ * 注意：仅当这个人确实在宽限中才广播 peer-online，避免"开第二个设备 /
+ * 普通重连"误触发 UI。客户端收到后会立即 ICE 重协商恢复媒体。
+ */
+function handleOnline(userId) {
+  const sid = userSession.get(userId);
+  if (!sid) return;
+  const s = sessions.get(sid);
+  if (!s || s.status === STATUS.ENDED) return;
+  if (!s.offlineTimers || !s.offlineTimers.has(userId)) return;
+  clearTimeout(s.offlineTimers.get(userId));
+  s.offlineTimers.delete(userId);
+  const peer = peerOf(s, userId);
+  if (peer) {
+    hub.broadcastToUser(peer, { type: 'remote:peer-online', sessionId: s.id, userId });
+  }
+}
 
 // ---------------------------------------------------------------- 无人值守
 

@@ -25,6 +25,7 @@ import '../api.dart';
 import '../socket.dart';
 import 'input_inject.dart';
 import 'remote_models.dart';
+import 'rtc_video_degrader.dart';
 import 'sound_service.dart';
 
 /// 一条已解析的远程输入指令。
@@ -173,6 +174,17 @@ class RemoteAssistService {
   final ValueNotifier<RemotePhase> phase = ValueNotifier<RemotePhase>(RemotePhase.idle);
   final ValueNotifier<String> diag = ValueNotifier<String>('');
 
+  /// UU-a：是否正在自动重连。UI 据此显示"网络波动，正在重连"的居中提示，
+  /// 别让用户以为软件卡死/断了而手动退出（手动退出反而真断了）。
+  final ValueNotifier<bool> reconnecting = ValueNotifier<bool>(false);
+
+  /// UU-a：当前重连到第几次（配合上限显示"第 n/5 次"）。
+  final ValueNotifier<int> reconnectAttempt = ValueNotifier<int>(0);
+
+  /// UU-c：画质自适应档位。0=原画不限制，数字越大越省带宽越糊。
+  /// 来自 RtcVideoDegrader 的 onChange，UI 在控制条上显示当前画质。
+  final ValueNotifier<int> qualityLevel = ValueNotifier<int>(0);
+
   /// 当前是否处于**被控**状态。UI 拿它决定要不要显示"正在被协助"警示条。
   ///
   /// 🔴 修复（2026-10-15）：原先直接读 `SoundService().myId`，而那个值
@@ -199,6 +211,9 @@ class RemoteAssistService {
   RTCPeerConnection? _pc;
   RTCDataChannel? _dc;
   MediaStream? _localScreen;
+
+  /// UU-c：被控端屏幕共享发送端的画质自适应控制器（网络差自动降级）
+  RtcVideoDegrader? _degrader;
 
   late final InputInjector _injector = createInputInjector();
 
@@ -227,6 +242,19 @@ class RemoteAssistService {
   // ICE 缓存：同一次会话里不必反复拉
   List<Map<String, dynamic>>? _ice;
   DateTime? _iceAt;
+  /// UU-b：服务端下发的打洞策略（all / relay）
+  String _icePolicy = 'all';
+
+  // ---- UU-a：自动重连（被控端连接断了不等用户，自己退避重连）----
+  // 借鉴 UU 远控：网络抖一下不该让用户手动重连。被控端作为 offer 方，
+  // 在连接 Disconnected/Failed 时自己指数退避地发起 ICE 重启（restartIce），
+  // 把屏幕共享接回来；连不上才最终放弃。重连期间**绝不停止屏幕采集轨**，
+  // 否则轨没了就没法 ICE 重启了（这正是老逻辑一断就废的根因）。
+  int _iceRestarts = 0;
+  bool _reconnecting = false;
+  Timer? _reconnectTimer;
+  static const List<int> _kReconnectBackoffMs = <int>[1000, 2000, 4000, 8000];
+  static const int _kMaxReconnectAttempts = 5;
 
   /// 确保"我是谁"已加载。有网时拉 /me 并同步给 SoundService（别的模块也受益）。
   Future<void> _ensureMyId() async {
@@ -248,10 +276,13 @@ class RemoteAssistService {
     if (_started) return;
     _started = true;
     _sub = SocketService().stream.listen(_onFrame);
+    // WS 重连后主动恢复远程协助媒体（UU-a）
+    SocketService().state.addListener(_onConnStateChanged);
     unawaited(_ensureMyId());
   }
 
   void dispose() {
+    SocketService().state.removeListener(_onConnStateChanged);
     _sub?.cancel();
     _sub = null;
     _started = false;
@@ -310,6 +341,16 @@ class RemoteAssistService {
       case 'remote:active':
         phase.value = RemotePhase.active;
         _log('远程协助已生效');
+        break;
+      case 'remote:peer-offline':
+        // 服务端宽限中（UU-a）：对方网络中断，但会话还在。提示并等待其重连。
+        _log('对方网络中断，正在等待重连…');
+        break;
+      case 'remote:peer-online':
+        // 对方重连回来了。被控端作为 offer 方立即 ICE 重协商把画面接回来；
+        // 控制端无需动作，等被控端的重连 offer 即可。
+        _log('对方网络已恢复，正在重连…');
+        if (isHost) _scheduleReconnect();
         break;
       case 'remote:end':
         onEndedByPeer(raw['reason']?.toString() ?? '');
@@ -508,6 +549,19 @@ class RemoteAssistService {
         await pc.addTrack(t, stream);
       }
 
+      // UU-c：屏幕共享的发送端挂在质量自适应控制器上，网络差时自动降码率/帧率
+      final senders = await pc.getSenders();
+      for (final s in senders) {
+        if (s.track?.kind == 'video') {
+          _degrader = RtcVideoDegrader(pc, s, onChange: (lvl, r) {
+            qualityLevel.value = lvl;
+            _log('画质自适应：等级 $lvl（$r）');
+          });
+          _degrader!.start();
+          break;
+        }
+      }
+
       // 控制通道由**被控端**创建并随 offer 一起协商出去 ——
       // 这样"谁可以给我发控制指令"这件事在 SDP 里就定死了。
       final dc = await pc.createDataChannel(
@@ -596,6 +650,86 @@ class RemoteAssistService {
     }
   }
 
+  // ------------------------------------------------------------ 自动重连（UU-a）
+
+  /// 启动退避重连（幂等：已在重连中就忽略）。
+  void _scheduleReconnect() {
+    if (_reconnecting) return;
+    _reconnecting = true;
+    reconnecting.value = true;
+    reconnectAttempt.value = 0;
+    _log('连接中断，准备自动重连…');
+    _reconnectTick();
+  }
+
+  /// 退避循环：每次按 1/2/4/8s（封顶）等待后发起一次 ICE 重启；
+  /// 连上会由 onConnectionState(Connected) 打断并清零；超上限则放弃。
+  void _reconnectTick() {
+    if (!_reconnecting) return;
+    if (_iceRestarts >= _kMaxReconnectAttempts) {
+      _log('自动重连失败，已放弃');
+      _reconnecting = false;
+      reconnecting.value = false;
+      unawaited(_teardown(reason: 'failed'));
+      return;
+    }
+    final idx = _iceRestarts < _kReconnectBackoffMs.length
+        ? _iceRestarts
+        : _kReconnectBackoffMs.length - 1;
+    final delay = _kReconnectBackoffMs[idx];
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(Duration(milliseconds: delay), () async {
+      _iceRestarts++;
+      reconnectAttempt.value = _iceRestarts;
+      await _restartIce();
+      // 仍未恢复则继续下一轮；恢复由 onConnectionState(Connected) 处理
+      _reconnectTick();
+    });
+  }
+
+  /// 被控端（offer 方）发起 ICE 重启：restartIce() 后重新 createOffer 并发出，
+  /// 控制端照常应答即可把屏幕共享接回来。重连期间**绝不停止屏幕采集轨**。
+  Future<void> _restartIce() async {
+    final pc = _pc;
+    if (pc == null || session.value?.id == null) return;
+    try {
+      // 现代 flutter_webrtc 支持 restartIce()，再 createOffer() 即带新 ICE 凭证
+      await pc.restartIce();
+      final offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      _sendOffer(offer);
+    } catch (e) {
+      // 兜底：部分实现无 restartIce，改用 createOffer 的 iceRestart 选项
+      try {
+        final offer =
+            await pc.createOffer(<String, dynamic>{'iceRestart': true});
+        await pc.setLocalDescription(offer);
+        _sendOffer(offer);
+      } catch (e2) {
+        _log('重连 offer 失败：$e2');
+      }
+    }
+  }
+
+  void _sendOffer(RTCSessionDescription offer) {
+    SocketService().send({
+      'type': 'remote:offer',
+      'sessionId': session.value?.id,
+      'data': offer.toMap(),
+    });
+    _log('已发送重连 offer（第 $_iceRestarts 次）');
+  }
+
+  /// WS 重连回来后，若正处于远程会话，被控端立即尝试恢复媒体（不用等退避定时器）。
+  void _onConnStateChanged() {
+    if (SocketService().state.value == ConnState.online &&
+        (phase.value == RemotePhase.active ||
+            phase.value == RemotePhase.connecting) &&
+        isHost) {
+      _scheduleReconnect();
+    }
+  }
+
   // ------------------------------------------------------------ 连接管理
 
   Future<void> _ensureRenderer() async {
@@ -624,6 +758,8 @@ class RemoteAssistService {
         if (list.isNotEmpty) {
           _ice = list;
           _iceAt = DateTime.now();
+          final p = d['iceTransportPolicy'];
+          _icePolicy = p == 'relay' ? 'relay' : 'all';
           return list;
         }
       }
@@ -632,6 +768,7 @@ class RemoteAssistService {
     }
     _ice = kRemoteIceServers;
     _iceAt = DateTime.now();
+    _icePolicy = 'all';
     return kRemoteIceServers;
   }
 
@@ -642,6 +779,8 @@ class RemoteAssistService {
     final pc = await createPeerConnection(<String, dynamic>{
       'iceServers': await _iceServers(),
       'sdpSemantics': 'unified-plan',
+      // UU-b：服务端下发的打洞策略（all / relay）
+      'iceTransportPolicy': _icePolicy,
     });
 
     pc.onIceCandidate = (c) {
@@ -666,16 +805,39 @@ class RemoteAssistService {
     pc.onConnectionState = (st) {
       switch (st) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-          phase.value = RemotePhase.active;
-          _log('连接已建立${isController ? '，你现在可以操作对方电脑' : '，对方可以看到你的屏幕'}');
-          SocketService().send({
-            'type': 'remote:active',
-            'sessionId': session.value?.id,
-          });
+          // 连上了：清零退避计数，取消重连定时器，恢复正常相位
+          _iceRestarts = 0;
+          _reconnecting = false;
+          reconnecting.value = false;
+          reconnectAttempt.value = 0;
+          _reconnectTimer?.cancel();
+          _reconnectTimer = null;
+          if (phase.value != RemotePhase.active) {
+            phase.value = RemotePhase.active;
+            SocketService().send({
+              'type': 'remote:active',
+              'sessionId': session.value?.id,
+            });
+          }
+          _log('连接已恢复${isController ? '，你现在可以操作对方电脑' : '，对方可以看到你的屏幕'}');
+          break;
+        case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
+          // 短暂断开（最常由网络抖动触发）：不急着拆，进入退避重连
+          if (phase.value == RemotePhase.active ||
+              phase.value == RemotePhase.connecting) {
+            _scheduleReconnect();
+          }
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-          _log('连接失败，可能双方不在同一网络且中继不可用');
-          unawaited(_teardown(reason: 'failed'));
+          // 失败：若会话仍在建立/进行中就退避重连；否则（比如刚建还没连）
+          // 按老逻辑放弃，避免卡在半死不活的状态。
+          if (phase.value == RemotePhase.active ||
+              phase.value == RemotePhase.connecting) {
+            _scheduleReconnect();
+          } else {
+            _log('连接失败，可能双方不在同一网络且中继不可用');
+            unawaited(_teardown(reason: 'failed'));
+          }
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
           break;
@@ -779,6 +941,16 @@ class RemoteAssistService {
 
   Future<void> _teardown({String reason = ''}) async {
     _hostByFrame = false;
+    // 收尾：清掉退避重连状态，避免定时器在会话结束后还跑
+    _reconnecting = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _iceRestarts = 0;
+    reconnecting.value = false;
+    reconnectAttempt.value = 0;
+    qualityLevel.value = 0;
+    _degrader?.stop();
+    _degrader = null;
     try {
       _dc?.close();
     } catch (_) {}

@@ -8,6 +8,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../api.dart';
 import '../screens/call.dart';
 import '../socket.dart';
+import 'rtc_video_degrader.dart';
 import 'sound_service.dart';
 import 'tray_service.dart';
 
@@ -129,6 +130,14 @@ class _PeerLink {
   /// 连接恢复正常（connected）会清零；超过上限则放弃该路。
   int iceRestarts = 0;
 
+  /// UU-c：本端视频发送端的画质自适应控制器（网络差自动降级），按需创建。
+  RtcVideoDegrader? degrader;
+
+  /// UU-c/媒体健康看门狗：连接已建立但远端迟迟不出首帧时，触发 ICE 重启重协商
+  /// （针对"连接通了却看不到对面"这类卡死）。出首帧即取消。
+  Timer? mediaWatchdog;
+  int mediaWatchdogTries = 0;
+
   /// 「断开后自愈」定时器：连接短暂 disconnected 时延迟触发 ICE 重启的兜底。
   Timer? recoverTimer;
 
@@ -140,6 +149,10 @@ class _PeerLink {
   Future<void> dispose() async {
     recoverTimer?.cancel();
     recoverTimer = null;
+    mediaWatchdog?.cancel();
+    mediaWatchdog = null;
+    degrader?.stop();
+    degrader = null;
     try {
       await pc?.close();
     } catch (_) {
@@ -895,6 +908,8 @@ class CallService {
   /// 服务端下发的 ICE 配置缓存
   List<Map<String, dynamic>>? _iceCache;
   DateTime? _iceCachedAt;
+  /// UU-b：服务端下发的打洞策略（all / relay），随 ICE 配置一起缓存
+  String _icePolicy = 'all';
 
   /// 解析本次通话要用的 ICE 服务器列表。
   ///
@@ -920,9 +935,13 @@ class CallService {
         if (list.isNotEmpty) {
           _iceCache = list;
           _iceCachedAt = DateTime.now();
+          // UU-b：服务端动态下发的打洞策略（all / relay），客户端不硬编码
+          final p = d['iceTransportPolicy'];
+          _icePolicy = p == 'relay' ? 'relay' : 'all';
           final turn = d['turnConfigured'] == true;
           _diag('ICE 配置已下发：${list.length} 项'
-              '${turn ? '，含 TURN 中继' : '，仅 STUN 无中继'}');
+              '${turn ? '，含 TURN 中继' : '，仅 STUN 无中继'}'
+              '，打洞策略=$_icePolicy');
           return list;
         }
       }
@@ -932,6 +951,7 @@ class CallService {
     }
     _iceCache = kIceServers;
     _iceCachedAt = DateTime.now();
+    _icePolicy = 'all';
     return kIceServers;
   }
 
@@ -963,6 +983,8 @@ class CallService {
         link.renderer.onFirstFrameRendered = () {
           _diag('远端首帧已渲染($userId)');
           link.videoOn.value = true;
+          // 画面来了，媒体健康看门狗取消
+          link.mediaWatchdog?.cancel();
         };
       } catch (e) {
         _diag('渲染器初始化失败($userId): $e');
@@ -972,11 +994,26 @@ class CallService {
     final pc = await createPeerConnection({
       'iceServers': await _resolveIceServers(),
       'sdpSemantics': 'unified-plan',
+      // UU-b：服务端下发的打洞策略（all / relay）
+      'iceTransportPolicy': _icePolicy,
     });
 
     // 本地轨道推进连接
     for (final t in _local?.getTracks() ?? const []) {
       await pc.addTrack(t, _local!);
+    }
+
+    // UU-c：本端视频发送端挂上画质自适应控制器（网络差自动降码率/帧率）
+    if (_local?.getVideoTracks().isNotEmpty ?? false) {
+      final senders = await pc.getSenders();
+      for (final s in senders) {
+        if (s.track?.kind == 'video') {
+          link.degrader = RtcVideoDegrader(pc, s,
+              onChange: (lvl, r) => _diag('视频画质自适应($userId)：等级 $lvl（$r）'));
+          link.degrader!.start();
+          break;
+        }
+      }
     }
 
     pc.onIceCandidate = (cand) {
@@ -1014,6 +1051,8 @@ class CallService {
           _diag('连接已建立($userId)');
           // 兜底：万一平台没触发 onTrack，这里主动把已到达的轨道捞回来渲染
           unawaited(_sweepReceivers(link));
+          // UU-c：媒体健康看门狗——连上了但对方画面迟迟不来，兜底重协商
+          _armMediaWatchdog(userId, link);
           if (phase.value != CallPhase.active) {
             phase.value = CallPhase.active;
             status.value = '通话中';
@@ -1130,6 +1169,37 @@ class CallService {
     }
     link.iceRestarts++;
     unawaited(_restartIce(userId));
+  }
+
+  /// UU-c：媒体健康看门狗。连接已建立但远端迟迟不出首帧时，触发一次 ICE 重启
+  /// 重协商 —— 针对"连接状态是 connected 却看不到对面"这类协商卡死。
+  /// 出首帧即取消（见 onFirstFrameRendered），最多重试 2 次后放弃、不无限循环。
+  void _armMediaWatchdog(int userId, _PeerLink link) {
+    link.mediaWatchdog?.cancel();
+    link.mediaWatchdogTries = 0;
+    if (link.videoOn.value) return;
+    link.mediaWatchdog =
+        Timer(const Duration(seconds: 10), () => _mediaWatchdogTick(userId, link));
+  }
+
+  void _mediaWatchdogTick(int userId, _PeerLink link) {
+    if (_ending || link.pc == null) return;
+    // 已经出画面或连接已断开：看门狗使命完成
+    if (link.videoOn.value) {
+      link.mediaWatchdog?.cancel();
+      return;
+    }
+    if (link.mediaWatchdogTries >= 2) {
+      _diag('媒体健康看门狗：已重协商仍无画面($userId)');
+      link.mediaWatchdog?.cancel();
+      return;
+    }
+    link.mediaWatchdogTries++;
+    _diag('媒体健康看门狗：已连通但 $userId 无画面，触发 ICE 重启重协商');
+    unawaited(_restartIce(userId));
+    // 重启后再给一次机会
+    link.mediaWatchdog =
+        Timer(const Duration(seconds: 10), () => _mediaWatchdogTick(userId, link));
   }
 
   /// 启动连接看门狗：进入「连接中」后调用，卡住迟迟不通就周期性重启 ICE。

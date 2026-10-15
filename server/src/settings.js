@@ -55,6 +55,12 @@ const KEYS = Object.freeze({
   // 它管的是"界面上给不给看"，不是数据加密。
   masterShowPurchasePrice: { key: 'master_show_purchase_price', def: false },
 
+  // WebRTC 打洞策略（UU-b）：服务端动态下发，客户端不硬编码。
+  //   'all'   = 先直连打洞、不行再走 TURN 中继（默认，最省流量）；
+  //   'relay' = 强制走 TURN 中继（对称 NAT / 严格防火墙下更稳，代价是流量走中转）。
+  // 管理台可切；未设置时回退到环境变量 WEBRTC_ICE_TRANSPORT_POLICY，再不行默认 'all'。
+  webrtcIceTransportPolicy: { key: 'webrtc_ice_transport_policy', def: 'all' },
+
   // 智能助手（#314 龙哥：智能助手接管帮助 + 接入智能体）。
   // 四个键都**故意不进 all()**：bootstrap 免鉴权，LLM 的 Key/地址绝不能铺出去；
   // 只走 /api/admin/assistant/config（Key 只回 hasKey 布尔，永不回明文）。

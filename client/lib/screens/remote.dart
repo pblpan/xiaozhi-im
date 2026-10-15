@@ -352,7 +352,12 @@ class _ConnectTabState extends State<_ConnectTab> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               leading: const Icon(Icons.desktop_windows_rounded, color: AppColors.brand),
               title: const Text('返回进行中的会话'),
-              subtitle: Text(_phaseText(p)),
+              // UU-a：重连中时副标题直接说"在重连"，别让用户以为断了就走了
+              subtitle: ValueListenableBuilder<bool>(
+                valueListenable: svc.reconnecting,
+                builder: (_, rc, __) =>
+                    Text(rc ? '网络波动，正在自动重连…' : _phaseText(p)),
+              ),
               trailing: TextButton(
                 onPressed: () => RemoteAssistService.instance.hangUp(),
                 child: const Text('结束', style: TextStyle(color: AppColors.danger)),
@@ -496,6 +501,23 @@ String _phaseText(RemotePhase p) {
       return '会话进行中';
     case RemotePhase.ended:
       return '已结束';
+  }
+}
+
+/// UU-c 画质档位文案。0=原画不限制；数字越大越糊但越省带宽
+/// （RtcVideoDegrader 的 tiers，网络差时自动逐级降）。
+String remoteQualityText(int level) {
+  switch (level) {
+    case 0:
+      return '画质 · 原画';
+    case 1:
+      return '画质 · 高清';
+    case 2:
+      return '画质 · 标清';
+    case 3:
+      return '画质 · 流畅';
+    default:
+      return '画质 · 极速';
   }
 }
 
@@ -1115,6 +1137,14 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                                   ],
                                 ),
                               ),
+                            // UU-a：连接还在，但网络波动正在退避重连。
+                            // 画面是静止的最后一帧，不盖一层用户会以为软件卡死。
+                            ValueListenableBuilder<bool>(
+                              valueListenable: svc.reconnecting,
+                              builder: (_, rc, __) => (rc && p == RemotePhase.active)
+                                  ? const _ReconnectOverlay()
+                                  : const SizedBox.shrink(),
+                            ),
                           ],
                         ),
                       ),
@@ -1144,13 +1174,16 @@ class _ControlBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Row(children: [
         IconButton(
-          icon: const Icon(Icons.close_rounded, color: AppColors.textSub),
+          icon: const Icon(Icons.close_rounded, color: AppColors.danger),
           tooltip: '断开连接',
           onPressed: () async {
             await svc.hangUp();
             if (context.mounted) Navigator.of(context).maybePop();
           },
         ),
+        // UU 借鉴：连接状态一眼可见（点 + 文字），断了绝不让人干等
+        const _LinkStatusDot(),
+        const SizedBox(width: 8),
         Expanded(
           child: ValueListenableBuilder<RemoteSession?>(
             valueListenable: svc.session,
@@ -1161,6 +1194,28 @@ class _ControlBar extends StatelessWidget {
             ),
           ),
         ),
+        // UU-c：画质档位。网络差自动降级时这里变黄字，
+        // 让用户知道"画面变糊"是自适应省带宽、不是坏了
+        ValueListenableBuilder<int>(
+          valueListenable: svc.qualityLevel,
+          builder: (_, lv, __) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: lv == 0
+                  ? AppColors.surface
+                  : AppColors.warn.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              remoteQualityText(lv),
+              style: TextStyle(
+                fontSize: 11,
+                color: lv == 0 ? AppColors.textWeak : AppColors.warn,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
         Row(children: [
           const Text('允许控制', style: TextStyle(fontSize: 12)),
           Switch(
@@ -1170,6 +1225,107 @@ class _ControlBar extends StatelessWidget {
           ),
         ]),
       ]),
+    );
+  }
+}
+
+/// 连接状态点：绿=已连接；黄=连接中/重连中；灰=已结束。
+class _LinkStatusDot extends StatelessWidget {
+  const _LinkStatusDot();
+
+  @override
+  Widget build(BuildContext context) {
+    final svc = RemoteAssistService.instance;
+    return ValueListenableBuilder<RemotePhase>(
+      valueListenable: svc.phase,
+      builder: (_, p, __) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: svc.reconnecting,
+          builder: (_, rc, __) {
+            final Color c;
+            final String t;
+            if (rc) {
+              c = AppColors.warn;
+              t = '重连中';
+            } else if (p == RemotePhase.active) {
+              c = AppColors.online;
+              t = '已连接';
+            } else if (p == RemotePhase.ended) {
+              c = AppColors.textWeak;
+              t = '已结束';
+            } else {
+              c = AppColors.brand2;
+              t = '连接中';
+            }
+            return Row(children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 5),
+              Text(t, style: const TextStyle(fontSize: 12, color: AppColors.textSub)),
+            ]);
+          },
+        );
+      },
+    );
+  }
+}
+
+/// UU-a 重连中的居中提示卡：网络波动 → 自动退避重连。
+/// 关键诉求是"别让用户手动退出"——退出反而真断了，等几秒它就自己回来。
+class _ReconnectOverlay extends StatelessWidget {
+  const _ReconnectOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    final svc = RemoteAssistService.instance;
+    return Container(
+      color: Colors.black54,
+      alignment: Alignment.center,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 40),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
+        decoration: BoxDecoration(
+          color: AppColors.bgElevated,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.warn.withValues(alpha: 0.5)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 30,
+              height: 30,
+              child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.warn),
+            ),
+            const SizedBox(height: 14),
+            ValueListenableBuilder<int>(
+              valueListenable: svc.reconnectAttempt,
+              builder: (_, n, __) => Text(
+                '网络波动，正在自动重连（第 $n/5 次）',
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 14.5, fontWeight: FontWeight.w600),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '恢复后会自动接回，请勿关闭窗口',
+              style: TextStyle(color: AppColors.textSub, fontSize: 12),
+            ),
+            const SizedBox(height: 4),
+            TextButton(
+              onPressed: () async {
+                await svc.hangUp();
+                if (context.mounted) Navigator.of(context).maybePop();
+              },
+              child: const Text('手动断开',
+                  style: TextStyle(color: AppColors.danger, fontSize: 12.5)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1213,26 +1369,55 @@ class RemoteHostBanner extends StatelessWidget {
       builder: (_, p, __) {
         if (!svc.isHost || p != RemotePhase.active) return const SizedBox.shrink();
         final s = svc.session.value;
-        return Container(
-          width: double.infinity,
-          color: AppColors.warn.withValues(alpha: 0.16),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(children: [
-            const Icon(Icons.screen_share_rounded, size: 17, color: AppColors.warn),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '正在被「${s?.controllerName ?? '对方'}」远程协助 —— 你的屏幕正在共享',
-                style: const TextStyle(fontSize: 12.5, color: AppColors.warn),
+        // UU-a：重连中也要醒目 —— 被控端看到"正在重连"才知道
+        // 别关机、别断网，等几秒软件自己就把画面接回来了
+        return ValueListenableBuilder<bool>(
+          valueListenable: svc.reconnecting,
+          builder: (_, rc, __) {
+            if (!rc) {
+              return _bannerRow(
+                icon: Icons.screen_share_rounded,
+                color: AppColors.warn,
+                text: '正在被「${s?.controllerName ?? '对方'}」远程协助 —— 你的屏幕正在共享',
+                onHangUp: svc.hangUp,
+              );
+            }
+            return ValueListenableBuilder<int>(
+              valueListenable: svc.reconnectAttempt,
+              builder: (_, n, __) => _bannerRow(
+                icon: Icons.wifi_off_rounded,
+                color: AppColors.danger,
+                text: '网络波动，正在自动重连（第 $n/5 次）… 请勿关机、勿断网',
+                onHangUp: svc.hangUp,
               ),
-            ),
-            TextButton(
-              onPressed: () => svc.hangUp(),
-              child: const Text('立即断开', style: TextStyle(color: AppColors.danger, fontSize: 12.5)),
-            ),
-          ]),
+            );
+          },
         );
       },
+    );
+  }
+
+  Widget _bannerRow({
+    required IconData icon,
+    required Color color,
+    required String text,
+    required Future<void> Function() onHangUp,
+  }) {
+    return Container(
+      width: double.infinity,
+      color: color.withValues(alpha: 0.16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(children: [
+        Icon(icon, size: 17, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(text, style: TextStyle(fontSize: 12.5, color: color)),
+        ),
+        TextButton(
+          onPressed: onHangUp,
+          child: const Text('立即断开', style: TextStyle(color: AppColors.danger, fontSize: 12.5)),
+        ),
+      ]),
     );
   }
 }

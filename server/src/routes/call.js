@@ -8,6 +8,7 @@
 
 const express = require('express');
 const config = require('../config');
+const settings = require('../settings');
 
 const router = express.Router();
 
@@ -20,12 +21,21 @@ const hasTurn = (list) =>
     });
   });
 
+/** 把任意输入收敛成 flutter_webrtc 认得的策略值（all / relay）。 */
+function normalizeIcePolicy(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  return s === 'relay' ? 'relay' : 'all';
+}
+
 /**
  * GET /api/call/ice
  * 客户端在 createPeerConnection 之前拉一次，缓存 5 分钟。
  *
  * 注意是 async：配了 Cloudflare TURN 时这里要现签凭据（内部有 50 分钟缓存，
  * 不会把 CF 的接口打爆）。签发失败不影响 STUN 下发，只是少一条中继。
+ *
+ * UU-b：额外下发 iceTransportPolicy（all / relay），由服务端决定打洞策略，
+ * 客户端不再硬编码 —— 管理台或环境变量即可切换"强制走中继"。
  */
 router.get('/ice', async (req, res) => {
   let list = [];
@@ -37,9 +47,18 @@ router.get('/ice', async (req, res) => {
   }
   const info = config.turnInfo();
 
+  // 策略优先级：管理台设置 > 环境变量 > 默认 all
+  const dbPolicy = settings.get('webrtcIceTransportPolicy');
+  const policy = normalizeIcePolicy(
+    dbPolicy && dbPolicy !== 'all'
+      ? dbPolicy
+      : (process.env.WEBRTC_ICE_TRANSPORT_POLICY || 'all'),
+  );
+
   res.set('Cache-Control', 'public, max-age=300');
   res.json({
     iceServers: list,
+    iceTransportPolicy: policy,
     ttlSeconds: 300,
     // 只暴露"有没有中继"，方便客户端/排障时区分
     // "打不通是因为没中继" 还是 "配了中继还是打不通"
