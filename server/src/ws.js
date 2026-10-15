@@ -42,6 +42,10 @@ function init(server) {
     // 再把正在振铃的通话补推给他 —— 否则断线期间错过的来电会变成
     // "永远收不到"，只能等对方挂断后在会话里看到一条未接记录。
     call.handleOnline(userId);
+    // UU-a：远程协助同理 —— 掉线宽限中被控端重连回来，取消宽限定时器并
+    // 广播 remote:peer-online，会话接着用（2026-10-15 曾漏接这根线：
+    // remote.handleOffline 接了、handleOnline 没接，宽限永远等到期）。
+    remote.handleOnline(userId);
     const pending = call.pendingForUser(userId);
     if (pending) hub.send(ws, pending);
 

@@ -9,7 +9,8 @@
 //   ④ 拒绝 / 取消 / 不能连自己 / 忙线
 //   ⑤ 无人值守：访问码 + 撤销窗口 + 一次性马子用过即废
 //   ⑥ 兑换限流（无限撞码 = 9 位口令被暴力枚举）
-//   ⑦ 掉线拆会话（绝不留无人看管的控制权）
+//   ⑦ 掉线宽限（UU-a）：掉线先广播 peer-offline 不断会话，宽限期内重连即
+//      恢复，到期不归才拆（绝不留无人看管的控制权）
 //
 //   node test/remote_e2e.js
 
@@ -28,6 +29,8 @@ const DATA_DIR = path.join(os.tmpdir(), 'xiaozhi-remote-e2e-' + Date.now());
 // 测试里把等待压短，免得为一个超时干等 45 秒
 const RING_MS = 1500;
 const ABORT_MS = 1200;
+// UU-a：掉线宽限也压短（线上默认 20s，这里 1.2s 够验证三种走向）
+const REMOTE_GRACE_MS = 1200;
 
 let passed = 0;
 let failed = 0;
@@ -131,6 +134,7 @@ async function main() {
       ADMIN_PASSWORD: 'admin-test-pw',
       REMOTE_RING_TIMEOUT_MS: String(RING_MS),
       REMOTE_ABORT_WINDOW_MS: String(ABORT_MS),
+      REMOTE_OFFLINE_GRACE_MS: String(REMOTE_GRACE_MS),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -404,7 +408,7 @@ async function main() {
   ok('连续撞码会被限流拦下', blocked);
   d1.close();
 
-  console.log('\n[10] 掉线即拆会话（不留无人看管的控制权）');
+  console.log('\n[10] 掉线宽限（UU-a）：先广播 peer-offline 不断会话，重连即恢复，宽限到期才拆');
   // ⚠️ 必须先把 A/B 的**旧连接**全部断开。服务端是"一个用户的最后一条 socket
   //    断开才算离线"（多端登录设计），旧连接还在的话 close 不会触发离线处理。
   a1.close(); b1.close(); c1.close();
@@ -417,10 +421,20 @@ async function main() {
   a2.send({ type: 'remote:accept', sessionId: inv5.session.sessionId, device: 'Windows' });
   await b2.next('remote:accept');
   b2.clear();
+  // ① 被控端掉线：先广播 peer-offline（宽限中），**不是**立即拆会话
   a2.close();
   await sleep(600);   // 等服务端处理 close
-  const off = await b2.next('remote:end', 4000);
-  ok('被控端掉线，控制端收到结束', off.reason === 'offline', `实际 ${off.reason}`);
+  const off = await b2.next('remote:peer-offline', 4000);
+  ok('被控端掉线先广播 peer-offline（宽限中，不立即拆）', !!off);
+  // ② 宽限期内重连回来：广播 peer-online，会话继续（网络抖一下不再散场）
+  const a3 = new Client(A.token, 'A3');
+  await a3.ready();
+  const back = await b2.next('remote:peer-online', 4000);
+  ok('宽限期内重连 → 广播 peer-online，会话不散', !!back);
+  // ③ 再次掉线且宽限到期不归：才真正拆（绝不留无人看管的控制权）
+  a3.close();
+  const ended5 = await b2.next('remote:end', REMOTE_GRACE_MS + 4000);
+  ok('宽限到期未归才结束会话', ended5.reason === 'offline', `实际 ${ended5.reason}`);
   b2.close();
 
   console.log('\n[11] 默认控制码（管理台统一维护，给管理员远程维护用）');
