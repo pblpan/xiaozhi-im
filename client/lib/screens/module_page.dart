@@ -78,6 +78,38 @@ class _ModulePageState extends State<ModulePage> {
     }
   }
 
+  /// 列表 / 表格 / 图表空着时该说什么。
+  ///
+  /// 🔴 空态一律写「暂无数据」会把两种完全不同的情况混成一句：
+  ///    ① 管理员压根没配数据来源（**配置没做完**，得有人去补）；
+  ///    ② 配了，这份数据现在真的是空的（**正常业务状态**，不用管）。
+  ///    员工看到同一句话不知道该不该报障，管理员也从没人提醒他去补。
+  ///    取数失败则交给 _dataError 那条提示（它已经能说清是超时还是 403），
+  ///    这里不再叠一句，避免同一件事说两遍。
+  bool get _truncated => _data['truncated'] == true;
+
+  /// 实际显示的行数：取数接口统一回 { data:{ rows, total } } 这个形状
+  int get _shownRows {
+    final d = _data['data'];
+    final rows = d is Map ? d['rows'] : null;
+    return rows is List ? rows.length : 0;
+  }
+
+  int get _totalRows {
+    final d = _data['data'];
+    final t = d is Map ? d['total'] : null;
+    return t is num ? t.toInt() : _shownRows;
+  }
+
+  String? get _emptyHint {
+    if (_dataError != null) return null;
+    if (_def.onLoad == null) {
+      return '这个页面还没接数据来源 —— 请管理员到管理台「动态模块」里选一份数据';
+    }
+    if (!_def.onLoad!.canExecute) return '这个页面配的取数地址不合法，已跳过';
+    return null;
+  }
+
   static Map<String, dynamic> _asMap(dynamic r) {
     if (r is Map) return r.map((k, v) => MapEntry(k.toString(), v));
     if (r is List) return {'data': {'items': r}, 'items': r};
@@ -220,10 +252,23 @@ class _ModulePageState extends State<ModulePage> {
                     padding: const EdgeInsets.only(bottom: 12),
                     child: _Notice(text: _dataError!, muted: sem.muted, border: sem.cardBorder),
                   ),
+                // 取回来的行被服务端截断时必须说清：一张"看起来只有 200 行"的表，
+                // 会让人以为库里就这么多 —— 这比报错更误导
+                if (_truncated)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _Notice(
+                      text: '这份数据较多，只显示了前 ${_shownRows} 行（共 ${_totalRows} 行）。'
+                          '要看全部请到管理台导出。',
+                      muted: sem.muted,
+                      border: sem.cardBorder,
+                    ),
+                  ),
                 ModuleRenderer(
                   body: _def.body,
                   data: _data,
                   onAction: _onAction,
+                  emptyHint: _emptyHint,
                 ),
               ],
             ),

@@ -418,6 +418,23 @@ function remove(moduleId) {
   return r.changes > 0;
 }
 
+/**
+ * 只改排序号（统一排序接口用）。
+ *
+ * 🔴 刻意**不经过 validate()**：validate 要求 body/moduleId/title 齐全，
+ *    而这里只是挪个位子，手上只有一个 id。走 validate 就得先读一遍整个模块
+ *    再原样写回去 —— 那是"改一个数字要重写整个文档"，期间还容易被并发覆盖。
+ *    排序号本身在 validate 里有 0~9999 的钳制，这里照抄同一个口径。
+ */
+function setSort(moduleId, sort) {
+  let n = Number(sort);
+  if (!Number.isFinite(n)) n = 0;
+  n = Math.max(0, Math.min(9999, Math.trunc(n)));
+  const r = db.prepare('UPDATE app_modules SET sort=?, updated_at=? WHERE module_id=?')
+    .run(n, Date.now(), String(moduleId));
+  return r.changes > 0;
+}
+
 /* ---------------- 提交记录（第二期验收：表单能提交并且能看见结果） ---------------- */
 
 /**
@@ -546,37 +563,43 @@ const TEMPLATES = [
   },
   {
     id: 'stock_overview',
-    name: '库存概览（列表）',
-    desc: '列表 + 刷新按钮，数据由服务端 /api/hooks 算好后下发',
+    name: '商品清单（列表）',
+    desc: '列表 + 刷新按钮，直接读本服务器的商品档案（有数据才看得见内容）',
     module: {
       moduleId: 'stock_overview',
-      title: '库存概览',
+      title: '商品清单',
       icon: 'inventory',
       sort: 20,
       enabled: true,
       minClientVersion: null,
       visibleTo: { roles: [], userIds: [] },
       body: [
-        { component: 'text', text: '数据由服务端算好后下发', size: 12.5, color: 'muted', align: 'left' },
         {
-          component: 'list', dataPath: 'data.items',
-          itemTemplate: { title: '{{name}}', subtitle: '{{spec}}', trailing: '{{qty}}' },
+          component: 'text', text: '数据来源：本服务器 · 盘点 · 商品档案',
+          size: 12.5, color: 'muted', align: 'left',
+        },
+        {
+          component: 'list', dataPath: 'data.rows',
+          itemTemplate: { title: '{{name}}', subtitle: '{{spec}}', trailing: '{{qtyText}}' },
         },
         {
           component: 'action', label: '刷新数据', color: 'primary',
-          onTap: { action: 'api', path: '/api/hooks/stock/overview', method: 'GET' },
+          onTap: { action: 'api', path: '/api/hooks/local/inventory/products', method: 'GET' },
         },
       ],
-      onLoad: { action: 'api', path: '/api/hooks/stock/overview', method: 'GET' },
+      // 🔴 2026-10-16 之前这条路径是 /api/hooks/stock/overview —— 服务器上
+      //    根本没有这个接口，管理员点完模板拿到的是一副空列表。
+      //    现在一律指向**真的存在**的本服务器数据源。
+      onLoad: { action: 'api', path: '/api/hooks/local/inventory/products', method: 'GET' },
     },
   },
   {
     id: 'duty_roster',
-    name: '值班表（表格）',
-    desc: '多列表格，适合值班、排班、对账明细',
+    name: '员工名册（表格）',
+    desc: '多列表格，直接读本服务器的员工名册',
     module: {
       moduleId: 'duty_roster',
-      title: '值班表',
+      title: '员工名册',
       icon: 'schedule',
       sort: 30,
       enabled: true,
@@ -586,22 +609,28 @@ const TEMPLATES = [
         {
           component: 'table', dataPath: 'data.rows',
           columns: [
-            { key: 'date', label: '日期', width: 110 },
-            { key: 'shift', label: '班次', width: 90 },
-            { key: 'who', label: '值班人' },
-            { key: 'phone', label: '联系电话', width: 140 },
+            { key: 'employeeNo', label: '工号', width: 110 },
+            { key: 'who', label: '姓名', width: 110 },
+            { key: 'dept', label: '部门', width: 140 },
+            { key: 'position', label: '岗位', width: 140 },
+            { key: 'roleText', label: '角色', width: 90 },
           ],
         },
+        {
+          component: 'action', label: '刷新数据', color: 'primary',
+          onTap: { action: 'api', path: '/api/hooks/local/work_org/members', method: 'GET' },
+        },
       ],
+      onLoad: { action: 'api', path: '/api/hooks/local/work_org/members', method: 'GET' },
     },
   },
   {
     id: 'sales_board',
-    name: '销售看板（图表）',
-    desc: '卡片 + 柱状图，适合门店日销、产量趋势',
+    name: '库存分布（图表）',
+    desc: '卡片 + 柱状图，直接读本服务器的商品档案（按账面库存画柱）',
     module: {
       moduleId: 'sales_board',
-      title: '销售看板',
+      title: '库存分布',
       icon: 'assessment',
       sort: 40,
       enabled: true,
@@ -609,11 +638,51 @@ const TEMPLATES = [
       visibleTo: { roles: [], userIds: [] },
       body: [
         {
-          component: 'card', title: '本周销售', subtitle: '数据来源：服务端统计', accent: 'success',
-          children: [{ component: 'text', text: '点右上角刷新可重新取数', size: 12, color: 'muted', align: 'left' }],
+          component: 'card', title: '商品库存', subtitle: '数据来源：本服务器 · 盘点 · 商品档案', accent: 'success',
+          children: [
+            { component: 'text', text: '柱子高度 = 账面库存数', size: 12, color: 'muted', align: 'left' },
+          ],
         },
-        { component: 'chart', dataPath: 'data.rows', xKey: 'day', yKey: 'amount', kind: 'bar' },
+        { component: 'chart', dataPath: 'data.rows', xKey: 'name', yKey: 'qty', kind: 'bar' },
+        {
+          component: 'action', label: '刷新数据', color: 'primary',
+          onTap: { action: 'api', path: '/api/hooks/local/inventory/products', method: 'GET' },
+        },
       ],
+      onLoad: { action: 'api', path: '/api/hooks/local/inventory/products', method: 'GET' },
+    },
+  },
+  {
+    id: 'punch_flow',
+    name: '打卡流水（表格）',
+    desc: '多列表格，直接读本服务器的打卡流水（含定位与卡次）',
+    module: {
+      moduleId: 'punch_flow',
+      title: '打卡流水',
+      icon: 'receipt_long',
+      sort: 50,
+      enabled: true,
+      minClientVersion: null,
+      // 流水里有每个人的坐标 → 只给管理员，跟数据源的 module:'admin' 对齐，
+      // 否则员工打开就是 403，看着像"界面坏了"
+      visibleTo: { roles: ['admin'], userIds: [] },
+      body: [
+        {
+          component: 'table', dataPath: 'data.rows',
+          columns: [
+            { key: 'day', label: '日期', width: 100 },
+            { key: 'who', label: '员工', width: 120 },
+            { key: 'punch', label: '卡次', width: 110 },
+            { key: 'atText', label: '打卡时刻', width: 150 },
+            { key: 'sourceText', label: '来源', width: 100 },
+          ],
+        },
+        {
+          component: 'action', label: '刷新数据', color: 'primary',
+          onTap: { action: 'api', path: '/api/hooks/local/attendance/records', method: 'GET' },
+        },
+      ],
+      onLoad: { action: 'api', path: '/api/hooks/local/attendance/records', method: 'GET' },
     },
   },
 ];
@@ -623,6 +692,6 @@ module.exports = {
   MAX_DEPTH, MAX_COMPONENTS, TEMPLATES,
   versionGte,
   validate, validateComponent, validateAction, sanitizeSubmission, collectFormFields,
-  list, get, listVisible, upsert, remove,
+  list, get, listVisible, upsert, remove, setSort,
   recordSubmission, listSubmissions, countSubmissions,
 };

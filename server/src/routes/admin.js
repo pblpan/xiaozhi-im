@@ -12,6 +12,7 @@ const appnotice = require('../appnotice');
 const appguard = require('../appguard');
 const appdata = require('../appdata');
 const upstream = require('../upstream');
+const localdata = require('../localdata');
 const appregistry = require('../apps');
 const settings = require('../settings');
 const remote = require('../remote');
@@ -1761,6 +1762,82 @@ router.delete('/modules/:id', (req, res) => {
   const ok = appmodules.remove(req.params.id);
   if (!ok) return res.status(404).json({ error: '模块不存在' });
   res.json({ ok: true });
+});
+
+/**
+ * 动态模块能选的**数据来源清单**（第四期：让内容真有内容）。
+ *
+ * 管理台编辑 list / table / chart 时，数据来源原来是**手填一条路径**
+ * （/api/hooks/up/xxx/yyy）—— 结果是管理员不知道能填什么、填错了前端就是空白。
+ * 这里把两条路的可选项一次性给全，选完连路径带列一起回填。
+ *
+ * 🔴 上游那份只给 name/label，**绝不回 base_url 和 auth_header**：
+ *    这是管理台页面，多回一个字段就多一条泄露通道，而它根本用不上。
+ */
+router.get('/module-sources', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  res.json({
+    local: localdata.sourcesFor('admin'),
+    upstreams: upstream.list().map((u) => ({
+      name: u.name,
+      label: u.label || u.name,
+      enabled: u.enabled,
+      pathPrefix: '/api/hooks/up/',
+    })),
+    // 客户端 dataPath 的约定形状，管理台照它生成默认值
+    dataPath: 'data.rows',
+  });
+});
+
+/**
+ * 工作台**统一排序**。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 为什么要有这一个入口
+ * ─────────────────────────────────────────────────────────────
+ * 排序原来分散在两处：内置应用改 app_overrides.sort，自定义模块改
+ * app_modules.sort，而两处的数字**各排各的** —— 内置应用排成 10/20/30，
+ * 模块也排成 10/20/30，落到客户端就是两组交错、谁也压不住谁。
+ * 管理员的直觉是"我要把这个模块挪到打卡下面"，而他能做的只有
+ * "去模块清单里把 20 改成 25" 然后猜。
+ *
+ * 这里一次收一串有序 id，按顺序统一发号（10/20/30…），
+ * 两组共用一个序号空间 —— 顺序就是界面上拖出来的那个顺序。
+ *
+ * 🔴 id 前缀 `module:` 用来区分两类：不带前缀 = 内置应用 id。
+ *    用前缀而不是"先查哪张表在不在"：后者在两边都有同名时会静默改错对象，
+ *    而前缀是显式的，改错了立刻看得见。
+ */
+router.post('/order', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const by = u?.username || 'admin';
+
+  const raw = req.body && Array.isArray(req.body.order) ? req.body.order : [];
+  if (!raw.length) return res.status(400).json({ error: '没有要排序的条目' });
+  if (raw.length > 200) return res.status(400).json({ error: '一次最多排 200 个条目' });
+
+  const known = new Set(appregistry.BUILTIN_APPS.map((a) => a.id));
+  for (const m of appmodules.list()) known.add('module:' + m.moduleId);
+
+  let n = 0;
+  let moved = 0;
+  const skipped = [];
+  for (const item of raw) {
+    const id = String(item || '').trim();
+    if (!known.has(id)) {
+      skipped.push(id); // 不认识的一律跳过，不能因为一条脏数据整批失败
+      continue;
+    }
+    n += 10;
+    if (id.startsWith('module:')) {
+      if (appmodules.setSort(id.slice(7), n)) moved++;
+    } else {
+      appoverrides.set(id, { sort: n }, by);
+      moved++;
+    }
+  }
+  res.json({ ok: true, moved, skipped });
 });
 
 /** 某模块的提交记录（第二期验收要看"表单真的收到数据了"） */

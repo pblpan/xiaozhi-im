@@ -27,6 +27,20 @@
  * 3. **不能清理的要说清为什么**。培训成绩、盘点差异都是**审计凭据**：
  *    删掉之后"当时到底考了多少分""这批货差在哪"就再也答不上来。
  *    给一个 403 不如给一句"为什么不行"。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 关于数据源上的 `module` 字段（2026-10-16 加，给动态模块取数用）
+ * ─────────────────────────────────────────────────────────────
+ * 这个注册表原本只服务于管理台的数据抽屉（那里进来的人都是管理员）。
+ * 动态模块也要取数，但**进来看的人是普通员工** —— 所以每个数据源必须
+ * 显式声明"能不能被动态模块取、谁能取"：
+ *   · 没写 `module`   → **不可**用于动态模块（默认最严）
+ *   · module:'admin'  → 只有管理员的模块能取
+ *   · module:'all'    → 所有已登录用户都能取
+ *
+ * 🔴 默认必须是最严的。反过来做（默认都给）的结果是：有人在工作台上建一个
+ *    「员工考勤」模块，全公司就都能看到每个人的打卡坐标了 ——
+ *    而建那个模块的人只是想看看"今天谁没打卡"。
  */
 
 const db = require('./db');
@@ -107,6 +121,8 @@ const SRC_ATT_RECORDS = {
   },
   needUserId: true,
   purge: { table: 'att_records', idCol: 'r.id', timeCol: 'at', label: '打卡流水' },
+  // 含每个人的打卡坐标与逐条流水 → 只有管理员的模块能取
+  module: 'admin',
 };
 
 /** 申请单（att_requests）：我的申请 与 考勤记录 共用 */
@@ -150,6 +166,8 @@ const SRC_ATT_REQUESTS = {
     };
   },
   purge: { table: 'att_requests', idCol: 'r.id', timeCol: 'created_at', label: '申请单' },
+  // 请假理由是直接写给审批人看的，不该出现在全公司都能点开的模块里
+  module: 'admin',
 };
 
 /* ============================================================
@@ -224,6 +242,8 @@ const APPS = {
           roleText: r.role === 'admin' ? '管理员' : '员工',
           createdText: dtText(r.created_at),
         }),
+        // 员工名册本来就是通讯录的内容，员工看得见
+        module: 'all',
       },
       {
         key: 'depts',
@@ -248,6 +268,7 @@ const APPS = {
           sort: r.sort,
           org: r.org_name || '',
         }),
+        module: 'all',
       },
       {
         key: 'positions',
@@ -265,6 +286,7 @@ const APPS = {
           { key: 'sort', label: '排序', width: 80 },
         ],
         map: (r) => ({ id: r.id, name: r.name, dept: r.dept_name || '（全组织通用）', sort: r.sort }),
+        module: 'all',
       },
     ],
     readOnlyReason: '组织与人员是配置数据，增删改一律走「组织机构」页（那里会同时处理账号、好友与考勤归属）。',
@@ -388,6 +410,8 @@ const APPS = {
           operator: r.operator || '',
           uploadedText: dtText(r.uploaded_at),
         }),
+        // 盘点单与它的差异结论是经营数据 → 只有管理员的模块能取
+        module: 'admin',
       },
       {
         key: 'scans',
@@ -419,6 +443,8 @@ const APPS = {
           locCode: r.loc_code || '',
           uploadedText: dtText(r.uploaded_at),
         }),
+        // 明细里带账面数，账面数是库存 → 只有管理员
+        module: 'admin',
       },
       {
         key: 'zones',
@@ -444,6 +470,8 @@ const APPS = {
           locCount: r.loc_count,
           lockedText: r.locked ? '已锁定' : '可用',
         }),
+        // 盘点位只是"货架分区"这种公共信息，员工也要能看（仓库里找货用）
+        module: 'all',
       },
       {
         key: 'grants',
@@ -469,6 +497,51 @@ const APPS = {
           grantedText: dtText(r.granted_at),
           stateText: r.revoked_at ? '已解除' : '生效中',
           revokedText: dtText(r.revoked_at),
+        }),
+        // "谁被授权抽哪个区"是内部权限安排，不是给全员看的
+        module: 'admin',
+      },
+      {
+        key: 'products',
+        name: '商品档案',
+        desc: '同步上来的商品档案：条码、名称、规格、单位、售价、进价、会员价、特价、账面库存、供应商。'
+          + '没有它，工作台上那些"库存概览"模块就只能是一副空架子 —— '
+          + '这也正是「光有界面没有内容」的根子。',
+        // 含**进价**：进价是采购成本，让员工在手机上随手翻到不合适
+        module: 'admin',
+        select: `p.barcode, p.name, p.spec, p.unit, p.unit_price, p.purchase_price,
+          p.member_price, p.special_price, p.account_qty, p.supplier, p.updated_at`,
+        from: 'FROM product_master p',
+        timeCol: 'p.updated_at',
+        order: 'p.updated_at DESC',
+        search: ['p.barcode', 'p.name', 'p.spec', 'p.supplier'],
+        columns: [
+          { key: 'barcode', label: '条码', width: 150, text: true },
+          { key: 'name', label: '商品名', width: 220 },
+          { key: 'spec', label: '规格', width: 120 },
+          { key: 'unit', label: '单位', width: 70 },
+          { key: 'saleText', label: '售价', width: 90 },
+          { key: 'costText', label: '进价', width: 90 },
+          { key: 'qtyText', label: '账面库存', width: 100 },
+          { key: 'supplier', label: '供应商', width: 160 },
+          { key: 'updatedText', label: '更新时间', width: 150 },
+        ],
+        map: (r) => ({
+          barcode: r.barcode,
+          name: r.name || '',
+          spec: r.spec || '',
+          unit: r.unit || '',
+          // 🔴 进价/会员价/特价为 0 或空时显示「—」而不是 0：
+          //    表格里一排 0.00 会被读成"这个商品白送/成本为零"，
+          //    而真实含义是"没维护这个价格"。
+          saleText: moneyText(r.unit_price),
+          costText: moneyText(r.purchase_price),
+          qtyText: r.account_qty == null ? '—' : String(r.account_qty),
+          // 🔴 图表要的是数字，不是字符串：qtyText 里的「—」画不成柱子。
+          //    没有这个字段，动态模块的柱状图只能拿到 undefined，画出一排空柱。
+          qty: r.account_qty == null ? 0 : Number(r.account_qty),
+          supplier: r.supplier || '',
+          updatedText: dtText(r.updated_at),
         }),
       },
     ],
@@ -517,6 +590,8 @@ const APPS = {
           flags: [r.required ? '必修' : '', r.published ? '已发布' : '草稿'].filter(Boolean).join(' / '),
           createdText: dtText(r.created_at),
         }),
+        // 课程清单员工本来就在培训中心里看得见
+        module: 'all',
       },
       {
         key: 'sheets',
@@ -551,6 +626,8 @@ const APPS = {
           resultText: r.pass ? '及格' : '未及格',
           submittedText: dtText(r.submitted_at),
         }),
+        // 成绩是考核凭据，且是"每个人的分数" → 只有管理员能放进模块
+        module: 'admin',
       },
       {
         key: 'progress',
@@ -589,11 +666,20 @@ const APPS = {
             updatedText: dtText(r.updated_at),
           };
         },
+        // 谁学到第几秒是考核过程 → 只有管理员
+        module: 'admin',
       },
     ],
     readOnlyReason: '培训成绩与学习进度是考核凭据，删掉就无法回答"当时考了多少分"。课程本身请在「培训中心」管理页维护。',
   },
 };
+
+/** 金额 → 文本。没有价格（0/空）一律显示「—」，不印 0.00 这种会被当真的假话 */
+function moneyText(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  return n.toFixed(2);
+}
 
 /* ============================================================
  * 引擎：概览 / 明细 / 导出 / 清理

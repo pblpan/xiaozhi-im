@@ -70,11 +70,21 @@ class ModuleRenderer extends StatelessWidget {
   final Map<String, dynamic> data;
   final ModuleActionHandler onAction;
 
+  /// 列表 / 表格 / 图表没数据时的说明文字。
+  ///
+  /// 🔴 2026-10-16 之前空态一律是「暂无数据」四个字。它把两种完全不同的情况
+  ///    混成一句：① 管理员压根没配数据来源（这是**配置没做完**，得有人去补）；
+  ///    ② 配了，但这份数据现在真的是空的（这是**正常业务状态**，不用管）。
+  ///    员工看到同一句话，不知道该不该报障；管理员也从没人告诉他要去补。
+  ///    现在由页面（它才知道 onLoad 配没配）把这句话传进来。
+  final String? emptyHint;
+
   const ModuleRenderer({
     super.key,
     required this.body,
     required this.data,
     required this.onAction,
+    this.emptyHint,
   });
 
   @override
@@ -110,9 +120,9 @@ class ModuleRenderer extends StatelessWidget {
       case ModuleComponentType.card:
         return _CardBlock(c: c, data: data, onAction: onAction);
       case ModuleComponentType.list:
-        return _ListBlock(c: c, data: data);
+        return _ListBlock(c: c, data: data, emptyHint: emptyHint);
       case ModuleComponentType.table:
-        return _TableBlock(c: c, data: data);
+        return _TableBlock(c: c, data: data, emptyHint: emptyHint);
       case ModuleComponentType.form:
         return ModuleFormBlock(
           key: ValueKey('form-${c.fields.length}-${c.fields.first.key}'),
@@ -128,7 +138,7 @@ class ModuleRenderer extends StatelessWidget {
       case ModuleComponentType.action:
         return _ActionBlock(c: c, onAction: onAction);
       case ModuleComponentType.chart:
-        return _ChartBlock(c: c, data: data);
+        return _ChartBlock(c: c, data: data, emptyHint: emptyHint);
       case ModuleComponentType.unknown:
         return _UnsupportedBlock(rawType: c.rawType);
     }
@@ -231,13 +241,14 @@ class _CardBlock extends StatelessWidget {
 class _ListBlock extends StatelessWidget {
   final ModuleComponent c;
   final Map<String, dynamic> data;
+  final String? emptyHint;
 
-  const _ListBlock({required this.c, required this.data});
+  const _ListBlock({required this.c, required this.data, this.emptyHint});
 
   @override
   Widget build(BuildContext context) {
     final items = ModuleData.listOf(data, c.dataPath);
-    if (items.isEmpty) return const _EmptyHint('暂无数据');
+    if (items.isEmpty) return _EmptyHint(emptyHint ?? '暂无数据');
     final sem = AppSemantic.of(context);
     return Container(
       decoration: BoxDecoration(
@@ -305,12 +316,14 @@ class _TableBlock extends StatelessWidget {
   final ModuleComponent c;
   final Map<String, dynamic> data;
 
-  const _TableBlock({required this.c, required this.data});
+  final String? emptyHint;
+
+  const _TableBlock({required this.c, required this.data, this.emptyHint});
 
   @override
   Widget build(BuildContext context) {
     final rows = ModuleData.listOf(data, c.dataPath);
-    if (rows.isEmpty) return const _EmptyHint('暂无数据');
+    if (rows.isEmpty) return _EmptyHint(emptyHint ?? '暂无数据');
     final sem = AppSemantic.of(context);
     final head = TextStyle(
       fontSize: 12.5,
@@ -462,12 +475,14 @@ class _ChartBlock extends StatelessWidget {
   final ModuleComponent c;
   final Map<String, dynamic> data;
 
-  const _ChartBlock({required this.c, required this.data});
+  final String? emptyHint;
+
+  const _ChartBlock({required this.c, required this.data, this.emptyHint});
 
   @override
   Widget build(BuildContext context) {
     final rows = ModuleData.listOf(data, c.dataPath);
-    if (rows.isEmpty) return const _EmptyHint('暂无数据');
+    if (rows.isEmpty) return _EmptyHint(emptyHint ?? '暂无数据');
     final points = <_ChartPoint>[];
     for (final r in rows) {
       if (r is! Map) continue;
@@ -476,7 +491,11 @@ class _ChartBlock extends StatelessWidget {
       if (v == null) continue;
       points.add(_ChartPoint('${r[c.xKey] ?? ''}', v));
     }
-    if (points.isEmpty) return const _EmptyHint('图表数据格式不对');
+    // 数据行取到了但 yKey 没有一个能当数字用 = **字段选错了**（比如选了展示文本列）。
+    //    这种情况要说清是配置问题，不然员工只会觉得"这图表坏了"
+    if (points.isEmpty) {
+      return _EmptyHint(emptyHint ?? '图表要一列数字才能画，当前取的字段里没有');
+    }
 
     final sem = AppSemantic.of(context);
     final bar = resolveSemantic(context, SemanticColor.primary);

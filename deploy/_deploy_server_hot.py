@@ -181,6 +181,11 @@ FILES = [
     'src/helpkb.js',
     'src/routes/assistant.js',
     'src/appmodules.js',
+    # 🔴 2026-10-16 补：动态模块「本服务器数据源」（/api/hooks/local/<app>/<key>）
+    #    的取数表就在这个新文件里。routes/hooks.js require 了它 ——
+    #    漏推 = hooks 上去了、localdata 还是旧的，接口直接 500。
+    #    （和上面 master/approval 那次是同一类坑：新文件不在清单 = 功能没上线且不报错）
+    'src/localdata.js',
 ]
 
 

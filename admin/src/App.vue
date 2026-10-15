@@ -1998,19 +1998,27 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-button size="small" @click="loadAppCatalog">刷新</el-button>
               </div>
             </template>
-            <el-table :data="appCatalog.builtin || []" border size="small">
-              <el-table-column label="内置应用" width="180">
+            <!-- 🔴 这张表原来是「只有内置应用」，自定义模块的排序在下面另一张表里
+                 各排各的（都是 10/20/30），落到客户端两组交错。
+                 现在合成一张：从上到下就是客户端工作台从上到下，↑↓ 直接拖出最终顺序。 -->
+            <el-table :data="wbOrder" border size="small" row-key="uid">
+              <el-table-column label="应用 / 模块" width="200">
                 <template #default="{ row }">
-                  <b>{{ row.effective.title }}</b>
-                  <el-tag v-if="row.effective.title !== row.title" size="small" type="warning" effect="plain"
-                    style="margin-left:6px" :title="`出厂名：${row.title}`">已改名</el-tag>
+                  <b>{{ row.title }}</b>
+                  <el-tag v-if="row.kind === 'module'" size="small" type="success" effect="plain"
+                    style="margin-left:6px">自定义</el-tag>
+                  <el-tag v-else-if="row.title !== row.rawTitle" size="small" type="warning" effect="plain"
+                    style="margin-left:6px" :title="`出厂名：${row.rawTitle}`">已改名</el-tag>
                 </template>
               </el-table-column>
               <el-table-column prop="desc" label="说明" min-width="220" show-overflow-tooltip />
               <!-- 分组：改完这个应用就换一组显示（组名可在本页下方「工作台版式」里改） -->
               <el-table-column label="分组" width="190">
                 <template #default="{ row }">
-                  <el-select :model-value="row.effective.group" size="small" style="width:100%"
+                  <!-- 分组只管内置应用（app_groups 按内置 id 统计），
+                       自定义模块一律不分组 —— 这里说明白，免得看着像漏配 -->
+                  <span v-if="row.kind === 'module'" class="hint">— 不分组</span>
+                  <el-select v-else :model-value="row.effective.group" size="small" style="width:100%"
                     @change="(v) => appMoveGroup(row, v)">
                     <el-option v-for="g in (appCatalog.groups || [])" :key="g.key" :label="g.label"
                       :value="g.key">
@@ -2020,18 +2028,21 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   </el-select>
                 </template>
               </el-table-column>
-              <!-- 排序直接在这里调：客户端工作台从上到下就是这个顺序（小的在前）。
-                   ↑↓ = 和相邻那行交换排序号，不用点进「管理」抽屉里填数字。 -->
-              <el-table-column label="排序" width="120" align="center">
+              <!-- 排序统一在这里调：客户端工作台从上到下就是这张表的顺序。
+                   ↑↓ = 和相邻那行换位置（两行一起存，序号由服务端统一发 10/20/30）。 -->
+              <el-table-column label="排序" width="130" align="center">
                 <template #default="{ row }">
-                  <span class="mono">{{ row.effective.sort }}</span>
-                  <el-button size="small" link type="primary" @click="appMove(row, -1)">↑</el-button>
-                  <el-button size="small" link type="primary" @click="appMove(row, 1)">↓</el-button>
+                  <span class="mono">{{ row.sort }}</span>
+                  <el-button size="small" link type="primary" @click="wbMove(row, -1)">↑</el-button>
+                  <el-button size="small" link type="primary" @click="wbMove(row, 1)">↓</el-button>
                 </template>
               </el-table-column>
               <el-table-column label="状态" width="150">
                 <template #default="{ row }">
                   <el-tag v-if="row.disabled" size="small" type="danger">已停用</el-tag>
+                  <el-tag v-else-if="row.kind === 'module'" size="small" type="success" effect="plain">
+                    {{ (row.raw.body || []).length }} 个内容块
+                  </el-tag>
                   <el-tag v-else-if="row.changed" size="small" type="warning" effect="plain">
                     已调整 {{ row.changedFields.length }} 项
                   </el-tag>
@@ -2041,7 +2052,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               </el-table-column>
               <el-table-column label="对员工是否可见" width="140">
                 <template #default="{ row }">
-                  <el-tag v-if="!appWhy[row.id]" size="small" effect="plain">—</el-tag>
+                  <!-- 复用模块清单那套口径，不在这里再写一份（两处说法会漂） -->
+                  <el-tag v-if="row.kind === 'module'" size="small" effect="plain">
+                    {{ visibleLabel(row.raw) }}
+                  </el-tag>
+                  <el-tag v-else-if="!appWhy[row.id]" size="small" effect="plain">—</el-tag>
                   <el-tag v-else :type="appWhy[row.id].visible ? 'success' : 'warning'" size="small" effect="plain">
                     {{ appWhy[row.id].visible ? '可见' : '当前不可见' }}
                   </el-tag>
@@ -2049,7 +2064,10 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               </el-table-column>
               <el-table-column label="原因 / 说明" min-width="300">
                 <template #default="{ row }">
-                  <span v-if="appWhy[row.id] && appWhy[row.id].reasons.length" class="hint">
+                  <span v-if="row.kind === 'module'" class="hint">
+                    {{ row.raw.onLoad ? '数据来源：' + row.raw.onLoad.path : '⚠ 没接数据来源，打开会是空的 —— 到下面编辑' }}
+                  </span>
+                  <span v-else-if="appWhy[row.id] && appWhy[row.id].reasons.length" class="hint">
                     {{ appWhy[row.id].reasons.join('；') }}
                   </span>
                   <span v-else class="hint">正常可见</span>
@@ -2057,21 +2075,28 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               </el-table-column>
               <el-table-column label="操作" width="130" fixed="right">
                 <template #default="{ row }">
-                  <el-button size="small" type="primary" plain @click="openAppAdmin(row.id, row.effective?.title || row.title)">管理</el-button>
+                  <el-button v-if="row.kind === 'module'" size="small" type="primary" plain
+                    @click="editModuleById(row.id)">编辑</el-button>
+                  <el-button v-else size="small" type="primary" plain @click="openAppAdmin(row.id, row.title)">管理</el-button>
                 </template>
               </el-table-column>
             </el-table>
             <div class="hint" style="margin-top:8px">
+              <b>这张表就是客户端工作台的全部内容，从上到下 = 手机上的从上到下</b>：内置应用和自定义模块
+              混在同一张表里，用 ↑↓ 直接把模块拖到打卡下面 —— 序号由服务端统一发 10/20/30，
+              不会再出现"两边各排各的、落到手机上交错"。
+              <br />
               内置应用随客户端安装包发布；它们的入口可见性由<b>业务状态</b>决定
               （是否工作模式 / 是否建了组织 / 考勤是否启用），不是开关 —— 所以不会出现"入口在、点进去报错"。
               其中<b>考勤打卡 / 我的申请</b>是员工专属（自己打卡、自己提申请），<b>考勤记录</b>是管理员专属
               （看今日全员出勤与缺卡、代员工补卡）—— 两类人看到的工作台本来就该不一样。
-              下面拼出来的自定义模块和它们并列出现在同一个工作台里。
               <br />
-              点每行的<b>「管理」</b>可以给内置应用改名 / 换图标 / <b>换分组 / 换配色</b> / 调顺序 / 调参数 / <b>整应用停用</b>
-              （停用会同时隐藏入口<b>并拦掉它的后端接口</b>，不是只藏图标）；<b>调顺序直接点排序列的 ↑↓</b> 更快，
-              客户端工作台从上到下就是这里的顺序。自定义模块请到下方模块清单里编辑
-              —— 两处都能改同一件事迟早对不上。
+              点每行的<b>「管理」</b>可以给内置应用改名 / 换图标 / <b>换分组 / 换配色</b> / 调参数 / <b>整应用停用</b>
+              （停用会同时隐藏入口<b>并拦掉它的后端接口</b>，不是只藏图标）。自定义模块点<b>「编辑」</b>
+              直接进下面的编辑区 —— 顺序在这一张表里统一管，内容在下面那一块里改，两件事分开才不会打架。
+              <br />
+              ⚠ 「原因 / 说明」列里写着<b>「没接数据来源」</b>的模块，在手机上打开就是一片空白：
+              点「编辑」，在<b>数据来源</b>那一块选一份数据就好了。
               <br />
               <b>分组</b>与<b>顶部公告</b>在下方「工作台版式」里统一改 —— 那两样是"整块工作台长什么样"，
               不属于某一个应用。
@@ -2522,6 +2547,10 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     · {{ (m.body || []).length }} 个内容块
                     · {{ visibleLabel(m) }}
                   </div>
+                  <!-- 没接数据源的模块一眼看出来：这是"光有界面没有内容"的现场证据 -->
+                  <div v-if="hasDataComp(m.body) && !m.onLoad" style="margin-top:4px">
+                    <el-tag size="small" type="danger" effect="plain">没接数据源 · 客户端打开是空的</el-tag>
+                  </div>
                 </div>
 
                 <el-divider content-position="left">模板库</el-divider>
@@ -2604,6 +2633,76 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                         角色和用户都留空 = 所有人可见（会写进免鉴权的 bootstrap）；只要填了任一项，就变成需登录才下发。
                       </div>
                     </div>
+                  </el-form-item>
+
+                  <!-- ===== 数据来源：这一块决定客户端打开时拿什么数据 ===== -->
+                  <el-divider content-position="left">数据来源（页面内容里的列表 / 表格 / 图表靠它才有内容）</el-divider>
+
+                  <el-alert v-if="mmHasDataComp && mmDataKind === 'none'" type="warning" :closable="false" show-icon
+                    title="这个模块里有列表 / 表格 / 图表，但还没接数据来源 —— 保存后客户端打开只能看到空边框。下面选一条就好。" />
+
+                  <el-form-item label="取数方式">
+                    <el-radio-group v-model="mmDataKind">
+                      <el-radio-button value="none">不取数</el-radio-button>
+                      <el-radio-button value="local">本服务器数据源</el-radio-button>
+                      <el-radio-button value="up">已登记的上游接口</el-radio-button>
+                      <el-radio-button value="raw">手填路径</el-radio-button>
+                    </el-radio-group>
+                  </el-form-item>
+
+                  <!-- 本服务器：下拉里每一条都是真能取到数的表，选完还告诉你有哪些字段 -->
+                  <template v-if="mmDataKind === 'local'">
+                    <el-form-item label="选哪份数据">
+                      <el-select v-model="mmOnLoadPath" filterable placeholder="如 盘点 · 商品档案" style="width:100%">
+                        <el-option v-for="s in mdSources.local" :key="s.path"
+                          :label="`${s.appTitle} · ${s.name}`" :value="s.path">
+                          <span>{{ s.appTitle }} · {{ s.name }}</span>
+                          <span class="hint" style="float:right">{{ s.key }}</span>
+                        </el-option>
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item v-if="mmLocalSrc" label="可用字段">
+                      <div style="width:100%">
+                        <el-tag v-for="c in mmLocalSrc.columns" :key="c.key" size="small" type="info"
+                          style="margin:0 6px 6px 0" class="mono">{{ c.key }}<span class="hint"> {{ c.label }}</span></el-tag>
+                        <div class="hint">
+                          把这些 key 填进下面表格的「列名」或列表的标题模板（写成 <code class="mono">{{name}}</code> 这样）。
+                        </div>
+                        <el-button size="small" type="primary" plain style="margin-top:6px"
+                          @click="applyLocalSource(mmLocalSrc.path)">
+                          一键接上（自动填好取值路径、表格列与刷新按钮）
+                        </el-button>
+                      </div>
+                    </el-form-item>
+                  </template>
+
+                  <!-- 上游：只给名字，绝不把对方地址显示在管理台上 -->
+                  <template v-if="mmDataKind === 'up'">
+                    <el-form-item label="接口">
+                      <el-select :model-value="mmUpName" filterable placeholder="已登记的上游接口"
+                        style="width:100%" @change="pickUpstream">
+                        <el-option v-for="u in mdSources.upstreams" :key="u.name"
+                          :label="u.label || u.name" :value="u.name" />
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="子路径">
+                      <el-input v-model="mmUpSub" placeholder="可留空，如 stock/overview" @change="syncUpPath" />
+                    </el-form-item>
+                    <el-alert v-if="!mdSources.upstreams.length" type="info" :closable="false"
+                      title="还没有登记上游接口。先去上游接口那页登记一条，这里才有得选。" />
+                  </template>
+
+                  <!-- 手填：路径非法的话服务端会直接 400 并说清原因，不靠猜 -->
+                  <el-form-item v-if="mmDataKind === 'raw'" label="路径">
+                    <el-input v-model="mmOnLoadPath" placeholder="/api/hooks/..." class="mono" />
+                  </el-form-item>
+
+                  <el-form-item v-if="mmDataKind !== 'none'" label="请求方式">
+                    <el-radio-group v-model="mmForm.onLoad.method">
+                      <el-radio-button value="GET">GET</el-radio-button>
+                      <el-radio-button value="POST">POST</el-radio-button>
+                    </el-radio-group>
+                    <code class="mono hint" style="margin-left:12px">{{ mmOnLoadPath || '（还没填路径）' }}</code>
                   </el-form-item>
 
                   <el-divider content-position="left">页面内容（{{ mmForm.body.length }} / {{ mm.capability.maxComponents }}）</el-divider>
@@ -7565,6 +7664,132 @@ const mmSubsDlg = ref(false);
 const mmSubs = ref([]);
 const mmForm = ref(newModuleForm());
 
+// ====== 数据来源（第四期：让 list / table / chart 真有内容） ======
+//
+// 🔴 2026-10-16 之前，管理台**根本不保存 onLoad**（mmPayload 里没这个字段）。
+//    后果是：哪怕从模板库载入一份自带 onLoad 的模板、哪怕管理员照着文档
+//    手填了一条取数路径，点保存之后 onLoad 就没了 —— 客户端拿到的是
+//    "一副漂亮的空架子"。这就是「光有界面没有内容」的根子。
+//    现在 onLoad 进了表单、也进了提交。
+const mdSources = ref({ local: [], upstreams: [], dataPath: 'data.rows' });
+
+/** 取数方式：一律从 onLoad.path 推，不另存一份状态（另存就一定会漂） */
+const mmDataKind = computed({
+  get() {
+    const p = mmForm.value.onLoad?.path || '';
+    if (!p) return 'none';
+    if (p.startsWith('/api/hooks/local/')) return 'local';
+    if (p.startsWith('/api/hooks/up/')) return 'up';
+    return 'raw';
+  },
+  set(v) {
+    if (v === 'none') { mmForm.value.onLoad = null; return; }
+    const p = mmForm.value.onLoad?.path || '';
+    // 从别的切法过来时，若是同族路径就留着（免得手填的长路径被一下清掉）
+    if (v === 'local') mmForm.value.onLoad = { action: 'api', path: p.startsWith('/api/hooks/local/') ? p : '', method: 'GET' };
+    else if (v === 'up') { mmForm.value.onLoad = { action: 'api', path: '', method: 'GET' }; enterUp(); }
+    else if (v === 'raw') mmForm.value.onLoad = { action: 'api', path: p.startsWith('/api/hooks/up/') ? '' : p, method: 'GET' };
+  },
+});
+
+const mmOnLoadPath = computed({
+  get() { return mmForm.value.onLoad?.path || ''; },
+  set(v) {
+    if (!mmForm.value.onLoad) mmForm.value.onLoad = { action: 'api', method: 'GET', path: v };
+    else mmForm.value.onLoad.path = v;
+  },
+});
+
+async function loadModuleSources() {
+  try {
+    const { data } = await api.get('/admin/module-sources');
+    mdSources.value = data;
+  } catch {
+    // 清单拿不到不该拦住编辑：手填路径那条路还在，只是没有下拉可挑
+  }
+}
+
+/** 把 body 里所有取数组件的 dataPath 与表格列一次配好（含卡内嵌套） */
+function applyLocalSource(path) {
+  const src = mdSources.value.local.find((s) => s.path === path);
+  if (!src) return;
+  const dp = mdSources.value.dataPath || 'data.rows';
+  var filled = 0;
+  const walk = (arr) => {
+    for (const c of arr) {
+      if (c.component === 'list' || c.component === 'chart') {
+        c.dataPath = dp;
+        if (c.component === 'list' && !c.itemTemplate.title) {
+          c.itemTemplate.title = '{{name}}';
+        }
+      }
+      if (c.component === 'table') {
+        c.dataPath = dp;
+        // 只在列还是空的时候覆盖：把人家手填好的列冲掉，比不填更惹人烦
+        if (!c.columns.some((x) => x.key)) {
+          c.columns = src.columns.map((x) => ({ key: x.key, label: x.label, width: x.width }));
+          filled++;
+        }
+      }
+      if (c.component === 'card' && Array.isArray(c.children)) walk(c.children);
+    }
+  };
+  walk(mmForm.value.body);
+  // 看板类模块得有个"点一下重新取数"的按钮，光进页面时取一次不够用
+  if (!mmForm.value.body.some((c) => c.component === 'action' && c.onTap?.path === path)) {
+    mmForm.value.body.push({
+      component: 'action', label: '刷新', color: 'primary',
+      onTap: { action: 'api', path, method: 'GET' },
+    });
+  }
+  ElMessage.success(`已接上「${src.appTitle} · ${src.name}」${filled ? `，顺手填好了 ${filled} 张表的列` : ''}`);
+}
+
+/**
+ * body 里有没有"靠数据才有意义"的组件（list / table / chart，含卡内嵌套）。
+ * 有却没接数据源 = 客户端打开就是空边框，这种状态必须在管理台上当场标出来，
+ * 而不是等龙哥在手机上看到一片空白才发现。
+ */
+function hasDataComp(body) {
+  const walk = (arr) => (arr || []).some((c) => (
+    ['list', 'table', 'chart'].includes(c.component)
+    || (c.component === 'card' && Array.isArray(c.children) && walk(c.children))
+  ));
+  return walk(body);
+}
+
+/** 编辑区那份：给"页面内容上面那块"的警告条用 */
+const mmHasDataComp = computed(() => hasDataComp(mmForm.value.body));
+
+/** 当前选中的本服务器数据源（用来把字段名摆到管理员眼前，省得靠猜） */
+const mmLocalSrc = computed(
+  () => mdSources.value.local.find((s) => s.path === (mmForm.value.onLoad?.path || '')) || null,
+);
+
+/** 上游：接口名 + 子路径 拼成 path（两边任一改动都回写） */
+const mmUpName = ref('');
+const mmUpSub = ref('');
+
+function syncUpPath() {
+  const name = mmUpName.value.trim();
+  if (!name) return;
+  const sub = mmUpSub.value.trim().replace(/^\/+|\/+$/g, '');
+  mmOnLoadPath.value = `/api/hooks/up/${name}${sub ? `/${sub}` : ''}`;
+}
+
+function pickUpstream(name) {
+  mmUpName.value = name || '';
+  syncUpPath();
+}
+
+/** 切到"上游"时把已登记的第一条先顶上去，省一次点击 */
+function enterUp() {
+  const first = mdSources.value.upstreams[0];
+  mmUpName.value = first ? first.name : '';
+  mmUpSub.value = '';
+  syncUpPath();
+}
+
 const mmActionTypes = [
   { value: 'api', label: '调用接口 /api/hooks/*' },
   { value: 'navigate', label: '跳内置页面' },
@@ -7584,6 +7809,9 @@ function newModuleForm() {
     roles: [],
     userIds: [],
     body: [blankComp('text')],
+    // 🔴 onLoad 必须进表单：它就是"这个模块的数据从哪来"。
+    //    没有它，list/table/chart 三种组件永远只画得出边框。
+    onLoad: null,
   };
 }
 
@@ -7621,6 +7849,9 @@ function visibleLabel(m) {
 async function loadMm() {
   const { data } = await api.get('/admin/modules');
   mm.value = data;
+  // 数据来源清单跟模块列表一起拿：管理员打开这一页就该立刻能选，
+  // 而不是先点开某一个模块才有下拉（那个时机看起来像"这功能坏了"）
+  loadModuleSources();
 }
 
 function selectModule(m) {
@@ -7636,12 +7867,33 @@ function selectModule(m) {
     userIds: [...(m.visibleTo?.userIds || [])],
     // 深拷贝：编辑中直接改 form，只有点保存才发出去（避免误改未保存就"生效"的错觉）
     body: JSON.parse(JSON.stringify(m.body || [])),
+    // 🔴 不回灌 onLoad 的话，点开一个早就配好取数的模块、再点保存，
+    //    取数配置就被静默抹掉了 —— 管理员还以为自己什么都没改。
+    onLoad: m.onLoad ? JSON.parse(JSON.stringify(m.onLoad)) : null,
   };
+  loadModuleSources();
 }
 
 function newModule() {
   mmSel.value = '';
   mmForm.value = newModuleForm();
+  loadModuleSources();
+}
+
+/**
+ * 总览表点「编辑」直接进编辑区。
+ * 以前管理员在总览里看到某个模块，得先记住 id、再滚下去在清单里找到它点开 ——
+ * 中间那一步是最容易忘记自己在改什么的。
+ */
+function editModuleById(id) {
+  const m = mm.value.modules.find((x) => x.moduleId === id);
+  if (!m) {
+    // 清单还没拉到（比如刚进页面）时退化成只提示，别静默什么都不做
+    ElMessage.warning(`模块「${id}」不在清单里，先点右边的「刷新」`);
+    return;
+  }
+  selectModule(m);
+  ElMessage.info(`已打开「${m.title}」${m.onLoad ? '' : '（这个模块还没接数据来源）'}`);
 }
 
 function addComp(type) {
@@ -7664,6 +7916,17 @@ function addChild(card) {
 /** 把表单模型转成要提交的 schema（与 appmodules.js 的 validate 对齐） */
 function mmPayload() {
   const f = mmForm.value;
+  // 🔴 onLoad 必须提交：它决定这个模块打开时去哪儿取数。
+  //    缺了它，list / table / chart 三种组件在客户端只有一个空壳边框，
+  //    管理员看到的现象就是「光有界面没有内容」。
+  //    留空则显式提交 null（不提交 = 服务端认为"不改"，清不掉旧的脏路径）。
+  const onLoad = f.onLoad && f.onLoad.path
+    ? {
+      action: f.onLoad.action || 'api',
+      path: String(f.onLoad.path).trim(),
+      method: f.onLoad.method || 'GET',
+    }
+    : null;
   const out = {
     moduleId: f.moduleId.trim(),
     title: f.title.trim(),
@@ -7673,6 +7936,7 @@ function mmPayload() {
     minClientVersion: f.minClientVersion.trim() || null,
     visibleTo: { roles: [...f.roles], userIds: [...f.userIds] },
     body: JSON.parse(JSON.stringify(f.body)),
+    onLoad,
   };
   return out;
 }
@@ -7738,8 +8002,16 @@ function applyTemplate(t) {
     roles: m.visibleTo?.roles || [],
     userIds: m.visibleTo?.userIds || [],
     body: m.body || [],
+    // 🔴 模板自带 onLoad（现在四份数据模板都自带了）：不带上就等于
+    //    "给你一副架子，数据你自己想办法"，正是被吐槽的那个现象
+    onLoad: m.onLoad ? JSON.parse(JSON.stringify(m.onLoad)) : null,
   };
-  ElMessage.info(`已载入模板「${t.name}」，确认内容后点保存`);
+  loadModuleSources();
+  ElMessage.info(
+    mmForm.value.onLoad
+      ? `已载入模板「${t.name}」，数据已接在 ${mmForm.value.onLoad.path}`
+      : `已载入模板「${t.name}」（这份模板不需要取数）`,
+  );
 }
 
 // ====== 上游接口（动态模块第三期：让列表 / 表格 / 图表真能取到数） ======
@@ -9913,6 +10185,76 @@ function bindUnauthorized() {
 // 而不是一堆开关（开关只会配出"入口在、点进去报错"的状态）。
 const appCatalog = ref({ builtin: [], dynamic: [], context: {} });
 const appWhy = ref({});
+
+/**
+ * 工作台**统一排序清单**：内置应用 + 自定义模块合成一张，按当前生效排序排好。
+ *
+ * 🔴 2026-10-16 之前这两组是两张表、两套序号：内置应用 10/20/30，
+ *    模块也 10/20/30，落到客户端就是两组交错、谁也压不住谁。
+ *    管理员想"把模块挪到打卡下面"，只能去改数字然后猜。
+ *    现在这里就是最终顺序，↑↓ 直接换，服务端统一发号。
+ *
+ * uid 里 `module:` 前缀是给服务端区分两类用的（见 POST /admin/order）。
+ */
+const wbOrder = computed(() => {
+  const bi = (appCatalog.value.builtin || []).map((a) => ({
+    uid: a.id,
+    kind: 'builtin',
+    id: a.id,
+    title: a.effective.title,
+    rawTitle: a.title,
+    desc: a.desc,
+    sort: Number(a.effective.sort) || 0,
+    disabled: !!a.disabled,
+    changed: !!a.changed,
+    changedFields: a.changedFields || [],
+    raw: a,
+  }));
+  const mo = (appCatalog.value.dynamic || []).map((m) => ({
+    uid: 'module:' + m.moduleId,
+    kind: 'module',
+    id: m.moduleId,
+    title: m.title,
+    rawTitle: m.title,
+    desc: `自定义模块 · ${(m.body || []).length} 个内容块`,
+    sort: Number(m.sort) || 0,
+    disabled: !m.enabled,
+    changed: false,
+    changedFields: [],
+    raw: m,
+  }));
+  // 排序号撞了就按 id 兜底，保证顺序稳定（不然每次刷新行都会乱跳）
+  return [...bi, ...mo].sort((a, b) => (a.sort - b.sort) || a.uid.localeCompare(b.uid));
+});
+
+/** 把整串顺序一次交给服务端发号（不是逐个 PATCH，避免中途失败留下半截顺序） */
+async function saveWbOrder(list) {
+  const order = (list || wbOrder.value).map((x) => x.uid);
+  if (!order.length) return ElMessage.warning('清单是空的');
+  try {
+    const { data } = await api.post('/admin/order', { order });
+    if (data.skipped && data.skipped.length) {
+      ElMessage.warning(`已保存 ${data.moved} 条，${data.skipped.length} 条不认识被跳过：${data.skipped.join('、')}`);
+    } else {
+      ElMessage.success('顺序已保存，客户端下次进工作台生效');
+    }
+    await loadAppCatalog();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存顺序失败');
+  }
+}
+
+/** ↑↓：和相邻行换位置后整串重发（序号由服务端按最终顺序统一生成） */
+async function wbMove(row, dir) {
+  const list = wbOrder.value;
+  const i = list.findIndex((x) => x.uid === row.uid);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  const next = [...list];
+  [next[i], next[j]] = [next[j], next[i]];
+  await saveWbOrder(next);
+}
+
 async function loadAppCatalog() {
   try {
     const { data } = await api.get('/admin/apps');
@@ -10034,7 +10376,7 @@ async function appMoveGroup(row, key) {
   if (!key) return;
   try {
     await api.patch('/admin/apps/' + row.id, { group: key });
-    ElMessage.success(`已把「${row.effective.title}」挪到「${groupLabelOf(key)}」，客户端下次进工作台生效`);
+    ElMessage.success(`已把「${row.title}」挪到「${groupLabelOf(key)}」，客户端下次进工作台生效`);
     await Promise.all([loadWorkbenchView(), loadAppCatalog()]);
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '挪分组失败');
@@ -10238,33 +10580,6 @@ async function saveAppAdm() {
     ElMessage.error(e.response?.data?.error || '保存失败');
   } finally {
     appAdm.saving = false;
-  }
-}
-
-/**
- * 总览页直接调序（龙哥 2026-09-26：不想为挪个顺序进抽屉填数字）。
- * 做法：按当前生效排序找到相邻行，两行**交换排序号**，各 PATCH 一次。
- * 两个 sort 相等时（历史数据撞号）交换不生效，退一步把后面那行
- * 挪一个位 —— 不追求完美布局，管理员随后还能再点。
- */
-async function appMove(row, dir) {
-  const list = [...(appCatalog.value.builtin || [])].sort(
-    (a, b) => (a.effective.sort - b.effective.sort) || a.id.localeCompare(b.id));
-  const i = list.findIndex((x) => x.id === row.id);
-  const j = i + dir;
-  if (i < 0 || j < 0 || j >= list.length) return;
-  const a = list[i], b = list[j];
-  let sa = a.effective.sort, sb = b.effective.sort;
-  if (sa === sb) sb = sb + (dir === -1 ? 1 : -1);
-  try {
-    await Promise.all([
-      api.patch('/admin/apps/' + a.id, { sort: sb }),
-      api.patch('/admin/apps/' + b.id, { sort: sa }),
-    ]);
-    ElMessage.success('已调整顺序，客户端下次进工作台生效');
-    await loadAppCatalog();
-  } catch (e) {
-    ElMessage.error(e.response?.data?.error || '调整顺序失败');
   }
 }
 

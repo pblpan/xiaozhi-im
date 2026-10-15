@@ -285,4 +285,73 @@ upRouter.use((req, res) => {
 
 router.use('/up', upRouter);
 
+// ─────────────────────────────────────────────────────────────────────
+//  本服务器数据源（动态模块第四期）
+//
+//    GET /api/hooks/local/<应用 id>/<数据源 key>
+//
+//  与 /up 并列，是动态模块取数的**第二条路**，但两者取的东西完全不同：
+//    · /up/<name>/...      —— 数据在**外面**（工厂 V2 / 餐饮 POS），服务端转发
+//    · /local/<app>/<key>  —— 数据就**在本库**（商档 / 盘点单 / 课程 / 部门）
+//
+//  安全模型与 /up 完全一致：
+//    · 必须已登录（这里是本服务器的真数据，没有"地址即凭证"这回事）
+//    · 路径里只有两个**名字**，真实 SQL 由服务端按名字查注册表得出 ——
+//      客户端既给不出任意 URL，也碰不到 SQL
+//    · 能不能取由**数据源自己声明**过才算（localdata 的 module 字段），
+//      默认最严：没声明 = 404
+//
+//  回包形状刻意与 /up 一致（{ ok, data }），这样客户端的模块渲染器
+//  完全不需要知道自己连的是哪条路。
+// ─────────────────────────────────────────────────────────────────────
+const localdata = require('../localdata');
+const LOCAL_ID_RE = /^[a-z][a-z0-9_]{1,31}$/;
+
+const localRouter = express.Router();
+
+localRouter.use((req, res, next) => {
+  const c = verifyToken(String(req.headers.authorization || '').replace('Bearer ', ''));
+  if (!c) return res.status(401).json({ error: 'unauthorized' });
+  if (upstreamRateLimited(c.uid)) {
+    return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
+  }
+  req._upUid = c.uid;
+  req._upRole = c.role;
+  next();
+});
+
+localRouter.use((req, res) => {
+  const seg = String(req.path || '').replace(/^\/+/, '').split('/');
+  const appId = (seg.shift() || '').trim();
+  const key = (seg.shift() || '').trim();
+
+  // 🔴 两个 id 都要过正则，而且是**先校验再查表**：
+  //    这是防路径遍历/注入的唯一一道门，放在查表前面才有效。
+  if (!LOCAL_ID_RE.test(appId) || !LOCAL_ID_RE.test(key)) {
+    return res.status(400).json({ error: '数据源路径不合法' });
+  }
+  const t0 = Date.now();
+  const r = localdata.rows(appId, key, req._upRole, req.query);
+  if (r.error) {
+    // 403 = 声明了但这个人不能看；404 = 根本没声明。
+    // 分开设状态码，排障时才知道该改数据源还是改人。
+    return res.status(r.code || 400).json({
+      error: r.error,
+      source: `${appId}/${key}`,
+    });
+  }
+  res.json({
+    ok: true,
+    source: `${appId}/${key}`,
+    status: 200,
+    ms: Date.now() - t0,
+    truncated: !!r.truncated,
+    // 🔴 `data.rows` 这个形状是客户端 dataPath 的约定（模板里写 data.rows），
+    //    改这里等于让所有已发布的 list/table 组件一夜之间取不到数
+    data: { rows: r.rows, total: r.total },
+  });
+});
+
+router.use('/local', localRouter);
+
 module.exports = router;
