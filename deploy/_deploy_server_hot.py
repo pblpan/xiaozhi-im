@@ -109,6 +109,10 @@ FILES = [
     #    10-12 的旧版：表现为"超时后再发起通话 win 端无反应""重连丢消息"，
     #    而且不报错。护栏（git status 比对）早就喊过，一直没加。
     'src/call.js',
+    # 🔴 2026-10-15 补：routes/call.js 也一直不在清单里 —— UU-b 的
+    #    /call/ice 下发 iceTransportPolicy 就在这个文件里，不推 = 打洞策略
+    #    服务端白配、客户端拿不到（同样不报错）。
+    'src/routes/call.js',
     'src/ws.js',
     # 🔴 2026-10-11 补：智能薪酬新文件（salary.js 是**新文件**，不在清单里就
     #    根本不会上传 —— routes/attendance.js require 它会直接 500，整个考勤
