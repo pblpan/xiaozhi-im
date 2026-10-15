@@ -6991,6 +6991,12 @@ watch(userSearch, () => {
   userSearchTimer = setTimeout(() => userPager.reset(), 300);
 });
 
+// 🔴 分页化时漏补的一个薄封装：模板「刷新」按钮与 保存/改角色/删除 三处都在调 loadUsers，
+// 但那次改造只给 groups/files/friends 补了同名封装，唯独 users 漏了 → loadUsers 一直是
+// 未定义，调用即抛 ReferenceError，被各函数的 catch 吞掉后统一显示"保存失败/更新失败/删除失败"
+// （请求其实已经成功，所以会先弹绿字再弹红字）。补齐后与 loadGroups/loadFiles 写法一致。
+async function loadUsers() { return userPager.reset(); }
+
 /**
  * 全部用户的轻量列表（**不分页**）。
  *

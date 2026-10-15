@@ -231,6 +231,10 @@ def write_cmd(src, dst, version):
 
 
 def write_text_gbk(dst, text):
+    # 🔴 防回归：GBK 编不了的符号（⚠️ / ⚠ 等 emoji、特殊符号）直接换成 GBK 里
+    #    有的等价物，否则打包会直接 UnicodeEncodeError 挂掉（2026-10-14 踩过）。
+    for k, v in (('⚠️', '※'), ('⚠', '※')):
+        text = text.replace(k, v)
     with open(dst, 'wb') as f:
         f.write(text.replace('\r\n', '\n').replace('\n', '\r\n').encode('gbk'))
 
@@ -373,7 +377,7 @@ def stage(version):
     · 查看运行日志.cmd     看日志（data\\logs\\server.log）
   （这些脚本的实体都在安装目录的 _sys\\ 子目录里。）
 
-  ⚠️ 不要在 PowerShell 里手动运行 _sys\\console.ps1 —— 那个脚本是给
+  注意：不要在 PowerShell 里手动运行 _sys\\console.ps1 —— 那个脚本是给
      「小智IM 服务端控制台.exe」用 -File 方式拉起的。用别的方式执行
      （比如把脚本内容粘进 PowerShell）会满屏"无法将 # 识别为 cmdlet"
      的报错，服务端也起不来。日常入口永远是桌面那个控制台。

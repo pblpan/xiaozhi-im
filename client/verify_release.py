@@ -187,7 +187,8 @@ WIN_MARKS = [
     'stocktake_result.dart',    # 出数页所在文件（AOT 为栈回溯保留文件名）
     'scan_record',              # 本地盘点流水表名：断网也能存，就靠它
     'stock_master',             # 本地商品档案表名：扫码能显示品名/账面，就靠它
-    '盘点盈亏',                  # 盈亏表页标题（UTF-16LE）
+    '扫码盈亏',                  # 盈亏表页标题（UTF-16LE）—— v0.14.5 时为「盘点盈亏」，
+                            #    v0.28.0 起改为「扫码盈亏」，旧串不再出现在产物里
     # ⚠️ 判据不是越多越好。StocktakeRepo / StockMasterRepo / LocalDb 同样命中，
     #    但三条新链路已经有代表，再堆只会让"哪天想改判据"变成考古。
     #    真正该加的是**下一期的新链路**，不是把同类再抄一遍。
@@ -255,7 +256,8 @@ ANDROID_ONLY_MARKS = [
     'stocktake_scan.dart',  # 该页所在文件（AOT 为栈回溯保留文件名）
     'shouldAcceptScan',     # 🔴 去重判据本身：证明"自己控重复"这段逻辑真的编进去了
                             #    （唯一能防住 DetectionSpeed.noDuplicates 那个坑的东西）
-    '扫码盘点',              # 扫码页标题（UTF-16LE）
+    '扫码枪',                # 扫码页标题（UTF-16LE）—— v0.14.5 时为「扫码盘点」，
+                            #    v0.28.0 起重命名为「扫码枪」，旧串不再出现在产物里
 ]
 APK_MARKS = list(WIN_MARKS) + ANDROID_ONLY_MARKS
 
