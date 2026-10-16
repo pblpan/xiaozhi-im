@@ -361,13 +361,13 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.bgElevated,
-          title: const Text('没有抽盘授权',
+          title:  Text('没有抽盘授权',
               style: TextStyle(color: AppColors.text, fontSize: 16)),
           content: Text(
             '您没有抽盘授权权限，请联系有权限的管理干部。\n\n'
             '（盘点位「${widget.zoneName}」。抽盘是主管定案那一步，'
             '服务端会拒绝无权账号上传的抽盘数据。）',
-            style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+            style: TextStyle(color: AppColors.textSub, fontSize: 13),
           ),
           actions: [
             TextButton(
@@ -376,7 +376,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
             if (canManage)
               TextButton(
                   onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('去授权',
+                  child:  Text('去授权',
                       style: TextStyle(
                           color: AppColors.brand,
                           fontWeight: FontWeight.w600))),
@@ -412,12 +412,12 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.bgElevated,
           title: Text('切到${InvPhase.label(phase)}？',
-              style: const TextStyle(color: AppColors.text, fontSize: 16)),
+              style: TextStyle(color: AppColors.text, fontSize: 16)),
           content: Text(
             '当前是${InvPhase.label(_phase)}，已扫 ${_rows.length} 种。\n\n'
             '切换后扫进来的商品会记到「${InvPhase.label(phase)}」单里。\n'
             '${InvPhase.label(_phase)}的数据不会丢，随时可以切回去看。',
-            style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+            style: TextStyle(color: AppColors.textSub, fontSize: 13),
           ),
           actions: [
             TextButton(
@@ -474,7 +474,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
         title: Text('提交$label',
-            style: const TextStyle(color: AppColors.text, fontSize: 16)),
+            style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           '本单 $no\n'
           '$summary\n\n'
@@ -482,7 +482,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
           '${nextP == null ? '' : (InvPhase.requiresDiffSetOnly(nextP) ? '差异集同时定格，'
               '${InvPhase.label(nextP)}就按它来复核。' : '接下来是${InvPhase.label(nextP)}：'
               '这一片要重新扫一遍，不限商品。')}',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+          style: TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
         actions: [
           TextButton(
@@ -490,7 +490,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               child: const Text('再盘盘')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('提交',
+              child:  Text('提交',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -533,14 +533,14 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
         title: Text('现在开始$label？',
-            style: const TextStyle(color: AppColors.text, fontSize: 16)),
+            style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           InvPhase.requiresDiffSetOnly(next)
               ? '上一轮有 $diff 个对不上的商品（含漏盘的）。\n'
                   '$label只收这些 —— 其他商品扫了不会被记上。'
               : '接下来是$label：这一片要重新扫一遍。\n'
                   '不限商品，初盘扫过的、没扫到的都算。',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+          style: TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
         actions: [
           TextButton(
@@ -568,11 +568,11 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
         title: Text('撤销提交$label？',
-            style: const TextStyle(color: AppColors.text, fontSize: 16)),
+            style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           '这张单（$no）会回到"可继续扫、可改数量"的状态。\n'
           '已经同步到服务端的数据不会因此撤销。',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+          style: TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
         actions: [
           TextButton(
@@ -580,7 +580,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               child: const Text('算了')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('撤销提交',
+              child:  Text('撤销提交',
                   style: TextStyle(color: AppColors.danger))),
         ],
       ),
@@ -623,14 +623,14 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
         title: Text('上传$label到服务端？',
-            style: const TextStyle(color: AppColors.text, fontSize: 16)),
+            style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           '本单 $no，共 ${_rows.length} 种商品。\n\n'
           '上传后服务端就把这张单归档，之后默认不能再覆盖 —— '
           '这是为了「盘点结果不能事后修饰」。\n'
           '传完还要改的话，得先找主管处理。\n\n'
           '（这张单的本地数据不会被清掉，随时还能查看和导出。）',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+          style: TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
         actions: [
           TextButton(
@@ -638,7 +638,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               child: const Text('再想想')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('上传',
+              child:  Text('上传',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -727,7 +727,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
         title: Text('有 ${rejected.length} 条没传上去',
-            style: const TextStyle(color: AppColors.text, fontSize: 16)),
+            style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: SizedBox(
           width: 420,
           child: SingleChildScrollView(
@@ -740,13 +740,13 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Text(
                       '${(r as Map)['barcode']} — ${r['reason'] ?? '未说明'}',
-                      style: const TextStyle(
+                      style:  TextStyle(
                           color: AppColors.danger, fontSize: 12),
                     ),
                   ),
                 if (rejected.length > items.length)
                   Text('…还有 ${rejected.length - items.length} 条',
-                      style: const TextStyle(
+                      style:  TextStyle(
                           color: AppColors.textWeak, fontSize: 12)),
               ],
             ),
@@ -781,12 +781,12 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('提交审批？',
+        title:  Text('提交审批？',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           '本单 $no（$label，${_rows.length} 种商品）交给主管审批。\n\n'
           '主管可以「通过」或「驳回」；被驳回时理由会显示出来。',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+          style: TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
         actions: [
           TextButton(
@@ -794,7 +794,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               child: const Text('不提')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('提交',
+              child:  Text('提交',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -854,7 +854,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('新建货架位',
+        title:  Text('新建货架位',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -864,8 +864,8 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               controller: ctl,
               autofocus: true,
               textCapitalization: TextCapitalization.characters,
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
-              decoration: const InputDecoration(
+              style: TextStyle(color: AppColors.text, fontSize: 15),
+              decoration:  InputDecoration(
                 labelText: '货架位码（如 A01）',
                 labelStyle:
                     TextStyle(color: AppColors.textWeak, fontSize: 13),
@@ -875,8 +875,8 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
             TextField(
               key: const Key('loc-name-input'),
               controller: nameCtl,
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
-              decoration: const InputDecoration(
+              style: TextStyle(color: AppColors.text, fontSize: 15),
+              decoration:  InputDecoration(
                 labelText: '名字（可留空）',
                 labelStyle:
                     TextStyle(color: AppColors.textWeak, fontSize: 13),
@@ -890,7 +890,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('建好',
+              child:  Text('建好',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -982,40 +982,40 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               ListTile(
                 title: Text(
                   '${InventoryExport.nameOf(r)}　${r['barcode']}',
-                  style: const TextStyle(color: AppColors.text, fontSize: 13),
+                  style: TextStyle(color: AppColors.text, fontSize: 13),
                 ),
               ),
               if (_editable)
                 ListTile(
                   key: const Key('row-menu-bind'),
-                  leading: const Icon(Icons.link, color: AppColors.brand),
+                  leading: Icon(Icons.link, color: AppColors.brand),
                   title: Text(
                       _locCode == null
                           ? '绑到货架位（先选一个货架位）'
                           : '绑到货架位 $_locCode',
-                      style: const TextStyle(color: AppColors.text)),
+                      style: TextStyle(color: AppColors.text)),
                   onTap: () => Navigator.pop(ctx, 'bind'),
                 ),
               ListTile(
                 key: const Key('row-menu-where'),
-                leading: const Icon(Icons.place_outlined,
+                leading:  Icon(Icons.place_outlined,
                     color: AppColors.textSub),
-                title: const Text('看它在哪些货架位',
+                title:  Text('看它在哪些货架位',
                     style: TextStyle(color: AppColors.text)),
                 onTap: () => Navigator.pop(ctx, 'where'),
               ),
               if (_editable)
                 ListTile(
                   key: const Key('row-menu-delete'),
-                  leading: const Icon(Icons.delete_outline,
+                  leading:  Icon(Icons.delete_outline,
                       color: AppColors.danger),
-                  title: const Text('删掉这一行',
+                  title:  Text('删掉这一行',
                       style: TextStyle(color: AppColors.danger)),
                   onTap: () => Navigator.pop(ctx, 'delete'),
                 ),
               ListTile(
-                leading: const Icon(Icons.close, color: AppColors.textWeak),
-                title: const Text('先不用',
+                leading: Icon(Icons.close, color: AppColors.textWeak),
+                title:  Text('先不用',
                     style: TextStyle(color: AppColors.textSub)),
                 onTap: () => Navigator.pop(ctx),
               ),
@@ -1038,17 +1038,17 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.bgElevated,
-          title: const Text('删掉这一行？',
+          title:  Text('删掉这一行？',
               style: TextStyle(color: AppColors.text, fontSize: 16)),
           content: Text('${InventoryExport.nameOf(r)}　${r['barcode']}',
-              style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
+              style: TextStyle(color: AppColors.textSub, fontSize: 13)),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
                 child: const Text('取消')),
             TextButton(
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('删除',
+                child:  Text('删除',
                     style: TextStyle(color: AppColors.danger))),
           ],
         ),
@@ -1075,13 +1075,13 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('$barcode 绑定的货架位',
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.text,
                       fontSize: 15,
                       fontWeight: FontWeight.w600)),
               const SizedBox(height: 10),
               if (rows.isEmpty)
-                const Text(
+                 Text(
                   '一个都没绑。\n\n'
                   '这不影响盘：扫它照样能记，只是"记在哪儿"要靠你上面选的货架位。\n'
                   '在货架前把它绑一次，以后它就知道自己在哪儿了。',
@@ -1094,13 +1094,13 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Row(
                       children: [
-                        const Icon(Icons.place,
+                         Icon(Icons.place,
                             size: 16, color: AppColors.brand),
                         const SizedBox(width: 6),
                         Text(
                           '${r['zone_code']} / ${r['loc_code']}'
                           '${(r['zone_name'] ?? '') == '' ? '' : '（${r['zone_name']}）'}',
-                          style: const TextStyle(
+                          style:  TextStyle(
                               color: AppColors.text, fontSize: 13),
                         ),
                       ],
@@ -1171,13 +1171,13 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                         size: 18, color: phaseColor(phase)),
                     const SizedBox(width: 8),
                     Text(isReview ? '抽盘复核' : '${InvPhase.label(phase)}差异',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             color: AppColors.text,
                             fontSize: 16,
                             fontWeight: FontWeight.w600)),
                     const Spacer(),
                     Text('盘点位 ${widget.zoneCode}',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             color: AppColors.textWeak, fontSize: 11)),
                   ],
                 ),
@@ -1247,7 +1247,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                                     '这一遍没扫到的"漏盘"。一条都没有，说明两遍完全一致；'
                                     '也可能是这一阶段还没扫。）',
                             textAlign: TextAlign.center,
-                            style: const TextStyle(
+                            style:  TextStyle(
                                 color: AppColors.textWeak,
                                 fontSize: 13,
                                 height: 1.7),
@@ -1350,7 +1350,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
           SizedBox(
             width: 24,
             child: Text('$idx',
-                style: const TextStyle(
+                style:  TextStyle(
                     color: AppColors.textWeak, fontSize: 12)),
           ),
           Expanded(
@@ -1358,7 +1358,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(InventoryExport.nameOf(r),
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.text, fontSize: 14),
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 3),
@@ -1381,7 +1381,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                     seg('复盘', a2, '（没盘过）'),
                     seg('抽盘', a3, '（未复核）'),
                   ].join(' → '),
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.textSub, fontSize: 12),
                 ),
                 const SizedBox(height: 3),
@@ -1445,7 +1445,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
           SizedBox(
             width: 24,
             child: Text('$idx',
-                style: const TextStyle(
+                style:  TextStyle(
                     color: AppColors.textWeak, fontSize: 12)),
           ),
           Expanded(
@@ -1453,7 +1453,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(InventoryExport.nameOf(r),
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.text, fontSize: 14),
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 3),
@@ -1570,13 +1570,13 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('清除本点位盘点数据（不可恢复）',
+        title:  Text('清除本点位盘点数据（不可恢复）',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           '会删掉「${widget.zoneName}」下所有阶段的盘点单与扫码明细。\n'
           '点位、货架位、商品绑定这些档案会保留。\n\n'
           '（只清本机数据，已经同步到服务端的不会被删。）',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+          style: TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
         actions: [
           TextButton(
@@ -1585,7 +1585,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
               child:
-                  const Text('清除', style: TextStyle(color: AppColors.danger))),
+                  Text('清除', style: TextStyle(color: AppColors.danger))),
         ],
       ),
     );
@@ -1648,7 +1648,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
         title: Text(widget.zoneName,
-            style: const TextStyle(color: AppColors.text, fontSize: 17)),
+            style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
           IconButton(
             key: const Key('inv-diff-btn'),
@@ -1663,7 +1663,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
             onPressed: _loading ? null : _showDiffSheet,
           ),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: AppColors.textSub),
+            icon: Icon(Icons.more_vert, color: AppColors.textSub),
             onSelected: (v) {
               if (v == 'clear') _clearZoneData();
               if (v == 'approvals') _openApprovals();
@@ -1676,7 +1676,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                 enabled: false,
                 child: Text(
                   '本单：${InvSheetStatus.label((_sheet?['status'] as num?)?.toInt() ?? InvSheetStatus.open)}',
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.textWeak, fontSize: 12),
                 ),
               ),
@@ -1803,7 +1803,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                 const SizedBox(height: 2),
                 Text(
                   subText,
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.textWeak, fontSize: 10),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1821,10 +1821,10 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
         padding: const EdgeInsets.fromLTRB(11, 0, 11, 8),
         child: Row(
           children: [
-            const Icon(Icons.place_outlined,
+             Icon(Icons.place_outlined,
                 size: 15, color: AppColors.textWeak),
             const SizedBox(width: 5),
-            const Text('货架位：',
+             Text('货架位：',
                 style: TextStyle(color: AppColors.textWeak, fontSize: 12)),
             Expanded(
               child: SizedBox(
@@ -1833,7 +1833,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                   scrollDirection: Axis.horizontal,
                   children: [
                     if (_locs.isEmpty)
-                      const Center(
+                       Center(
                         child: Text('还没建，扫到没绑过的商品会不记货架位',
                             style: TextStyle(
                                 color: AppColors.textWeak, fontSize: 11)),
@@ -1848,7 +1848,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
               key: const Key('inv-new-loc'),
               borderRadius: BorderRadius.circular(999),
               onTap: _newLocation,
-              child: const Padding(
+              child:  Padding(
                 padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1913,7 +1913,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                   key: const Key('inv-camera'),
                   borderRadius: BorderRadius.circular(AppRadii.sm),
                   onTap: _openCamera,
-                  child: const Padding(
+                  child:  Padding(
                     padding: EdgeInsets.symmetric(horizontal: 12, vertical: 11),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1946,11 +1946,11 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                 enableSuggestions: false,
                 autocorrect: false,
                 textInputAction: TextInputAction.done,
-                style: const TextStyle(color: AppColors.text, fontSize: 15),
+                style: TextStyle(color: AppColors.text, fontSize: 15),
                 decoration: InputDecoration(
                   hintText: '扫码枪直接打，或手输条码回车',
                   hintStyle:
-                      const TextStyle(color: AppColors.textWeak, fontSize: 13),
+                      TextStyle(color: AppColors.textWeak, fontSize: 13),
                   filled: true,
                   fillColor: AppColors.surface,
                   isDense: true,
@@ -1994,7 +1994,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
             Expanded(
               child: Text(
                 _sheet == null ? '还没开始' : (_sheet!['sheet_no'] ?? '').toString(),
-                style: const TextStyle(color: AppColors.textWeak, fontSize: 11),
+                style: TextStyle(color: AppColors.textWeak, fontSize: 11),
                 overflow: TextOverflow.ellipsis,
               ),
             ),
@@ -2060,12 +2060,12 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.task_alt, size: 44, color: AppColors.brand),
+              Icon(Icons.task_alt, size: 44, color: AppColors.brand),
               const SizedBox(height: 14),
-              const Text('前两遍都对得上',
+               Text('前两遍都对得上',
                   style: TextStyle(color: AppColors.text, fontSize: 15)),
               const SizedBox(height: 10),
-              const Text(
+               Text(
                 '初盘和复盘没盘出差异，这一遍没有要复核的商品。\n'
                 '回点位看一眼差异表就行。',
                 textAlign: TextAlign.center,
@@ -2094,12 +2094,12 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
             Icon(Icons.qr_code_scanner, size: 44, color: pc),
             const SizedBox(height: 14),
             Text('${InvPhase.label(_phase)}还没扫',
-                style: const TextStyle(color: AppColors.text, fontSize: 15)),
+                style: TextStyle(color: AppColors.text, fontSize: 15)),
             const SizedBox(height: 10),
             Text(
               _emptyHint(),
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style:  TextStyle(
                   color: AppColors.textWeak, fontSize: 13, height: 1.7),
             ),
           ],
@@ -2141,7 +2141,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
             SizedBox(
               width: 26,
               child: Text('$idx',
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.textWeak, fontSize: 12)),
             ),
             Expanded(
@@ -2162,7 +2162,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                       Flexible(
                         child: Text(
                           bc,
-                          style: const TextStyle(
+                          style:  TextStyle(
                               color: AppColors.textWeak, fontSize: 11),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -2173,13 +2173,13 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                             size: 11,
                             color: AppColors.textWeak.withValues(alpha: 0.9)),
                         Text(lc,
-                            style: const TextStyle(
+                            style:  TextStyle(
                                 color: AppColors.textWeak, fontSize: 11)),
                       ],
                       if (acc != null) ...[
                         const SizedBox(width: 6),
                         Text('账面 ${fmtQty(acc)}',
-                            style: const TextStyle(
+                            style:  TextStyle(
                                 color: AppColors.textWeak, fontSize: 11)),
                       ],
                     ],
@@ -2337,7 +2337,7 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                 key: const Key('inv-reopen'),
                 tooltip: '撤销提交（回到可继续扫、可改数量）',
                 onPressed: _netBusy ? null : _reopen,
-                icon: const Icon(Icons.lock_open,
+                icon:  Icon(Icons.lock_open,
                     size: 20, color: AppColors.warn),
               ),
             IconButton(
@@ -2349,14 +2349,14 @@ class _InventoryCollectPageState extends State<InventoryCollectPage> {
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.table_chart_outlined,
+                  :  Icon(Icons.table_chart_outlined,
                       color: AppColors.textSub),
             ),
             IconButton(
               key: const Key('inv-export-doc'),
               tooltip: '导出本阶段明细文档',
               onPressed: _exporting ? null : () => _exportRows(asDoc: true),
-              icon: const Icon(Icons.description_outlined,
+              icon:  Icon(Icons.description_outlined,
                   color: AppColors.textSub),
             ),
           ],

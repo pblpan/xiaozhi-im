@@ -169,8 +169,8 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
         title: Text('解除 $label 的抽盘授权？',
-            style: const TextStyle(color: AppColors.text, fontSize: 16)),
-        content: const Text(
+            style: TextStyle(color: AppColors.text, fontSize: 16)),
+        content:  Text(
           '解除后 ta 进不了抽盘，上传的抽盘单也会被服务端拒绝。\n\n'
           '这条授权记录不会删掉，会留一条"什么时候被解除"的痕迹，'
           '以后还能查。真要让 ta 重新抽盘，再授一次即可（会重新计时）。',
@@ -182,7 +182,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
               child: const Text('不解除')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('解除',
+              child:  Text('解除',
                   style: TextStyle(
                       color: AppColors.danger, fontWeight: FontWeight.w600))),
         ],
@@ -269,12 +269,12 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('抽盘授权',
+        title:  Text('抽盘授权',
             style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
           IconButton(
             tooltip: '刷新',
-            icon: const Icon(Icons.refresh, color: AppColors.textSub),
+            icon: Icon(Icons.refresh, color: AppColors.textSub),
             onPressed: _loading ? null : () => _load(),
           ),
         ],
@@ -305,13 +305,13 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.cloud_off, color: AppColors.danger, size: 40),
+              Icon(Icons.cloud_off, color: AppColors.danger, size: 40),
               const SizedBox(height: 12),
               Text(msg,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
+                  style: TextStyle(color: AppColors.textSub, fontSize: 13)),
               const SizedBox(height: 6),
-              const Text('抽盘授权只有连上服务器才能看和改。',
+               Text('抽盘授权只有连上服务器才能看和改。',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: AppColors.textWeak, fontSize: 12)),
               const SizedBox(height: 16),
@@ -339,13 +339,13 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.fact_check_outlined,
+               Icon(Icons.fact_check_outlined,
                   color: AppColors.brand, size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   '${widget.zoneName}（${widget.zoneCode}）',
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.text,
                       fontSize: 15,
                       fontWeight: FontWeight.w600),
@@ -354,7 +354,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          const Text(
+           Text(
             '初盘、复盘是"数"，抽盘是"定案"。被授权的人才能开抽盘单、'
             '才能把抽盘数据传上来。',
             style: TextStyle(color: AppColors.textSub, fontSize: 12, height: 1.5),
@@ -377,7 +377,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
           ),
           if (_isAdmin) ...[
             const SizedBox(height: 10),
-            const Text(
+             Text(
               '管理员不需要出现在下面的名单里 —— 系统默认管理员可抽盘，'
               '否则新点位建出来当天没人开得了第一张抽盘单。',
               style: TextStyle(
@@ -399,7 +399,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: AppColors.warn.withValues(alpha: 0.35)),
         ),
-        child: const Row(
+        child:  Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(Icons.lock_outline, color: AppColors.warn, size: 16),
@@ -448,7 +448,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
                       ? const _MiniSpin()
                       : TextButton(
                           onPressed: () => _revoke(uid, _name(g)),
-                          child: const Text('解除',
+                          child:  Text('解除',
                               style: TextStyle(
                                   color: AppColors.danger, fontSize: 13)),
                         )
@@ -475,26 +475,26 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
             key: const Key('grant-search'),
             controller: _qCtrl,
             onChanged: (v) => setState(() => _q = v),
-            style: const TextStyle(color: AppColors.text, fontSize: 14),
+            style: TextStyle(color: AppColors.text, fontSize: 14),
             decoration: InputDecoration(
               isDense: true,
               hintText: '搜昵称 / 账号（工号）',
-              hintStyle: const TextStyle(color: AppColors.textWeak, fontSize: 13),
+              hintStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
               prefixIcon:
-                  const Icon(Icons.search, color: AppColors.textWeak, size: 18),
+                  Icon(Icons.search, color: AppColors.textWeak, size: 18),
               filled: true,
               fillColor: AppColors.surface,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: AppColors.border),
+                borderSide: BorderSide(color: AppColors.border),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: AppColors.border),
+                borderSide: BorderSide(color: AppColors.border),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: AppColors.brand, width: 1.4),
+                borderSide: BorderSide(color: AppColors.brand, width: 1.4),
               ),
             ),
           ),
@@ -523,7 +523,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
                           ? const _MiniSpin()
                           : TextButton(
                               onPressed: () => _grant(uid, _name(m)),
-                              child: const Text('授权',
+                              child:  Text('授权',
                                   style: TextStyle(
                                       color: AppColors.brand,
                                       fontWeight: FontWeight.w600,
@@ -536,7 +536,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
               padding: const EdgeInsets.only(top: 6),
               child: Text(
                 '还有 ${cands.length - shown.length} 人没显示，用上面的搜索框缩小范围。',
-                style: const TextStyle(color: AppColors.textWeak, fontSize: 11),
+                style: TextStyle(color: AppColors.textWeak, fontSize: 11),
               ),
             ),
         ],
@@ -560,7 +560,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
       children: [
         const SizedBox(height: 18),
         _sectionTitle('已解除（留痕）', dead.length),
-        const Padding(
+         Padding(
           padding: EdgeInsets.only(bottom: 8),
           child: Text(
             '这些记录不会删除：谁、什么时候被授过、什么时候被解除，都留着。',
@@ -578,7 +578,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
                     ? const _MiniSpin()
                     : TextButton(
                         onPressed: () => _grant(uid, _name(g)),
-                        child: const Text('重新授权',
+                        child:  Text('重新授权',
                             style: TextStyle(
                                 color: AppColors.brand, fontSize: 13)),
                       )
@@ -596,13 +596,13 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
         child: Row(
           children: [
             Text(text,
-                style: const TextStyle(
+                style:  TextStyle(
                     color: AppColors.text,
                     fontSize: 14,
                     fontWeight: FontWeight.w600)),
             const SizedBox(width: 6),
             Text('$count',
-                style: const TextStyle(color: AppColors.textWeak, fontSize: 12)),
+                style: TextStyle(color: AppColors.textWeak, fontSize: 12)),
           ],
         ),
       );
@@ -617,7 +617,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
           border: Border.all(color: AppColors.border),
         ),
         child: Text(text,
-            style: const TextStyle(
+            style:  TextStyle(
                 color: AppColors.textSub, fontSize: 12, height: 1.5)),
       );
 
@@ -662,7 +662,7 @@ class _InventoryGrantScreenState extends State<InventoryGrantScreen> {
                   const SizedBox(height: 2),
                   Text(subtitle,
                       maxLines: 2,
-                      style: const TextStyle(
+                      style:  TextStyle(
                           color: AppColors.textWeak, fontSize: 11, height: 1.4)),
                 ],
               ),

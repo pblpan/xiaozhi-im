@@ -34,7 +34,7 @@ final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (Platform.isAndroid) {
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    SystemChrome.setSystemUIOverlayStyle( SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
       systemNavigationBarColor: AppColors.bg,
@@ -59,6 +59,9 @@ void main() async {
   await ImApi().restore(); // 冷启动恢复登录态（否则请求全 401）
   await SoundService().init(); // 读提示音开关 + 预加载音频
   SoundService().attach(); // 全局监听新消息，收到就响一声
+  // 皮肤（深色/浅色）：必须在 runApp 之前定好，否则首帧还是旧皮肤闪一下。
+  // 顺序放在 SharedPreferences 已经能用的任何 Service 之后即可。
+  await AppSkin.load();
   // 新消息通知 + 桌面图标角标（仅 Android）。与 SoundService 挂同一条流：
   // socket 收到 message:new 时响一声（前台）+ 弹通知（后台）。
   MessageNotifier.instance.attach();
@@ -127,14 +130,18 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<String>(
-        // 窗口 / 任务栏标题也跟随公司名（Windows 桌面端最显眼的位置）。
-        // 只在公司名变化时重建一次，MaterialApp 的 Element 会复用，不丢状态。
-        valueListenable: Workspace.brand,
-        builder: (_, brand, __) => MaterialApp(
-          title: brand,
-          navigatorKey: appNavigatorKey,
-          theme: AppTheme.dark(),
+  Widget build(BuildContext context) => ValueListenableBuilder<AppPalette>(
+        // 皮肤监听放最外层：换肤时整棵 MaterialApp 重建，
+        // theme 与 1400 多处 AppColors.* 一起换（静态字段已被 AppSkin.apply 重写）。
+        valueListenable: AppSkin.changed,
+        builder: (_, pal, __) => ValueListenableBuilder<String>(
+          // 窗口 / 任务栏标题也跟随公司名（Windows 桌面端最显眼的位置）。
+          // 只在公司名变化时重建一次，MaterialApp 的 Element 会复用，不丢状态。
+          valueListenable: Workspace.brand,
+          builder: (_, brand, __) => MaterialApp(
+            title: brand,
+            navigatorKey: appNavigatorKey,
+            theme: AppTheme.build(pal),
           // 🔴 固定 zh：现场全是中文用户，不跟系统语言走（跟了反而不可控）。
           //    长按文本选择菜单、日期选择器、对话框按钮等框架文案随之变中文。
           locale: const Locale('zh'),
@@ -155,6 +162,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               ? IntegrityBlockedScreen(reason: Integrity.blocked!)
               : const AuthGate(),
           debugShowCheckedModeBanner: false,
+          ),
         ),
       );
 }
@@ -175,20 +183,20 @@ class IntegrityBlockedScreen extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.gpp_bad_rounded,
+                   Icon(Icons.gpp_bad_rounded,
                       size: 56, color: AppColors.danger),
                   const SizedBox(height: 18),
                   Text(
                     reason,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style:  TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w600,
                       color: AppColors.text,
                     ),
                   ),
                   const SizedBox(height: 10),
-                  const Text(
+                   Text(
                     '请从官方安装包重新安装后再使用。\n'
                     '（出现这个提示说明程序文件被改动过，出于安全考虑已停止运行）',
                     textAlign: TextAlign.center,
@@ -207,7 +215,7 @@ class IntegrityBlockedScreen extends StatelessWidget {
                       ),
                       child: Text(
                         Integrity.detail!,
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 11,
                             height: 1.6,
                             fontFamily: 'monospace',

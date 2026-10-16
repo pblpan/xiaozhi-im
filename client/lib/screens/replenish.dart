@@ -212,17 +212,17 @@ class _ReplenishPageState extends State<ReplenishPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('删掉这一行？',
+        title:  Text('删掉这一行？',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text('${r['barcode']}\n删掉后可以重新扫这个条码。',
-            style: const TextStyle(color: AppColors.textSub, fontSize: 14)),
+            style: TextStyle(color: AppColors.textSub, fontSize: 14)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除',
+              child:  Text('删除',
                   style: TextStyle(
                       color: AppColors.danger, fontWeight: FontWeight.w600))),
         ],
@@ -245,17 +245,17 @@ class _ReplenishPageState extends State<ReplenishPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('改数量',
+        title:  Text('改数量',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: TextField(
           controller: ctl,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          style: const TextStyle(color: AppColors.text, fontSize: 15),
+          style: TextStyle(color: AppColors.text, fontSize: 15),
           decoration: InputDecoration(
             labelText: '数量（$unit）',
             labelStyle:
-                const TextStyle(color: AppColors.textWeak, fontSize: 13),
+                TextStyle(color: AppColors.textWeak, fontSize: 13),
           ),
         ),
         actions: [
@@ -264,7 +264,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存',
+              child:  Text('保存',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -338,9 +338,9 @@ class _ReplenishPageState extends State<ReplenishPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('清除本机全部补货数据？',
+        title:  Text('清除本机全部补货数据？',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
-        content: const Text(
+        content:  Text(
           '会删掉本机**所有**补货单和明细（生鲜 + 杂百）。\n'
           '盘点单、减货单、简易盘点**一个字节都不会动**。',
           style: TextStyle(color: AppColors.textSub, fontSize: 14),
@@ -351,7 +351,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('清除',
+              child:  Text('清除',
                   style: TextStyle(
                       color: AppColors.danger, fontWeight: FontWeight.w600))),
         ],
@@ -383,7 +383,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
           shrinkWrap: true,
           children: briefs.isEmpty
               ? [
-                  const Padding(
+                   Padding(
                     padding: EdgeInsets.all(20),
                     child: Text('还没有历史补货单',
                         style: TextStyle(color: AppColors.textWeak)),
@@ -392,12 +392,12 @@ class _ReplenishPageState extends State<ReplenishPage> {
               : briefs
                   .map((s) => ListTile(
                         title: Text((s['sheet_no'] ?? '').toString(),
-                            style: const TextStyle(
+                            style:  TextStyle(
                                 color: AppColors.text, fontSize: 13)),
                         subtitle: Text(
                           '${ReplenishScene.label((s['scene'] ?? '').toString())}'
                           ' · ${s['rows']} 行 · 合计 ${s['total_qty']}',
-                          style: const TextStyle(
+                          style:  TextStyle(
                               color: AppColors.textSub, fontSize: 12),
                         ),
                         onTap: () =>
@@ -443,24 +443,24 @@ class _ReplenishPageState extends State<ReplenishPage> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('补货',
+        title:  Text('补货',
             style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
           IconButton(
             key: const Key('replenish-history'),
             tooltip: '历史补货单',
-            icon: const Icon(Icons.history, color: AppColors.textSub),
+            icon: Icon(Icons.history, color: AppColors.textSub),
             onPressed: _busy ? null : _pickSheet,
           ),
           IconButton(
             key: const Key('replenish-export'),
             tooltip: '导出 CSV',
-            icon: const Icon(Icons.ios_share, color: AppColors.textSub),
+            icon: Icon(Icons.ios_share, color: AppColors.textSub),
             onPressed: _busy ? null : _export,
           ),
           PopupMenuButton<String>(
             key: const Key('replenish-menu'),
-            icon: const Icon(Icons.more_vert, color: AppColors.textSub),
+            icon: Icon(Icons.more_vert, color: AppColors.textSub),
             onSelected: (v) {
               switch (v) {
                 case 'submit':
@@ -511,17 +511,17 @@ class _ReplenishPageState extends State<ReplenishPage> {
                     color: AppColors.danger.withValues(alpha: 0.15),
                     padding: const EdgeInsets.all(12),
                     child: Text(_error!,
-                        style: const TextStyle(
+                        style:  TextStyle(
                             color: AppColors.danger, fontSize: 13)),
                   ),
                 _sceneBar(),
                 _header(status),
                 _inputBar(),
-                const Divider(height: 1, color: AppColors.divider),
+                Divider(height: 1, color: AppColors.divider),
                 _listHeader(),
                 Expanded(
                   child: _rows.isEmpty
-                      ? const Center(
+                      ?  Center(
                           child: Text('还没有补货记录，扫一个条码开始',
                               style: TextStyle(
                                   color: AppColors.textWeak, fontSize: 14)),
@@ -529,7 +529,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
                       : ListView.separated(
                           itemCount: _rows.length,
                           separatorBuilder: (_, __) =>
-                              const Divider(height: 1, color: AppColors.divider),
+                              Divider(height: 1, color: AppColors.divider),
                           itemBuilder: (_, i) => _rowTile(_rows[i]),
                         ),
                 ),
@@ -547,7 +547,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
       child: Row(
         children: [
-          const Text('场景',
+           Text('场景',
               style: TextStyle(color: AppColors.textWeak, fontSize: 12)),
           const SizedBox(width: 10),
           Expanded(
@@ -591,7 +591,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
               Expanded(
                 child: Text(_sheetNo,
                     key: const Key('replenish-sheet-no'),
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.text,
                         fontSize: 14,
                         fontWeight: FontWeight.w600)),
@@ -621,7 +621,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
           const SizedBox(height: 4),
           Text(ReplenishExport.summaryText(_tally, _scene),
               key: const Key('replenish-summary'),
-              style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
+              style: TextStyle(color: AppColors.textSub, fontSize: 13)),
           // 「每分钟补货」是 PG 那版有的效率列。不到 1 分钟不给数 ——
           // 拿 20 秒去除会得到虚高的数，而它会被当成"这人补得真快"看。
           if (_rows.isNotEmpty && _sheet != null)
@@ -629,11 +629,11 @@ class _ReplenishPageState extends State<ReplenishPage> {
               padding: const EdgeInsets.only(top: 2),
               child: Text(_speedText(),
                   key: const Key('replenish-speed'),
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.textWeak, fontSize: 12)),
             ),
           if (!_editable && !_loading)
-            const Padding(
+             Padding(
               padding: EdgeInsets.only(top: 2),
               child: Text('这一单已提交，不能再改（右上角菜单可撤销提交或开新单）',
                   key: Key('replenish-locked-hint'),
@@ -671,7 +671,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
               child: InkWell(
                 borderRadius: BorderRadius.circular(AppRadii.sm),
                 onTap: (_editable && !_busy) ? _openCamera : null,
-                child: const Padding(
+                child:  Padding(
                   padding: EdgeInsets.symmetric(horizontal: 12, vertical: 11),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -700,8 +700,8 @@ class _ReplenishPageState extends State<ReplenishPage> {
               enabled: _editable,
               autofocus: true,
               textInputAction: TextInputAction.next,
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
-              decoration: const InputDecoration(
+              style: TextStyle(color: AppColors.text, fontSize: 15),
+              decoration:  InputDecoration(
                 labelText: '条码',
                 isDense: true,
                 labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
@@ -718,12 +718,12 @@ class _ReplenishPageState extends State<ReplenishPage> {
               enabled: _editable,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
+              style: TextStyle(color: AppColors.text, fontSize: 15),
               decoration: InputDecoration(
                 labelText: '数量($unit)',
                 isDense: true,
                 labelStyle:
-                    const TextStyle(color: AppColors.textWeak, fontSize: 12),
+                    TextStyle(color: AppColors.textWeak, fontSize: 12),
               ),
               onSubmitted: (_) => _addRow(),
             ),
@@ -741,11 +741,11 @@ class _ReplenishPageState extends State<ReplenishPage> {
   }
 
   Widget _listHeader() {
-    const style = TextStyle(color: AppColors.textWeak, fontSize: 12);
+    final style = TextStyle(color: AppColors.textWeak, fontSize: 12);
     return Container(
       color: AppColors.bgElevated,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      child: const Row(
+      child: Row(
         children: [
           Expanded(
               flex: 4,
@@ -786,7 +786,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
           Expanded(
             flex: 4,
             child: Text((r['barcode'] ?? '').toString(),
-                style: const TextStyle(color: AppColors.text, fontSize: 13)),
+                style: TextStyle(color: AppColors.text, fontSize: 13)),
           ),
           Expanded(
             flex: 3,
@@ -796,7 +796,7 @@ class _ReplenishPageState extends State<ReplenishPage> {
                   : r['name'].toString()),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+              style: TextStyle(color: AppColors.textSub, fontSize: 13),
             ),
           ),
           SizedBox(
@@ -817,14 +817,14 @@ class _ReplenishPageState extends State<ReplenishPage> {
             width: 62,
             child: Text(kg == null ? '—' : kg.toStringAsFixed(3),
                 key: Key('replenish-row-kg-${r['id']}'),
-                style: const TextStyle(color: AppColors.textSub, fontSize: 12)),
+                style: TextStyle(color: AppColors.textSub, fontSize: 12)),
           ),
           SizedBox(
             width: 48,
             child: IconButton(
               tooltip: '删除这一行',
               iconSize: 18,
-              icon: const Icon(Icons.close, color: AppColors.danger),
+              icon: Icon(Icons.close, color: AppColors.danger),
               onPressed: _editable ? () => _deleteRow(r) : null,
             ),
           ),

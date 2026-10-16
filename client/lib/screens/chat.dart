@@ -260,7 +260,7 @@ class _ChatScreenState extends State<ChatScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 12),
-            const Text('选择要提醒的人',
+             Text('选择要提醒的人',
                 style: TextStyle(fontSize: 13.5, color: AppColors.textSub)),
             const SizedBox(height: 8),
             Flexible(
@@ -1248,7 +1248,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           fontSize: 16, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 1),
                   _typingUserId != null
-                      ? const Text(
+                      ?  Text(
                           '正在输入…',
                           style: TextStyle(
                               fontSize: 11.5,
@@ -1264,7 +1264,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                       ? '群聊 · ${widget.conv.memberCount} 人'
                                       : '群聊')
                                   : '私信',
-                          style: const TextStyle(
+                          style:  TextStyle(
                               fontSize: 11.5,
                               color: AppColors.textWeak,
                               fontWeight: FontWeight.w400),
@@ -1392,7 +1392,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     border: Border.all(color: AppColors.border),
                   ),
                   child: Row(
-                    children: const [
+                    children:  [
                       Icon(Icons.volume_off_rounded,
                           size: 17, color: AppColors.textWeak),
                       SizedBox(width: 8),
@@ -1439,20 +1439,20 @@ class _ChatScreenState extends State<ChatScreen> {
         color: AppColors.brand.withValues(alpha: 0.10),
         child: Row(
           children: [
-            const Icon(Icons.push_pin_rounded, size: 15, color: AppColors.brand),
+            Icon(Icons.push_pin_rounded, size: 15, color: AppColors.brand),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
                 _previewOf(m),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12.5, color: AppColors.text),
+                style: TextStyle(fontSize: 12.5, color: AppColors.text),
               ),
             ),
             if (_canPinHere)
               GestureDetector(
                 onTap: () => _togglePin(m),
-                child: const Padding(
+                child:  Padding(
                   padding: EdgeInsets.only(left: 8),
                   child: Icon(Icons.close_rounded,
                       size: 15, color: AppColors.textWeak),
@@ -1467,7 +1467,7 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: const BoxDecoration(
+          decoration:  BoxDecoration(
             color: AppColors.surfaceHi,
             border: Border(bottom: BorderSide(color: AppColors.divider)),
           ),
@@ -1485,7 +1485,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   '群公告：$text',
                   maxLines: _announceCollapsed ? 1 : 6,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style:  TextStyle(
                       fontSize: 12.5, color: AppColors.textSub, height: 1.4),
                 ),
               ),
@@ -1592,7 +1592,7 @@ class _ChatScreenState extends State<ChatScreen> {
             Icon(Icons.waving_hand_rounded,
                 size: 46, color: AppColors.textWeak.withValues(alpha: 0.5)),
             const SizedBox(height: 12),
-            const Text('还没有消息，打个招呼吧',
+             Text('还没有消息，打个招呼吧',
                 style: TextStyle(color: AppColors.textSub, fontSize: 14)),
           ],
         ),
@@ -1704,7 +1704,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _composer(bool canSend) => Container(
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-        decoration: const BoxDecoration(
+        decoration:  BoxDecoration(
           color: AppColors.bgElevated,
           border: Border(top: BorderSide(color: AppColors.divider)),
         ),
@@ -1951,7 +1951,7 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 24),
                   child:
-                      Text(_err!, style: const TextStyle(color: AppColors.textWeak)),
+                      Text(_err!, style: TextStyle(color: AppColors.textWeak)),
                 ),
               )
             : _body();
@@ -2009,7 +2009,7 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text('已读 $readCount/$total',
-                  style: const TextStyle(
+                  style:  TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.brand)),
             ),
           ],
@@ -2017,7 +2017,7 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
         const SizedBox(height: 6),
         Text(
           '${isGroup ? "群聊" : "单聊"} · ${sender?['name'] ?? "某人"} 发送',
-          style: const TextStyle(fontSize: 12.5, color: AppColors.textWeak),
+          style: TextStyle(fontSize: 12.5, color: AppColors.textWeak),
         ),
         if (kind == 'text' && content.isNotEmpty)
           Padding(
@@ -2025,7 +2025,7 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
             child: Text(content,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13, color: AppColors.textSub)),
+                style: TextStyle(fontSize: 13, color: AppColors.textSub)),
           ),
       ],
     );
@@ -2058,7 +2058,7 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
                 ),
                 const SizedBox(width: 8),
                 Text(s.title,
-                    style: const TextStyle(
+                    style:  TextStyle(
                         fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.text)),
               ],
             ),
@@ -2067,7 +2067,7 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
             Padding(
               padding: const EdgeInsets.only(left: 16, bottom: 4),
               child: Text(s.read ? '暂无人已读' : '全部已读',
-                  style: const TextStyle(fontSize: 12.5, color: AppColors.textWeak)),
+                  style: TextStyle(fontSize: 12.5, color: AppColors.textWeak)),
             )
           else
             for (final u in s.members)
@@ -2084,7 +2084,7 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text((u['name'] as String?) ?? '?',
-                          style: const TextStyle(fontSize: 14, color: AppColors.text)),
+                          style: TextStyle(fontSize: 14, color: AppColors.text)),
                     ),
                     if (u['isBot'] == true)
                       Container(
@@ -2093,7 +2093,7 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
                           color: AppColors.brand.withValues(alpha: 0.16),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: const Text('机器人',
+                        child:  Text('机器人',
                             style: TextStyle(
                                 fontSize: 9.5, fontWeight: FontWeight.w700, color: AppColors.brand)),
                       ),
@@ -2221,7 +2221,7 @@ class _PollCreateSheetState extends State<_PollCreateSheet> {
                     if (_opts.length > 2)
                       IconButton(
                         visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.remove_circle_outline_rounded,
+                        icon:  Icon(Icons.remove_circle_outline_rounded,
                             size: 19, color: AppColors.textWeak),
                         onPressed: () => setState(() {
                           _opts[i].dispose();
@@ -2250,7 +2250,7 @@ class _PollCreateSheetState extends State<_PollCreateSheet> {
               dense: true,
               contentPadding: EdgeInsets.zero,
               title: const Text('匿名投票', style: TextStyle(fontSize: 14)),
-              subtitle: const Text('只显示票数，不显示谁投的',
+              subtitle:  Text('只显示票数，不显示谁投的',
                   style: TextStyle(fontSize: 12, color: AppColors.textSub)),
               value: _anonymous,
               onChanged: (v) => setState(() => _anonymous = v),

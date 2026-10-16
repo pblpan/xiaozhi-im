@@ -251,7 +251,7 @@ class _AttendanceRequestPageState extends State<AttendanceRequestPage> {
                 child: Center(child: CircularProgressIndicator()),
               )
             else if (_error != null)
-              Text('加载失败：$_error', style: const TextStyle(color: AppColors.danger))
+              Text('加载失败：$_error', style: TextStyle(color: AppColors.danger))
             else if (_items.isEmpty)
               _emptyHint()
             else
@@ -505,7 +505,7 @@ class _AttendanceRequestPageState extends State<AttendanceRequestPage> {
               borderRadius: BorderRadius.circular(AppRadii.pill),
             ),
             child: Text((it['kindLabel'] ?? '').toString(),
-                style: const TextStyle(
+                style:  TextStyle(
                     fontSize: 11.5, fontWeight: FontWeight.w600, color: AppColors.brand)),
           ),
           const SizedBox(width: 10),

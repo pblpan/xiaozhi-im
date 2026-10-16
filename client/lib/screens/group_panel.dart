@@ -159,7 +159,7 @@ class _GroupPanelScreenState extends State<GroupPanelScreen>
           color: AppColors.surfaceHi,
           borderRadius: BorderRadius.circular(AppRadii.sm),
         ),
-        child: const Icon(Icons.insert_drive_file_rounded,
+        child:  Icon(Icons.insert_drive_file_rounded,
             color: AppColors.textSub, size: 20),
       ),
       title: Text(name,
@@ -170,9 +170,9 @@ class _GroupPanelScreenState extends State<GroupPanelScreen>
         [if (who.isNotEmpty) who, if (size != null) _bytes(size), _when(at)]
             .where((s) => s.isNotEmpty)
             .join(' · '),
-        style: const TextStyle(fontSize: 11.5, color: AppColors.textWeak),
+        style: TextStyle(fontSize: 11.5, color: AppColors.textWeak),
       ),
-      trailing: const Icon(Icons.open_in_new_rounded, size: 18, color: AppColors.textWeak),
+      trailing: Icon(Icons.open_in_new_rounded, size: 18, color: AppColors.textWeak),
       onTap: () => _open(m['url'] as String?),
     );
   }
@@ -315,7 +315,7 @@ class _GroupPanelScreenState extends State<GroupPanelScreen>
                   if (_courses['canManage'] == true)
                     IconButton(
                       tooltip: '从群里摘掉',
-                      icon: const Icon(Icons.remove_circle_outline_rounded,
+                      icon:  Icon(Icons.remove_circle_outline_rounded,
                           size: 18, color: AppColors.textWeak),
                       onPressed: () => _unlink(id),
                     ),
@@ -326,7 +326,7 @@ class _GroupPanelScreenState extends State<GroupPanelScreen>
                 Text((c['intro'] ?? '') as String,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style:  TextStyle(
                         fontSize: 12.5, color: AppColors.textSub)),
               ],
               const SizedBox(height: 10),
@@ -336,12 +336,12 @@ class _GroupPanelScreenState extends State<GroupPanelScreen>
                   value: pct / 100,
                   minHeight: 5,
                   backgroundColor: AppColors.surfaceHi,
-                  valueColor: const AlwaysStoppedAnimation(AppColors.brand),
+                  valueColor:  AlwaysStoppedAnimation(AppColors.brand),
                 ),
               ),
               const SizedBox(height: 6),
               Text('$lessons 课时 · 已学 $pct%',
-                  style: const TextStyle(fontSize: 11.5, color: AppColors.textWeak)),
+                  style: TextStyle(fontSize: 11.5, color: AppColors.textWeak)),
             ],
           ),
         ),
@@ -424,7 +424,7 @@ class _GroupPanelScreenState extends State<GroupPanelScreen>
               const SizedBox(height: 12),
               Text(text,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.textWeak, fontSize: 13)),
+                  style: TextStyle(color: AppColors.textWeak, fontSize: 13)),
               if (action != null) ...[const SizedBox(height: 16), action],
             ],
           ),

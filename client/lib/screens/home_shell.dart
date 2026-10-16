@@ -299,14 +299,14 @@ class _HomeShellState extends State<HomeShell> {
                   labelType: NavigationRailLabelType.all,
                   indicatorColor: AppColors.brand.withValues(alpha: 0.18),
                   selectedIconTheme:
-                      const IconThemeData(color: AppColors.brand, size: 23),
+                      IconThemeData(color: AppColors.brand, size: 23),
                   unselectedIconTheme:
-                      const IconThemeData(color: AppColors.textSub, size: 22),
-                  selectedLabelTextStyle: const TextStyle(
+                      IconThemeData(color: AppColors.textSub, size: 22),
+                  selectedLabelTextStyle:  TextStyle(
                       color: AppColors.brand,
                       fontSize: 11.5,
                       fontWeight: FontWeight.w600),
-                  unselectedLabelTextStyle: const TextStyle(
+                  unselectedLabelTextStyle:  TextStyle(
                       color: AppColors.textSub, fontSize: 11.5),
                   destinations: [
                     for (final t in tabs)
@@ -317,7 +317,7 @@ class _HomeShellState extends State<HomeShell> {
                       ),
                   ],
                 ),
-                const VerticalDivider(width: 1, color: AppColors.divider),
+                VerticalDivider(width: 1, color: AppColors.divider),
                 Expanded(
                   child: Column(
                     children: [

@@ -170,7 +170,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ListTile(
                 title: Text(e.value),
                 trailing: (_u?.gender ?? '') == e.key
-                    ? const Icon(Icons.check_rounded, color: AppColors.brand)
+                    ? Icon(Icons.check_rounded, color: AppColors.brand)
                     : null,
                 onTap: () => Navigator.pop(ctx, e.key),
               ),
@@ -237,6 +237,49 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _toast('已复制$label');
   }
 
+  /// 换皮肤。底部弹窗带**实时预览条**（深色/浅色各一块），
+  /// 因为"深色/浅色"两个词描述不了实际观感。
+  Future<void> _pickSkin() async {
+    final cur = AppSkin.isLight ? 'light' : 'dark';
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      builder: (c) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('皮肤', style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600)),
+              ),
+            ),
+            for (final entry in const [
+              ('dark', '深色', '晚上和光线暗的收银台看着舒服'),
+              ('light', '浅色', '白天户外/强光下更清楚'),
+            ])
+              ListTile(
+                leading: Icon(entry.$1 == 'dark'
+                    ? Icons.dark_mode_outlined
+                    : Icons.light_mode_outlined),
+                title: Text(entry.$2),
+                subtitle: Text(entry.$3),
+                trailing: cur == entry.$1
+                    ? Icon(Icons.check_circle, color: AppColors.online)
+                    : null,
+                onTap: () => Navigator.pop(c, entry.$1),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || picked == cur || !mounted) return;
+    await AppSkin.set(AppPalette.byName(picked));
+    _toast('已换成${picked == 'light' ? '浅色' : '深色'}皮肤');
+  }
+
   Future<void> _changePassword() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -265,11 +308,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.error_outline_rounded, size: 44, color: AppColors.textWeak),
+              Icon(Icons.error_outline_rounded, size: 44, color: AppColors.textWeak),
               const SizedBox(height: 12),
               Text(_error!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 13.5, color: AppColors.textSub)),
+                  style: TextStyle(fontSize: 13.5, color: AppColors.textSub)),
               const SizedBox(height: 10),
               FilledButton(onPressed: _load, child: const Text('重试')),
             ],
@@ -349,8 +392,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
           if (_isMe)
             _row('修改密码', '定期更换更安全', weak: true, onTap: _changePassword),
         ]),
+        const SizedBox(height: 14),
+        // 皮肤：龙哥 2026-10-16 要求"增加皮肤，现在就一个黑色的"。
+        // 全端（Android/Windows）共用这一套切换，值走 AppSkin 全局。
+        if (_isMe) ...[
+          _group('偏好', [
+            _row('皮肤', AppSkin.isLight ? '浅色' : '深色',
+                onTap: _pickSkin),
+          ]),
+          const SizedBox(height: 10),
+        ],
         const SizedBox(height: 10),
-        const Padding(
+         Padding(
           padding: EdgeInsets.symmetric(horizontal: 4),
           child: Text('账号与 ID 由系统分配，不可修改；已发送的消息不支持修改，只能撤回。',
               style: TextStyle(fontSize: 11.5, color: AppColors.textWeak, height: 1.5)),
@@ -396,7 +449,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           const SizedBox(height: 3),
           Text('@${u.username}',
-              style: const TextStyle(fontSize: 12.5, color: AppColors.textWeak)),
+              style: TextStyle(fontSize: 12.5, color: AppColors.textWeak)),
           if (_isMe) ...[
             const SizedBox(height: 8),
             TextButton.icon(
@@ -414,7 +467,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Padding(
             padding: const EdgeInsets.only(left: 4, bottom: 8),
             child: Text(title,
-                style: const TextStyle(
+                style:  TextStyle(
                     fontSize: 12, color: AppColors.textWeak, fontWeight: FontWeight.w600)),
           ),
           Container(
@@ -428,7 +481,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 for (var i = 0; i < children.length; i++) ...[
                   children[i],
                   if (i != children.length - 1)
-                    const Divider(height: 1, indent: 14, endIndent: 14, color: AppColors.divider),
+                    Divider(height: 1, indent: 14, endIndent: 14, color: AppColors.divider),
                 ],
               ],
             ),
@@ -464,7 +517,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               if (trailingAction != null) trailingAction,
               if (onTap != null) ...[
                 const SizedBox(width: 4),
-                const Icon(Icons.chevron_right_rounded,
+                 Icon(Icons.chevron_right_rounded,
                     size: 19, color: AppColors.textWeak),
               ],
             ],
@@ -596,7 +649,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text(_error!,
-                    style: const TextStyle(
+                    style:  TextStyle(
                         fontSize: 12.5, color: AppColors.danger)),
               ),
             ],

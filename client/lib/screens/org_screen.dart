@@ -184,7 +184,7 @@ class _OrgScreenState extends State<OrgScreen> {
               ),
             ),
             const SizedBox(height: 4),
-            const Align(
+             Align(
               alignment: Alignment.centerLeft,
               child: Text('工号即登录账号，初始密码与工号相同；录入后自动与同事互为好友。',
                   style: TextStyle(fontSize: 11.5, color: AppColors.textWeak, height: 1.5)),
@@ -283,11 +283,11 @@ class _OrgScreenState extends State<OrgScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.error_outline_rounded, size: 44, color: AppColors.textWeak),
+              Icon(Icons.error_outline_rounded, size: 44, color: AppColors.textWeak),
               const SizedBox(height: 12),
               Text(_error!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 13.5, color: AppColors.textSub)),
+                  style: TextStyle(fontSize: 13.5, color: AppColors.textSub)),
               const SizedBox(height: 10),
               FilledButton(onPressed: _load, child: const Text('重试')),
             ],
@@ -303,18 +303,18 @@ class _OrgScreenState extends State<OrgScreen> {
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
           child: Row(
             children: [
-              const Icon(Icons.corporate_fare_rounded,
+               Icon(Icons.corporate_fare_rounded,
                   size: 18, color: AppColors.textWeak),
               const SizedBox(width: 6),
               Text('${_org!['name']} · ${_members.length} 人',
-                  style: const TextStyle(
+                  style:  TextStyle(
                       fontSize: 12.5, color: AppColors.textWeak)),
             ],
           ),
         ),
         Expanded(
           child: _members.isEmpty
-              ? const Center(
+              ?  Center(
                   child: Text('还没有成员，点右上角添加',
                       style: TextStyle(color: AppColors.textWeak)))
               : ListView(
@@ -447,7 +447,7 @@ class _OrgScreenState extends State<OrgScreen> {
       ),
       initiallyExpanded: depth == 0,
       children: empty
-          ? const [
+          ?  [
               Padding(
                 padding: EdgeInsets.only(left: 16, bottom: 8),
                 child: Text('（暂无成员）',
@@ -467,7 +467,7 @@ class _OrgScreenState extends State<OrgScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.corporate_fare_rounded,
+             Icon(Icons.corporate_fare_rounded,
                 size: 56, color: AppColors.textWeak),
             const SizedBox(height: 14),
             Text(
@@ -480,7 +480,7 @@ class _OrgScreenState extends State<OrgScreen> {
                   ? '创建后即可按工号录入员工：\n工号即登录账号，初始密码与工号相同。'
                   : '请管理员在工作模式下按工号录入，\n录入后同事自动互为好友。',
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12.5, color: AppColors.textWeak, height: 1.6),
+              style: TextStyle(fontSize: 12.5, color: AppColors.textWeak, height: 1.6),
             ),
             const SizedBox(height: 16),
             if (_isAdmin)
@@ -535,13 +535,13 @@ class _OrgScreenState extends State<OrgScreen> {
         trailing: _isAdmin && !mine && u.role != 'admin'
             ? IconButton(
                 tooltip: '移除员工',
-                icon: const Icon(Icons.person_remove_outlined,
+                icon:  Icon(Icons.person_remove_outlined,
                     size: 19, color: AppColors.textWeak),
                 onPressed: _busy ? null : () => _removeMember(u),
               )
             : (mine
                 ? null
-                : const Icon(Icons.chevron_right_rounded,
+                :  Icon(Icons.chevron_right_rounded,
                     size: 19, color: AppColors.textWeak)),
       ),
     );

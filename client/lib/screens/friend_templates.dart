@@ -169,20 +169,20 @@ class _FriendTemplatesScreenState extends State<FriendTemplatesScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(_error!,
-                            style: const TextStyle(color: AppColors.textSub)),
+                            style: TextStyle(color: AppColors.textSub)),
                         const SizedBox(height: 10),
                         FilledButton(onPressed: _load, child: const Text('重试')),
                       ],
                     ),
                   )
                 : _list.isEmpty
-                    ? const Center(
+                    ?  Center(
                         child: Text('还没有模板，点右上角「+」加一条',
                             style: TextStyle(color: AppColors.textWeak, fontSize: 13)))
                     : ListView.separated(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         itemCount: _list.length + 1,
-                        separatorBuilder: (_, __) => const Divider(
+                        separatorBuilder: (_, __) =>  Divider(
                             height: 1, indent: 16, endIndent: 16, color: AppColors.divider),
                         itemBuilder: (_, i) {
                           if (i == _list.length) {
@@ -191,7 +191,7 @@ class _FriendTemplatesScreenState extends State<FriendTemplatesScreen> {
                               child: Text(
                                 '共 ${_list.length}/$kMaxFriendTemplates 条。'
                                 '加好友时点一下模板即可填入附言。',
-                                style: const TextStyle(
+                                style:  TextStyle(
                                     fontSize: 11.5,
                                     color: AppColors.textWeak,
                                     height: 1.5),
@@ -204,7 +204,7 @@ class _FriendTemplatesScreenState extends State<FriendTemplatesScreen> {
                                 style: const TextStyle(fontSize: 14.5, height: 1.4)),
                             trailing: IconButton(
                               tooltip: '删除',
-                              icon: const Icon(Icons.delete_outline_rounded,
+                              icon:  Icon(Icons.delete_outline_rounded,
                                   size: 19, color: AppColors.danger),
                               onPressed: () => _remove(t),
                             ),

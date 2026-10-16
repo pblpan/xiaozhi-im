@@ -158,7 +158,7 @@ class _DeductPageState extends State<DeductPage> {
           key: const Key('deduct-history-sheet'),
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
+             Padding(
               padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
               child: Align(
                 alignment: Alignment.centerLeft,
@@ -169,13 +169,13 @@ class _DeductPageState extends State<DeductPage> {
                         fontWeight: FontWeight.w600)),
               ),
             ),
-            const Divider(height: 1, color: AppColors.divider),
+            Divider(height: 1, color: AppColors.divider),
             Flexible(
               child: ListView.separated(
                 shrinkWrap: true,
                 itemCount: briefs.length,
                 separatorBuilder: (_, __) =>
-                    const Divider(height: 1, color: AppColors.divider),
+                    Divider(height: 1, color: AppColors.divider),
                 itemBuilder: (_, i) {
                   final b = briefs[i];
                   final no = (b['sheet_no'] ?? '').toString();
@@ -194,7 +194,7 @@ class _DeductPageState extends State<DeductPage> {
                       '${InvSheetStatus.label(st)} · '
                       '${(b['rows'] as num? ?? 0).toInt()} 条 · '
                       '合计 ${DeductExport.fmtQty(b['total_qty'])}',
-                      style: const TextStyle(
+                      style:  TextStyle(
                           color: AppColors.textSub, fontSize: 12),
                     ),
                     onTap: () => Navigator.pop(ctx, no),
@@ -365,11 +365,11 @@ class _DeductPageState extends State<DeductPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('删掉这一行？',
+        title:  Text('删掉这一行？',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           '${r['barcode']}\n删除后可以重新扫这个条码。',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 14),
+          style: TextStyle(color: AppColors.textSub, fontSize: 14),
         ),
         actions: [
           TextButton(
@@ -377,7 +377,7 @@ class _DeductPageState extends State<DeductPage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除',
+              child:  Text('删除',
                   style: TextStyle(
                       color: AppColors.danger, fontWeight: FontWeight.w600))),
         ],
@@ -399,14 +399,14 @@ class _DeductPageState extends State<DeductPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('改减货数量',
+        title:  Text('改减货数量',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: TextField(
           key: const Key('deduct-qty-input'),
           controller: ctl,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          style: const TextStyle(color: AppColors.text, fontSize: 15),
+          style: TextStyle(color: AppColors.text, fontSize: 15),
           decoration: const InputDecoration(labelText: '减货数量'),
         ),
         actions: [
@@ -415,7 +415,7 @@ class _DeductPageState extends State<DeductPage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存',
+              child:  Text('保存',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -446,12 +446,12 @@ class _DeductPageState extends State<DeductPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('提交这一单？',
+        title:  Text('提交这一单？',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           '${DeductExport.summaryText(_tally)}\n'
           '提交后本地就锁死，不能再改（可撤销提交）。',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 14),
+          style: TextStyle(color: AppColors.textSub, fontSize: 14),
         ),
         actions: [
           TextButton(
@@ -459,7 +459,7 @@ class _DeductPageState extends State<DeductPage> {
               child: const Text('再核对一下')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('提交',
+              child:  Text('提交',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -490,9 +490,9 @@ class _DeductPageState extends State<DeductPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('清除本机全部减货数据（不可恢复）',
+        title:  Text('清除本机全部减货数据（不可恢复）',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
-        content: const Text(
+        content:  Text(
           '会删掉本机**所有**减货单和明细。\n'
           '「盘点」的数据不受影响。没提交过的单删了就找不回来了。',
           style: TextStyle(color: AppColors.textSub, fontSize: 14),
@@ -503,7 +503,7 @@ class _DeductPageState extends State<DeductPage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('确认清除',
+              child:  Text('确认清除',
                   style: TextStyle(
                       color: AppColors.danger, fontWeight: FontWeight.w600))),
         ],
@@ -615,13 +615,13 @@ class _DeductPageState extends State<DeductPage> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('库房减货',
+        title:  Text('库房减货',
             style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
           IconButton(
             key: const Key('deduct-history'),
             tooltip: '历史减货单',
-            icon: const Icon(Icons.history, color: AppColors.textSub),
+            icon: Icon(Icons.history, color: AppColors.textSub),
             onPressed: _busy ? null : _pickSheet,
           ),
           // 上传是这一页**唯一会写服务端**的动作，放在 AppBar 上而不是塞进
@@ -629,18 +629,18 @@ class _DeductPageState extends State<DeductPage> {
           IconButton(
             key: const Key('deduct-upload'),
             tooltip: '上传管理台',
-            icon: const Icon(Icons.cloud_upload_outlined, color: AppColors.textSub),
+            icon: Icon(Icons.cloud_upload_outlined, color: AppColors.textSub),
             onPressed: _busy ? null : _upload,
           ),
           IconButton(
             key: const Key('deduct-export'),
             tooltip: '导出 CSV',
-            icon: const Icon(Icons.ios_share, color: AppColors.textSub),
+            icon: Icon(Icons.ios_share, color: AppColors.textSub),
             onPressed: _busy ? null : _export,
           ),
           PopupMenuButton<String>(
             key: const Key('deduct-menu'),
-            icon: const Icon(Icons.more_vert, color: AppColors.textSub),
+            icon: Icon(Icons.more_vert, color: AppColors.textSub),
             onSelected: (v) {
               switch (v) {
                 case 'upload':
@@ -703,20 +703,20 @@ class _DeductPageState extends State<DeductPage> {
                     color: AppColors.danger.withValues(alpha: 0.15),
                     padding: const EdgeInsets.all(12),
                     child: Text(_error!,
-                        style: const TextStyle(
+                        style:  TextStyle(
                             color: AppColors.danger, fontSize: 13)),
                   ),
                 _header(),
                 _refCard(),
                 _inputBar(),
-                const Divider(height: 1, color: AppColors.divider),
+                Divider(height: 1, color: AppColors.divider),
                 // 🔴 表头**空列表也要画**：不画的话没扫过码的人整页看不到列名，
                 //    现场只会得出"这页没有这个功能"的结论。
                 //    （这条在扫码枪上真的踩过，见方案文档 §3.0.1。）
                 _listHeader(),
                 Expanded(
                   child: _rows.isEmpty
-                      ? const Center(
+                      ?  Center(
                           child: Text('还没有减货记录，扫一个条码开始',
                               style: TextStyle(
                                   color: AppColors.textWeak, fontSize: 14)),
@@ -724,7 +724,7 @@ class _DeductPageState extends State<DeductPage> {
                       : ListView.separated(
                           itemCount: _rows.length,
                           separatorBuilder: (_, __) =>
-                              const Divider(height: 1, color: AppColors.divider),
+                              Divider(height: 1, color: AppColors.divider),
                           itemBuilder: (_, i) => _rowTile(_rows[i]),
                         ),
                 ),
@@ -747,7 +747,7 @@ class _DeductPageState extends State<DeductPage> {
               Expanded(
                 child: Text(_sheetNo,
                     key: const Key('deduct-sheet-no'),
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.text,
                         fontSize: 14,
                         fontWeight: FontWeight.w600)),
@@ -777,12 +777,12 @@ class _DeductPageState extends State<DeductPage> {
           const SizedBox(height: 4),
           Text(DeductExport.summaryText(_tally),
               key: const Key('deduct-summary'),
-              style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
+              style: TextStyle(color: AppColors.textSub, fontSize: 13)),
           // 龙哥 2026-09-26 的原话："库房减货不是盘点的一个流程吗？怎么独立成一个
           // 单独的功能了？" —— 它确实是分开的功能，但**依据来自盘点**。这里把那层
           // 关系写死在页面上（只在没有参照数时占一行），免得每次都得解释一遍。
           if (!_hasRef && !_loading)
-            const Padding(
+             Padding(
               padding: EdgeInsets.only(top: 2),
               child: Text(
                 '减货不是盘点的下一步：盘点是数实际有多少，减货是拿货/损耗之后把账往下调',
@@ -792,7 +792,7 @@ class _DeductPageState extends State<DeductPage> {
             ),
           // 锁死之后输入框是灰的，但不写一句话员工只会以为"手机卡了"。
           if (!_editable && !_loading)
-            const Padding(
+             Padding(
               padding: EdgeInsets.only(top: 2),
               child: Text('这一单已提交，不能再改（右上角菜单可撤销提交或开新单）',
                   key: Key('deduct-locked-hint'),
@@ -847,10 +847,10 @@ class _DeductPageState extends State<DeductPage> {
         children: [
           Row(
             children: [
-              const Icon(Icons.history_edu, size: 14, color: AppColors.textSub),
+              Icon(Icons.history_edu, size: 14, color: AppColors.textSub),
               const SizedBox(width: 5),
               Text('参照',
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
               const SizedBox(width: 8),
               Expanded(
@@ -864,7 +864,7 @@ class _DeductPageState extends State<DeductPage> {
                   }(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: AppColors.textWeak, fontSize: 12),
+                  style: TextStyle(color: AppColors.textWeak, fontSize: 12),
                 ),
               ),
             ],
@@ -876,7 +876,7 @@ class _DeductPageState extends State<DeductPage> {
               '账面 ${DeductExport.fmtQty(account)}${unit.isNotEmpty ? ' $unit' : ''}'
               ' · ${fromCounted ? '上轮盘点时' : '商品档案'}',
               key: const Key('deduct-ref-account'),
-              style: const TextStyle(color: AppColors.textSub, fontSize: 11),
+              style: TextStyle(color: AppColors.textSub, fontSize: 11),
             ),
           ],
           const SizedBox(height: 6),
@@ -906,7 +906,7 @@ class _DeductPageState extends State<DeductPage> {
                     ? '这个码还没盘过，账面数是商品档案里的；减货照样能做'
                     : '这个码没有盘过点参照（临时减货照样能减）；已减的是最近 ${(ref['windowDays'] ?? 30).toString()} 天')
                 : '参照来自上一次盘点（减货是拿货/损耗之后把账往下调，不是盘点这一步）',
-            style: const TextStyle(color: AppColors.textWeak, fontSize: 11),
+            style: TextStyle(color: AppColors.textWeak, fontSize: 11),
           ),
         ],
       ),
@@ -921,7 +921,7 @@ class _DeductPageState extends State<DeductPage> {
         children: [
           Text(label,
               key: Key(key + '-label'),
-              style: const TextStyle(color: AppColors.textWeak, fontSize: 11)),
+              style: TextStyle(color: AppColors.textWeak, fontSize: 11)),
           const SizedBox(height: 1),
           Text(
             value,
@@ -937,7 +937,7 @@ class _DeductPageState extends State<DeductPage> {
             ),
           ),
           if (sub != null)
-            Text(sub, style: const TextStyle(color: AppColors.textWeak, fontSize: 10)),
+            Text(sub, style: TextStyle(color: AppColors.textWeak, fontSize: 10)),
         ],
       ),
     );
@@ -962,7 +962,7 @@ class _DeductPageState extends State<DeductPage> {
                   child: InkWell(
                     borderRadius: BorderRadius.circular(AppRadii.sm),
                     onTap: (_editable && !_busy) ? _openCamera : null,
-                    child: const Padding(
+                    child:  Padding(
                       padding: EdgeInsets.symmetric(horizontal: 11, vertical: 11),
                       child: Icon(Icons.qr_code_scanner,
                           key: Key('deduct-camera'), color: AppColors.brand, size: 21),
@@ -980,8 +980,8 @@ class _DeductPageState extends State<DeductPage> {
                   enabled: _editable,
                   autofocus: true,
                   textInputAction: TextInputAction.next,
-                  style: const TextStyle(color: AppColors.text, fontSize: 15),
-                  decoration: const InputDecoration(
+                  style: TextStyle(color: AppColors.text, fontSize: 15),
+                  decoration:  InputDecoration(
                     labelText: '条码',
                     isDense: true,
                     labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
@@ -1000,8 +1000,8 @@ class _DeductPageState extends State<DeductPage> {
                   enabled: _editable,
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
-                  style: const TextStyle(color: AppColors.text, fontSize: 15),
-                  decoration: const InputDecoration(
+                  style: TextStyle(color: AppColors.text, fontSize: 15),
+                  decoration:  InputDecoration(
                     labelText: '数量',
                     isDense: true,
                     labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
@@ -1028,11 +1028,11 @@ class _DeductPageState extends State<DeductPage> {
   }
 
   Widget _listHeader() {
-    const style = TextStyle(color: AppColors.textWeak, fontSize: 12);
+    final style = TextStyle(color: AppColors.textWeak, fontSize: 12);
     return Container(
       color: AppColors.bgElevated,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      child: const Row(
+      child: Row(
         children: [
           // 每列带 key：列名和输入框的 label 会重名（"条码"两处都有），
           // 测试用文字找会一次命中两个，"到底画没画列头"就说不清了。
@@ -1067,7 +1067,7 @@ class _DeductPageState extends State<DeductPage> {
           Expanded(
             flex: 4,
             child: Text((r['barcode'] ?? '').toString(),
-                style: const TextStyle(color: AppColors.text, fontSize: 13)),
+                style: TextStyle(color: AppColors.text, fontSize: 13)),
           ),
           Expanded(
             flex: 3,
@@ -1077,7 +1077,7 @@ class _DeductPageState extends State<DeductPage> {
                   : r['name'].toString()),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+              style: TextStyle(color: AppColors.textSub, fontSize: 13),
             ),
           ),
           SizedBox(
@@ -1098,7 +1098,7 @@ class _DeductPageState extends State<DeductPage> {
             child: IconButton(
               tooltip: '删除这一行',
               iconSize: 18,
-              icon: const Icon(Icons.close, color: AppColors.danger),
+              icon: Icon(Icons.close, color: AppColors.danger),
               onPressed: _editable ? () => _deleteRow(r) : null,
             ),
           ),

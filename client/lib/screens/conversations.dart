@@ -319,6 +319,16 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     if (nv) SoundService().playMessage();
   }
 
+  /// 换皮肤（桌面端菜单入口）。点了就在深/浅之间切，不弹二级选择 ——
+  /// 菜单项上已经写着当前值（"皮肤：深色"），再弹一层是重复。
+  /// 想两个都看看的用户：切过去不喜欢，再切回来就是，一秒的事。
+  Future<void> _pickSkin() async {
+    final wantLight = !AppSkin.isLight;
+    await AppSkin.set(wantLight ? AppPalette.light : AppPalette.dark);
+    if (!mounted) return;
+    setState(() {});
+  }
+
   /// 桌面端：点右上角 × 之后的落点（每次询问 / 缩到托盘 / 直接退出）。
   ///
   /// 做成三态循环而不是单独开关：**用户一旦在关闭对话框里勾了"记住选择"，
@@ -401,13 +411,13 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                 if (fetchTip != null) ...[
                   const SizedBox(height: 6),
                   Text(fetchTip!,
-                      style: const TextStyle(
+                      style:  TextStyle(
                           fontSize: 12, color: AppColors.textSub)),
                 ],
                 if (rc.upgradeHint.value != null) ...[
                   const SizedBox(height: 10),
                   Text(rc.upgradeHint.value!,
-                      style: const TextStyle(
+                      style:  TextStyle(
                           fontSize: 13, color: AppColors.danger)),
                 ],
                 for (final a in (rc.payload['announcements'] as List? ?? []))
@@ -620,7 +630,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                   autofocus: true,
                   decoration: InputDecoration(
                     hintText: '搜索账号或昵称',
-                    prefixIcon: const Icon(Icons.search_rounded,
+                    prefixIcon:  Icon(Icons.search_rounded,
                         size: 20, color: AppColors.textWeak),
                     suffixIcon: q.text.isEmpty
                         ? null
@@ -665,7 +675,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2)),
                   )
                 else if (results.isEmpty && q.text.isNotEmpty)
-                  const Padding(
+                   Padding(
                     padding: EdgeInsets.symmetric(vertical: 22),
                     child: Text('没有找到匹配的用户',
                         style: TextStyle(color: AppColors.textWeak)),
@@ -783,7 +793,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
         enabled: false,
         height: 30,
         child: Text(t,
-            style: const TextStyle(
+            style:  TextStyle(
                 fontSize: 11.5,
                 color: AppColors.textWeak,
                 letterSpacing: 0.6)),
@@ -842,7 +852,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                               name,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style:  TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w600,
                                 color: AppColors.text,
@@ -892,7 +902,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                               padding: const EdgeInsets.only(left: 6),
                               child: Text(
                                 TimeFmt.listStamp(cv.lastAt!),
-                                style: const TextStyle(
+                                style:  TextStyle(
                                     fontSize: 11.5, color: AppColors.textWeak),
                               ),
                             ),
@@ -903,7 +913,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                         _preview(cv),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 13, color: AppColors.textSub),
                       ),
                     ],
@@ -926,7 +936,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
             const Text('还没有会话',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
-            const Text('搜索好友，发起第一次聊天',
+             Text('搜索好友，发起第一次聊天',
                 style: TextStyle(color: AppColors.textSub, fontSize: 13)),
             const SizedBox(height: 20),
             SizedBox(
@@ -973,7 +983,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
               const SizedBox(height: 12),
               Text(_error!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
+                  style: TextStyle(color: AppColors.textSub, fontSize: 13)),
               const SizedBox(height: 18),
               // 主按钮：重试（同设置不变的情况下也能好转——比如对端刚重启）
               SizedBox(
@@ -984,7 +994,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                   label: const Text('重试'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.brand,
-                    side: const BorderSide(color: AppColors.brand),
+                    side: BorderSide(color: AppColors.brand),
                     padding: const EdgeInsets.symmetric(vertical: 11),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadii.md)),
@@ -1102,6 +1112,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                 if (v == 'logout') _logout();
                 if (v == 'tray') _cycleCloseAction();
                 if (v == 'sound') _toggleSound();
+                if (v == 'skin') _pickSkin();
                 if (v == 'about') _openAbout();
                 if (v == 'remote') _openRemote();
                 if (v == 'newfriends') _openNewFriends();
@@ -1182,12 +1193,23 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                       SizedBox(width: 10),
                       Text('切换企业')
                     ])),
-                const PopupMenuItem(
+                const                 PopupMenuItem(
                     value: 'server',
                     child: Row(children: [
                       Icon(Icons.dns_rounded, size: 19),
                       SizedBox(width: 10),
                       Text('服务器设置')
+                    ])),
+                // 皮肤（龙哥 2026-10-16："增加皮肤，现在就一个黑色的"）。
+                // 桌面端以前完全没得选，这里补一个显性入口；与手机端共用 AppSkin。
+                PopupMenuItem(
+                    value: 'skin',
+                    child: Row(children: [
+                      Icon(AppSkin.isLight
+                          ? Icons.light_mode_outlined
+                          : Icons.dark_mode_outlined, size: 19),
+                      const SizedBox(width: 10),
+                      Text(AppSkin.isLight ? '皮肤：浅色' : '皮肤：深色')
                     ])),
                 PopupMenuItem(
                     value: 'sound',
@@ -1217,7 +1239,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                       Text('关于 / 检查配置')
                     ])),
                 const PopupMenuDivider(),
-                const PopupMenuItem(
+                 PopupMenuItem(
                     value: 'logout',
                     child: Row(children: [
                       Icon(Icons.logout_rounded, size: 19, color: AppColors.danger),
@@ -1248,7 +1270,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                                   color: AppColors.textWeak
                                       .withValues(alpha: 0.5)),
                               const SizedBox(height: 14),
-                              const Text('选择一个会话开始聊天',
+                               Text('选择一个会话开始聊天',
                                   style: TextStyle(
                                       color: AppColors.textSub, fontSize: 14)),
                             ],

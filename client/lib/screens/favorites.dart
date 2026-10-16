@@ -124,7 +124,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
               onRefresh: _load,
               child: _items.isEmpty
                   ? ListView(
-                      children: const [
+                      children:  [
                         SizedBox(height: 140),
                         Center(
                           child: Column(
@@ -146,7 +146,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 6),
                       itemCount: _items.length,
                       separatorBuilder: (_, __) =>
-                          const Divider(height: 1, color: AppColors.divider),
+                          Divider(height: 1, color: AppColors.divider),
                       itemBuilder: (c, i) {
                         final h = _items[i];
                         return ListTile(
@@ -163,7 +163,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                                 ),
                               ),
                               if (h.convType == 'group')
-                                const Padding(
+                                 Padding(
                                   padding: EdgeInsets.only(left: 6),
                                   child: Icon(Icons.group_rounded,
                                       size: 13, color: AppColors.textWeak),
@@ -178,14 +178,14 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                                 _preview(h.msg),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
+                                style:  TextStyle(
                                     fontSize: 13, color: AppColors.textSub, height: 1.35),
                               ),
                               const SizedBox(height: 4),
                               Text(
                                 '${h.mine ? "我" : (h.senderName ?? "对方")} · '
                                 '${h.favoritedAt != null ? TimeFmt.hhmm(h.favoritedAt!) : ""}',
-                                style: const TextStyle(
+                                style:  TextStyle(
                                     fontSize: 11, color: AppColors.textWeak),
                               ),
                             ],

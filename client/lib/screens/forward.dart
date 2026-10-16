@@ -78,7 +78,7 @@ class _ForwardScreenState extends State<ForwardScreen> {
               children: [
                 Expanded(
                   child: _convs.isEmpty
-                      ? const Center(
+                      ?  Center(
                           child: Text('还没有会话',
                               style: TextStyle(color: AppColors.textSub)))
                       : ListView.builder(
@@ -96,7 +96,7 @@ class _ForwardScreenState extends State<ForwardScreen> {
                                   maxLines: 1, overflow: TextOverflow.ellipsis),
                               subtitle: Text(
                                 cv.type == 'group' ? '群聊' : '单聊',
-                                style: const TextStyle(
+                                style:  TextStyle(
                                     fontSize: 12, color: AppColors.textWeak),
                               ),
                               trailing: Checkbox(
@@ -123,7 +123,7 @@ class _ForwardScreenState extends State<ForwardScreen> {
                 ),
                 Container(
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-                  decoration: const BoxDecoration(
+                  decoration:  BoxDecoration(
                     color: AppColors.bgElevated,
                     border: Border(top: BorderSide(color: AppColors.divider)),
                   ),

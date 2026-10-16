@@ -117,7 +117,7 @@ class _InventoryPageState extends State<InventoryPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('新建盘点位',
+        title:  Text('新建盘点位',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -126,8 +126,8 @@ class _InventoryPageState extends State<InventoryPage> {
               key: const Key('zone-code-input'),
               controller: codeCtl,
               autofocus: true,
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
-              decoration: const InputDecoration(
+              style: TextStyle(color: AppColors.text, fontSize: 15),
+              decoration:  InputDecoration(
                 labelText: '盘点位码（扫货架旁的点位码）',
                 labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
               ),
@@ -136,8 +136,8 @@ class _InventoryPageState extends State<InventoryPage> {
             TextField(
               key: const Key('zone-name-input'),
               controller: nameCtl,
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
-              decoration: const InputDecoration(
+              style: TextStyle(color: AppColors.text, fontSize: 15),
+              decoration:  InputDecoration(
                 labelText: '名字（如 生鲜区，可留空）',
                 labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
               ),
@@ -150,7 +150,7 @@ class _InventoryPageState extends State<InventoryPage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('建好',
+              child:  Text('建好',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -213,13 +213,13 @@ class _InventoryPageState extends State<InventoryPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('删除盘点位（不可恢复）',
+        title:  Text('删除盘点位（不可恢复）',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           '将删除「${z['zone_name'] ?? code}」以及它的 '
           '${z['loc_count'] ?? 0} 个货架位、商品与货架位的绑定关系、'
           '该点位下的全部盘点单与明细。\n\n此操作不可撤销。',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+          style: TextStyle(color: AppColors.textSub, fontSize: 13),
         ),
         actions: [
           TextButton(
@@ -227,7 +227,7 @@ class _InventoryPageState extends State<InventoryPage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除',
+              child:  Text('删除',
                   style: TextStyle(color: AppColors.danger))),
         ],
       ),
@@ -248,9 +248,9 @@ class _InventoryPageState extends State<InventoryPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('清除全部盘点数据（不可恢复）',
+        title:  Text('清除全部盘点数据（不可恢复）',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
-        content: const Text(
+        content:  Text(
           '会删掉所有点位的盘点单与扫码明细。\n'
           '盘点位、货架位、商品绑定这些档案会保留。\n\n'
           '（只清本机数据，已经同步到服务端的不会被删。）',
@@ -262,7 +262,7 @@ class _InventoryPageState extends State<InventoryPage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('清除', style: TextStyle(color: AppColors.danger))),
+              child: Text('清除', style: TextStyle(color: AppColors.danger))),
         ],
       ),
     );
@@ -334,7 +334,7 @@ class _InventoryPageState extends State<InventoryPage> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('盘点',
+        title:  Text('盘点',
             style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
           IconButton(
@@ -343,18 +343,18 @@ class _InventoryPageState extends State<InventoryPage> {
               isLabelVisible: _pendingApprovals > 0,
               label: Text('$_pendingApprovals'),
               backgroundColor: AppColors.danger,
-              child: const Icon(Icons.approval_outlined,
+              child:  Icon(Icons.approval_outlined,
                   color: AppColors.textSub),
             ),
             onPressed: () => _openApprovals(),
           ),
           IconButton(
             tooltip: '同步商品档案',
-            icon: const Icon(Icons.sync, color: AppColors.textSub),
+            icon: Icon(Icons.sync, color: AppColors.textSub),
             onPressed: _syncMaster,
           ),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: AppColors.textSub),
+            icon: Icon(Icons.more_vert, color: AppColors.textSub),
             onSelected: (v) {
               if (v == 'clear') _clearAll();
             },
@@ -423,7 +423,7 @@ class _InventoryPageState extends State<InventoryPage> {
                       Icon(icon, size: 22, color: AppColors.textSub),
                       const SizedBox(height: 3),
                       Text(label,
-                          style: const TextStyle(
+                          style:  TextStyle(
                               color: AppColors.textSub, fontSize: 11)),
                     ],
                   ),
@@ -465,10 +465,10 @@ class _InventoryPageState extends State<InventoryPage> {
               Icon(Icons.inventory_2_outlined,
                   size: 46, color: AppColors.textWeak),
               const SizedBox(height: 14),
-              const Text('还没有盘点位',
+               Text('还没有盘点位',
                   style: TextStyle(color: AppColors.text, fontSize: 15)),
               const SizedBox(height: 8),
-              const Text(
+               Text(
                 '盘点先定"盘哪儿"：一个货架区就是一个盘点位。\n'
                 '点下面的「新建盘点位」，扫一下货架旁的点位码\n'
                 '（或直接输一个编号，比如 Z01）就能开始。',
@@ -528,7 +528,7 @@ class _InventoryPageState extends State<InventoryPage> {
                           Flexible(
                             child: Text(
                               (z['zone_name'] ?? code).toString(),
-                              style: const TextStyle(
+                              style:  TextStyle(
                                   color: AppColors.text,
                                   fontSize: 15,
                                   fontWeight: FontWeight.w600),
@@ -537,7 +537,7 @@ class _InventoryPageState extends State<InventoryPage> {
                           ),
                           if (locked) ...[
                             const SizedBox(width: 6),
-                            const _Chip(text: '已锁定', color: AppColors.warn),
+                            _Chip(text: '已锁定', color: AppColors.warn),
                           ],
                         ],
                       ),
@@ -545,14 +545,14 @@ class _InventoryPageState extends State<InventoryPage> {
                       Text(
                         '$code　·　$locCount 个货架位'
                         '${(z['open_sheets'] as num? ?? 0) > 0 ? '　·　有未完成的单' : ''}',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             color: AppColors.textWeak, fontSize: 12),
                       ),
                     ],
                   ),
                 ),
                 PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert,
+                  icon:  Icon(Icons.more_vert,
                       color: AppColors.textWeak, size: 20),
                   onSelected: (v) {
                     if (v == 'lock') _toggleLock(z);

@@ -144,7 +144,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
               decoration: InputDecoration(
                 labelText: '群名称（可留空）',
                 hintText: _effectiveName,
-                hintStyle: const TextStyle(color: AppColors.textWeak),
+                hintStyle: TextStyle(color: AppColors.textWeak),
                 isDense: true,
                 border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(AppRadii.md)),
@@ -155,7 +155,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
               child: Text(_error!,
-                  style: const TextStyle(color: AppColors.danger, fontSize: 12.5)),
+                  style: TextStyle(color: AppColors.danger, fontSize: 12.5)),
             ),
           const Divider(height: 1),
           Expanded(child: _body()),
@@ -167,7 +167,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   Widget _body() {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_friends.isEmpty) {
-      return const Center(
+      return  Center(
         child: Padding(
           padding: EdgeInsets.all(32),
           child: Text('还没有好友，先去通讯录加几个人再来建群',
@@ -198,7 +198,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                   const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
           subtitle: u.remark != null && u.remark!.isNotEmpty
               ? Text(u.nickname ?? u.username,
-                  style: const TextStyle(fontSize: 11.5, color: AppColors.textWeak))
+                  style: TextStyle(fontSize: 11.5, color: AppColors.textWeak))
               : null,
         );
       },

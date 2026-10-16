@@ -108,7 +108,7 @@ class MessageBubble extends StatelessWidget {
             ),
             child: Text(
               mine ? '你撤回了一条消息' : '${senderName ?? '对方'} 撤回了一条消息',
-              style: const TextStyle(
+              style:  TextStyle(
                   fontSize: 11.5,
                   color: AppColors.textWeak,
                   fontStyle: FontStyle.italic),
@@ -169,7 +169,7 @@ class MessageBubble extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(senderName!,
-                                style: const TextStyle(
+                                style:  TextStyle(
                                     fontSize: 11.5, color: AppColors.textWeak)),
                             // 群主 / 管理员：跟机器人标签同一套视觉，颜色区分身份
                             if (senderRole == 'owner' || senderRole == 'admin') ...[
@@ -205,7 +205,7 @@ class MessageBubble extends StatelessWidget {
                                   color: AppColors.brand.withValues(alpha: 0.16),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
-                                child: const Text('机器人',
+                                child:  Text('机器人',
                                     style: TextStyle(
                                         fontSize: 9.5,
                                         height: 1.3,
@@ -235,7 +235,7 @@ class MessageBubble extends StatelessWidget {
                     mine ? MainAxisAlignment.end : MainAxisAlignment.start,
                 children: [
                   if (msg.edited) ...[
-                    const Text('已编辑',
+                     Text('已编辑',
                         style: TextStyle(
                             fontSize: 11, color: AppColors.textWeak)),
                     const SizedBox(width: 6),
@@ -257,7 +257,7 @@ class MessageBubble extends StatelessWidget {
                   ],
                   if (showTime)
                     Text(TimeFmt.hhmm(msg.createdAt),
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 11, color: AppColors.textWeak)),
                 ],
               ),
@@ -301,7 +301,7 @@ class MessageBubble extends StatelessWidget {
                   if (card.title.isNotEmpty)
                     Text(
                       card.title,
-                      style: const TextStyle(
+                      style:  TextStyle(
                         fontSize: 14.5,
                         height: 1.3,
                         fontWeight: FontWeight.w700,
@@ -312,7 +312,7 @@ class MessageBubble extends StatelessWidget {
                     if (card.title.isNotEmpty) const SizedBox(height: 6),
                     Text(
                       card.text,
-                      style: const TextStyle(
+                      style:  TextStyle(
                         fontSize: 13.5,
                         height: 1.45,
                         color: AppColors.textSub,
@@ -329,7 +329,7 @@ class MessageBubble extends StatelessWidget {
                     const SizedBox(height: 10),
                     Text(
                       card.footer,
-                      style: const TextStyle(
+                      style:  TextStyle(
                           fontSize: 11, height: 1.3, color: AppColors.textWeak),
                     ),
                   ],
@@ -381,14 +381,14 @@ class MessageBubble extends StatelessWidget {
         children: [
           if (f.label.isNotEmpty)
             Text(f.label,
-                style: const TextStyle(
+                style:  TextStyle(
                     fontSize: 11, height: 1.25, color: AppColors.textWeak)),
           if (f.value.isNotEmpty)
             Padding(
               padding: EdgeInsets.only(top: f.label.isEmpty ? 0 : 2),
               child: Text(
                 f.value,
-                style: const TextStyle(
+                style:  TextStyle(
                   fontSize: 13,
                   height: 1.35,
                   fontWeight: FontWeight.w600,
@@ -470,7 +470,7 @@ class MessageBubble extends StatelessWidget {
           color: AppColors.bgElevated,
           borderRadius: BorderRadius.circular(12),
         ),
-        child: const Text('[投票]',
+        child:  Text('[投票]',
             style: TextStyle(fontSize: 13, color: AppColors.textSub)),
       );
     }
@@ -483,7 +483,7 @@ class MessageBubble extends StatelessWidget {
       pollId = 0;
     }
     if (pollId <= 0) {
-      return const Text('[投票]（数据缺失）',
+      return  Text('[投票]（数据缺失）',
           style: TextStyle(fontSize: 13, color: AppColors.textWeak));
     }
     return PollBubble(
@@ -636,7 +636,7 @@ class MessageBubble extends StatelessWidget {
                   ),
                 ),
                 ),
-                errorWidget: (_, __, ___) => const SizedBox(
+                errorWidget: (_, __, ___) =>  SizedBox(
                   width: 210,
                   height: 130,
                   child: Column(
@@ -768,7 +768,7 @@ class MessageBubble extends StatelessWidget {
                         color: AppColors.brand.withValues(alpha: 0.16),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Icon(Icons.insert_drive_file_rounded,
+                      child:  Icon(Icons.insert_drive_file_rounded,
                           color: AppColors.brand, size: 20),
                     ),
             ),
@@ -779,7 +779,7 @@ class MessageBubble extends StatelessWidget {
                 children: [
                   Text(
                     _displayName,
-                    style: const TextStyle(fontSize: 14, color: AppColors.text),
+                    style: TextStyle(fontSize: 14, color: AppColors.text),
                     overflow: TextOverflow.ellipsis,
                     maxLines: 2,
                   ),
@@ -788,7 +788,7 @@ class MessageBubble extends StatelessWidget {
                     downloading
                         ? '下载中 $pct%'
                         : (size.isEmpty ? '点击打开' : '$size · 点击打开'),
-                    style: const TextStyle(
+                    style:  TextStyle(
                         fontSize: 11.5, color: AppColors.textWeak),
                   ),
                 ],
@@ -801,7 +801,7 @@ class MessageBubble extends StatelessWidget {
                 child: InkWell(
                   borderRadius: BorderRadius.circular(9),
                   onTap: onFileSaveAs,
-                  child: const Padding(
+                  child:  Padding(
                     padding: EdgeInsets.all(7),
                     child: Icon(Icons.save_alt_rounded,
                         size: 19, color: AppColors.textSub),
@@ -887,7 +887,7 @@ class DayDivider extends StatelessWidget {
             ),
             child: Text(
               TimeFmt.dayLabel(ts),
-              style: const TextStyle(
+              style:  TextStyle(
                   fontSize: 11.5, color: AppColors.textWeak),
             ),
           ),

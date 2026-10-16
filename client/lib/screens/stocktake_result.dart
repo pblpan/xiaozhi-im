@@ -144,14 +144,14 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('扫码盈亏',
+             Text('扫码盈亏',
                 style: TextStyle(color: AppColors.text, fontSize: 17)),
             Text(
                 _sheetName.isEmpty
                     ? widget.sheetNo
                     : '$_sheetName（${widget.sheetNo}）',
                 style:
-                    const TextStyle(color: AppColors.textWeak, fontSize: 11)),
+                    TextStyle(color: AppColors.textWeak, fontSize: 11)),
           ],
         ),
         actions: [
@@ -165,7 +165,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
                 )
               : IconButton(
                   tooltip: '导出 CSV',
-                  icon: const Icon(Icons.ios_share, color: AppColors.brand),
+                  icon: Icon(Icons.ios_share, color: AppColors.brand),
                   onPressed: _export,
                 ),
         ],
@@ -179,7 +179,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
                     if (_error != null) _banner(_error!, AppColors.danger),
                     _summaryCard(),
                     _filterBar(),
-                    const Divider(height: 1, color: AppColors.divider),
+                    Divider(height: 1, color: AppColors.divider),
                     Expanded(child: _list()),
                   ],
                 ),
@@ -192,10 +192,10 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.inbox_outlined,
+               Icon(Icons.inbox_outlined,
                   size: 48, color: AppColors.textWeak),
               const SizedBox(height: 12),
-              const Text('这张扫码单还没有扫码记录',
+               Text('这张扫码单还没有扫码记录',
                   style: TextStyle(color: AppColors.textSub, fontSize: 14)),
               const SizedBox(height: 16),
               OutlinedButton(
@@ -275,7 +275,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
               child: Text(
                 '有 $noAccount 个条码在商品档案里找不到，'
                 '不知道账面数，因此不计入盈亏。先同步一次商档再盘更准。',
-                style: const TextStyle(color: AppColors.warn, fontSize: 12),
+                style: TextStyle(color: AppColors.warn, fontSize: 12),
               ),
             ),
         ],
@@ -296,7 +296,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
             children: [
               Text(label,
                   style:
-                      const TextStyle(color: AppColors.textWeak, fontSize: 12)),
+                      TextStyle(color: AppColors.textWeak, fontSize: 12)),
               const SizedBox(height: 4),
               Text(value,
                   style: TextStyle(
@@ -329,7 +329,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
             const Spacer(),
             Text('${_visible().length} 行',
                 style:
-                    const TextStyle(color: AppColors.textWeak, fontSize: 12)),
+                    TextStyle(color: AppColors.textWeak, fontSize: 12)),
           ],
         ),
       );
@@ -359,7 +359,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
   Widget _list() {
     final rows = _visible();
     if (rows.isEmpty) {
-      return const Center(
+      return  Center(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text('这个筛选下没有记录',
@@ -371,7 +371,7 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
       padding: const EdgeInsets.only(bottom: 24),
       itemCount: rows.length,
       separatorBuilder: (_, __) =>
-          const Divider(height: 1, color: AppColors.divider),
+          Divider(height: 1, color: AppColors.divider),
       itemBuilder: (_, i) => _row(rows[i]),
     );
   }
@@ -402,12 +402,12 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
         children: [
           const SizedBox(height: 3),
           Text(r['barcode'].toString(),
-              style: const TextStyle(color: AppColors.textWeak, fontSize: 12)),
+              style: TextStyle(color: AppColors.textWeak, fontSize: 12)),
           const SizedBox(height: 2),
           Text(
             '实盘 ${StocktakeExport.fmtNum(qty)}$unit'
             '　账面 ${account == null ? '—' : StocktakeExport.fmtNum(account)}$unit',
-            style: const TextStyle(color: AppColors.textSub, fontSize: 12),
+            style: TextStyle(color: AppColors.textSub, fontSize: 12),
           ),
         ],
       ),

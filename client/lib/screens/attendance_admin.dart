@@ -327,7 +327,7 @@ class _AttendanceAdminPageState extends State<AttendanceAdminPage> {
         children: [
           Row(
             children: [
-              const Icon(Icons.pending_actions, size: 18, color: AppColors.warn),
+              Icon(Icons.pending_actions, size: 18, color: AppColors.warn),
               const SizedBox(width: 8),
               Text('待审批 ${_pending.length} 条',
                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),

@@ -264,14 +264,14 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlg) => AlertDialog(
           backgroundColor: AppColors.bgElevated,
-          title: const Text('导入这一轮要盘的商品清单',
+          title:  Text('导入这一轮要盘的商品清单',
               style: TextStyle(color: AppColors.text, fontSize: 16)),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('这一轮盘的是哪儿？',
+                 Text('这一轮盘的是哪儿？',
                     style: TextStyle(color: AppColors.textSub, fontSize: 13)),
                 const SizedBox(height: 6),
                 Row(
@@ -289,12 +289,12 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                   }).toList(),
                 ),
                 const SizedBox(height: 10),
-                const Text('给这一轮起个名字（可以不填）',
+                 Text('给这一轮起个名字（可以不填）',
                     style: TextStyle(color: AppColors.textSub, fontSize: 13)),
                 TextField(
                   key: const Key('simple-round-name'),
                   controller: nameCtl,
-                  style: const TextStyle(color: AppColors.text, fontSize: 15),
+                  style: TextStyle(color: AppColors.text, fontSize: 15),
                   decoration: const InputDecoration(
                     hintText: '例：9月生鲜大盘',
                     isDense: true,
@@ -305,7 +305,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                   Text(
                     '会把当前这一轮（$_taskNo）归档，换上新的一份清单。\n'
                     '上一轮的数据**不会删**，随时能在「历史趟次」里翻回来导出。',
-                    style: const TextStyle(color: AppColors.warn, fontSize: 12),
+                    style: TextStyle(color: AppColors.warn, fontSize: 12),
                   ),
                 ],
               ],
@@ -319,7 +319,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               key: const Key('simple-pick-file'),
               onPressed: () =>
                   Navigator.pop(ctx, _RoundPick(scene, nameCtl.text.trim())),
-              child: const Text('选择 CSV 文件',
+              child:  Text('选择 CSV 文件',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600)),
             ),
@@ -423,10 +423,10 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('确认导入',
+        title:  Text('确认导入',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(sb.toString(),
-            style: const TextStyle(color: AppColors.textSub, fontSize: 14)),
+            style: TextStyle(color: AppColors.textSub, fontSize: 14)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -434,7 +434,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
           TextButton(
               key: const Key('simple-import-ok'),
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('开始盘点',
+              child:  Text('开始盘点',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -447,9 +447,9 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.bgElevated,
           title: Text(title,
-              style: const TextStyle(color: AppColors.text, fontSize: 16)),
+              style: TextStyle(color: AppColors.text, fontSize: 16)),
           content: Text(body,
-              style: const TextStyle(color: AppColors.textSub, fontSize: 14)),
+              style: TextStyle(color: AppColors.textSub, fontSize: 14)),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx),
@@ -594,14 +594,14 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('改这一趟的数量',
+        title:  Text('改这一趟的数量',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: TextField(
           key: const Key('simple-qty-input'),
           controller: ctl,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          style: const TextStyle(color: AppColors.text, fontSize: 15),
+          style: TextStyle(color: AppColors.text, fontSize: 15),
           decoration: const InputDecoration(labelText: '数量'),
         ),
         actions: [
@@ -610,7 +610,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存',
+              child:  Text('保存',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -637,17 +637,17 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('删掉这一行？',
+        title:  Text('删掉这一行？',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text('${r['barcode']}\n删掉后可以重新扫这个条码。',
-            style: const TextStyle(color: AppColors.textSub, fontSize: 14)),
+            style: TextStyle(color: AppColors.textSub, fontSize: 14)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除',
+              child:  Text('删除',
                   style: TextStyle(
                       color: AppColors.danger, fontWeight: FontWeight.w600))),
         ],
@@ -675,13 +675,13 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('完成本趟？',
+        title:  Text('完成本趟？',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(
           '${SimplePhase.tripLabel(SimplePhase.first)}：'
           '记了 ${_nodeTally.rows} 个品。\n'
           '完成后本趟就锁死，不能再改（可以撤销）。',
-          style: const TextStyle(color: AppColors.textSub, fontSize: 14),
+          style: TextStyle(color: AppColors.textSub, fontSize: 14),
         ),
         actions: [
           TextButton(
@@ -690,7 +690,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
           TextButton(
               key: const Key('simple-submit-ok'),
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('完成本趟',
+              child:  Text('完成本趟',
                   style: TextStyle(
                       color: AppColors.brand, fontWeight: FontWeight.w600))),
         ],
@@ -818,7 +818,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
           key: const Key('simple-history'),
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
+             Padding(
               padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
               child: Align(
                 alignment: Alignment.centerLeft,
@@ -830,7 +830,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               ),
             ),
             if (nodes.isEmpty)
-              const Padding(
+               Padding(
                 padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
                 child: Align(
                   alignment: Alignment.centerLeft,
@@ -853,15 +853,15 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                 ),
                 subtitle: Text(
                   InvSheetStatus.label(_intOf(n['status'])),
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.textSub, fontSize: 12),
                 ),
                 onTap: () => Navigator.pop(ctx, <String, String>{
                   'node': (n['sheet_no'] ?? '').toString(),
                 }),
               ),
-            const Divider(height: 1, color: AppColors.divider),
-            const Padding(
+            Divider(height: 1, color: AppColors.divider),
+             Padding(
               padding: EdgeInsets.fromLTRB(16, 12, 16, 6),
               child: Align(
                 alignment: Alignment.centerLeft,
@@ -877,7 +877,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                 shrinkWrap: true,
                 itemCount: tasks.length,
                 separatorBuilder: (_, __) =>
-                    const Divider(height: 1, color: AppColors.divider),
+                    Divider(height: 1, color: AppColors.divider),
                 itemBuilder: (_, i) {
                   final t = tasks[i];
                   final no = (t['task_no'] ?? '').toString();
@@ -894,7 +894,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                       '${SimpleScene.label((t['scene'] ?? '').toString())} · '
                       '${st == SimpleRepo.taskOpen ? '进行中' : '已归档'} · '
                       '已盘 ${_intOf(t['scanned'])} / ${_intOf(t['items'])}',
-                      style: const TextStyle(
+                      style:  TextStyle(
                           color: AppColors.textSub, fontSize: 12),
                     ),
                     onTap: () => Navigator.pop(ctx, <String, String>{
@@ -921,9 +921,9 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('清除本机全部简易盘点数据（不可恢复）',
+        title:  Text('清除本机全部简易盘点数据（不可恢复）',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
-        content: const Text(
+        content:  Text(
           '会删掉本机**所有**轮的清单、趟次和扫码明细。\n'
           '「盘点」和「库房减货」的数据不受影响。\n'
           '没导出的明细删了就找不回来了。',
@@ -935,7 +935,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('确认清除',
+              child:  Text('确认清除',
                   style: TextStyle(
                       color: AppColors.danger, fontWeight: FontWeight.w600))),
         ],
@@ -963,20 +963,20 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('简易盘点',
+        title:  Text('简易盘点',
             style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
           IconButton(
             key: const Key('simple-history-btn'),
             tooltip: '历史趟次',
-            icon: const Icon(Icons.history, color: AppColors.textSub),
+            icon: Icon(Icons.history, color: AppColors.textSub),
             onPressed: _busy ? null : _pickHistory,
           ),
           // 商档查询：扫一下商品，跳出商档里该商品的所有信息（龙哥 2026-10-03）。
           IconButton(
             key: const Key('open-master-lookup'),
             tooltip: '商档查询',
-            icon: const Icon(Icons.qr_code_2_outlined,
+            icon:  Icon(Icons.qr_code_2_outlined,
                 color: AppColors.textSub),
             onPressed: () => Navigator.push(
               context,
@@ -986,7 +986,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
           ),
           PopupMenuButton<String>(
             key: const Key('simple-menu'),
-            icon: const Icon(Icons.more_vert, color: AppColors.textSub),
+            icon: Icon(Icons.more_vert, color: AppColors.textSub),
             onSelected: (v) {
               switch (v) {
                 case 'reopen':
@@ -1028,7 +1028,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                     _header(),
                     _nodeBar(),
                     _inputBar(),
-                    const Divider(height: 1, color: AppColors.divider),
+                    Divider(height: 1, color: AppColors.divider),
                     _viewSwitch(),
                     // 🔴 表头**空列表也要画**：不画的话第一次进来的人整页
                     //    看不到列名，只会得出"这页没有这个功能"的结论。
@@ -1049,14 +1049,14 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.playlist_add, size: 46, color: AppColors.textWeak),
+            Icon(Icons.playlist_add, size: 46, color: AppColors.textWeak),
             const SizedBox(height: 12),
-            const Text('请先导入这一轮要盘的商品清单（CSV）',
+             Text('请先导入这一轮要盘的商品清单（CSV）',
                 key: Key('simple-empty-hint'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.text, fontSize: 15)),
             const SizedBox(height: 6),
-            const Text('清单里要有商品条码（商品名称可以没有）。\n'
+             Text('清单里要有商品条码（商品名称可以没有）。\n'
                 '导进来以后一趟趟扫，最后导出一张全量盘点单。',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.textSub, fontSize: 13)),
@@ -1071,7 +1071,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
             TextButton(
               key: const Key('simple-template-empty'),
               onPressed: _busy ? null : _downloadTemplate,
-              child: const Text('先下载一份模板',
+              child:  Text('先下载一份模板',
                   style: TextStyle(color: AppColors.textSub)),
             ),
           ],
@@ -1085,7 +1085,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
         color: AppColors.danger.withValues(alpha: 0.15),
         padding: const EdgeInsets.all(12),
         child:
-            Text(msg, style: const TextStyle(color: AppColors.danger, fontSize: 13)),
+            Text(msg, style: TextStyle(color: AppColors.danger, fontSize: 13)),
       );
 
   Widget _header() {
@@ -1102,7 +1102,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               Expanded(
                 child: Text(_taskNo,
                     key: const Key('simple-task-no'),
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.text,
                         fontSize: 14,
                         fontWeight: FontWeight.w600)),
@@ -1135,15 +1135,15 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
             '$_taskTitle　·　${st == SimpleRepo.taskOpen ? '进行中' : '已归档'}'
             '${_taskTally.scannedOffList > 0 ? '　·　清单外 ${_taskTally.scannedOffList} 个' : ''}',
             key: const Key('simple-task-name'),
-            style: const TextStyle(color: AppColors.textSub, fontSize: 12),
+            style: TextStyle(color: AppColors.textSub, fontSize: 12),
           ),
           const SizedBox(height: 3),
           Text(_taskTally.progressText,
               key: const Key('simple-progress'),
-              style: const TextStyle(
+              style:  TextStyle(
                   color: AppColors.text, fontSize: 14, fontWeight: FontWeight.w600)),
           if (st != SimpleRepo.taskOpen)
-            const Padding(
+             Padding(
               padding: EdgeInsets.only(top: 3),
               child: Text('这是已归档的一轮（只读）。要盘新的一轮请点下面「换一份清单」。',
                   style: TextStyle(color: AppColors.textWeak, fontSize: 12)),
@@ -1168,7 +1168,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                       '　记了 ${_nodeTally.rows} 个品'
                   : '这一轮还没有趟次',
               key: const Key('simple-node-label'),
-              style: const TextStyle(color: AppColors.textSub, fontSize: 13),
+              style: TextStyle(color: AppColors.textSub, fontSize: 13),
             ),
           ),
           if (hasNode)
@@ -1191,7 +1191,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                     ),
                     child: Text(
                       '${InvSheetStatus.label(_intOf(_node!['status']))}（右上角可撤销）',
-                      style: const TextStyle(color: AppColors.warn, fontSize: 12),
+                      style: TextStyle(color: AppColors.warn, fontSize: 12),
                     ),
                   ),
           // 本趟交完之后才给"开下一趟"。放在这一行而不是塞进菜单：
@@ -1255,8 +1255,8 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               enabled: _editable,
               autofocus: true,
               textInputAction: TextInputAction.next,
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
-              decoration: const InputDecoration(
+              style: TextStyle(color: AppColors.text, fontSize: 15),
+              decoration:  InputDecoration(
                 labelText: '条码',
                 isDense: true,
                 labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
@@ -1273,8 +1273,8 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               enabled: _editable,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              style: const TextStyle(color: AppColors.text, fontSize: 15),
-              decoration: const InputDecoration(
+              style: TextStyle(color: AppColors.text, fontSize: 15),
+              decoration:  InputDecoration(
                 labelText: '数量',
                 isDense: true,
                 labelStyle: TextStyle(color: AppColors.textWeak, fontSize: 13),
@@ -1289,7 +1289,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
             IconButton(
               key: const Key('simple-camera'),
               tooltip: '摄像头扫码',
-              icon: const Icon(Icons.qr_code_scanner, color: AppColors.brand),
+              icon: Icon(Icons.qr_code_scanner, color: AppColors.brand),
               onPressed: (_editable && !_busy) ? _openCameraScan : null,
             ),
           const SizedBox(width: 8),
@@ -1305,11 +1305,11 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
   }
 
   Widget _listHeader() {
-    const style = TextStyle(color: AppColors.textWeak, fontSize: 12);
+    final style = TextStyle(color: AppColors.textWeak, fontSize: 12);
     return Container(
       color: AppColors.bgElevated,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      child: const Row(
+      child: Row(
         children: [
           // 每列带 key：列名和输入框的 label 会重名（"条码"两处都有），
           // 测试用文字找会一次命中两个，"到底画没画列头"就说不清了。
@@ -1360,11 +1360,11 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
 
   /// 未盘视图的列头（没有数量列 —— 还没盘的东西没有数）。
   Widget _pendingHeader() {
-    const style = TextStyle(color: AppColors.textWeak, fontSize: 12);
+    final style = TextStyle(color: AppColors.textWeak, fontSize: 12);
     return Container(
       color: AppColors.bgElevated,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      child: const Row(
+      child: Row(
         children: [
           Expanded(
               flex: 4,
@@ -1389,7 +1389,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
           child: Text(
             onlyDiff ? '对不上的都复核完了\n可以导出盘点数据单了' : '这一趟要盘的都盘到了\n可以点右上「完成本趟」',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.textWeak, fontSize: 14),
+            style: TextStyle(color: AppColors.textWeak, fontSize: 14),
           ),
         ),
       );
@@ -1397,7 +1397,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
     return ListView.separated(
       itemCount: rows.length,
       separatorBuilder: (_, __) =>
-          const Divider(height: 1, color: AppColors.divider),
+          Divider(height: 1, color: AppColors.divider),
       itemBuilder: (_, i) {
         final r = rows[i];
         final name = (r['name'] ?? '').toString().trim();
@@ -1411,7 +1411,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               Expanded(
                 flex: 4,
                 child: Text((r['barcode'] ?? '').toString(),
-                    style: const TextStyle(color: AppColors.text, fontSize: 13)),
+                    style: TextStyle(color: AppColors.text, fontSize: 13)),
               ),
               Expanded(
                 flex: 3,
@@ -1427,7 +1427,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                 child: Text((r['spec'] ?? '').toString(),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.textWeak, fontSize: 12)),
               ),
             ],
@@ -1439,7 +1439,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
 
   Widget _recordedList() {
     if (_rows.isEmpty) {
-      return const Center(
+      return  Center(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text(
@@ -1453,7 +1453,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
     return ListView.separated(
       itemCount: _rows.length,
       separatorBuilder: (_, __) =>
-          const Divider(height: 1, color: AppColors.divider),
+          Divider(height: 1, color: AppColors.divider),
       itemBuilder: (_, i) => _rowTile(_rows[i]),
     );
   }
@@ -1471,7 +1471,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
           Expanded(
             flex: 4,
             child: Text((r['barcode'] ?? '').toString(),
-                style: const TextStyle(color: AppColors.text, fontSize: 13)),
+                style: TextStyle(color: AppColors.text, fontSize: 13)),
           ),
           Expanded(
             flex: 3,
@@ -1504,7 +1504,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
             child: IconButton(
               tooltip: '删除这一行',
               iconSize: 18,
-              icon: const Icon(Icons.close, color: AppColors.danger),
+              icon: Icon(Icons.close, color: AppColors.danger),
               onPressed: _editable ? () => _deleteRow(r) : null,
             ),
           ),
@@ -1526,7 +1526,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               child: TextButton(
                 key: const Key('simple-history-bottom'),
                 onPressed: _busy ? null : _pickHistory,
-                child: const Text('历史趟次',
+                child:  Text('历史趟次',
                     style: TextStyle(color: AppColors.textSub, fontSize: 13)),
               ),
             ),
@@ -1534,7 +1534,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
               child: TextButton(
                 key: const Key('simple-export-bottom'),
                 onPressed: _busy ? null : _export,
-                child: const Text('导出盘点数据单',
+                child:  Text('导出盘点数据单',
                     style: TextStyle(color: AppColors.brand, fontSize: 13)),
               ),
             ),
@@ -1544,7 +1544,7 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
                 onPressed: _busy ? null : _importFlow,
                 child: Text(
                     _taskTally.totalItems > 0 ? '换一份清单' : '导入清单',
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.textSub, fontSize: 13)),
               ),
             ),

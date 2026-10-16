@@ -571,11 +571,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.campaign_outlined, color: AppColors.brand, size: 20),
+                      Icon(Icons.campaign_outlined, color: AppColors.brand, size: 20),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(text,
-                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.text)),
+                            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.text)),
                       ),
                     ],
                   ),

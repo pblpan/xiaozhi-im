@@ -83,7 +83,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
         ),
         body: Container(
-          decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+          decoration: BoxDecoration(gradient: AppTheme.bgGradient),
           child: Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
@@ -115,7 +115,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 fontSize: 21, fontWeight: FontWeight.w700)),
                       ),
                       const SizedBox(height: 4),
-                      const Center(
+                       Center(
                         child: Text('注册后自动登录',
                             style: TextStyle(
                                 color: AppColors.textSub, fontSize: 13)),
@@ -145,7 +145,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       TextField(
                         controller: _u,
                         textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(
+                        decoration:  InputDecoration(
                           hintText: '账号（至少 3 位）',
                           prefixIcon: Icon(Icons.person_outline_rounded,
                               size: 20, color: AppColors.textWeak),
@@ -155,7 +155,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       TextField(
                         controller: _n,
                         textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(
+                        decoration:  InputDecoration(
                           hintText: '昵称（选填）',
                           prefixIcon: Icon(Icons.badge_outlined,
                               size: 20, color: AppColors.textWeak),
@@ -169,7 +169,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         onSubmitted: (_) => _register(),
                         decoration: InputDecoration(
                           hintText: '密码（至少 4 位）',
-                          prefixIcon: const Icon(Icons.lock_outline_rounded,
+                          prefixIcon:  Icon(Icons.lock_outline_rounded,
                               size: 20, color: AppColors.textWeak),
                           suffixIcon: IconButton(
                             onPressed: () =>
@@ -209,12 +209,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.error_outline, size: 17, color: AppColors.danger),
+            Icon(Icons.error_outline, size: 17, color: AppColors.danger),
             const SizedBox(width: 8),
             Expanded(
               child: Text(msg,
                   style:
-                      const TextStyle(color: AppColors.danger, fontSize: 13)),
+                      TextStyle(color: AppColors.danger, fontSize: 13)),
             ),
           ],
         ),

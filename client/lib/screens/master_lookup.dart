@@ -94,13 +94,13 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('商档查询',
+        title:  Text('商档查询',
             style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
           if (_cam != null)
             IconButton(
               tooltip: '手电',
-              icon: const Icon(Icons.flashlight_off, color: AppColors.textSub),
+              icon: Icon(Icons.flashlight_off, color: AppColors.textSub),
               onPressed: () async {
                 await _cam.toggleTorch();
                 if (!mounted) return;
@@ -162,10 +162,10 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
                     enableSuggestions: false,
                     autocorrect: false,
                     textInputAction: TextInputAction.done,
-                    style: const TextStyle(color: AppColors.text, fontSize: 15),
+                    style: TextStyle(color: AppColors.text, fontSize: 15),
                     decoration: InputDecoration(
                       hintText: '手输条码查询',
-                      hintStyle: const TextStyle(
+                      hintStyle:  TextStyle(
                           color: AppColors.textWeak, fontSize: 13),
                       filled: true,
                       fillColor: AppColors.surface,
@@ -183,7 +183,7 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
                 const SizedBox(width: 10),
                 IconButton(
                   tooltip: '查询',
-                  icon: const Icon(Icons.search, color: AppColors.brand),
+                  icon: Icon(Icons.search, color: AppColors.brand),
                   onPressed: () => _lookup(_input.text),
                 ),
               ],
@@ -206,7 +206,7 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
           child: Text(
             _cam != null ? '把商品条码对准摄像头，或手输条码查询' : '手输条码查询商档',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.textWeak, fontSize: 13),
+            style: TextStyle(color: AppColors.textWeak, fontSize: 13),
           ),
         ),
       );
@@ -261,7 +261,7 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
               ),
               const SizedBox(height: 10),
               Text(body,
-                  style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
+                  style: TextStyle(color: AppColors.textSub, fontSize: 13)),
               const SizedBox(height: 16),
               _resumeButton(),
             ],
@@ -341,7 +341,7 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
           children: [
             Row(
               children: [
-                const Icon(Icons.inventory_2_outlined,
+                 Icon(Icons.inventory_2_outlined,
                     color: AppColors.brand, size: 22),
                 const SizedBox(width: 8),
                 Expanded(
@@ -362,12 +362,12 @@ class _MasterLookupPageState extends State<MasterLookupPage> {
                       SizedBox(
                         width: 76,
                         child: Text(e.key,
-                            style: const TextStyle(
+                            style:  TextStyle(
                                 color: AppColors.textWeak, fontSize: 13)),
                       ),
                       Expanded(
                         child: Text(e.value,
-                            style: const TextStyle(
+                            style:  TextStyle(
                                 color: AppColors.text, fontSize: 14)),
                       ),
                     ],

@@ -147,7 +147,7 @@ class _FriendAuthSheetState extends State<FriendAuthSheet> {
                           Text('发送给 ${widget.peerName}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style:  TextStyle(
                                   fontSize: 12.5, color: AppColors.textWeak)),
                         ],
                       ),
@@ -168,17 +168,17 @@ class _FriendAuthSheetState extends State<FriendAuthSheet> {
                     fillColor: AppColors.bgElevated,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(AppRadii.sm),
-                      borderSide: const BorderSide(color: AppColors.border),
+                      borderSide: BorderSide(color: AppColors.border),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(AppRadii.sm),
-                      borderSide: const BorderSide(color: AppColors.border),
+                      borderSide: BorderSide(color: AppColors.border),
                     ),
                   ),
                 ),
                 const SizedBox(height: 6),
                 if (_tpls.isNotEmpty) ...[
-                  const Padding(
+                   Padding(
                     padding: EdgeInsets.only(left: 2, bottom: 6),
                     child: Text('常用模板（点一下填入）',
                         style: TextStyle(fontSize: 11.5, color: AppColors.textWeak)),
@@ -204,7 +204,7 @@ class _FriendAuthSheetState extends State<FriendAuthSheet> {
                               t.content,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style:  TextStyle(
                                   fontSize: 12.5, color: AppColors.textSub),
                             ),
                           ),

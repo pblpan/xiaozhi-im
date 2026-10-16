@@ -47,18 +47,18 @@ class ExportFlow {
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                leading: const Icon(Icons.check_circle_outline,
+                leading:  Icon(Icons.check_circle_outline,
                     color: AppColors.brand),
                 title: Text('已生成 $rows 行：${fileNameOf(f)}',
-                    style: const TextStyle(color: AppColors.text, fontSize: 13)),
+                    style: TextStyle(color: AppColors.text, fontSize: 13)),
               ),
               // 只给这台设备真能走的那一条 —— 见 FileShare.channelFor 的说明：
               // 在桌面上摆一个"发给同事"就是假按钮（点了没反应）。
               if (channel == ShareChannel.systemShare)
                 ListTile(
                   key: const Key('share-to-others'),
-                  leading: const Icon(Icons.send, color: AppColors.brand),
-                  title: const Text('发给同事（微信 / 企微 / 钉钉…）',
+                  leading: Icon(Icons.send, color: AppColors.brand),
+                  title:  Text('发给同事（微信 / 企微 / 钉钉…）',
                       style: TextStyle(
                           color: AppColors.text, fontWeight: FontWeight.w600)),
                   onTap: () => Navigator.pop(ctx, 'share'),
@@ -66,28 +66,28 @@ class ExportFlow {
               else if (channel == ShareChannel.openFolder)
                 ListTile(
                   key: const Key('share-to-others'),
-                  leading: const Icon(Icons.folder_open, color: AppColors.brand),
-                  title: const Text('打开所在文件夹（拖进微信发送）',
+                  leading: Icon(Icons.folder_open, color: AppColors.brand),
+                  title:  Text('打开所在文件夹（拖进微信发送）',
                       style: TextStyle(
                           color: AppColors.text, fontWeight: FontWeight.w600)),
                   onTap: () => Navigator.pop(ctx, 'folder'),
                 ),
               ListTile(
-                leading: const Icon(Icons.open_in_new, color: AppColors.textSub),
-                title: const Text('打开（用 WPS / Excel / 记事本看）',
+                leading: Icon(Icons.open_in_new, color: AppColors.textSub),
+                title:  Text('打开（用 WPS / Excel / 记事本看）',
                     style: TextStyle(color: AppColors.text)),
                 onTap: () => Navigator.pop(ctx, 'open'),
               ),
               ListTile(
-                leading: const Icon(Icons.save_alt, color: AppColors.textSub),
-                title: const Text('另存为 / 发到别处',
+                leading: Icon(Icons.save_alt, color: AppColors.textSub),
+                title:  Text('另存为 / 发到别处',
                     style: TextStyle(color: AppColors.text)),
                 onTap: () => Navigator.pop(ctx, 'save'),
               ),
               ListTile(
-                leading: const Icon(Icons.close, color: AppColors.textWeak),
+                leading: Icon(Icons.close, color: AppColors.textWeak),
                 title:
-                    const Text('先不用', style: TextStyle(color: AppColors.textSub)),
+                    Text('先不用', style: TextStyle(color: AppColors.textSub)),
                 onTap: () => Navigator.pop(ctx),
               ),
             ],

@@ -84,7 +84,7 @@ class _JoinRequestsScreenState extends State<JoinRequestsScreen> {
               ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
-                    children: const [
+                    children:  [
                       Icon(Icons.how_to_reg_outlined,
                           size: 44, color: AppColors.textWeak),
                       SizedBox(height: 10),
@@ -98,7 +98,7 @@ class _JoinRequestsScreenState extends State<JoinRequestsScreen> {
                   onRefresh: _load,
                   child: ListView.separated(
                     itemCount: _items.length,
-                    separatorBuilder: (_, __) => const Divider(
+                    separatorBuilder: (_, __) =>  Divider(
                         height: 1, indent: 66, color: AppColors.divider),
                     itemBuilder: (c, i) {
                       final r = _items[i];
@@ -116,7 +116,7 @@ class _JoinRequestsScreenState extends State<JoinRequestsScreen> {
                             style: const TextStyle(fontSize: 14.5)),
                         subtitle: Text(
                           inviter == null ? '申请加入群聊' : '由「$inviter」邀请加入',
-                          style: const TextStyle(
+                          style:  TextStyle(
                               fontSize: 12.5, color: AppColors.textSub),
                         ),
                         trailing: busy

@@ -337,7 +337,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
           ),
           IconButton(
             tooltip: '切换前后摄像头',
-            icon: const Icon(Icons.cameraswitch_outlined,
+            icon:  Icon(Icons.cameraswitch_outlined,
                 color: AppColors.textSub),
             onPressed: () => _cam.switchCamera(),
           ),
@@ -489,7 +489,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
       );
 
   Widget _panel() => DecoratedBox(
-        decoration: const BoxDecoration(color: AppColors.bg),
+        decoration: BoxDecoration(color: AppColors.bg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
@@ -499,7 +499,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
                 padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
                 child: Text(_error!,
                     style:
-                        const TextStyle(color: AppColors.danger, fontSize: 12)),
+                        TextStyle(color: AppColors.danger, fontSize: 12)),
               ),
             if (_gate.awaiting) _confirmCard(),
             const SizedBox(height: 6),
@@ -532,7 +532,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
             const SizedBox(width: 8),
             Text(
               widget.sheetNo,
-              style: const TextStyle(color: AppColors.textWeak, fontSize: 11),
+              style: TextStyle(color: AppColors.textWeak, fontSize: 11),
             ),
           ],
         ),
@@ -628,7 +628,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(title,
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.text,
                         fontSize: 15,
                         fontWeight: FontWeight.w600),
@@ -638,7 +638,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
           ),
           const SizedBox(height: 4),
           Text(sub,
-              style: const TextStyle(color: AppColors.textSub, fontSize: 12),
+              style: TextStyle(color: AppColors.textSub, fontSize: 12),
               overflow: TextOverflow.ellipsis),
           // 供应商行（龙哥特意要的，红框区上面）+ 进价/售价/特价三项。
           if (!unknown && supplier.isNotEmpty)
@@ -646,12 +646,12 @@ class _CameraScanPageState extends State<CameraScanPage> {
               padding: const EdgeInsets.only(top: 6),
               child: Row(
                 children: <Widget>[
-                  const Icon(Icons.store_outlined,
+                   Icon(Icons.store_outlined,
                       size: 14, color: AppColors.textSub),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text('供应商：$supplier',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             color: AppColors.textSub, fontSize: 12),
                         overflow: TextOverflow.ellipsis),
                   ),
@@ -666,7 +666,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
           const SizedBox(height: 12),
           Row(
             children: <Widget>[
-              const Text('数量',
+               Text('数量',
                   style: TextStyle(color: AppColors.text, fontSize: 14)),
               const Spacer(),
               _qtyStepper(),
@@ -741,7 +741,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
         ),
         child: Text(
             v == null ? '$label —' : '$label ¥${v.toStringAsFixed(2)}',
-            style: const TextStyle(color: AppColors.textSub, fontSize: 11)),
+            style: TextStyle(color: AppColors.textSub, fontSize: 11)),
       );
 
   /// 数量步进器：可输入、可加减（龙哥 2026-10-03 要的"直接输数量"）。
@@ -772,7 +772,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
                 textAlign: TextAlign.center,
                 keyboardType: const TextInputType.numberWithOptions(
                     decimal: true, signed: false),
-                style: const TextStyle(
+                style:  TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
                     color: AppColors.text),
@@ -825,7 +825,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const Row(
+           Row(
             children: <Widget>[
               Icon(Icons.block, size: 18, color: AppColors.danger),
               SizedBox(width: 8),
@@ -840,7 +840,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
           ),
           const SizedBox(height: 4),
           Text(message,
-              style: const TextStyle(color: AppColors.textSub, fontSize: 12),
+              style: TextStyle(color: AppColors.textSub, fontSize: 12),
               overflow: TextOverflow.ellipsis),
           const SizedBox(height: 12),
           SizedBox(
@@ -861,7 +861,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
   /// 扫重了、扫错了、数量不对，都得在这里当场看出来。
   Widget _recentList() {
     if (_recent.isEmpty) {
-      return const Center(
+      return  Center(
         child: Padding(
           padding: EdgeInsets.all(20),
           child: Text('还没扫到东西。\n把条码对准上面的框里。',
@@ -892,7 +892,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
         radius: 14,
         backgroundColor: AppColors.brand.withValues(alpha: 0.14),
         child: Text('$no',
-            style: const TextStyle(fontSize: 11, color: AppColors.brand)),
+            style: TextStyle(fontSize: 11, color: AppColors.brand)),
       ),
       title: Text(unknown ? '未知条码' : name,
           style: TextStyle(
@@ -902,9 +902,9 @@ class _CameraScanPageState extends State<CameraScanPage> {
           ),
           overflow: TextOverflow.ellipsis),
       subtitle: Text(t.isEmpty ? code : '$code　$t',
-          style: const TextStyle(color: AppColors.textWeak, fontSize: 11)),
+          style: TextStyle(color: AppColors.textWeak, fontSize: 11)),
       trailing: Text('×$qty',
-          style: const TextStyle(
+          style:  TextStyle(
               color: AppColors.text, fontSize: 15, fontWeight: FontWeight.w600)),
     );
   }
@@ -914,10 +914,10 @@ class _CameraScanPageState extends State<CameraScanPage> {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Text(label,
-              style: const TextStyle(color: AppColors.textWeak, fontSize: 10)),
+              style: TextStyle(color: AppColors.textWeak, fontSize: 10)),
           const SizedBox(height: 1),
           Text(value,
-              style: const TextStyle(
+              style:  TextStyle(
                   color: AppColors.text,
                   fontSize: 16,
                   fontWeight: FontWeight.w600)),
@@ -942,13 +942,13 @@ class _CameraScanPageState extends State<CameraScanPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                const Icon(Icons.no_photography_outlined,
+                 Icon(Icons.no_photography_outlined,
                     size: 40, color: AppColors.warn),
                 const SizedBox(height: 12),
-                const Text('摄像头打不开',
+                 Text('摄像头打不开',
                     style: TextStyle(color: AppColors.text, fontSize: 15)),
                 const SizedBox(height: 8),
-                const Text(
+                 Text(
                   '常见原因：\n'
                   '① 相机权限被拒绝 —— 到 手机设置 → 应用 → 小智IM → 权限 → 相机 打开\n'
                   '② 后置摄像头正被别的 App 占用 —— 关掉相机/视频通话类 App 再回来\n'
@@ -964,7 +964,7 @@ class _CameraScanPageState extends State<CameraScanPage> {
                   textAlign: TextAlign.center,
                   maxLines: 4,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: AppColors.textWeak, fontSize: 10),
+                  style: TextStyle(color: AppColors.textWeak, fontSize: 10),
                 ),
               ],
             ),

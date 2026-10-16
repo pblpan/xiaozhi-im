@@ -117,13 +117,13 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setD) => AlertDialog(
           backgroundColor: AppColors.bgElevated,
-          title: const Text('驳回理由',
+          title:  Text('驳回理由',
               style: TextStyle(color: AppColors.text, fontSize: 16)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+               Text(
                 '驳回必须写明理由 —— 提交人全靠这句话知道该回去改什么。',
                 style: TextStyle(
                     color: AppColors.textSub, fontSize: 12, height: 1.5),
@@ -139,8 +139,8 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
                 //    `ctl.text` 现算可用性的，不重建的话它会**永远停在禁用**上
                 //    —— 现象是"输了理由还是点不动"，看着像坏了。
                 onChanged: (_) => setD(() {}),
-                style: const TextStyle(color: AppColors.text, fontSize: 14),
-                decoration: const InputDecoration(
+                style: TextStyle(color: AppColors.text, fontSize: 14),
+                decoration:  InputDecoration(
                   hintText: '例如：抽盘数量与货架实物不符，请复称后重扫',
                   hintStyle: TextStyle(color: AppColors.textWeak, fontSize: 12),
                   counterStyle: TextStyle(color: AppColors.textWeak, fontSize: 11),
@@ -270,9 +270,9 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.bgElevated,
           title:
-              Text(title, style: const TextStyle(color: AppColors.text, fontSize: 16)),
+              Text(title, style: TextStyle(color: AppColors.text, fontSize: 16)),
           content: Text(body,
-              style: const TextStyle(
+              style:  TextStyle(
                   color: AppColors.textSub, fontSize: 13, height: 1.5)),
           actions: [
             TextButton(
@@ -312,12 +312,12 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
           backgroundColor: AppColors.bg,
           appBar: AppBar(
             backgroundColor: AppColors.bgElevated,
-            title: const Text('审批中心',
+            title:  Text('审批中心',
                 style: TextStyle(color: AppColors.text, fontSize: 17)),
             actions: [
               IconButton(
                 tooltip: '刷新',
-                icon: const Icon(Icons.refresh, color: AppColors.textSub),
+                icon: Icon(Icons.refresh, color: AppColors.textSub),
                 onPressed: _loading ? null : () => _load(),
               ),
             ],
@@ -348,13 +348,13 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.cloud_off, color: AppColors.danger, size: 40),
+              Icon(Icons.cloud_off, color: AppColors.danger, size: 40),
               const SizedBox(height: 12),
               Text(_err!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
+                  style: TextStyle(color: AppColors.textSub, fontSize: 13)),
               const SizedBox(height: 6),
-              const Text('审批要连服务器才做得成（批完了得写回单据上）。',
+               Text('审批要连服务器才做得成（批完了得写回单据上）。',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: AppColors.textWeak, fontSize: 12)),
               const SizedBox(height: 16),
@@ -380,7 +380,7 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppColors.warn.withValues(alpha: 0.35)),
             ),
-            child: const Row(
+            child:  Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.visibility_outlined, color: AppColors.warn, size: 16),
@@ -449,7 +449,7 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
                 child: Text(_labelOf(a),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.text,
                         fontSize: 15,
                         fontWeight: FontWeight.w600)),
@@ -468,7 +468,7 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
                   child: Text('单号 ${a['ref']}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style:  TextStyle(
                           color: AppColors.textWeak, fontSize: 11)),
                 ),
             ],
@@ -480,7 +480,7 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
               if (created != null && created > 0)
                 '${TimeFmt.dayLabel(created)} ${TimeFmt.hhmm(created)}',
             ].join(' · '),
-            style: const TextStyle(color: AppColors.textSub, fontSize: 12),
+            style: TextStyle(color: AppColors.textSub, fontSize: 12),
           ),
           if (decidedAt != null && decidedAt > 0)
             Padding(
@@ -505,7 +505,7 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
                     Border.all(color: AppColors.danger.withValues(alpha: 0.35)),
               ),
               child: Text('驳回理由：$reason',
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.danger, fontSize: 12, height: 1.5)),
             ),
           ..._payloadLines(a['payload']),
@@ -530,14 +530,14 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
                   if (st == 'pending' && inMineTab)
                     TextButton(
                       onPressed: () => _withdraw(a),
-                      child: const Text('撤回',
+                      child:  Text('撤回',
                           style: TextStyle(
                               color: AppColors.textSub, fontSize: 13)),
                     ),
                   if (canDecide) ...[
                     TextButton(
                       onPressed: () => _reject(a),
-                      child: const Text('驳回',
+                      child:  Text('驳回',
                           style: TextStyle(
                               color: AppColors.danger, fontSize: 13)),
                     ),
@@ -594,7 +594,7 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
       Padding(
         padding: const EdgeInsets.only(top: 8),
         child: Text(parts.join(' · '),
-            style: const TextStyle(
+            style:  TextStyle(
                 color: AppColors.textSub, fontSize: 12, height: 1.4)),
       ),
     ];
@@ -608,7 +608,7 @@ class _InventoryApprovalScreenState extends State<InventoryApprovalScreen> {
           border: Border.all(color: AppColors.border),
         ),
         child: Text(text,
-            style: const TextStyle(
+            style:  TextStyle(
                 color: AppColors.textSub, fontSize: 13, height: 1.5)),
       );
 

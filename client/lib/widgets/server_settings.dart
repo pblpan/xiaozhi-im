@@ -206,7 +206,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                     borderRadius: BorderRadius.circular(AppRadii.md),
                     border: Border.all(color: AppColors.divider),
                   ),
-                  child: const Row(
+                  child:  Row(
                     children: [
                       Text('当前连接',
                           style: TextStyle(
@@ -245,7 +245,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                 const SizedBox(height: 4),
                 Text(
                   _modeHint(_mode),
-                  style: const TextStyle(
+                  style:  TextStyle(
                       fontSize: 11.5, color: AppColors.textWeak),
                 ),
 
@@ -280,7 +280,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                       style: const TextStyle(fontSize: 13)),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.brand,
-                    side: const BorderSide(color: AppColors.border),
+                    side: BorderSide(color: AppColors.border),
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadii.sm)),
@@ -310,7 +310,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.dns_rounded,
+                             Icon(Icons.dns_rounded,
                                 size: 16, color: AppColors.brand),
                             const SizedBox(width: 8),
                             Expanded(
@@ -324,13 +324,13 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                                           fontWeight: FontWeight.w600)),
                                   if (s.companyName.isNotEmpty)
                                     Text('公司：${s.companyName} · 服务端 v${s.serverVersion}',
-                                        style: const TextStyle(
+                                        style:  TextStyle(
                                             fontSize: 11,
                                             color: AppColors.textWeak)),
                                 ],
                               ),
                             ),
-                            const Icon(Icons.check_rounded,
+                             Icon(Icons.check_rounded,
                                 size: 16, color: AppColors.textWeak),
                           ],
                         ),
@@ -341,7 +341,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(_scanNote!,
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 11.5, color: AppColors.textWeak)),
                   ),
 
@@ -358,7 +358,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                       style: TextStyle(fontSize: 13)),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.brand,
-                    side: const BorderSide(color: AppColors.border),
+                    side: BorderSide(color: AppColors.border),
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadii.sm)),
@@ -368,7 +368,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(_recNote!,
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 11.5, color: AppColors.textWeak)),
                   ),
 
@@ -382,7 +382,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                         Config.baseUrl.isEmpty
                             ? '未配置服务器（可扫描或手填）'
                             : '当前使用：${Config.baseUrl}',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 11.5,
                             color: AppColors.textWeak,
                             fontFamily: 'monospace'),
@@ -418,7 +418,7 @@ class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
                   label: const Text('测试两个地址'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.brand,
-                    side: const BorderSide(color: AppColors.border),
+                    side: BorderSide(color: AppColors.border),
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadii.sm)),
@@ -461,7 +461,7 @@ class _Label extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Text(
         text,
-        style: const TextStyle(
+        style:  TextStyle(
           fontSize: 12,
           color: AppColors.textWeak,
           fontWeight: FontWeight.w500,
@@ -507,7 +507,7 @@ class _AddrField extends StatelessWidget {
             helperText: status != null && status!.startsWith('fail:')
                 ? status!.substring(5)
                 : null,
-            helperStyle: const TextStyle(
+            helperStyle:  TextStyle(
                 fontSize: 11, color: AppColors.danger),
             prefixIcon: Icon(icon, size: 18, color: AppColors.textWeak),
             suffixIcon: suffixIcon != null

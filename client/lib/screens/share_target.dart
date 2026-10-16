@@ -189,7 +189,7 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
             if (_files.isNotEmpty) _attachBar(),
             _noteField(),
             if (_error != null) _errorBar(_error!),
-            const Divider(height: 1, color: AppColors.divider),
+            Divider(height: 1, color: AppColors.divider),
             Expanded(child: _convList()),
             _bottomBar(conv),
           ],
@@ -239,12 +239,12 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
                           width: double.infinity,
                           fit: BoxFit.cover,
                           cacheWidth: 240,
-                          errorBuilder: (_, __, ___) => const Icon(
+                          errorBuilder: (_, __, ___) =>  Icon(
                               Icons.broken_image_outlined,
                               color: AppColors.textWeak),
                         ),
                       )
-                    : const Center(
+                    :  Center(
                         child: Icon(Icons.insert_drive_file_outlined,
                             size: 26, color: AppColors.textSub),
                       ),
@@ -254,7 +254,7 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
                 f.name.isEmpty ? '文件' : f.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: AppColors.textSub),
+                style: TextStyle(fontSize: 11, color: AppColors.textSub),
               ),
             ],
           ),
@@ -274,7 +274,7 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
                   },
             child: Container(
               padding: const EdgeInsets.all(2),
-              decoration: const BoxDecoration(
+              decoration:  BoxDecoration(
                   color: AppColors.danger, shape: BoxShape.circle),
               child: const Icon(Icons.close, size: 14, color: Colors.white),
             ),
@@ -295,7 +295,7 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
         style: const TextStyle(fontSize: 14),
         decoration: InputDecoration(
           hintText: _files.isEmpty ? '说点什么' : '说点什么（可不填）',
-          hintStyle: const TextStyle(color: AppColors.textWeak, fontSize: 14),
+          hintStyle: TextStyle(color: AppColors.textWeak, fontSize: 14),
           filled: true,
           fillColor: AppColors.bg,
           isDense: true,
@@ -315,7 +315,7 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
       color: AppColors.danger.withValues(alpha: 0.14),
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
       child: Text(text,
-          style: const TextStyle(fontSize: 12.5, color: AppColors.danger)),
+          style: TextStyle(fontSize: 12.5, color: AppColors.danger)),
     );
   }
 
@@ -327,7 +327,7 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
       );
     }
     if (_convs.isEmpty) {
-      return const Center(
+      return  Center(
         child: Padding(
           padding: EdgeInsets.all(28),
           child: Text(
@@ -349,7 +349,7 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
               maxLines: 1, overflow: TextOverflow.ellipsis),
           subtitle: Text(
             cv.type == 'group' ? '群聊' : '单聊',
-            style: const TextStyle(fontSize: 12, color: AppColors.textWeak),
+            style: TextStyle(fontSize: 12, color: AppColors.textWeak),
           ),
           // 用图标自绘选中态而不是 Radio 组件：Radio 的 API 在新版 Flutter 里
           // 改过（引入 RadioGroup），自绘没有版本兼容风险。
@@ -383,7 +383,7 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
                     : '发送 ${_files.length} 个文件给「$who」'));
         return Container(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-          decoration: const BoxDecoration(
+          decoration:  BoxDecoration(
             color: AppColors.bgElevated,
             border: Border(top: BorderSide(color: AppColors.divider)),
           ),
@@ -398,12 +398,12 @@ class _ShareTargetScreenState extends State<ShareTargetScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.info_outline,
+                         Icon(Icons.info_outline,
                             size: 13, color: AppColors.textWeak),
                         const SizedBox(width: 5),
                         Text(
                           '共 ${TimeFmt.size(_files.fold<int>(0, (s, f) => s + f.size))}',
-                          style: const TextStyle(
+                          style:  TextStyle(
                               fontSize: 11.5, color: AppColors.textWeak),
                         ),
                       ],

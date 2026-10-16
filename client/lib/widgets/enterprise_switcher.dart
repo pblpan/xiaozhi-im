@@ -121,7 +121,8 @@ class _StateDot extends StatelessWidget {
 
 /// 由档案 id 派生一个稳定颜色（不依赖任何外部包）。
 Color enterpriseColor(String id) {
-  const palette = [
+  // 不能 const：AppColors 是运行时值（换肤要重写）
+  final palette = [
     AppColors.brand,
     AppColors.brand2,
     Colors.orange,
@@ -250,19 +251,19 @@ class BackgroundReminderBar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
           child: Row(
             children: [
-              const Icon(Icons.notifications_active_rounded,
+               Icon(Icons.notifications_active_rounded,
                   size: 16, color: AppColors.brand),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   '${profile.name} 有 $tail，点击切换',
-                  style: const TextStyle(
+                  style:  TextStyle(
                     fontSize: 12.5,
                     color: AppColors.text,
                   ),
                 ),
               ),
-              const Icon(Icons.swap_horiz_rounded,
+               Icon(Icons.swap_horiz_rounded,
                   size: 18, color: AppColors.brand),
             ],
           ),
@@ -420,13 +421,13 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
           const SizedBox(width: 12),
         Text(
           label,
-          style: const TextStyle(fontSize: 11, color: AppColors.textWeak),
+          style: TextStyle(fontSize: 11, color: AppColors.textWeak),
         ),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
             url.isEmpty ? '未填写' : url,
-            style: const TextStyle(
+            style:  TextStyle(
               fontSize: 11.5,
               fontFamily: 'monospace',
               color: AppColors.textSub,
@@ -450,7 +451,7 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
             padding: const EdgeInsets.fromLTRB(16, 10, 10, 4),
             child: Row(
               children: [
-                const Expanded(
+                 Expanded(
                   child: Text(
                     '切换企业',
                     style: TextStyle(
@@ -476,14 +477,14 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
               ],
             ),
           ),
-          const Divider(height: 1, color: AppColors.divider),
+          Divider(height: 1, color: AppColors.divider),
           Flexible(
             child: ListView.separated(
               shrinkWrap: true,
               padding: const EdgeInsets.symmetric(vertical: 6),
               itemCount: profiles.length,
               separatorBuilder: (_, __) =>
-                  const Divider(height: 1, color: AppColors.divider),
+                  Divider(height: 1, color: AppColors.divider),
               itemBuilder: (_, i) {
                 final pr = profiles[i];
                 final isActive = pr.id == _sm.activeId;
@@ -526,7 +527,7 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
                                   Expanded(
                                     child: Text(
                                       pr.name,
-                                      style: const TextStyle(
+                                      style:  TextStyle(
                                         fontSize: 14.5,
                                         fontWeight: FontWeight.w600,
                                         color: AppColors.text,
@@ -543,7 +544,7 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
                                             .withValues(alpha: 0.16),
                                         borderRadius: BorderRadius.circular(999),
                                       ),
-                                      child: const Text(
+                                      child:  Text(
                                         '当前',
                                         style: TextStyle(
                                           fontSize: 11,
@@ -564,7 +565,7 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
                                   const SizedBox(width: 6),
                                   Text(
                                     connStateText(state),
-                                    style: const TextStyle(
+                                    style:  TextStyle(
                                       fontSize: 11.5,
                                       color: AppColors.textWeak,
                                     ),
@@ -596,7 +597,7 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
                         // 操作菜单（重命名 / 删除）
                         if (!isActive)
                           PopupMenuButton<String>(
-                            icon: const Icon(Icons.more_vert_rounded,
+                            icon:  Icon(Icons.more_vert_rounded,
                                 size: 18, color: AppColors.textSub),
                             color: AppColors.surface,
                             onSelected: (v) {
@@ -617,7 +618,7 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
               },
             ),
           ),
-          const Divider(height: 1, color: AppColors.divider),
+          Divider(height: 1, color: AppColors.divider),
           Padding(
             padding: const EdgeInsets.all(12),
             child: SizedBox(
@@ -635,7 +636,7 @@ class _EnterpriseSwitcherSheetState extends State<EnterpriseSwitcherSheet> {
                 label: const Text('添加企业'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.brand,
-                  side: const BorderSide(color: AppColors.border),
+                  side: BorderSide(color: AppColors.border),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(AppRadii.sm),

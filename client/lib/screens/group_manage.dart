@@ -280,12 +280,12 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                             fontSize: 15.5, fontWeight: FontWeight.w600)),
                   ),
                   Text(m.roleLabel,
-                      style: const TextStyle(fontSize: 12, color: AppColors.textWeak)),
+                      style: TextStyle(fontSize: 12, color: AppColors.textWeak)),
                 ],
               ),
             ),
             const SizedBox(height: 8),
-            const Divider(height: 1, color: AppColors.divider),
+            Divider(height: 1, color: AppColors.divider),
             if (d.canManage)
               _item(Icons.drive_file_rename_outline_rounded, '修改群名片',
                   () async {
@@ -404,8 +404,8 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                     leading: const Icon(Icons.badge_outlined, size: 21),
                     title: const Text('群名称', style: TextStyle(fontSize: 14.5)),
                     subtitle: Text(d.name,
-                        style: const TextStyle(fontSize: 13, color: AppColors.textSub)),
-                    trailing: const Icon(Icons.chevron_right_rounded,
+                        style: TextStyle(fontSize: 13, color: AppColors.textSub)),
+                    trailing:  Icon(Icons.chevron_right_rounded,
                         size: 20, color: AppColors.textWeak),
                     onTap: _editName,
                   ),
@@ -418,9 +418,9 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                           : d.announcement!,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, color: AppColors.textSub),
+                      style: TextStyle(fontSize: 13, color: AppColors.textSub),
                     ),
-                    trailing: const Icon(Icons.chevron_right_rounded,
+                    trailing:  Icon(Icons.chevron_right_rounded,
                         size: 20, color: AppColors.textWeak),
                     onTap: _editAnnouncement,
                   ),
@@ -430,7 +430,7 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                     leading: const Icon(Icons.badge_outlined, size: 21),
                     title: const Text('群名称', style: TextStyle(fontSize: 14.5)),
                     subtitle: Text(d.name,
-                        style: const TextStyle(fontSize: 13, color: AppColors.textSub)),
+                        style: TextStyle(fontSize: 13, color: AppColors.textSub)),
                   ),
                   ListTile(
                     leading: const Icon(Icons.campaign_outlined, size: 21),
@@ -439,7 +439,7 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                       (d.announcement == null || d.announcement!.isEmpty)
                           ? '未设置'
                           : d.announcement!,
-                      style: const TextStyle(fontSize: 13, color: AppColors.textSub),
+                      style: TextStyle(fontSize: 13, color: AppColors.textSub),
                     ),
                   ),
                 ],
@@ -450,7 +450,7 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                   SwitchListTile(
                     secondary: const Icon(Icons.volume_off_rounded, size: 21),
                     title: const Text('全员禁言', style: TextStyle(fontSize: 14.5)),
-                    subtitle: const Text('开启后只有群主和管理员能发言',
+                    subtitle:  Text('开启后只有群主和管理员能发言',
                         style: TextStyle(fontSize: 12.5, color: AppColors.textSub)),
                     value: d.mutedAll,
                     onChanged: _switching ? null : (v) => _toggleSwitch('mutedAll', v),
@@ -458,7 +458,7 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                   SwitchListTile(
                     secondary: const Icon(Icons.verified_user_outlined, size: 21),
                     title: const Text('加群验证', style: TextStyle(fontSize: 14.5)),
-                    subtitle: const Text('成员拉人需要群主或管理员同意',
+                    subtitle:  Text('成员拉人需要群主或管理员同意',
                         style: TextStyle(fontSize: 12.5, color: AppColors.textSub)),
                     value: d.needApproval,
                     onChanged: _switching ? null : (v) => _toggleSwitch('join', v),
@@ -481,7 +481,7 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                                 style: const TextStyle(
                                     fontSize: 11, color: Colors.white)),
                           ),
-                        const Icon(Icons.chevron_right_rounded,
+                         Icon(Icons.chevron_right_rounded,
                             size: 20, color: AppColors.textWeak),
                       ],
                     ),
@@ -510,9 +510,9 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                       style: const TextStyle(fontSize: 14.5),
                     );
                   }),
-                  subtitle: const Text('只在本群显示，别人看到的名字',
+                  subtitle:  Text('只在本群显示，别人看到的名字',
                       style: TextStyle(fontSize: 12.5, color: AppColors.textSub)),
-                  trailing: const Icon(Icons.chevron_right_rounded,
+                  trailing:  Icon(Icons.chevron_right_rounded,
                       size: 20, color: AppColors.textWeak),
                   onTap: _editMyNickname,
                 ),
@@ -525,7 +525,7 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                 ListTile(
                   leading: const Icon(Icons.person_add_alt_1_rounded, size: 21),
                   title: const Text('添加成员', style: TextStyle(fontSize: 14.5)),
-                  trailing: const Icon(Icons.chevron_right_rounded,
+                  trailing:  Icon(Icons.chevron_right_rounded,
                       size: 20, color: AppColors.textWeak),
                   onTap: () => _addMembers(d),
                 ),
@@ -557,10 +557,10 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                       ],
                     ),
                     subtitle: Text('@${m.username}',
-                        style: const TextStyle(fontSize: 12, color: AppColors.textWeak)),
+                        style: TextStyle(fontSize: 12, color: AppColors.textWeak)),
                     trailing: isMe
                         ? null
-                        : const Icon(Icons.more_horiz_rounded,
+                        :  Icon(Icons.more_horiz_rounded,
                             size: 20, color: AppColors.textWeak),
                     onTap: isMe ? null : () => _memberSheet(m),
                   );
@@ -573,7 +573,7 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                     child: OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.danger,
-                        side: const BorderSide(color: AppColors.danger),
+                        side: BorderSide(color: AppColors.danger),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                       onPressed: _leave,
@@ -582,7 +582,7 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
                     ),
                   ),
                 if (d.isOwner)
-                  const Padding(
+                   Padding(
                     padding: EdgeInsets.fromLTRB(16, 4, 16, 20),
                     child: Text(
                       '你是群主，需先转让群主才能退出群聊。',
@@ -608,7 +608,7 @@ class _GroupManageScreenState extends State<GroupManageScreen> {
   Widget _sectionTitle(String s) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
         child: Text(s,
-            style: const TextStyle(
+            style:  TextStyle(
                 fontSize: 12.5,
                 color: AppColors.textWeak,
                 fontWeight: FontWeight.w600,

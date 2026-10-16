@@ -54,10 +54,10 @@ Future<double?> askQty(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('改成 0 = 删掉这一行',
+        title:  Text('改成 0 = 删掉这一行',
             style: TextStyle(color: AppColors.text, fontSize: 16)),
         content: Text(confirmText ?? '确定删除这一行？',
-            style: const TextStyle(color: AppColors.textSub)),
+            style: TextStyle(color: AppColors.textSub)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -65,7 +65,7 @@ Future<double?> askQty(
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
               child:
-                  const Text('删除', style: TextStyle(color: AppColors.danger))),
+                  Text('删除', style: TextStyle(color: AppColors.danger))),
         ],
       ),
     );
@@ -122,7 +122,7 @@ class _QtyDialogState extends State<_QtyDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: AppColors.bgElevated,
-      title: const Text('改数量',
+      title:  Text('改数量',
           style: TextStyle(color: AppColors.text, fontSize: 16)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -130,7 +130,7 @@ class _QtyDialogState extends State<_QtyDialog> {
         children: [
           Text(
             widget.subtitle,
-            style: const TextStyle(color: AppColors.textWeak, fontSize: 12),
+            style: TextStyle(color: AppColors.textWeak, fontSize: 12),
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 12),
@@ -139,12 +139,12 @@ class _QtyDialogState extends State<_QtyDialog> {
             autofocus: true,
             // 数量可能是小数（称重商品按公斤），所以允许小数点
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            style: const TextStyle(color: AppColors.text, fontSize: 16),
+            style: TextStyle(color: AppColors.text, fontSize: 16),
             textInputAction: TextInputAction.done,
             onSubmitted: (s) => Navigator.pop(context, s),
             decoration: InputDecoration(
               hintText: '数量',
-              hintStyle: const TextStyle(color: AppColors.textWeak),
+              hintStyle: TextStyle(color: AppColors.textWeak),
               filled: true,
               fillColor: AppColors.surface,
               isDense: true,
@@ -163,7 +163,7 @@ class _QtyDialogState extends State<_QtyDialog> {
             onPressed: () => Navigator.pop(context), child: const Text('取消')),
         TextButton(
           onPressed: () => Navigator.pop(context, _ctrl.text),
-          child: const Text('保存',
+          child:  Text('保存',
               style:
                   TextStyle(color: AppColors.brand, fontWeight: FontWeight.w600)),
         ),

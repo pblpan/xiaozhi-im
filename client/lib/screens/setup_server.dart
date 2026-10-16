@@ -99,7 +99,7 @@ class _SetupServerScreenState extends State<SetupServerScreen> {
               children: [
                 const Center(child: BrandLogo(size: 64)),
                 const SizedBox(height: 20),
-                const Text(
+                 Text(
                   '连接你的服务器',
                   textAlign: TextAlign.center,
                   style: TextStyle(
@@ -109,7 +109,7 @@ class _SetupServerScreenState extends State<SetupServerScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text(
+                 Text(
                   '小智 IM 需要一台服务器（公司电脑或 NAS）才能收发消息。\n'
                   '如果它和本机在同一个网络里，下面会自动找出来。',
                   textAlign: TextAlign.center,
@@ -131,7 +131,7 @@ class _SetupServerScreenState extends State<SetupServerScreen> {
                     ),
                   ),
                 if (_scanning)
-                  const Text('正在扫描局域网…',
+                   Text('正在扫描局域网…',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                           fontSize: 12.5, color: AppColors.textWeak)),
@@ -155,7 +155,7 @@ class _SetupServerScreenState extends State<SetupServerScreen> {
                     ),
                     child: Text(
                       _note!,
-                      style: const TextStyle(
+                      style:  TextStyle(
                           fontSize: 12, height: 1.6, color: AppColors.textSub),
                     ),
                   ),
@@ -168,7 +168,7 @@ class _SetupServerScreenState extends State<SetupServerScreen> {
                       style: const TextStyle(fontSize: 13.5)),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.brand,
-                    side: const BorderSide(color: AppColors.border),
+                    side: BorderSide(color: AppColors.border),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadii.sm)),
@@ -215,7 +215,7 @@ class _ServerTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
             children: [
-              const Icon(Icons.dns_rounded,
+               Icon(Icons.dns_rounded,
                   size: 20, color: AppColors.brand),
               const SizedBox(width: 12),
               Expanded(
@@ -224,7 +224,7 @@ class _ServerTile extends StatelessWidget {
                   children: [
                     Text(
                       name.isEmpty ? '小智 IM 服务器' : name,
-                      style: const TextStyle(
+                      style:  TextStyle(
                           fontSize: 14.5,
                           fontWeight: FontWeight.w600,
                           color: AppColors.text),
@@ -236,7 +236,7 @@ class _ServerTile extends StatelessWidget {
                           (server.serverVersion.isEmpty
                               ? ''
                               : '  ·  v${server.serverVersion}'),
-                      style: const TextStyle(
+                      style:  TextStyle(
                           fontSize: 12,
                           fontFamily: 'monospace',
                           color: AppColors.textWeak),
@@ -245,7 +245,7 @@ class _ServerTile extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded,
+               Icon(Icons.chevron_right_rounded,
                   size: 20, color: AppColors.textWeak),
             ],
           ),

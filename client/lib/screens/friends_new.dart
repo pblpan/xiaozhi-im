@@ -184,7 +184,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+             Text(
               '只对你自己可见，对方看不到，也不会改掉对方的昵称。',
               style: TextStyle(fontSize: 12.5, color: AppColors.textWeak, height: 1.4),
             ),
@@ -204,7 +204,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
             ),
             const SizedBox(height: 8),
             Text('对方昵称：${u.display}',
-                style: const TextStyle(fontSize: 12, color: AppColors.textWeak)),
+                style: TextStyle(fontSize: 12, color: AppColors.textWeak)),
           ],
         ),
         actions: [
@@ -264,11 +264,11 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline_rounded, size: 44, color: AppColors.textWeak),
+            Icon(Icons.error_outline_rounded, size: 44, color: AppColors.textWeak),
             const SizedBox(height: 12),
             Text(_error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.textSub, fontSize: 13.5)),
+                style: TextStyle(color: AppColors.textSub, fontSize: 13.5)),
             const SizedBox(height: 10),
             FilledButton(onPressed: _load, child: const Text('重试')),
           ],
@@ -285,12 +285,12 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
                   size: 46, color: AppColors.textWeak.withValues(alpha: 0.5)),
               const SizedBox(height: 12),
               Text(title,
-                  style: const TextStyle(
+                  style:  TextStyle(
                       fontSize: 14.5, fontWeight: FontWeight.w600, color: AppColors.textSub)),
               const SizedBox(height: 6),
               Text(sub,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 12.5, color: AppColors.textWeak)),
+                  style: TextStyle(fontSize: 12.5, color: AppColors.textWeak)),
             ],
           ),
         ),
@@ -305,7 +305,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
       child: ListView.separated(
         padding: const EdgeInsets.symmetric(vertical: 6),
         itemCount: _pending.length,
-        separatorBuilder: (_, __) => const Divider(
+        separatorBuilder: (_, __) =>  Divider(
             height: 1, indent: 74, endIndent: 14, color: AppColors.divider),
         itemBuilder: (_, i) {
           final r = _pending[i];
@@ -332,7 +332,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
                           const SizedBox(width: 8),
                           if (r.createdAt > 0)
                             Text(TimeFmt.listStamp(r.createdAt),
-                                style: const TextStyle(
+                                style:  TextStyle(
                                     fontSize: 11, color: AppColors.textWeak)),
                         ],
                       ),
@@ -354,7 +354,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
                         Text(r.signature!,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style:  TextStyle(
                                 fontSize: 11.5, color: AppColors.textWeak)),
                       ],
                     ],
@@ -380,7 +380,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 10),
                         textStyle: const TextStyle(fontSize: 12.5),
                       ),
-                      child: const Text('拒绝',
+                      child:  Text('拒绝',
                           style: TextStyle(color: AppColors.textWeak)),
                     ),
                   ],
@@ -398,13 +398,13 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
         leading: const FileHelperAvatar(size: 46, radius: 15),
         title: const Text('文件助手',
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-        subtitle: const Text(
+        subtitle:  Text(
           '手机和电脑互传文件',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(fontSize: 12.5, color: AppColors.textWeak),
         ),
-        trailing: const Icon(Icons.chevron_right_rounded,
+        trailing:  Icon(Icons.chevron_right_rounded,
             size: 20, color: AppColors.textWeak),
         onTap: _openFileHelper,
       );
@@ -417,7 +417,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
             child: ListView.separated(
               padding: const EdgeInsets.symmetric(vertical: 6),
               itemCount: _friends.length,
-              separatorBuilder: (_, __) => const Divider(
+              separatorBuilder: (_, __) =>  Divider(
                   height: 1, indent: 74, endIndent: 14, color: AppColors.divider),
               itemBuilder: (_, i) {
                 final u = _friends[i];
@@ -441,7 +441,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style:
-                        const TextStyle(fontSize: 12.5, color: AppColors.textWeak),
+                        TextStyle(fontSize: 12.5, color: AppColors.textWeak),
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -456,7 +456,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
                         ),
                         onPressed: () => _editRemark(u),
                       ),
-                      const Icon(Icons.chat_bubble_outline_rounded,
+                       Icon(Icons.chat_bubble_outline_rounded,
                           size: 19, color: AppColors.textSub),
                     ],
                   ),
@@ -471,7 +471,7 @@ class _NewFriendsScreenState extends State<NewFriendsScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _fileHelperTile(),
-        const Divider(height: 1, indent: 74, endIndent: 14, color: AppColors.divider),
+        Divider(height: 1, indent: 74, endIndent: 14, color: AppColors.divider),
         Expanded(child: body),
       ],
     );

@@ -181,7 +181,7 @@ class _AddEnterpriseScreenState extends State<AddEnterpriseScreen> {
           title: const Text('添加企业'),
         ),
         body: Container(
-          decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+          decoration: BoxDecoration(gradient: AppTheme.bgGradient),
           child: Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
@@ -261,7 +261,7 @@ class _AddEnterpriseScreenState extends State<AddEnterpriseScreen> {
                 style: const TextStyle(fontSize: 13)),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.brand,
-              side: const BorderSide(color: AppColors.border),
+              side: BorderSide(color: AppColors.border),
               padding: const EdgeInsets.symmetric(vertical: 10),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(AppRadii.sm)),
@@ -283,7 +283,7 @@ class _AddEnterpriseScreenState extends State<AddEnterpriseScreen> {
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.dns_rounded,
+                       Icon(Icons.dns_rounded,
                           size: 16, color: AppColors.brand),
                       const SizedBox(width: 8),
                       Expanded(
@@ -297,13 +297,13 @@ class _AddEnterpriseScreenState extends State<AddEnterpriseScreen> {
                                     fontWeight: FontWeight.w600)),
                             if (s.companyName.isNotEmpty)
                               Text('公司：${s.companyName}',
-                                  style: const TextStyle(
+                                  style:  TextStyle(
                                       fontSize: 11,
                                       color: AppColors.textWeak)),
                           ],
                         ),
                       ),
-                      const Icon(Icons.check_rounded,
+                       Icon(Icons.check_rounded,
                           size: 16, color: AppColors.textWeak),
                     ],
                   ),
@@ -335,7 +335,7 @@ class _AddEnterpriseScreenState extends State<AddEnterpriseScreen> {
           Center(
             child: Text('在「${_lan.text}」上登录账号',
                 style:
-                    const TextStyle(color: AppColors.textSub, fontSize: 12.5)),
+                    TextStyle(color: AppColors.textSub, fontSize: 12.5)),
           ),
           const SizedBox(height: 18),
           SegmentedButton<bool>(
@@ -390,12 +390,12 @@ class _AddEnterpriseScreenState extends State<AddEnterpriseScreen> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.error_outline, size: 17, color: AppColors.danger),
+            Icon(Icons.error_outline, size: 17, color: AppColors.danger),
             const SizedBox(width: 8),
             Expanded(
               child: Text(msg,
                   style:
-                      const TextStyle(color: AppColors.danger, fontSize: 13)),
+                      TextStyle(color: AppColors.danger, fontSize: 13)),
             ),
           ],
         ),
@@ -408,7 +408,7 @@ class _Label extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Text(
         text,
-        style: const TextStyle(
+        style:  TextStyle(
           fontSize: 12,
           color: AppColors.textWeak,
           fontWeight: FontWeight.w500,

@@ -100,7 +100,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ],
         ),
         body: Container(
-          decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+          decoration: BoxDecoration(gradient: AppTheme.bgGradient),
           child: Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
@@ -137,7 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      const Center(
+                       Center(
                         child: Text('登录到你的私有通讯',
                             style: TextStyle(
                                 color: AppColors.textSub, fontSize: 13.5)),
@@ -164,7 +164,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       TextField(
                         controller: _u,
                         textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(
+                        decoration:  InputDecoration(
                           hintText: '账号',
                           prefixIcon: Icon(Icons.person_outline_rounded,
                               size: 20, color: AppColors.textWeak),
@@ -178,7 +178,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         onSubmitted: (_) => _login(),
                         decoration: InputDecoration(
                           hintText: '密码',
-                          prefixIcon: const Icon(Icons.lock_outline_rounded,
+                          prefixIcon:  Icon(Icons.lock_outline_rounded,
                               size: 20, color: AppColors.textWeak),
                           suffixIcon: IconButton(
                             onPressed: () =>
@@ -203,7 +203,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Text('还没有账号？',
+                           Text('还没有账号？',
                               style: TextStyle(
                                   color: AppColors.textWeak, fontSize: 13.5)),
                           TextButton(
@@ -239,7 +239,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               Flexible(
                                 child: Text(
                                   _modeText(),
-                                  style: const TextStyle(
+                                  style:  TextStyle(
                                     color: AppColors.brand,
                                     fontSize: 12,
                                     fontWeight: FontWeight.w500,
@@ -248,7 +248,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                               ),
                               const SizedBox(width: 4),
-                              const Icon(Icons.edit_rounded,
+                               Icon(Icons.edit_rounded,
                                   size: 11, color: AppColors.brand),
                             ],
                           ),
@@ -273,11 +273,11 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.error_outline, size: 17, color: AppColors.danger),
+            Icon(Icons.error_outline, size: 17, color: AppColors.danger),
             const SizedBox(width: 8),
             Expanded(
               child: Text(msg,
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.danger, fontSize: 13)),
             ),
           ],

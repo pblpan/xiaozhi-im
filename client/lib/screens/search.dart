@@ -275,7 +275,7 @@ class _SearchScreenState extends State<SearchScreen>
                 _total > _hits.length
                     ? '找到 $_total 条，显示前 ${_hits.length} 条'
                     : '找到 $_total 条',
-                style: const TextStyle(fontSize: 12, color: AppColors.textWeak),
+                style: TextStyle(fontSize: 12, color: AppColors.textWeak),
               ),
             ],
           ),
@@ -283,7 +283,7 @@ class _SearchScreenState extends State<SearchScreen>
         Expanded(
           child: ListView.separated(
             itemCount: _hits.length,
-            separatorBuilder: (_, __) => const Divider(
+            separatorBuilder: (_, __) =>  Divider(
                 height: 1, indent: 66, color: AppColors.divider),
             itemBuilder: (_, i) => _tile(_hits[i]),
           ),
@@ -329,7 +329,7 @@ class _SearchScreenState extends State<SearchScreen>
                             color: AppColors.brand.withValues(alpha: 0.14),
                             borderRadius: BorderRadius.circular(4),
                           ),
-                          child: const Text('群',
+                          child:  Text('群',
                               style: TextStyle(
                                   fontSize: 9.5,
                                   color: AppColors.brand,
@@ -338,7 +338,7 @@ class _SearchScreenState extends State<SearchScreen>
                       ],
                       const Spacer(),
                       Text(TimeFmt.listStamp(m.createdAt),
-                          style: const TextStyle(
+                          style:  TextStyle(
                               fontSize: 11, color: AppColors.textWeak)),
                     ],
                   ),
@@ -381,7 +381,7 @@ class _SearchScreenState extends State<SearchScreen>
     return ListView.separated(
       padding: const EdgeInsets.only(top: 6, bottom: 12),
       itemCount: _friendHits.length,
-      separatorBuilder: (_, __) => const Divider(
+      separatorBuilder: (_, __) =>  Divider(
           height: 1, indent: 66, color: AppColors.divider),
       itemBuilder: (_, i) => _friendTile(_friendHits[i]),
     );
@@ -414,7 +414,7 @@ class _SearchScreenState extends State<SearchScreen>
                   Text('@$username',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style:  TextStyle(
                           fontSize: 12.5, color: AppColors.textWeak)),
                 ],
               ),
@@ -425,7 +425,7 @@ class _SearchScreenState extends State<SearchScreen>
                   height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2))
             else
-              const Icon(Icons.chevron_right_rounded, color: AppColors.textWeak),
+              Icon(Icons.chevron_right_rounded, color: AppColors.textWeak),
           ],
         ),
       ),
@@ -436,7 +436,8 @@ class _SearchScreenState extends State<SearchScreen>
 
   /// 把命中的关键词标成品牌色加粗
   Widget _highlighted(String text, String kw) {
-    const base = TextStyle(
+    // 不能 const：AppColors 是运行时值（换肤要重写）
+    final base = TextStyle(
         fontSize: 13.5, color: AppColors.textSub, height: 1.35);
     if (kw.isEmpty) {
       return Text(text,
@@ -455,7 +456,7 @@ class _SearchScreenState extends State<SearchScreen>
       if (i > start) spans.add(TextSpan(text: text.substring(start, i)));
       spans.add(TextSpan(
         text: text.substring(i, i + kw.length),
-        style: const TextStyle(
+        style:  TextStyle(
             color: AppColors.brand, fontWeight: FontWeight.w700),
       ));
       start = i + kw.length;
@@ -480,7 +481,7 @@ class _SearchScreenState extends State<SearchScreen>
               const SizedBox(height: 12),
               Text(title,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style:  TextStyle(
                       fontSize: 14.5,
                       fontWeight: FontWeight.w600,
                       color: AppColors.textSub)),
@@ -488,7 +489,7 @@ class _SearchScreenState extends State<SearchScreen>
                 const SizedBox(height: 6),
                 Text(sub,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style:  TextStyle(
                         fontSize: 12.5, color: AppColors.textWeak)),
               ],
               if (action != null) ...[const SizedBox(height: 10), action],

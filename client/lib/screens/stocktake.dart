@@ -224,13 +224,13 @@ class _StocktakePageState extends State<StocktakePage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.add, color: AppColors.brand),
-              title: const Text('新建一张扫码单',
+              leading: Icon(Icons.add, color: AppColors.brand),
+              title:  Text('新建一张扫码单',
                   style: TextStyle(color: AppColors.text)),
               onTap: () => Navigator.pop(ctx, '__new__'),
             ),
-            const Divider(height: 1, color: AppColors.divider),
-            const Padding(
+            Divider(height: 1, color: AppColors.divider),
+             Padding(
               padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Align(
                 alignment: Alignment.centerLeft,
@@ -248,16 +248,16 @@ class _StocktakePageState extends State<StocktakePage> {
                   final no = s['sheet_no'].toString();
                   final name = (s['name'] ?? '').toString().trim();
                   return ListTile(
-                    leading: const Icon(Icons.receipt_long,
+                    leading:  Icon(Icons.receipt_long,
                         color: AppColors.textWeak),
                     // 有名字显示名字，副标题兜底单号（好又多版同款）。
                     title: Text(name.isEmpty ? no : name,
-                        style: const TextStyle(color: AppColors.text)),
+                        style: TextStyle(color: AppColors.text)),
                     subtitle: Text(
                         name.isEmpty
                             ? '${s['kinds']} 个品种'
                             : '$no · ${s['kinds']} 个品种',
-                        style: const TextStyle(color: AppColors.textWeak)),
+                        style: TextStyle(color: AppColors.textWeak)),
                     onTap: () => Navigator.pop(ctx, no),
                     onLongPress: () {
                       renameTarget = no;
@@ -296,12 +296,12 @@ class _StocktakePageState extends State<StocktakePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('单据名称', style: TextStyle(color: AppColors.text)),
+        title: Text('单据名称', style: TextStyle(color: AppColors.text)),
         content: TextField(
           controller: ctl,
           autofocus: true,
           maxLength: 30,
-          style: const TextStyle(color: AppColors.text),
+          style: TextStyle(color: AppColors.text),
           decoration: InputDecoration(
             hintText: hint ?? '例如：日配 9 月底盘点',
             counterText: '',
@@ -338,17 +338,17 @@ class _StocktakePageState extends State<StocktakePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('清空本张扫码单？',
+        title:  Text('清空本张扫码单？',
             style: TextStyle(color: AppColors.text)),
         content: Text('将删除 $_sheetNo 的全部扫码记录，不可恢复。',
-            style: const TextStyle(color: AppColors.textSub)),
+            style: TextStyle(color: AppColors.textSub)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('取消')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('清空',
+              child:  Text('清空',
                   style: TextStyle(color: AppColors.danger))),
         ],
       ),
@@ -480,22 +480,22 @@ class _StocktakePageState extends State<StocktakePage> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bgElevated,
-        title: const Text('扫码枪',
+        title:  Text('扫码枪',
             style: TextStyle(color: AppColors.text, fontSize: 17)),
         actions: [
           IconButton(
             tooltip: '盈亏表',
-            icon: const Icon(Icons.assessment_outlined, color: AppColors.brand),
+            icon: Icon(Icons.assessment_outlined, color: AppColors.brand),
             onPressed: _openResult,
           ),
           IconButton(
             tooltip: '切换/新建扫码单',
-            icon: const Icon(Icons.receipt_long, color: AppColors.textSub),
+            icon: Icon(Icons.receipt_long, color: AppColors.textSub),
             onPressed: _pickSheet,
           ),
           IconButton(
             tooltip: '清空本单',
-            icon: const Icon(Icons.delete_outline, color: AppColors.textSub),
+            icon: Icon(Icons.delete_outline, color: AppColors.textSub),
             onPressed: _rows.isEmpty ? null : _clearSheet,
           ),
         ],
@@ -514,7 +514,7 @@ class _StocktakePageState extends State<StocktakePage> {
                 _sheetBar(),
                 _inputBar(),
                 if (_lastHit != null) _hitBanner(),
-                const Divider(height: 1, color: AppColors.divider),
+                Divider(height: 1, color: AppColors.divider),
                 // 表头**常显**：空列表时也要让人看见这个列表有哪几列。
                 // 之前是 _rows.isNotEmpty 才画，结果没扫之前整页看不出有列表，
                 // 现场被当成"这功能没做"。列表结构本身也是要给人看的。
@@ -531,7 +531,7 @@ class _StocktakePageState extends State<StocktakePage> {
   /// 底部导出栏：文档（.txt，微信里直接能看）+ 表格（.csv，Excel/WPS 可开）。
   /// 挂在 bottomNavigationBar 上，列表再长也始终可见、不用滚到底找。
   Widget _exportBar() => Container(
-        decoration: const BoxDecoration(
+        decoration:  BoxDecoration(
           color: AppColors.bgElevated,
           border: Border(top: BorderSide(color: AppColors.divider)),
         ),
@@ -586,7 +586,7 @@ class _StocktakePageState extends State<StocktakePage> {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         child: Row(
           children: [
-            const Icon(Icons.numbers, size: 16, color: AppColors.textWeak),
+            Icon(Icons.numbers, size: 16, color: AppColors.textWeak),
             const SizedBox(width: 6),
             // 有名字显示「名字（单号）」，空则只显示单号 —— 与好又多版一致。
             Expanded(
@@ -594,7 +594,7 @@ class _StocktakePageState extends State<StocktakePage> {
                 _sheetName.isEmpty
                     ? _sheetNo
                     : '$_sheetName（$_sheetNo）',
-                style: const TextStyle(color: AppColors.text, fontSize: 13),
+                style: TextStyle(color: AppColors.text, fontSize: 13),
                 overflow: TextOverflow.ellipsis,
               ),
             ),
@@ -609,14 +609,19 @@ class _StocktakePageState extends State<StocktakePage> {
         ),
       );
 
-  Widget _chip(String text, {Color color = AppColors.textSub}) => Container(
+  Widget _chip(String text, {Color? color}) {
+    // 默认色不能写成参数默认值：AppColors 是运行时值（换肤要重写），
+    // 而默认参数值必须编译期常量。改可空 + 内部回落。
+    final c = color ?? AppColors.textSub;
+    return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.14),
+          color: c.withValues(alpha: 0.14),
           borderRadius: BorderRadius.circular(999),
         ),
-        child: Text(text, style: TextStyle(color: color, fontSize: 12)),
+        child: Text(text, style: TextStyle(color: c, fontSize: 12)),
       );
+  }
 
   Widget _inputBar() => Container(
         color: AppColors.bgElevated,
@@ -632,7 +637,7 @@ class _StocktakePageState extends State<StocktakePage> {
                 child: InkWell(
                   borderRadius: BorderRadius.circular(AppRadii.sm),
                   onTap: _openCamera,
-                  child: const Padding(
+                  child:  Padding(
                     padding: EdgeInsets.symmetric(horizontal: 12, vertical: 11),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -667,11 +672,11 @@ class _StocktakePageState extends State<StocktakePage> {
                 enableSuggestions: false,
                 autocorrect: false,
                 textInputAction: TextInputAction.done,
-                style: const TextStyle(color: AppColors.text, fontSize: 15),
+                style: TextStyle(color: AppColors.text, fontSize: 15),
                 decoration: InputDecoration(
                   hintText: '扫码枪直接打，或手输条码回车',
                   hintStyle:
-                      const TextStyle(color: AppColors.textWeak, fontSize: 13),
+                      TextStyle(color: AppColors.textWeak, fontSize: 13),
                   filled: true,
                   fillColor: AppColors.surface,
                   isDense: true,
@@ -697,7 +702,7 @@ class _StocktakePageState extends State<StocktakePage> {
                   )
                 : IconButton(
                     tooltip: '同步商档',
-                    icon: const Icon(Icons.sync, color: AppColors.brand),
+                    icon: Icon(Icons.sync, color: AppColors.brand),
                     onPressed: _syncMaster,
                   ),
           ],
@@ -722,7 +727,7 @@ class _StocktakePageState extends State<StocktakePage> {
           Expanded(
             child: Text(
               unknown ? '未知条码 ${h['barcode']} × $qty（商档里没有）' : '$name × $qty',
-              style: const TextStyle(color: AppColors.text, fontSize: 13),
+              style: TextStyle(color: AppColors.text, fontSize: 13),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -741,7 +746,7 @@ class _StocktakePageState extends State<StocktakePage> {
                 ? '还没有扫码记录\n点左边「扫码」用摄像头扫，\n或用扫码枪对着上面的输入框扫'
                 : '还没有扫码记录\n把光标放在上面的输入框，用扫码枪扫即可',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.textWeak, fontSize: 13),
+            style: TextStyle(color: AppColors.textWeak, fontSize: 13),
           ),
         ),
       );
@@ -752,7 +757,7 @@ class _StocktakePageState extends State<StocktakePage> {
       padding: const EdgeInsets.only(bottom: 12),
       itemCount: _rows.length,
       separatorBuilder: (_, __) =>
-          const Divider(height: 1, color: AppColors.divider),
+          Divider(height: 1, color: AppColors.divider),
       itemBuilder: (_, i) => _row(i, _rows[i]),
     );
   }
@@ -771,7 +776,7 @@ class _StocktakePageState extends State<StocktakePage> {
           children: [
             _hCell('序号', _kIdxW),
             const SizedBox(width: 8),
-            const Expanded(
+             Expanded(
               flex: 5,
               child: Text('条码',
                   style: TextStyle(color: AppColors.textWeak, fontSize: 11)),
@@ -779,7 +784,7 @@ class _StocktakePageState extends State<StocktakePage> {
             const SizedBox(width: 8),
             _hCell('数量', _kQtyW),
             const SizedBox(width: 8),
-            const Expanded(
+             Expanded(
               flex: 6,
               child: Text('商品名称',
                   style: TextStyle(color: AppColors.textWeak, fontSize: 11)),
@@ -794,7 +799,7 @@ class _StocktakePageState extends State<StocktakePage> {
         child: Text(text,
             // 数量列的内容是居中的胶囊，表头跟着居中才对得齐
             textAlign: text == '数量' ? TextAlign.center : TextAlign.left,
-            style: const TextStyle(color: AppColors.textWeak, fontSize: 11)),
+            style: TextStyle(color: AppColors.textWeak, fontSize: 11)),
       );
 
   Widget _row(int index, Map<String, dynamic> r) {
@@ -815,14 +820,14 @@ class _StocktakePageState extends State<StocktakePage> {
             width: _kIdxW,
             child: Text('${index + 1}',
                 style:
-                    const TextStyle(color: AppColors.textWeak, fontSize: 13)),
+                    TextStyle(color: AppColors.textWeak, fontSize: 13)),
           ),
           const SizedBox(width: 8),
           // ② 条码
           Expanded(
             flex: _kCodeFlex.toInt(),
             child: Text(r['barcode'].toString(),
-                style: const TextStyle(color: AppColors.text, fontSize: 12),
+                style: TextStyle(color: AppColors.text, fontSize: 12),
                 overflow: TextOverflow.ellipsis),
           ),
           const SizedBox(width: 8),
@@ -845,7 +850,7 @@ class _StocktakePageState extends State<StocktakePage> {
                     child: Text(
                       StocktakeExport.fmtNum(qty),
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style:  TextStyle(
                           color: AppColors.brand,
                           fontSize: 15,
                           fontWeight: FontWeight.w600),
@@ -873,7 +878,7 @@ class _StocktakePageState extends State<StocktakePage> {
             height: 36,
             child: IconButton(
               tooltip: '删除本行',
-              icon: const Icon(Icons.delete_outline,
+              icon:  Icon(Icons.delete_outline,
                   color: AppColors.danger, size: 20),
               onPressed: () => _deleteRow(r),
             ),

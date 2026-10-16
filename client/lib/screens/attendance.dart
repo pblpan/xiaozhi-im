@@ -518,7 +518,7 @@ class _AttendancePageState extends State<AttendancePage> {
                         : Colors.white70)),
             if (done && !exempt) ...[
               const SizedBox(height: 2),
-              const Text('可再次点击更新',
+               Text('可再次点击更新',
                   style: TextStyle(fontSize: 10.5, color: AppColors.textWeak)),
             ],
           ],

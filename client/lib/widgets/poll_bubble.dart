@@ -116,7 +116,7 @@ class _PollBubbleState extends State<PollBubble> {
           borderRadius: BorderRadius.circular(12),
         ),
         child: Text('[投票] 加载失败：$_error',
-            style: const TextStyle(fontSize: 13, color: AppColors.textWeak)),
+            style: TextStyle(fontSize: 13, color: AppColors.textWeak)),
       );
     }
     final p = _poll;
@@ -176,7 +176,7 @@ class _PollBubbleState extends State<PollBubble> {
         children: [
           Row(
             children: [
-              const Icon(Icons.how_to_vote_outlined, size: 16, color: AppColors.brand),
+              Icon(Icons.how_to_vote_outlined, size: 16, color: AppColors.brand),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(title,
@@ -186,7 +186,7 @@ class _PollBubbleState extends State<PollBubble> {
                         fontSize: 14.5, fontWeight: FontWeight.w600)),
               ),
               if (multi)
-                const Text('多选',
+                 Text('多选',
                     style: TextStyle(fontSize: 10.5, color: AppColors.textWeak)),
             ],
           ),
@@ -200,10 +200,10 @@ class _PollBubbleState extends State<PollBubble> {
           Row(
             children: [
               Text('$total 人参与',
-                  style: const TextStyle(fontSize: 11.5, color: AppColors.textWeak)),
+                  style: TextStyle(fontSize: 11.5, color: AppColors.textWeak)),
               const Spacer(),
               if (closed)
-                const Text('已结束',
+                 Text('已结束',
                     style: TextStyle(fontSize: 11.5, color: AppColors.textWeak))
               else ...[
                 if (multi && _draftPicks.isNotEmpty)
@@ -223,7 +223,7 @@ class _PollBubbleState extends State<PollBubble> {
                         padding: const EdgeInsets.symmetric(horizontal: 8),
                         minimumSize: const Size(0, 30)),
                     onPressed: _close,
-                    child: const Text('结束投票',
+                    child:  Text('结束投票',
                         style: TextStyle(fontSize: 12.5, color: AppColors.textWeak)),
                   ),
               ],
@@ -282,14 +282,14 @@ class _PollBubbleState extends State<PollBubble> {
                 const SizedBox(width: 4),
                 // 头像堆叠最多 3 个 + 人数
                 Text('${voters.length} 人',
-                    style: const TextStyle(fontSize: 11, color: AppColors.textWeak)),
+                    style: TextStyle(fontSize: 11, color: AppColors.textWeak)),
               ],
               const SizedBox(width: 6),
               SizedBox(
                 width: 34,
                 child: Text('$count$pctText',
                     textAlign: TextAlign.right,
-                    style: const TextStyle(fontSize: 11.5, color: AppColors.textSub)),
+                    style: TextStyle(fontSize: 11.5, color: AppColors.textSub)),
               ),
             ],
           ),

@@ -79,7 +79,7 @@ class EmojiPanelState extends State<EmojiPanel> {
   Widget build(BuildContext context) {
     return Container(
       height: EmojiPanel.height,
-      decoration: const BoxDecoration(
+      decoration:  BoxDecoration(
         color: AppColors.bgElevated,
         border: Border(top: BorderSide(color: AppColors.divider)),
       ),
@@ -98,7 +98,7 @@ class EmojiPanelState extends State<EmojiPanel> {
   Widget _grid() {
     final list = _current;
     if (list.isEmpty) {
-      return const Center(
+      return  Center(
         child: Text('还没有用过的表情',
             style: TextStyle(fontSize: 12.5, color: AppColors.textWeak)),
       );
@@ -127,7 +127,7 @@ class EmojiPanelState extends State<EmojiPanel> {
   Widget _tabs() {
     return Container(
       height: 42,
-      decoration: const BoxDecoration(
+      decoration:  BoxDecoration(
         border: Border(top: BorderSide(color: AppColors.divider)),
       ),
       child: Row(
@@ -152,7 +152,7 @@ class EmojiPanelState extends State<EmojiPanel> {
           InkWell(
             onTap: widget.onBackspace,
             borderRadius: BorderRadius.circular(8),
-            child: const Padding(
+            child:  Padding(
               padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: Icon(Icons.backspace_outlined,
                   size: 20, color: AppColors.textSub),
