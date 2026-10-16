@@ -85,6 +85,17 @@ abstract class InputInjector {
   /// 把鼠标移到归一化位置 (0..1)
   void moveAbsolute(double nx, double ny);
 
+  /// 告诉注入器：本端画面**只包含主显示器**。
+  ///
+  /// 🔴 归一化坐标的换算前提就是"画面覆盖了哪块屏"，所以这句话必须由
+  ///    **采集侧**告诉注入侧，两边用的是同一个事实：
+  ///      · 画面是整个虚拟桌面（多屏拼起来）→ 坐标按整个虚拟桌面摊开；
+  ///      · 画面只有主显示器               → 坐标按主显示器摊开。
+  ///    搞反了的表象是"画面完全正确、但点哪儿都偏一点"，肉眼极难定位
+  ///    （曾经就在这里踩过：副屏摆在主屏左侧时算出负坐标，审核看不出来）。
+  ///    只有 Windows 有这个概念，其余平台默认空实现即可。
+  void usePrimaryOnlyCapture(bool primaryOnly) {}
+
   void mouseButton(RemoteMouseButton button, bool down);
 
   /// 滚轮。delta 为正表示向上滚。

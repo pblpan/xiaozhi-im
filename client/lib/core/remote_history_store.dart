@@ -117,6 +117,60 @@ class RemoteHistoryStore {
     }
   }
 
+  /// **手动**收藏一个对象 —— 不需要先连过一次。
+  ///
+  /// 为什么不复用 [record]：record 的语义是"连过才记"。而收藏要解决的恰恰是
+  /// "我还没连上 / 以后要常用"—— 龙哥 2026-10-16 的反馈就是收藏夹里加不进东西
+  /// （一直在排查黑屏、从没成功连过，历史列表是空的，于是连"收藏"这个动作
+  /// 都无处可点）。同对象已存在时只标成收藏并更新名字，不新增一行。
+  ///
+  /// 返回是否落库成功 —— 失败了要让 UI 说实话，不能假装加上了。
+  Future<bool> addFavorite({
+    required int peerId,
+    required String peerName,
+    required String code,
+    required String kind,
+  }) async {
+    try {
+      final db = await LocalDb.I.db();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final rows = await db.query(
+        _t,
+        where: 'kind = ? AND peer_id = ? AND code = ?',
+        whereArgs: <Object?>[kind, peerId, code],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        await db.insert(_t, <String, Object?>{
+          'peer_id': peerId,
+          'peer_name': peerName,
+          'code': code,
+          'kind': kind,
+          // times = 0 是"手动加的、还没连过"，列表据此显示"还没连过"
+          // 而不是"连过 0 次"（后者像刚连上了）。
+          'times': 0,
+          'fav': 1,
+          'last_at': now,
+        });
+        return true;
+      }
+      await db.update(
+        _t,
+        <String, Object?>{
+          'fav': 1,
+          if (peerName.isNotEmpty) 'peer_name': peerName,
+          // 重新收藏也把它顶到最前面（收藏区内部按时间倒序）
+          'last_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: <Object?>[rows.first['id'] as int],
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> setFav(int id, bool fav) async {
     try {
       final db = await LocalDb.I.db();

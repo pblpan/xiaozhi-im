@@ -17,6 +17,8 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -25,10 +27,39 @@ import '../api.dart';
 import '../socket.dart';
 import 'input_inject.dart';
 import 'remote_capture.dart';
+import 'remote_frame_stream.dart';
 import 'remote_history_store.dart';
 import 'remote_models.dart';
 import 'rtc_video_degrader.dart';
 import 'sound_service.dart';
+import 'win_gdi_frame_worker.dart';
+
+/// 自研画面通道的画质档位表：档位 → (目标最大宽度, JPEG 质量)。
+///
+/// 序号沿用控制端 UI 的 0..4（原画/高清/标清/流畅/极速，文案见 remote.dart）。
+/// ⚠️ 这里的"原画"封顶在 1280 宽，不是屏幕原始分辨率 —— 原因是硬的：
+/// 抓屏 + JPEG 编码是同步的几十毫秒，宽度越大帧率掉得越快（本机实测
+/// 1280 宽约 4~5fps、960 宽约 8~13fps）。把 1536 宽也叫"原画"，
+/// 用户选到的是一张每秒动两次的图 —— 那是骗人，不是画质。
+const List<({int width, int quality})> kRemoteFrameLevels = <({
+  int width,
+  int quality
+})>[
+  (width: 1280, quality: 70),
+  (width: 1152, quality: 68),
+  (width: 960, quality: 65),
+  (width: 800, quality: 60),
+  (width: 640, quality: 55),
+];
+
+/// 自研画面通道的默认档位（标清）。控制端没手动选过时用这个：
+/// 960 宽在本机实测约 8~13fps、约 30KB/帧（0.24MB/s），
+/// 是"看得清桌面小字"和"画面跟得上手"之间的平衡点。
+const int kRemoteFrameDefaultLevel = 2;
+
+/// 自研画面通道把最新一帧推给控制端的最小间隔。
+/// 发一帧只要几百微秒，这个值只是给发送侧一个上限，实际速度由采集端决定。
+const Duration kRemoteFrameSendInterval = Duration(milliseconds: 60);
 
 /// 一条已解析的远程输入指令。
 ///
@@ -235,6 +266,48 @@ class RemoteAssistService {
 
   /// UU-c：被控端屏幕共享发送端的画质自适应控制器（网络差自动降级）
   RtcVideoDegrader? _degrader;
+
+  // ---------------------------------------------------- 自研画面通道（Windows）
+  // 背景见 win_gdi_capture.dart 头注：Windows 上 WebRTC 的桌面采集恒黑，
+  // 所以被控端在 Windows 上改用自研 GDI 抓屏 → JPEG → DataChannel。
+  // 信令、鉴权、ICE、控制指令通道**全部沿用原样**，只换"画面像素从哪来"。
+
+  /// 控制端：收到的最新一帧（JPEG 字节）。null=还没收到过。
+  ///
+  /// remote.dart 据它决定贴图还是用 RTCVideoView —— 这个 notifier 为 null
+  /// 就说明对端没用自研通道（比如手机当被控端），一切照旧。
+  final ValueNotifier<Uint8List?> frameJpeg = ValueNotifier<Uint8List?>(null);
+
+  /// 控制端：最新一帧的像素尺寸。首帧到达前为 null。
+  final ValueNotifier<({int w, int h})?> frameSize =
+      ValueNotifier<({int w, int h})?>(null);
+
+  /// 控制端：已收到的完整帧数（诊断/黑屏判定用）。
+  int framesIn = 0;
+
+  /// 被控端：自研采集线程。
+  GdiFrameHub? _gdiHub;
+
+  /// 被控端：承载画面的数据通道。
+  RTCDataChannel? _frameDc;
+
+  /// 被控端：把"手上最新一帧"推出去的定时器。
+  Timer? _frameSendTimer;
+
+  /// 被控端：待发送的最新一帧（只留最新的一帧，旧的直接丢）。
+  ({int w, int h, Uint8List jpeg})? _pendingFrame;
+
+  /// 被控端：帧序号。
+  int _frameSeq = 0;
+
+  /// 控制端：分片重组器。
+  final RemoteFrameAssembler _assembler = RemoteFrameAssembler();
+
+  /// 被控端：因对端消费不过来而主动丢掉的帧数（诊断用）。
+  int framesDropped = 0;
+
+  /// 被控端：已发出的帧数（诊断用）。
+  int framesOut = 0;
 
   late final InputInjector _injector = createInputInjector();
 
@@ -597,47 +670,22 @@ class RemoteAssistService {
     _hostStarting = true;
     try {
       phase.value = RemotePhase.connecting;
-      final stream = await _captureScreen();
-      _localScreen = stream;
 
-      await _ensureRenderer();
-      final pc = await _ensurePc();
-
-      for (final t in stream.getVideoTracks()) {
-        await pc.addTrack(t, stream);
+      // ① Windows 被控端优先走**自研画面通道**（GDI 抓屏 → JPEG → DataChannel）。
+      //    打不开就静默回落到原来的 WebRTC 采集：宁可帧率一般、画面普通，
+      //    也不能因为自研这条路出问题就变成"完全没法协助"。
+      //
+      //    为什么非换不可：libwebrtc 的桌面采集在本机（就是被控的那台电脑）
+      //    **恒出黑帧** —— 不报错、不抛异常，就是黑的。同机 GDI 抓屏实测
+      //    完全正常。详细推理见 win_gdi_capture.dart 的头注。
+      final hub = await _tryStartGdi();
+      if (hub != null) {
+        await _startFrameHost(hub);
+        return;
       }
 
-      // UU-c：屏幕共享的发送端挂在质量自适应控制器上，网络差时自动降码率/帧率
-      final senders = await pc.getSenders();
-      for (final s in senders) {
-        if (s.track?.kind == 'video') {
-          _degrader = RtcVideoDegrader(pc, s, onChange: (lvl, r) {
-            qualityLevel.value = lvl;
-            _log('画质自适应：等级 $lvl（$r）');
-          });
-          _degrader!.start();
-          break;
-        }
-      }
-
-      // 控制通道由**被控端**创建并随 offer 一起协商出去 ——
-      // 这样"谁可以给我发控制指令"这件事在 SDP 里就定死了。
-      final dc = await pc.createDataChannel(
-        'control',
-        RTCDataChannelInit()
-          ..ordered = true
-          ..maxRetransmits = -1,
-      );
-      _bindControlChannel(dc);
-
-      final offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      SocketService().send({
-        'type': 'remote:offer',
-        'sessionId': session.value?.id,
-        'data': offer.toMap(),
-      });
-      _log('已发送共享offer，等待对方接入');
+      // ② 原路径：WebRTC 桌面采集（安卓被控端 / Windows 上自研通道不可用）
+      await _startVideoHost();
     } catch (e) {
       // 失败必须留痕：diag 栏（远程页底部）会展示这句话，
       // 不能再像以前那样只有 debugPrint、release 版里什么都看不到。
@@ -649,6 +697,243 @@ class RemoteAssistService {
     } finally {
       _hostStarting = false;
     }
+  }
+
+  /// 原路径：WebRTC 桌面采集（手机当被控端时走这里，也是 Windows 的兜底）。
+  Future<void> _startVideoHost() async {
+    final stream = await _captureScreen();
+    _localScreen = stream;
+
+    await _ensureRenderer();
+    final pc = await _ensurePc();
+
+    for (final t in stream.getVideoTracks()) {
+      await pc.addTrack(t, stream);
+    }
+
+    // UU-c：屏幕共享的发送端挂在质量自适应控制器上，网络差时自动降码率/帧率
+    final senders = await pc.getSenders();
+    for (final s in senders) {
+      if (s.track?.kind == 'video') {
+        _degrader = RtcVideoDegrader(pc, s, onChange: (lvl, r) {
+          qualityLevel.value = lvl;
+          _log('画质自适应：等级 $lvl（$r）');
+        });
+        _degrader!.start();
+        break;
+      }
+    }
+
+    // 控制通道由**被控端**创建并随 offer 一起协商出去 ——
+    // 这样"谁可以给我发控制指令"这件事在 SDP 里就定死了。
+    final dc = await pc.createDataChannel(
+      'control',
+      RTCDataChannelInit()
+        ..ordered = true
+        ..maxRetransmits = -1,
+    );
+    _bindControlChannel(dc);
+
+    final offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    SocketService().send({
+      'type': 'remote:offer',
+      'sessionId': session.value?.id,
+      'data': offer.toMap(),
+    });
+    _log('已发送共享offer，等待对方接入');
+  }
+
+  // ------------------------------------------------ 自研画面通道（被控端侧）
+
+  /// 尝试拉起自研采集线程。返回 null = 这条路走不通，调用方回落。
+  ///
+  /// 🔴 **必须先真抓一帧再决定**：采集器能 open 不等于抓得到（远程会话断开、
+  ///    屏被独占时 BitBlt 会失败）。如果等 PeerConnection 建好、控制端连上
+  ///    之后才发现抓不到，用户看到的就是"连上了但一片黑" —— 那正是我们要
+  ///    消灭的现象。所以这里先抓一帧当体检，抓不到就干脆别用这条路。
+  Future<GdiFrameHub?> _tryStartGdi() async {
+    if (!Platform.isWindows) return null;
+    final hub = await GdiFrameHub.start();
+    if (hub == null) {
+      _log('自研画面通道不可用，改用系统屏幕共享');
+      return null;
+    }
+    hub.onInfo = (s) => _log(s);
+
+    final first = Completer<bool>();
+    hub.onFrame = (w, h, jpeg) {
+      _pendingFrame = (w: w, h: h, jpeg: jpeg);
+      if (!first.isCompleted) first.complete(true);
+    };
+    hub.setTarget(
+      maxWidth: kRemoteFrameLevels[kRemoteFrameDefaultLevel].width,
+      quality: kRemoteFrameLevels[kRemoteFrameDefaultLevel].quality,
+    );
+    final got = await first.future
+        .timeout(const Duration(seconds: 6), onTimeout: () => false);
+    if (!got) {
+      await hub.stop();
+      _log('自研画面通道首帧超时，改用系统屏幕共享');
+      return null;
+    }
+    return hub;
+  }
+
+  /// 自研画面通道：只协商数据通道，不协商视频轨。
+  Future<void> _startFrameHost(GdiFrameHub hub) async {
+    _gdiHub = hub;
+    qualityLevel.value = kRemoteFrameDefaultLevel;
+    qualityPick.value = null;
+    // 🔴 成对改动，拆开任何一半都会"画面正确但点哪儿都偏"：
+    //    画面只含主显示器，注入坐标就必须按主显示器换算。
+    _injector.usePrimaryOnlyCapture(true);
+    _log('自研画面通道已启用：${hub.info}');
+
+    final pc = await _ensurePc();
+
+    // 控制通道：可靠有序（键鼠指令少点一下，比画面旧一帧严重得多）
+    final ctl = await pc.createDataChannel(
+      'control',
+      RTCDataChannelInit()
+        ..ordered = true
+        ..maxRetransmits = -1,
+    );
+    _bindControlChannel(ctl);
+
+    // 画面通道：无序 + 只允许重传 1 次。
+    //
+    // ⚠️ 这里**不能**写 maxRetransmits = 0：flutter_webrtc 的
+    //    RTCDataChannelInit.toMap() 里是 `if (maxRetransmits > 0)`，
+    //    传 0 会被静默丢掉，通道悄悄变回"完全可靠"—— 那正是我们要避免的
+    //    （丢片会一直重传，画面越拖越旧）。写 1 才真正落到 native。
+    //    配合有序=否：不因为等某一个碎块而卡住后面所有帧。
+    final frames = await pc.createDataChannel(
+      kRemoteFrameChannelLabel,
+      RTCDataChannelInit()
+        ..ordered = false
+        ..maxRetransmits = 1,
+    );
+    _bindFrameSender(frames);
+
+    final offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    SocketService().send({
+      'type': 'remote:offer',
+      'sessionId': session.value?.id,
+      'data': offer.toMap(),
+    });
+    _log('已发送共享offer（自研画面通道），等待对方接入');
+  }
+
+  /// 被控端：绑定画面发送通道，通道一开就按节奏推帧。
+  void _bindFrameSender(RTCDataChannel dc) {
+    _frameDc = dc;
+    dc.onDataChannelState = (st) {
+      switch (st) {
+        case RTCDataChannelState.RTCDataChannelOpen:
+          _startFrameSendLoop();
+        case RTCDataChannelState.RTCDataChannelClosed:
+        case RTCDataChannelState.RTCDataChannelClosing:
+          _stopFrameSendLoop();
+        case RTCDataChannelState.RTCDataChannelConnecting:
+          break;
+      }
+    };
+  }
+
+  void _startFrameSendLoop() {
+    if (_frameSendTimer != null) return;
+    _frameSendTimer =
+        Timer.periodic(kRemoteFrameSendInterval, (_) => _sendLatestFrame());
+  }
+
+  void _stopFrameSendLoop() {
+    _frameSendTimer?.cancel();
+    _frameSendTimer = null;
+  }
+
+  /// 推"手上最新的一帧"。没新帧、通道没就绪、对端吃不消 —— 都直接跳过。
+  ///
+  /// 这一段跑在主 isolate 上，必须是微秒级：只看一眼 bufferedAmount，
+  /// 然后把几十 KB 丢给 native 就返回（真正的重活都在采集线程里）。
+  void _sendLatestFrame() {
+    final dc = _frameDc;
+    final f = _pendingFrame;
+    if (dc == null || f == null) return;
+    _pendingFrame = null;
+
+    // 对端消费不过来就丢掉这一帧 —— 画面要的是最新，不是完整。
+    // 阈值取 512KB：约 10 帧的余量，够吸收一次网络抖动，又不至于积压成延迟。
+    if (dc.bufferedAmount != null && dc.bufferedAmount! > 512 * 1024) {
+      framesDropped++;
+      return;
+    }
+    final parts = packRemoteFrame(
+      seq: ++_frameSeq,
+      width: f.w,
+      height: f.h,
+      jpeg: f.jpeg,
+    );
+    try {
+      for (final p in parts) {
+        dc.send(RTCDataChannelMessage.fromBinary(p));
+      }
+      framesOut++;
+    } catch (e) {
+      _log('画面发送失败：$e');
+    }
+  }
+
+  /// 被控端画面采集状态的一行人话，给被控端警示条显示。
+  ///
+  /// 🔴 被控端也需要看得见的诊断（原来只有控制端画布页底部的 _DiagBar）：
+  ///    远程协助出问题时，坐在电脑前的人和拿着手机的人看到的现象完全不同。
+  ///    "画面黑"这件事只有被控端能说清是"没抓到"还是"抓到了没发出去"。
+  ///    2026-10-16 排查黑屏时，电脑端一个可看的字都没有，只能靠猜 ——
+  ///    这一行就是补上那个"看一眼就知道卡在哪"的位置。
+  String get captureStatus {
+    final hub = _gdiHub;
+    if (hub != null) {
+      final lv = qualityLevel.value.clamp(0, kRemoteFrameLevels.length - 1);
+      final cfg = kRemoteFrameLevels[lv];
+      final buf = <String>[
+        '画面：${hub.info} → ${cfg.width}宽',
+        '已发 $framesOut 帧',
+      ];
+      if (framesDropped > 0) buf.add('丢弃 $framesDropped');
+      if (hub.lastError.isNotEmpty) buf.add('错误：${hub.lastError}');
+      return buf.join(' · ');
+    }
+    if (phase.value == RemotePhase.active) return '画面：系统屏幕共享（WebRTC）';
+    return '';
+  }
+
+  /// 控制端：绑定画面接收通道。
+  void _bindFrameChannel(RTCDataChannel dc) {
+    dc.onMessage = (RTCDataChannelMessage msg) {
+      if (!msg.isBinary) return;
+      if (phase.value == RemotePhase.ended) return;
+      RemoteFrame? done;
+      try {
+        done = _assembler.feed(msg.binary);
+      } catch (e) {
+        // 网络来的字节，畸形是常态，绝不能把异常抛到事件循环上
+        debugPrint('[remote] 画面分片解析失败：$e');
+        return;
+      }
+      if (done == null) return;
+      framesIn++;
+      final size = _assembler.width;
+      final hgt = _assembler.height;
+      if (size != null && hgt != null) {
+        final prev = frameSize.value;
+        if (prev == null || prev.w != size || prev.h != hgt) {
+          frameSize.value = (w: size, h: hgt);
+        }
+      }
+      frameJpeg.value = done.jpeg;
+    };
   }
 
   // ------------------------------------------------------------ 控制端接入
@@ -856,8 +1141,15 @@ class RemoteAssistService {
     pc.onTrack = (event) => unawaited(_onTrack(event));
 
     pc.onDataChannel = (dc) {
-      // 控制端的数据通道由被控端创建，这里是接收端
-      _bindControlChannel(dc);
+      // 数据通道都由**被控端**创建，这里只是接收端。
+      // 🔴 必须按 label 分流：自研画面通道会额外建一条 frames 通道，
+      //    如果一律当成控制通道，后到的那条会把 _dc 覆盖掉 ——
+      //    表现是"鼠标键盘全失灵，画面却是好的"，最容易被误判成网络抖动。
+      if (dc.label == kRemoteFrameChannelLabel) {
+        _bindFrameChannel(dc);
+      } else {
+        _bindControlChannel(dc);
+      }
     };
 
     pc.onConnectionState = (st) {
@@ -968,6 +1260,19 @@ class RemoteAssistService {
       case QualityAction(:final level):
         // 画质锁定（UU-c）。被控端是发送端，档位只有在这边能落地；
         // qualityLevel notifier 同步一下，被控端自己的状态条也跟着变。
+        final hub = _gdiHub;
+        if (hub != null) {
+          // 自研画面通道：档位 → (目标宽度, JPEG 质量)，直接下给采集线程。
+          // level 为 null 表示"恢复自动"，在没有网络自适应的自研通道里
+          // 就等同于回到默认档。
+          final lv = (level ?? kRemoteFrameDefaultLevel)
+              .clamp(0, kRemoteFrameLevels.length - 1);
+          final cfg = kRemoteFrameLevels[lv];
+          hub.setTarget(maxWidth: cfg.width, quality: cfg.quality);
+          qualityLevel.value = lv;
+          _log('画质档位：$lv（${cfg.width}宽 · 质量${cfg.quality}）');
+          return;
+        }
         unawaited(_degrader?.lock(level));
     }
   }
@@ -1027,6 +1332,29 @@ class RemoteAssistService {
     qualityPick.value = null;
     _degrader?.stop();
     _degrader = null;
+
+    // 自研画面通道收尾：停推帧、关采集线程、清掉控制端手上的最后一帧。
+    // 采集线程**必须**显式停 —— 它一直握着屏幕 DC 在抓屏，忘了停就是
+    // "会话结束了摄像头还亮着"，用户会怀疑被偷录。
+    _stopFrameSendLoop();
+    _pendingFrame = null;
+    final hub = _gdiHub;
+    _gdiHub = null;
+    if (hub != null) unawaited(hub.stop());
+    // "画面只含主显示器"是自研通道的前提，随会话一起失效 ——
+    // 下次可能是手机当被控端（画面=整块屏），留着会让鼠标点偏。
+    _injector.usePrimaryOnlyCapture(false);
+    try {
+      _frameDc?.close();
+    } catch (_) {}
+    _frameDc = null;
+    _assembler.reset();
+    framesIn = 0;
+    framesOut = 0;
+    framesDropped = 0;
+    frameJpeg.value = null;
+    frameSize.value = null;
+
     try {
       _dc?.close();
     } catch (_) {}

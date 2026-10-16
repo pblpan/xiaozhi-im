@@ -10,6 +10,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 这样 [AppColors._assign] 就是一个直白的赋值表，不会漏。
 class AppPalette {
   const AppPalette({
+    required this.name,
+    required this.label,
+    required this.isLight,
     required this.bg,
     required this.bgElevated,
     required this.surface,
@@ -26,6 +29,22 @@ class AppPalette {
     required this.warn,
     required this.bubbleOther,
   });
+
+  /// 存进 SharedPreferences 的键。
+  ///
+  /// 🔴 这两个老名字（'dark'/'light'）**必须继续认**：v0.28.5 就已经把
+  ///    它们写进用户机器了，改名会让升级上来的用户皮肤被打回默认。
+  final String name;
+
+  /// 选择面板上给人看的名字。
+  final String label;
+
+  /// 明 / 暗。决定状态栏图标、ThemeData.brightness、AppSemantic 走哪套。
+  ///
+  /// 🔴 早期只有深浅两套，代码里到处写 `p == AppPalette.light` 来判断明暗。
+  ///    现在浅色不止一套了，那种写法会把「纸白」「暖沙」误判成深色 ——
+  ///    状态栏图标颜色反了、ThemeData 亮度反了。一律走这个字段。
+  final bool isLight;
 
   // 背景层次（由深到浅）
   final Color bg;
@@ -54,8 +73,11 @@ class AppPalette {
   // 气泡
   final Color bubbleOther;
 
-  /// 夜间（默认）。原来的 AppColors 常量的值原样搬到这里。
+  /// ① 极夜青（默认）。原来的 AppColors 常量的值原样搬到这里。
   static const dark = AppPalette(
+    name: 'dark',
+    label: '极夜青',
+    isLight: false,
     bg: Color(0xFF0E1015),
     bgElevated: Color(0xFF141821),
     surface: Color(0xFF1A1F2A),
@@ -73,9 +95,58 @@ class AppPalette {
     bubbleOther: Color(0xFF212734),
   );
 
-  /// 日间。品牌色/语义色都刻意加深一档 —— 亮色在白底上原样用会发灰、
-  /// 对比度不够，而按钮和警示必须一眼看清。
+  /// ② 午夜蓝。底色偏蓝紫，品牌色换成靛蓝→紫，
+  ///    跟极夜青的青绿明确区分 —— 两套都深色，靠品牌色辨认。
+  static const midnight = AppPalette(
+    name: 'midnight',
+    label: '午夜蓝',
+    isLight: false,
+    bg: Color(0xFF0B1020),
+    bgElevated: Color(0xFF111834),
+    surface: Color(0xFF161E3D),
+    surfaceHi: Color(0xFF1F294F),
+    divider: Color(0xFF242E52),
+    border: Color(0xFF2C3760),
+    text: Color(0xFFE7EAF6),
+    textSub: Color(0xFF9AA3C4),
+    textWeak: Color(0xFF6C7597),
+    brand: Color(0xFF6366F1),
+    brand2: Color(0xFFA855F7),
+    online: Color(0xFF22D3EE),
+    danger: Color(0xFFFB7185),
+    warn: Color(0xFFFBBF24),
+    bubbleOther: Color(0xFF1C2547),
+  );
+
+  /// ③ 墨玉。接近纯黑的中性灰阶 + 琥珀金强调色。
+  ///    存在的理由：有人在 OLED 屏上嫌极夜青"发蓝发紫"，要一套不带色偏的黑。
+  static const ink = AppPalette(
+    name: 'ink',
+    label: '墨玉',
+    isLight: false,
+    bg: Color(0xFF0A0A0A),
+    bgElevated: Color(0xFF121212),
+    surface: Color(0xFF171717),
+    surfaceHi: Color(0xFF212121),
+    divider: Color(0xFF262626),
+    border: Color(0xFF333333),
+    text: Color(0xFFF0F0F0),
+    textSub: Color(0xFFA3A3A3),
+    textWeak: Color(0xFF707070),
+    brand: Color(0xFFF59E0B),
+    brand2: Color(0xFFF97316),
+    online: Color(0xFF10B981),
+    danger: Color(0xFFEF4444),
+    warn: Color(0xFFEAB308),
+    bubbleOther: Color(0xFF1E1E1E),
+  );
+
+  /// ④ 晨光青。品牌色/语义色都刻意加深一档 —— 亮色在白底上原样用会发灰、
+  ///    对比度不够，而按钮和警示必须一眼看清。
   static const light = AppPalette(
+    name: 'light',
+    label: '晨光青',
+    isLight: true,
     bg: Color(0xFFF2F4F7),
     bgElevated: Color(0xFFFFFFFF),
     surface: Color(0xFFFFFFFF),
@@ -84,7 +155,10 @@ class AppPalette {
     border: Color(0xFFD3D9E0),
     text: Color(0xFF1B2330),
     textSub: Color(0xFF5B6575),
-    textWeak: Color(0xFF8B94A3),
+    // 原 #8B94A3：在 #F2F4F7 底上对比度只有 2.78，低于 3.0 ——
+    // 占位符/时间戳这类弱化文字在亮处会糊掉。加深两档到 #7C8595（3.38），
+    // 肉眼仍是一眼"次要信息"的灰，但看得清了。
+    textWeak: Color(0xFF7C8595),
     brand: Color(0xFF0DA46E),
     brand2: Color(0xFF0E93C2),
     online: Color(0xFF0E9384),
@@ -93,8 +167,75 @@ class AppPalette {
     bubbleOther: Color(0xFFFFFFFF),
   );
 
-  static AppPalette byName(String? name) =>
-      name == 'light' ? light : dark;
+  /// ⑤ 纸白。冷白纸感 + 靛蓝品牌色（与午夜蓝同一支色系，明暗成对）。
+  static const paper = AppPalette(
+    name: 'paper',
+    label: '纸白',
+    isLight: true,
+    bg: Color(0xFFF4F6FA),
+    bgElevated: Color(0xFFFFFFFF),
+    surface: Color(0xFFFFFFFF),
+    surfaceHi: Color(0xFFE8ECF4),
+    divider: Color(0xFFDFE5EF),
+    border: Color(0xFFCBD3E1),
+    text: Color(0xFF16203A),
+    textSub: Color(0xFF55618A),
+    // #8590AE 在 #F4F6FA 上只有 2.94，差 3.0 一点点。降到 #7E8AA8（3.19）。
+    textWeak: Color(0xFF7E8AA8),
+    brand: Color(0xFF4F46E5),
+    brand2: Color(0xFF7C3AED),
+    online: Color(0xFF059669),
+    danger: Color(0xFFDC2626),
+    warn: Color(0xFFD97706),
+    bubbleOther: Color(0xFFFFFFFF),
+  );
+
+  /// ⑥ 暖沙。米黄纸底 + 赭橙。
+  ///    存在的理由：户外强光下冷白底反光刺眼，暖底 + 稍低的对比更耐看。
+  static const sand = AppPalette(
+    name: 'sand',
+    label: '暖沙',
+    isLight: true,
+    bg: Color(0xFFF7F3EC),
+    bgElevated: Color(0xFFFFFDF8),
+    surface: Color(0xFFFFFFFF),
+    surfaceHi: Color(0xFFEFE8DA),
+    divider: Color(0xFFE4DBC9),
+    border: Color(0xFFD2C5AC),
+    text: Color(0xFF2B2419),
+    textSub: Color(0xFF6B5F4B),
+    // #9A8C74 对比度 2.977，差 3.0 一丁点。降到 #94876F（3.19）。
+    textWeak: Color(0xFF94876F),
+    brand: Color(0xFFB45309),
+    brand2: Color(0xFFD97706),
+    online: Color(0xFF15803D),
+    danger: Color(0xFFC0392B),
+    warn: Color(0xFFB45309),
+    bubbleOther: Color(0xFFFFFFFF),
+  );
+
+  /// 选择面板的展示顺序：**先深色后浅色**，各自内部按"由保守到特别"排。
+  /// 默认项（dark）放在第一个，用户找不到想要的时候退回来最近。
+  static const List<AppPalette> all = [
+    dark,
+    midnight,
+    ink,
+    light,
+    paper,
+    sand,
+  ];
+
+  /// 按持久化名字取皮肤。
+  ///
+  /// 🔴 认不出的一律回落 [dark]，不抛 —— 老版本/手改配置/将来下线某套皮肤
+  ///    都会走到这里，抛异常等于 App 起不来，不值当。
+  static AppPalette byName(String? name) {
+    if (name == null || name.isEmpty) return dark;
+    for (final p in all) {
+      if (p.name == name) return p;
+    }
+    return dark;
+  }
 }
 
 /// 皮肤管理器：切换 + 持久化。
@@ -114,7 +255,12 @@ class AppSkin {
 
   static AppPalette get palette => changed.value;
 
-  static bool get isLight => palette == AppPalette.light;
+  /// 当前是不是浅色皮肤。
+  ///
+  /// 🔴 早期写成 `palette == AppPalette.light`。浅色皮肤从 1 套变成 3 套之后，
+  ///    那句对「纸白」「暖沙」会返回 false —— 状态栏图标、背景渐变方向
+  ///    全跟着错。判断明暗只能看 [AppPalette.isLight]。
+  static bool get isLight => palette.isLight;
 
   /// 启动时读持久化值。要在 runApp 之前调。
   static Future<void> load() async {
@@ -133,11 +279,20 @@ class AppSkin {
     apply(p);
     try {
       final sp = await SharedPreferences.getInstance();
-      await sp.setString(_kPref, p == AppPalette.light ? 'light' : 'dark');
+      await sp.setString(_kPref, p.name);
     } catch (_) {}
   }
 
-  /// 只改当前色板（不写盘、不通知）—— [load] 的冷启动路径用它。
+  /// 只改当前色板（不写盘）—— [load] 的冷启动路径用它。
+  ///
+  /// 🔴🔴 这里**必须**给 [changed] 赋值，否则换肤只生效一半。
+  ///     v0.28.5 的 bug：apply 改了 AppColors 就收工，changed 一直是 dark。
+  ///     于是 `AppSkin.palette` / `isLight` 永远返回深色，而根 MaterialApp
+  ///     偏偏只听 changed —— 结果是「切了皮肤，只有正在看的那一页变色」。
+  ///     那一页之所以会变，是因为它自己 setState 重建时读到了新的 AppColors；
+  ///     其余页面（IndexedStack 里已经建好的、还没建过的）一概不动，
+  ///     重启 App 才全变。桌面端一屏里同时铺着导航条 + 会话 + 聊天三块，
+  ///     这个"只变一半"最难看，也最像"点了没反应"。
   static void apply(AppPalette p) {
     AppColors._assign(p);
     // Android 状态栏跟着换：深色皮肤用浅色图标，浅色皮肤用深色图标。
@@ -146,12 +301,14 @@ class AppSkin {
       SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
         statusBarIconBrightness:
-            p == AppPalette.light ? Brightness.dark : Brightness.light,
+            p.isLight ? Brightness.dark : Brightness.light,
         systemNavigationBarColor: p.bg,
         systemNavigationBarIconBrightness:
-            p == AppPalette.light ? Brightness.dark : Brightness.light,
+            p.isLight ? Brightness.dark : Brightness.light,
       ));
     }
+    // 放最后：色值都就位了再广播，监听者重建时读到的才是这一套。
+    changed.value = p;
   }
 }
 
@@ -249,8 +406,7 @@ class AppTheme {
   ///    除外）—— 换肤时 AppColors 与这个调用之间没有先后问题，
   ///    传进来的 [p] 就是"这一次 build 用的那一套"。
   static ThemeData build(AppPalette p) {
-    final bright =
-        p == AppPalette.light ? Brightness.light : Brightness.dark;
+    final bright = p.isLight ? Brightness.light : Brightness.dark;
     final scheme = ColorScheme(
       brightness: bright,
       primary: p.brand,
@@ -414,7 +570,7 @@ class AppTheme {
       // 动态模块用到的语义色令牌（见 AppSemantic 注释）。
       // 两套皮肤各自注册 —— Theme.of(context) 按当前主题解析。
       extensions: <ThemeExtension<dynamic>>[
-        p == AppPalette.light ? AppSemantic.light : AppSemantic.dark,
+        AppSemantic.forPalette(p),
       ],
     );
   }
@@ -470,6 +626,20 @@ class AppSemantic extends ThemeExtension<AppSemantic> {
     cardBg: AppPalette.light.surface,
     cardBorder: AppPalette.light.border,
   );
+
+  /// 按任意一套皮肤生成令牌。
+  ///
+  /// 🔴 早期只有两套，build 里直接三元选 dark/light。加到六套之后那种写法
+  ///    会把四套新皮肤全错配成深色令牌 —— 动态模块的卡片底色、次要文字
+  ///    在浅色皮肤上会变成深底浅字，等于动态页面换肤失效。
+  ///    令牌内容本来就全部派生自 [AppPalette]，直接从 p 取即可，不需要注册表。
+  static AppSemantic forPalette(AppPalette p) => AppSemantic(
+        success: p.online,
+        warning: p.warn,
+        muted: p.textSub,
+        cardBg: p.surface,
+        cardBorder: p.border,
+      );
 
   /// 取令牌；主题没注册时回落到深色（App 目前只有深色，行为不变）
   static AppSemantic of(BuildContext context) =>

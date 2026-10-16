@@ -69,3 +69,9 @@ tools/keygen*
 license.json
 _commit_*.txt
 _commitmsg*.txt
+
+# 一次性验证脚手架（GDI 抓屏探针等）。
+# 里面是独立 Dart 工程，用**相对路径直接加载 client/lib 下的真实文件**来跑，
+# 所以必须待在仓库里才能用；但它不是产品代码，不该入库
+# （进了树的独立 pubspec 还会被 flutter analyze 扫成噪声）。
+_scratch/

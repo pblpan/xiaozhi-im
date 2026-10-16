@@ -9,6 +9,7 @@ import 'package:xiaozhi_im_client/core/session_manager.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/models.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
+import 'package:xiaozhi_im_client/widgets/skin_picker.dart';
 
 /// 个人信息面板。
 ///
@@ -237,47 +238,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _toast('已复制$label');
   }
 
-  /// 换皮肤。底部弹窗带**实时预览条**（深色/浅色各一块），
-  /// 因为"深色/浅色"两个词描述不了实际观感。
+  /// 换皮肤。面板走 [SkinPickerSheet]（与会话页 ⋮ 菜单同一个），
+  /// 每一套都自带迷你预览 —— "深色/浅色"两个词描述不了实际观感，六套更不行。
   Future<void> _pickSkin() async {
-    final cur = AppSkin.isLight ? 'light' : 'dark';
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      builder: (c) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('皮肤', style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600)),
-              ),
-            ),
-            for (final entry in const [
-              ('dark', '深色', '晚上和光线暗的收银台看着舒服'),
-              ('light', '浅色', '白天户外/强光下更清楚'),
-            ])
-              ListTile(
-                leading: Icon(entry.$1 == 'dark'
-                    ? Icons.dark_mode_outlined
-                    : Icons.light_mode_outlined),
-                title: Text(entry.$2),
-                subtitle: Text(entry.$3),
-                trailing: cur == entry.$1
-                    ? Icon(Icons.check_circle, color: AppColors.online)
-                    : null,
-                onTap: () => Navigator.pop(c, entry.$1),
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-    if (picked == null || picked == cur || !mounted) return;
-    await AppSkin.set(AppPalette.byName(picked));
-    _toast('已换成${picked == 'light' ? '浅色' : '深色'}皮肤');
+    final before = AppSkin.palette;
+    await SkinPickerSheet.show(context);
+    if (!mounted) return;
+    // 面板自己是即时生效的（点一张就换），这里只负责"换了没换"给个回执。
+    if (!identical(AppSkin.palette, before)) {
+      _toast('已换成「${AppSkin.palette.label}」');
+    }
   }
 
   Future<void> _changePassword() async {
@@ -397,8 +367,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         // 全端（Android/Windows）共用这一套切换，值走 AppSkin 全局。
         if (_isMe) ...[
           _group('偏好', [
-            _row('皮肤', AppSkin.isLight ? '浅色' : '深色',
-                onTap: _pickSkin),
+            _row('皮肤', AppSkin.palette.label, onTap: _pickSkin),
           ]),
           const SizedBox(height: 10),
         ],

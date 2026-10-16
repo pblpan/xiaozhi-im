@@ -7,6 +7,7 @@
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/gestures.dart'; // 指针事件（Pointer* / kSecondaryButton）
 import 'package:flutter/material.dart';
@@ -19,6 +20,7 @@ import '../core/remote_assist.dart';
 import '../core/remote_history_store.dart';
 import '../core/remote_models.dart';
 import '../core/theme.dart';
+import '../widgets/remote_frame_view.dart';
 
 // ============================================================ 入口页
 
@@ -389,6 +391,43 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
     await _loadHistory();
   }
 
+  /// 「添加收藏」—— 手动收一个对象，不需要先连过一次。
+  ///
+  /// 校验刻意做在校验**之后**才落库：访问码服务端固定 9 位（server/src/remote.js
+  /// 的 CODE_LEN），长度不对就是输错了。存进去了也连不上，不如当场说清楚。
+  Future<void> _addFavorite() async {
+    final r = await showDialog<({String name, String id, String code})>(
+      context: context,
+      builder: (_) => const _AddFavoriteDialog(),
+    );
+    if (r == null || !mounted) return;
+
+    final name = r.name.trim();
+    final code = r.code.trim();
+    final isCode = code.isNotEmpty;
+    final peerId = isCode ? 0 : (int.tryParse(r.id.trim()) ?? 0);
+
+    if (isCode) {
+      if (code.length != 9) {
+        setState(() => _msg = '访问码是 9 位数字，请检查后再收藏');
+        return;
+      }
+    } else if (peerId <= 0) {
+      setState(() => _msg = '账号 ID 必须是数字；无人值守的机器请改选「无人值守访问码」');
+      return;
+    }
+
+    final ok = await RemoteHistoryStore.I.addFavorite(
+      peerId: peerId,
+      peerName: name.isNotEmpty ? name : (isCode ? '无人值守机器' : '同事 $peerId'),
+      code: isCode ? code : '',
+      kind: isCode ? 'code' : 'friend',
+    );
+    await _loadHistory();
+    if (!mounted) return;
+    setState(() => _msg = ok ? '已加入收藏，点一下就能发起' : '加入收藏失败（本机存储不可用）');
+  }
+
   Future<void> _deleteHistory(RemoteHistoryItem h) async {
     final yes = await showDialog<bool>(
       context: context,
@@ -576,12 +615,22 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
             ],
           ),
         ),
-        // 本地历史 + 收藏：连过的对象直接点一下再发起。
+        // 收藏：**始终渲染**（空的时候给一句提示 + 一个「添加」按钮）。
+        // 理由见 _FavoritesSection 的注释 —— 收藏不能依赖"连过一次"。
+        const SizedBox(height: 16),
+        _FavoritesSection(
+          items: _hist.where((h) => h.fav).toList(),
+          onReconnect: _reconnectHistory,
+          onToggleFav: _toggleFavHistory,
+          onDelete: _deleteHistory,
+          onAdd: _addFavorite,
+        ),
+        // 本地最近连接（收藏的已经在上面列过了，这里不重复）：
         // 空列表时整块不渲染 —— 新用户不该一进来先看一块"你没有历史"。
-        if (_hist.isNotEmpty) ...[
+        if (_hist.any((h) => !h.fav)) ...[
           const SizedBox(height: 16),
           _HistorySection(
-            items: _hist,
+            items: _hist.where((h) => !h.fav).toList(),
             onReconnect: _reconnectHistory,
             onToggleFav: _toggleFavHistory,
             onDelete: _deleteHistory,
@@ -754,6 +803,91 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
 ///   · ★ = 收藏/取消，收藏永远置顶；
 ///   · 长按 = 删这条（有确认，防误触）；
 ///   · 右上角"清空"只清普通记录，收藏保留。
+/// 「我的收藏」区 —— **始终渲染，空也不藏**。
+///
+/// 🔴 为什么必须独立于"最近连接"（龙哥 2026-10-16 真机反馈"我要的收藏夹没有添加"）：
+///    原来"收藏"只是历史列表里的一个 ★ 置顶，而历史列表在**空的时候整块不渲染**。
+///    于是从没成功连过的人（当时正在排查黑屏，一次都没连上）根本看不到收藏夹 ——
+///    连"点一下星号"这个动作都无处可点。可收藏的意义本来就是给
+///    "我还没连上 / 以后要常用"准备的，它不能依赖"已经连过一次"这个前提。
+///    现在这里永远有一个入口：空的时候直接给「添加」按钮。
+class _FavoritesSection extends StatelessWidget {
+  const _FavoritesSection({
+    required this.items,
+    required this.onReconnect,
+    required this.onToggleFav,
+    required this.onDelete,
+    required this.onAdd,
+  });
+
+  final List<RemoteHistoryItem> items;
+  final ValueChanged<RemoteHistoryItem> onReconnect;
+  final ValueChanged<RemoteHistoryItem> onToggleFav;
+  final ValueChanged<RemoteHistoryItem> onDelete;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Icon(Icons.star_rounded, size: 17, color: AppColors.warn),
+          const SizedBox(width: 6),
+          const Text('我的收藏',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 8),
+          Text('只存在本机',
+              style: TextStyle(fontSize: 11, color: AppColors.textWeak)),
+          const Spacer(),
+          TextButton(
+            onPressed: onAdd,
+            child: Text('添加',
+                style: TextStyle(fontSize: 12, color: AppColors.brand2)),
+          ),
+        ]),
+        if (items.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('还没有收藏',
+                    style: TextStyle(fontSize: 13.5, color: AppColors.textSub)),
+                const SizedBox(height: 4),
+                Text(
+                  '把常用的同事账号、或无人值守的访问码收藏起来，'
+                  '下次点一下就能发起 —— 不用翻记录，也不用重新输码。',
+                  style: TextStyle(
+                      fontSize: 11.5, color: AppColors.textWeak, height: 1.5),
+                ),
+              ],
+            ),
+          )
+        else ...[
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text('点一下直接发起 · ☆ 取消收藏 · 长按删除',
+                style: TextStyle(fontSize: 11.5, color: AppColors.textWeak)),
+          ),
+          for (final h in items)
+            _RemotePeerTile(
+              item: h,
+              onReconnect: onReconnect,
+              onToggleFav: onToggleFav,
+              onDelete: onDelete,
+            ),
+        ],
+      ],
+    );
+  }
+}
+
 class _HistorySection extends StatelessWidget {
   const _HistorySection({
     required this.items,
@@ -790,16 +924,40 @@ class _HistorySection extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Text(
-            '点一下直接再发起 · ★ 收藏置顶 · 长按删除',
+            '点一下直接再发起 · ★ 收藏（会移到上面的收藏区）· 长按删除',
             style: TextStyle(fontSize: 11.5, color: AppColors.textWeak),
           ),
         ),
-        for (final h in items) _historyTile(h),
+        for (final h in items)
+          _RemotePeerTile(
+            item: h,
+            onReconnect: onReconnect,
+            onToggleFav: onToggleFav,
+            onDelete: onDelete,
+          ),
       ],
     );
   }
+}
 
-  Widget _historyTile(RemoteHistoryItem h) {
+/// 收藏 / 最近连接列表里的一行。两个区**共用**这个件 ——
+/// 同一条记录在两处的呈现必须一致，否则用户会以为它们是两种东西。
+class _RemotePeerTile extends StatelessWidget {
+  const _RemotePeerTile({
+    required this.item,
+    required this.onReconnect,
+    required this.onToggleFav,
+    required this.onDelete,
+  });
+
+  final RemoteHistoryItem item;
+  final ValueChanged<RemoteHistoryItem> onReconnect;
+  final ValueChanged<RemoteHistoryItem> onToggleFav;
+  final ValueChanged<RemoteHistoryItem> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final h = item;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
@@ -838,22 +996,120 @@ class _HistorySection extends StatelessWidget {
             ),
           ],
         ]),
-        subtitle: Text(
-          '${h.isCode ? '访问码 ${h.code}' : '同事'} · 连过 ${h.times} 次'
-          ' · ${remoteWhenText(h.lastAt)}',
-          style: const TextStyle(fontSize: 12),
-        ),
+        subtitle: Text(_subtitle(h), style: const TextStyle(fontSize: 12)),
         trailing: IconButton(
           icon: Icon(
             h.fav ? Icons.star_rounded : Icons.star_border_rounded,
             color: h.fav ? AppColors.warn : AppColors.textWeak,
           ),
-          tooltip: h.fav ? '取消收藏' : '收藏（置顶）',
+          tooltip: h.fav ? '取消收藏' : '收藏',
           onPressed: () => onToggleFav(h),
         ),
         onTap: () => onReconnect(h),
         onLongPress: () => onDelete(h),
       ),
+    );
+  }
+
+  /// ⚠️ times == 0 是「手动加进来的收藏，还一次都没连过」。
+  ///    这时**不能**显示"连过 0 次 · 刚刚" —— 那看着像刚刚才连上过，
+  ///    会让人以为连成功了（而实际上可能正是连不上的那条）。
+  static String _subtitle(RemoteHistoryItem h) {
+    final what = h.isCode ? '访问码 ${h.code}' : '同事';
+    if (h.times <= 0) return '$what · 还没连过';
+    return '$what · 连过 ${h.times} 次 · ${remoteWhenText(h.lastAt)}';
+  }
+}
+
+/// 「添加收藏」弹窗：手动收一个对象，**不需要先连过一次**。
+///
+/// 为什么分成「同事账号 / 无人值守访问码」两个选项而不是一个输入框猜：
+/// 账号 ID 是数字、访问码也是 9 位数字，靠长度猜必然会在某个边界猜错，
+/// 而猜错的表象是"收藏点了发起没反应"（存进去的 peerId 永远匹配不上），
+/// 极难排查。让用户明确选一次，比事后猜便宜得多。
+class _AddFavoriteDialog extends StatefulWidget {
+  const _AddFavoriteDialog();
+
+  @override
+  State<_AddFavoriteDialog> createState() => _AddFavoriteDialogState();
+}
+
+class _AddFavoriteDialogState extends State<_AddFavoriteDialog> {
+  final _name = TextEditingController();
+  final _value = TextEditingController();
+  bool _isCode = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _value.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.bgElevated,
+      title: const Text('添加收藏'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _name,
+            style: const TextStyle(fontSize: 15),
+            decoration: const InputDecoration(
+                labelText: '备注名（可空）', isDense: true),
+          ),
+          const SizedBox(height: 14),
+          Row(children: [
+            ChoiceChip(
+              label: const Text('同事账号'),
+              selected: !_isCode,
+              onSelected: (_) => setState(() => _isCode = false),
+            ),
+            const SizedBox(width: 8),
+            ChoiceChip(
+              label: const Text('无人值守访问码'),
+              selected: _isCode,
+              onSelected: (_) => setState(() => _isCode = true),
+            ),
+          ]),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _value,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(fontSize: 15),
+            decoration: InputDecoration(
+              labelText: _isCode ? '访问码（9 位）' : '账号 ID',
+              hintText: _isCode ? '例如 123456789' : '例如 10086',
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            _isCode
+                ? '收藏后点一下就能直接向那台机器发起协助，不用每次输码。'
+                : '对方必须在线，并在弹出提示里点「同意」才会开始。',
+            style: TextStyle(
+                fontSize: 11.5, color: AppColors.textWeak, height: 1.5),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, (
+            name: _name.text,
+            id: _isCode ? '' : _value.text,
+            code: _isCode ? _value.text : '',
+          )),
+          child: const Text('保存'),
+        ),
+      ],
     );
   }
 }
@@ -1564,6 +1820,9 @@ class _RemoteStageState extends State<_RemoteStage> {
   void initState() {
     super.initState();
     _svc.remoteRenderer.addListener(_onRenderer);
+    // 自研画面通道（Windows 被控端）的帧尺寸走另一条通知 ——
+    // 它没有 RTCVideoRenderer，尺寸只能由帧自己带过来。
+    _svc.frameSize.addListener(_onFrameSize);
     _tf.addListener(_onTransform);
     // 🔴 黑屏检测（龙哥 2026-10-16 真机："远程协助界面一片漆黑"）。
     //    连接建立但 12 秒还没收到任何视频帧 → 大概率不是网速问题，
@@ -1573,6 +1832,7 @@ class _RemoteStageState extends State<_RemoteStage> {
     _blackTimer = Timer(const Duration(seconds: 12), () {
       if (!mounted) return;
       if (_svc.remoteRenderer.videoWidth > 0) return; // 有帧，不打扰
+      if (_svc.framesIn > 0) return; // 自研画面通道有帧，不打扰
       if (widget.phase != RemotePhase.active) return;
       setState(() => _black = true);
     });
@@ -1582,6 +1842,7 @@ class _RemoteStageState extends State<_RemoteStage> {
   void dispose() {
     _blackTimer?.cancel();
     _svc.remoteRenderer.removeListener(_onRenderer);
+    _svc.frameSize.removeListener(_onFrameSize);
     _tf.removeListener(_onTransform);
     _tf.dispose();
     super.dispose();
@@ -1597,6 +1858,24 @@ class _RemoteStageState extends State<_RemoteStage> {
     setState(() {
       _videoSize = next;
       _black = false; // 来帧了，黑屏提示撤掉
+    });
+  }
+
+  /// 自研画面通道来帧：帧尺寸一变就按新比例重排画面矩形，
+  /// 并撤销黑屏提示（来帧了就不是黑屏）。
+  ///
+  /// 为什么不用帧尺寸做"来没来帧"的唯一依据：被控端换分辨率（拔插显示器、
+  /// 改缩放）时尺寸才会变，尺寸不变不代表没帧 —— 所以黑屏判定看的是一个
+  /// 单独的计数（见 _onFrameTick 的 framesIn）。
+  void _onFrameSize() {
+    final s = _svc.frameSize.value;
+    if (s == null) return;
+    final next = Size(s.w.toDouble(), s.h.toDouble());
+    if (_videoSize == next && !_black) return;
+    if (!mounted) return;
+    setState(() {
+      _videoSize = next;
+      _black = false;
     });
   }
 
@@ -1804,10 +2083,21 @@ class _RemoteStageState extends State<_RemoteStage> {
                   child: Stack(children: [
                     Positioned.fromRect(
                       rect: r,
-                      child: RTCVideoView(
-                        _svc.remoteRenderer,
-                        objectFit:
-                            RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                      // 两条画面来路，取到哪条用哪条：
+                      //   · frameJpeg 有值 → 对端走的是**自研画面通道**
+                      //     （Windows 被控端，GDI 抓屏 + DataChannel 推帧）；
+                      //   · 否则 → 原来的 WebRTC 视频轨（手机当被控端走这里）。
+                      // 画面矩形 r 已经按对应尺寸做过 contain，所以两个分支
+                      // 都用 fill：比例由矩形保证，这里再 contain 一次只会缩出黑边。
+                      child: ValueListenableBuilder<Uint8List?>(
+                        valueListenable: _svc.frameJpeg,
+                        builder: (_, jpeg, __) => jpeg == null
+                            ? RTCVideoView(
+                                _svc.remoteRenderer,
+                                objectFit: RTCVideoViewObjectFit
+                                    .RTCVideoViewObjectFitContain,
+                              )
+                            : RemoteFrameView(jpeg: _svc.frameJpeg),
                       ),
                     ),
                   ]),
@@ -2286,8 +2576,31 @@ class _BlackScreenTip extends StatelessWidget {
 /// 【为什么必须常驻且醒目】
 /// 这是远程协助里唯一能防止"被悄悄控住"的东西。只要会话没结束，用户
 /// 就应该随时能在余光里看到它 —— 做成能顺手关掉的通知就失去意义了。
-class RemoteHostBanner extends StatelessWidget {
+class RemoteHostBanner extends StatefulWidget {
   const RemoteHostBanner({super.key});
+
+  @override
+  State<RemoteHostBanner> createState() => _RemoteHostBannerState();
+}
+
+class _RemoteHostBannerState extends State<RemoteHostBanner> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // 下面那行采集状态里有实时计数（已发多少帧 / 丢弃多少），不刷新等于没有。
+    // 一秒一次足够：这行字只给人看，不参与任何判定。
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2301,27 +2614,53 @@ class RemoteHostBanner extends StatelessWidget {
         // 别关机、别断网，等几秒软件自己就把画面接回来了
         return ValueListenableBuilder<bool>(
           valueListenable: svc.reconnecting,
-          builder: (_, rc, __) {
-            if (!rc) {
-              return _bannerRow(
-                icon: Icons.screen_share_rounded,
-                color: AppColors.warn,
-                text: '正在被「${s?.controllerName ?? '对方'}」远程协助 —— 你的屏幕正在共享',
-                onHangUp: svc.hangUp,
-              );
-            }
-            return ValueListenableBuilder<int>(
-              valueListenable: svc.reconnectAttempt,
-              builder: (_, n, __) => _bannerRow(
-                icon: Icons.wifi_off_rounded,
-                color: AppColors.danger,
-                text: '网络波动，正在自动重连（第 $n/5 次）… 请勿关机、勿断网',
-                onHangUp: svc.hangUp,
-              ),
-            );
-          },
+          builder: (_, rc, __) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!rc)
+                _bannerRow(
+                  icon: Icons.screen_share_rounded,
+                  color: AppColors.warn,
+                  text: '正在被「${s?.controllerName ?? '对方'}」远程协助 —— 你的屏幕正在共享',
+                  onHangUp: svc.hangUp,
+                )
+              else
+                ValueListenableBuilder<int>(
+                  valueListenable: svc.reconnectAttempt,
+                  builder: (_, n, __) => _bannerRow(
+                    icon: Icons.wifi_off_rounded,
+                    color: AppColors.danger,
+                    text: '网络波动，正在自动重连（第 $n/5 次）… 请勿关机、勿断网',
+                    onHangUp: svc.hangUp,
+                  ),
+                ),
+              _captureLine(svc),
+            ],
+          ),
         );
       },
+    );
+  }
+
+  /// 画面采集状态行。
+  ///
+  /// 🔴 被控端原来**没有任何**可看的诊断信息（诊断条只在控制端画布页）。
+  ///    于是"手机看到一片黑"的时候，坐在电脑前的人什么也判断不了 ——
+  ///    是没抓到？抓到了没发出去？还是发出去被网络吞了？
+  ///    2026-10-16 那次排查就是卡在这里只能猜。补上这行之后，
+  ///    被控端的人念一句就能定位到环节。
+  Widget _captureLine(RemoteAssistService svc) {
+    if (svc.reconnecting.value) return const SizedBox.shrink();
+    final text = svc.captureStatus;
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      color: AppColors.warn.withValues(alpha: 0.08),
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 6),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 11.5, color: AppColors.textWeak),
+      ),
     );
   }
 

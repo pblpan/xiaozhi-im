@@ -31,6 +31,7 @@ import 'package:xiaozhi_im_client/widgets/enterprise_switcher.dart'
     show showEnterpriseSwitcher;
 import 'package:xiaozhi_im_client/widgets/friend_auth_sheet.dart';
 import 'package:xiaozhi_im_client/widgets/server_settings.dart';
+import 'package:xiaozhi_im_client/widgets/skin_picker.dart';
 
 class ConversationsScreen extends StatefulWidget {
   const ConversationsScreen({super.key});
@@ -319,14 +320,16 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     if (nv) SoundService().playMessage();
   }
 
-  /// 换皮肤（桌面端菜单入口）。点了就在深/浅之间切，不弹二级选择 ——
-  /// 菜单项上已经写着当前值（"皮肤：深色"），再弹一层是重复。
-  /// 想两个都看看的用户：切过去不喜欢，再切回来就是，一秒的事。
+  /// 换皮肤（桌面端菜单入口）。
+  ///
+  /// 🔴 早期这里"点了就在深/浅之间切、不弹二级"，理由是菜单项上已写着当前值，
+  ///    再弹一层算重复。皮肤从 2 套加到 6 套之后这个理由不成立 ——
+  ///    一键切换只能在两套之间来回，另外四套永远摸不到。
+  ///    改成打开 [SkinPickerSheet]，与手机端「我的 → 皮肤」同一个面板。
   Future<void> _pickSkin() async {
-    final wantLight = !AppSkin.isLight;
-    await AppSkin.set(wantLight ? AppPalette.light : AppPalette.dark);
+    await SkinPickerSheet.show(context);
     if (!mounted) return;
-    setState(() {});
+    setState(() {}); // 菜单项上写的皮肤名要跟着变
   }
 
   /// 桌面端：点右上角 × 之后的落点（每次询问 / 缩到托盘 / 直接退出）。
@@ -1200,7 +1203,8 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                       SizedBox(width: 10),
                       Text('服务器设置')
                     ])),
-                // 皮肤（龙哥 2026-10-16："增加皮肤，现在就一个黑色的"）。
+                // 皮肤（龙哥 2026-10-16："增加皮肤，现在就一个黑色的"；
+                // 2026-10-17："把 PC 端的皮肤一起加进去" → 从 2 套扩到 6 套）。
                 // 桌面端以前完全没得选，这里补一个显性入口；与手机端共用 AppSkin。
                 PopupMenuItem(
                     value: 'skin',
@@ -1209,7 +1213,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                           ? Icons.light_mode_outlined
                           : Icons.dark_mode_outlined, size: 19),
                       const SizedBox(width: 10),
-                      Text(AppSkin.isLight ? '皮肤：浅色' : '皮肤：深色')
+                      Text('皮肤：${AppSkin.palette.label}')
                     ])),
                 PopupMenuItem(
                     value: 'sound',

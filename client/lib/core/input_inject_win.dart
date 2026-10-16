@@ -173,11 +173,30 @@ class WindowsInputInjector extends InputInjector {
   @override
   String get hint => 'Windows 端可直接远程控制';
 
+  /// 画面是否只含主显示器。见 [usePrimaryOnlyCapture] 的说明。
+  ///
+  /// ⚠️ 这个开关和"采集哪块屏"必须由同一个地方决定（现在是
+  ///    RemoteAssistService._startFrameHost / _teardown 成对设置），
+  ///    任何一边单独改都会变成"画面对、点不准"。
+  bool _primaryOnly = false;
+
+  @override
+  void usePrimaryOnlyCapture(bool primaryOnly) {
+    _primaryOnly = primaryOnly;
+  }
+
   @override
   void moveAbsolute(double nx, double ny) {
     final p = absoluteMousePos(nx, ny);
-    _mouse(_MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK,
-        p.x, p.y, 0);
+    // MOUSEEVENTF_ABSOLUTE 的归一化基准由 VIRTUALDESK 决定：
+    //   带 VIRTUALDESK → 0..65535 摊在整个虚拟桌面（多屏拼起来）上；
+    //   不带          → 摊在**主显示器**上。
+    // 自研画面通道只抓主屏，所以那时必须去掉这个标志；沿用原来的
+    // WebRTC 屏幕采集（抓的是整块屏）时保持带标志。
+    final flags = _MOUSEEVENTF_MOVE |
+        _MOUSEEVENTF_ABSOLUTE |
+        (_primaryOnly ? 0 : _MOUSEEVENTF_VIRTUALDESK);
+    _mouse(flags, p.x, p.y, 0);
   }
 
   @override
