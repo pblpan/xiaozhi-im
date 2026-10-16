@@ -63,6 +63,11 @@ dependencies:
   #    桌面端实例化 MobileScanner 会抛 UnimplementedError，所以入口必须按平台判断
   #    （见 screens/stocktake_scan.dart 的 StocktakeScanPage.supported）。
   mobile_scanner: ^7.4.2
+  # 价签预览里的**真条码**：Code128 编码 + SVG 绘制。
+  # 以前预览画的是"示意条"（随机宽度），扫不出来也对不上打印输出；
+  # 打印机发的是 CODE128（GS k m=73），预览必须画同一个码制才叫预览。
+  # 纯 Dart 无平台代码，Android/iOS/Windows 全端可用。
+  barcode_widget: ^2.0.4
   # 培训中心：课件视频**内嵌播放**（不交给系统播放器）。
   # 有了它才拿得到"看到第几秒、是不是真在播"，进度才不是"打开即完成"的假进度。
   #

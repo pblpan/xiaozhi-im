@@ -9,6 +9,7 @@ import 'package:xiaozhi_im_client/core/price_tag_store.dart';
 import 'package:xiaozhi_im_client/core/price_tag_template.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/screens/price_tag_template_page.dart';
+import 'package:xiaozhi_im_client/screens/quick_scan.dart';
 import 'package:xiaozhi_im_client/widgets/price_tag_preview.dart';
 
 /// 蓝牙价签打印。
@@ -370,6 +371,49 @@ class _PriceTagPrintPageState extends State<PriceTagPrintPage> {
     await _loadTemplates();
   }
 
+  /// 扫码枪扫完是"输入框里出现一串字 + 回车"；相机扫码是把值直接填进来。
+  /// 两条路都汇到这一个口，保证加行、清空、回焦的逻辑只有一份。
+  Future<void> _submitOne(String raw) async {
+    await _add(raw);
+    if (!mounted) return;
+    _ctrl.clear();
+    _focus.requestFocus();
+  }
+
+  Future<void> _openCameraScan() async {
+    final code = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const QuickScanPage(title: '扫商品码'),
+      ),
+    );
+    if (code == null || code.isEmpty || !mounted) return;
+    await _submitOne(code);
+  }
+
+  /// 换模板：预览区直接换，不用退回模板行找下拉。
+  ///
+  /// 🔴 底部弹窗里每项带一张 mini 预览 —— "名字 + 尺寸"描述不了
+  ///    「促销模板长什么样」，而选错模板的代价是打废一卷纸。
+  Future<void> _pickTemplateFromPreview() async {
+    if (_tpls.isEmpty || _tplLoading) return;
+    final item = _rows.isNotEmpty ? _rows.first.toItem() : null;
+    if (!mounted) return;
+    final picked = await showModalBottomSheet<PriceTagTemplate>(
+      context: context,
+      isScrollControlled: true,
+      builder: (c) => _TemplateSheet(
+        templates: _tpls,
+        current: _tpl,
+        item: item,
+        dateText: _today(),
+      ),
+    );
+    if (picked == null || picked.id == _tpl.id) return;
+    setState(() => _tpl = picked);
+    await PriceTagStore.I.setLast(picked.id);
+  }
+
   // ---------------- 界面 ----------------
 
   @override
@@ -392,12 +436,8 @@ class _PriceTagPrintPageState extends State<PriceTagPrintPage> {
             controller: _ctrl,
             focus: _focus,
             busy: _busy,
-            onSubmit: (v) async {
-              await _add(v);
-              if (!mounted) return;
-              _ctrl.clear();
-              _focus.requestFocus();
-            },
+            onSubmit: _submitOne,
+            onScan: _openCameraScan,
           ),
           _TemplateBar(
             templates: _tpls,
@@ -447,11 +487,18 @@ class _PriceTagPrintPageState extends State<PriceTagPrintPage> {
             seq: 1,
             maxPxPerMm: 3.4,
           ),
+          // 换模板入口就放在预览底下：扫完码、看着预览想换一张，
+          // 手指不用离开这块屏幕。上面模板行的下拉也留着（桌面端/熟手用）。
+          TextButton.icon(
+            onPressed: _tplLoading ? null : _pickTemplateFromPreview,
+            icon: const Icon(Icons.swap_horiz, size: 16),
+            label: Text('换模板（当前：${_tpl.name}）'),
+          ),
           Padding(
-            padding: const EdgeInsets.only(top: 6),
+            padding: const EdgeInsets.only(top: 2),
             child: Text(
               _rows.length > 1 ? '预览第 1 张（共 ${_rows.length} 种）' : '打印预览',
-              style: const TextStyle(fontSize: 11.5, color: AppColors.textSub),
+              style: TextStyle(fontSize: 11.5, color: AppColors.textSub),
             ),
           ),
         ],
@@ -475,12 +522,18 @@ class _ScanBar extends StatelessWidget {
     required this.focus,
     required this.busy,
     required this.onSubmit,
+    required this.onScan,
   });
 
   final TextEditingController controller;
   final FocusNode focus;
   final bool busy;
   final Future<void> Function(String) onSubmit;
+
+  /// 相机扫码。扫码枪用户用不着，但**没有扫码枪的现场**
+  /// （新开店、临时顶班、价签补打）全靠它 —— 输入框旁边必须有个
+  /// 看得出来的相机入口，不能让人猜"这里能不能扫"。
+  final Future<void> Function() onScan;
 
   @override
   Widget build(BuildContext context) {
@@ -490,9 +543,14 @@ class _ScanBar extends StatelessWidget {
         controller: controller,
         focusNode: focus,
         enabled: !busy,
-        decoration: const InputDecoration(
+        decoration: InputDecoration(
           labelText: '扫条码或手输商品码，回车加一行',
-          border: OutlineInputBorder(),
+          border: const OutlineInputBorder(),
+          suffixIcon: IconButton(
+            tooltip: '相机扫码',
+            icon: const Icon(Icons.qr_code_scanner),
+            onPressed: busy ? null : onScan,
+          ),
         ),
         onSubmitted: onSubmit,
       ),
@@ -591,7 +649,7 @@ class _EmptyRows extends StatelessWidget {
                 child: Text(
                   BtPrinter.unsupportedReason,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.textSub),
+                  style: TextStyle(color: AppColors.textSub),
                 ),
               ),
           ],
@@ -671,6 +729,86 @@ class _Actions extends StatelessWidget {
             onPressed: rowCount == 0 ? null : onSave,
             icon: const Icon(Icons.save_outlined),
             label: const Text('存指令'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 换模板弹窗：每项一张 mini 预览。
+///
+/// 为什么不用单选列表：模板之间的差别是**排版**（印不印会员价、
+/// 促不促销、纸多宽），名字只能说出"标准价签"这种废话。
+/// 直接把纸的样子画出来，选错模板的概率才归零。
+class _TemplateSheet extends StatelessWidget {
+  const _TemplateSheet({
+    required this.templates,
+    required this.current,
+    required this.item,
+    required this.dateText,
+  });
+
+  final List<PriceTagTemplate> templates;
+  final PriceTagTemplate current;
+  final PriceTagItem? item;
+  final String dateText;
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.72,
+      maxChildSize: 0.92,
+      builder: (c, sc) => Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text('换一张模板',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(c),
+                  child: const Text('取消'),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              controller: sc,
+              itemCount: templates.length,
+              itemBuilder: (c, i) {
+                final t = templates[i];
+                final sel = t.id == current.id;
+                return ListTile(
+                  selected: sel,
+                  leading: const Icon(Icons.label_outline),
+                  title: Text('${t.name}　${t.widthMm}×${t.heightMm}mm'),
+                  subtitle: item == null
+                      ? const Text('还没有商品行，先扫一个码')
+                      : SizedBox(
+                          height: 64,
+                          child: FittedBox(
+                            fit: BoxFit.contain,
+                            alignment: Alignment.centerLeft,
+                            child: PriceTagPreview(
+                              template: t,
+                              item: item!,
+                              dateText: dateText,
+                              seq: 1,
+                              maxPxPerMm: 1.6,
+                            ),
+                          ),
+                        ),
+                  trailing: sel ? Icon(Icons.check_circle, color: AppColors.online) : null,
+                  onTap: () => Navigator.pop(c, t),
+                );
+              },
+            ),
           ),
         ],
       ),

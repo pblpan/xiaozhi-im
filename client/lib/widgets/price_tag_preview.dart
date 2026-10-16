@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:barcode_widget/barcode_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/core/price_tag.dart';
 import 'package:xiaozhi_im_client/core/price_tag_template.dart';
@@ -22,10 +23,8 @@ import 'package:xiaozhi_im_client/core/price_tag_template.dart';
 /// ─────────────────────────────────────────────────────────────
 /// 刻意不做的事
 /// ─────────────────────────────────────────────────────────────
-/// 条码画的是**按码值生成的示意条**，不是真能扫的条码。画真条码要自己算
-/// EAN-13 / CODE128 的条空宽度表，那属于另一个工程量级，而且预览上
-/// 真条码和示意条看起来几乎一样 —— 用户要看的是"这个位置放得下吗"。
-/// 真条码由打印机负责，它比我们算得准。
+/// 二维码画的是示意图形（不含真实编码）—— 价签模板默认不带二维码，
+/// 真要用的时候再接 qr 包。条码则是 Code128 真编码（见 _BarcodeStrip）。
 class PriceTagPreview extends StatelessWidget {
   const PriceTagPreview({
     super.key,
@@ -114,15 +113,14 @@ class PriceTagPreview extends StatelessWidget {
     if (e.kind == TagElementKind.barcode) {
       if (item.barcode.isEmpty) return null;
       final h = (e.barcodeHeight / 8.0) * px; // 点 → mm → px
+      // 条码横向铺满纸宽（扣掉 _paper 的左右 padding）
+      final w = template.widthMm * px - px * 2.4;
       return Padding(
         padding: EdgeInsets.symmetric(vertical: px * 0.4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CustomPaint(
-              size: Size(double.infinity, h),
-              painter: _BarPainter(item.barcode),
-            ),
+            _BarcodeStrip(code: item.barcode, height: h, width: w),
             // HRI：条码底下那串数字。关掉时不占位 ——
             // 预览和打印必须占一样的位置，否则"预览刚好、打出来多一行"
             if (e.hri)
@@ -222,38 +220,55 @@ class PriceTagPreview extends StatelessWidget {
   }
 }
 
-/// 条码示意条：由码值算出稳定不变的条宽序列（同一个码每次预览都一样）。
+/// 真条码：Code128（和打印机发的是同一个码制 `GS k m=73`）。
 ///
-/// 🔴 必须是**确定性**的（由码值算，不随机）。随机的结果是指尖一动
-///    条码就变一次，用户会以为"这个预览在闪"，其实是我们在胡画。
-class _BarPainter extends CustomPainter {
-  _BarPainter(this.code);
+/// 以前这里画的是"示意条"（按码值种子随机宽度）——看着像条码，
+/// 实际扫不出来，也和对打印输出对不上。龙哥 2026-10-16 要求
+/// "预览里面条形码要显示真实的条形码"，于是换成 Code128 真编码。
+///
+/// 🔴 Code128 只能编可打印 ASCII（32~126）。手输了中文/控制字符时
+///    打印机同样发不出这个码 —— 预览老老实实显示文本，
+///    不画假条、也不让整个预览崩掉。
+class _BarcodeStrip extends StatelessWidget {
+  const _BarcodeStrip({
+    required this.code,
+    required this.height,
+    required this.width,
+  });
 
   final String code;
+  final double height;
+  final double width;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    // 用码值的字符和当种子 —— 同一个条码永远画成同一条
-    var seed = 0;
-    for (final u in code.codeUnits) {
-      seed = (seed * 31 + u) & 0x7FFFFFFF;
+  Widget build(BuildContext context) {
+    final printable = code.codeUnits.every((u) => u >= 32 && u <= 126);
+    if (!printable) {
+      return SizedBox(
+        width: width,
+        height: height,
+        child: Center(
+          child: Text(
+            code,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: height * 0.6, color: Colors.black),
+          ),
+        ),
+      );
     }
-    final rnd = math.Random(seed);
-    final paint = Paint()..color = Colors.black;
-    const bars = 46;
-    final slot = size.width / bars;
-    for (var i = 0; i < bars; i++) {
-      // 每 2 根里 1 根黑 1 根白，宽度随机 1~3 格 → 看着就是条码的疏密
-      final w = (1 + rnd.nextInt(3)) * slot;
-      if (rnd.nextBool()) {
-        canvas.drawRect(Rect.fromLTWH(i * slot, 0, w, size.height), paint);
-      }
-      if (i * slot > size.width) break;
-    }
+    return SizedBox(
+      width: width,
+      height: height,
+      child: BarcodeWidget(
+        barcode: Barcode.code128(),
+        data: code,
+        drawText: false,
+        color: Colors.black,
+        padding: EdgeInsets.zero,
+      ),
+    );
   }
-
-  @override
-  bool shouldRepaint(covariant _BarPainter old) => old.code != code;
 }
 
 /// 二维码示意：三个定位角 + 数据点，看着是二维码就行（不含真实编码）。

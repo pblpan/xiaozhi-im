@@ -88,7 +88,7 @@ class _PriceTagTemplatePageState extends State<PriceTagTemplatePage> {
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
           TextButton(
             onPressed: () => Navigator.pop(c, true),
-            child: const Text('删除', style: TextStyle(color: AppColors.danger)),
+            child: Text('删除', style: TextStyle(color: AppColors.danger)),
           ),
         ],
       ),
@@ -181,7 +181,7 @@ class _Card extends StatelessWidget {
                             fontSize: 15, fontWeight: FontWeight.w600)),
                     const SizedBox(height: 2),
                     Text('${tpl.widthMm}×${tpl.heightMm}mm · ${tpl.elements.length} 个元素',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 12, color: AppColors.textSub)),
                   ],
                 ),
@@ -229,7 +229,7 @@ class _Card extends StatelessWidget {
                 IconButton(
                   tooltip: '删除',
                   onPressed: onDelete,
-                  icon: const Icon(Icons.delete_outline,
+                  icon:  Icon(Icons.delete_outline,
                       size: 19, color: AppColors.danger),
                 ),
               ],
@@ -255,7 +255,7 @@ class _Chip extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(text,
-          style: const TextStyle(fontSize: 11, color: AppColors.brand)),
+          style: TextStyle(fontSize: 11, color: AppColors.brand)),
     );
   }
 }
@@ -443,7 +443,7 @@ class _TemplateEditorPageState extends State<_TemplateEditorPage> {
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
+           Text(
             '预览用的是一个样品（康师傅红烧牛肉面，有会员价和原价），'
             '没有会员价/原价的商品上那两行会自动整行不印。',
             style: TextStyle(fontSize: 11.5, color: AppColors.textSub),
@@ -457,7 +457,7 @@ class _TemplateEditorPageState extends State<_TemplateEditorPage> {
                   style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
               const SizedBox(width: 6),
               Text('（${_tpl.elements.length}）',
-                  style: const TextStyle(fontSize: 12.5, color: AppColors.textSub)),
+                  style: TextStyle(fontSize: 12.5, color: AppColors.textSub)),
             ],
           ),
           const SizedBox(height: 8),
@@ -607,7 +607,7 @@ class _ElementCard extends StatelessWidget {
               ),
               IconButton(
                 visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.delete_outline,
+                icon:  Icon(Icons.delete_outline,
                     size: 18, color: AppColors.danger),
                 onPressed: readOnly ? null : onRemove,
               ),
@@ -767,13 +767,13 @@ class _ElementCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 4),
-            const Text(
+             Text(
               '高度 100 点以上，扫码枪隔 20cm 才扫得动（出厂默认那点高度不行）',
               style: TextStyle(fontSize: 11, color: AppColors.textSub),
             ),
           ],
           if (e.kind == TagElementKind.qrcode)
-            const Text(
+             Text(
               '二维码印的是商品条码。老一点的标签机可能不支持，'
               '打了出来是一串乱码就把它删掉。',
               style: TextStyle(fontSize: 11, color: AppColors.textSub),
