@@ -69,6 +69,16 @@ const KEYS = Object.freeze({
   assistantApiBase: { key: 'assistant_api_base', def: '' },
   assistantApiKey: { key: 'assistant_api_key', def: '' },
   assistantModel: { key: 'assistant_model', def: 'deepseek-chat' },
+
+  // 腾讯地图 GL JS 的 key（管理台「打卡点位」的地图选点用，龙哥 2026-10-16）。
+  // 🔴 故意不进 all()：all() 会被**免鉴权**的 /api/client/bootstrap 原样铺出去
+  //    （routes/client.js 里 ...settings.all()），key 铺出去等于白送。
+  //    只走 /api/admin/attendance/map-key（管理员鉴权）。
+  //    它和 assistantApiKey 的区别：那个 key 在**服务端**用（调 LLM），所以可以
+  //    只回 hasKey；这个 key 必须在**管理员的浏览器**里加载 SDK 用，明文到
+  //    浏览器是这个功能的必要条件 —— 防泄露靠腾讯位置服务官网配 Referer 白名单
+  //    （管理台界面里也写了这句提醒）。
+  tencentMapKey: { key: 'tencent_map_key', def: '' },
 });
 
 const COMPANY_MAX = 20;
@@ -228,6 +238,23 @@ function cleanFenceAccuracy(input) {
   return { value: v };
 }
 
+/**
+ * 校验腾讯地图 key。空串 = 清除（地图选点降级为手动填坐标 + 定位按钮）。
+ *
+ * 格式从宽：腾讯的 key 形如 OB4BZ-D4W3U-B7VVO-4PJWW-6TKDJ-WPB77（大写字母
+ * 数字加连字符），但官网也发过其它形态，所以只做「看起来像个 key」的粗校验
+ * （长度 + 字符集），不逐段猜格式 —— 猜错的后果是把用户合法的 key 挡在门外，
+ * 而真正的校验在腾讯那边（key 错的表现是地图瓦片不显示，界面有明确提示）。
+ */
+function cleanMapKey(input) {
+  const s = String(input ?? '').trim();
+  if (!s) return { value: '' };
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(s)) {
+    return { error: 'Key 格式不正确：应为腾讯位置服务官网申请的字母数字串（可含连字符）' };
+  }
+  return { value: s };
+}
+
 /** 管理台整体更新入口：只处理认识的键，返回 { ok, settings } 或 { error } */
 function update(input, by) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -289,6 +316,17 @@ function update(input, by) {
     if (r.error) return r;
   }
 
+  // 地图 key 走这里只是防御：真正的入口是 /api/admin/attendance/map-key
+  // （GET 不能走 all()，那条路会被免鉴权 bootstrap 铺出去）。
+  // 但没有这个分支的话，往本接口整对象回传 tencentMapKey 会被静默忽略 ——
+  // "显示保存成功、key 却没存上"正是最难查的那类坑，所以两边都接上。
+  if (input.tencentMapKey !== undefined) {
+    const c = cleanMapKey(input.tencentMapKey);
+    if (c.error) return { error: c.error };
+    const r = setRaw('tencentMapKey', c.value, by);
+    if (r.error) return r;
+  }
+
   return { ok: true, settings: all() };
 }
 
@@ -296,5 +334,5 @@ function update(input, by) {
 // 那套"公司名/好友模式"表单校验），但仍然要落同一张 settings 表。
 module.exports = {
   all, update, cleanCompany, cleanShift, cleanWorkdays, cleanTime,
-  cleanFenceAccuracy, get, setRaw, KEYS,
+  cleanFenceAccuracy, cleanMapKey, get, setRaw, KEYS,
 };

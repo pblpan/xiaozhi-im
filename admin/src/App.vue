@@ -3950,6 +3950,14 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <el-form-item label="经度">
                 <el-input v-model="attLocForm.lng" style="width:200px" placeholder="如：121.473701" />
               </el-form-item>
+              <el-form-item label="快捷填位">
+                <el-button size="small" :loading="attGeoBusy" @click="useCurrentLocation">获取当前定位</el-button>
+                <el-button size="small" @click="attMapDlg = true">地图选点</el-button>
+                <div class="hint">
+                  定位 = 读本机 GPS（浏览器要求 https 或 localhost 访问，http 下会被禁）；
+                  地图选点 = 腾讯地图上点选，自动转成 WGS-84 存入（配 Key 指引见弹窗内）。
+                </div>
+              </el-form-item>
               <el-form-item label="围栏半径">
                 <el-input-number v-model="attLocForm.radius" :min="10" :max="5000" :step="10" />
                 <span class="hint" style="margin-left:8px">米：在此范围内打卡算"到位"。</span>
@@ -3960,6 +3968,14 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <el-button type="primary" :loading="attBusy" @click="saveLoc">保存</el-button>
             </template>
           </el-dialog>
+
+          <!-- 打卡点位地图选点（腾讯地图 GL JS，key 管理员自配） -->
+          <AttMapPicker
+            v-model="attMapDlg"
+            :lat="attLocForm.lat"
+            :lng="attLocForm.lng"
+            @confirm="onMapConfirm"
+          />
 
           <!-- 管理员补卡 / 修正 -->
           <el-dialog v-model="attRecDlg" title="补卡 / 修正打卡" width="480px">
@@ -6082,6 +6098,7 @@ import { ElMessage, ElMessageBox, ElPagination } from 'element-plus';
 // 二级叶项纯文字** —— 叶项加图标会让 19 行的小图标互相打架，反而更难扫读。
 import { Odometer, User, ChatDotRound, Cellphone, Connection, Goods, Setting } from '@element-plus/icons-vue';
 import api from './api';
+import AttMapPicker from './AttMapPicker.vue';
 
 const token = ref(localStorage.getItem('xz_token') || '');
 // 品牌名：只依赖 pub（bootstrap 的公开字段，登录前就能拿到）。
@@ -10755,6 +10772,11 @@ const attGroupForm = ref({});
 const attLocations = ref([]);
 const attLocDlg = ref(false);
 const attLocForm = ref({ id: null, name: '', lat: '', lng: '', radius: 100 });
+// ── 打卡点位的「一键定位 / 地图选点」（龙哥 2026-10-16）──
+// 两个入口都不碰服务端的距离计算：定位填的是浏览器 GPS 读数（WGS-84），
+// 地图选点在组件里转好 WGS-84 再交回来 —— 和服务端 haversine 同一基准。
+const attMapDlg = ref(false);
+const attGeoBusy = ref(false);
 const attRecDlg = ref(false);
 const attRecForm = ref({});
 const attDetailDlg = ref(false);
@@ -11184,6 +11206,51 @@ async function removeLoc(row) {
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '删除失败');
   }
+}
+
+// ---- 一键定位 / 地图选点（龙哥 2026-10-16：经纬度要能一键取、最好能地图选点）----
+
+/**
+ * 「获取当前定位」：浏览器 geolocation，拿到的就是手机/电脑 GPS 原始读数
+ * （WGS-84），与库存、服务端 haversine 同一基准，直接填、不转换。
+ *
+ * ⚠️ 浏览器只在 **安全上下文**（https 或 localhost）里给定位。管理台常按
+ *    http://内网IP 访问，那种情况下 Chrome/Firefox 会直接拒 —— 所以失败
+ *    提示里必须点明"用 https 打开"，不然用户只会看到"定位失败"四个字，
+ *    完全不知道去哪修。地图选点（腾讯 key）不受此限制，是 http 下的主路径。
+ */
+function useCurrentLocation() {
+  if (!navigator.geolocation) { ElMessage.warning('此浏览器不支持定位'); return; }
+  attGeoBusy.value = true;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      attGeoBusy.value = false;
+      attLocForm.value.lat = pos.coords.latitude.toFixed(6);
+      attLocForm.value.lng = pos.coords.longitude.toFixed(6);
+      const acc = Math.round(pos.coords.accuracy || 0);
+      ElMessage.success(`已填入当前定位（误差约 ${acc} 米，可在原地上再核一遍）`);
+    },
+    (err) => {
+      attGeoBusy.value = false;
+      const msg = String(err.message || '');
+      if (err.code === 1 && /secure|insecure/i.test(msg)) {
+        ElMessage.error('浏览器禁止在 http 页面定位：请用 https（或 localhost）打开管理台，或改用「地图选点」');
+        return;
+      }
+      if (err.code === 1) ElMessage.error('定位权限被拒绝：请在地址栏左侧的网站设置里允许获取位置');
+      else if (err.code === 2) ElMessage.error('定位不可用：系统的定位服务可能关着');
+      else if (err.code === 3) ElMessage.error('定位超时，请重试');
+      else ElMessage.error('定位失败：' + (msg || '未知错误'));
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+  );
+}
+
+/** 地图选点回调：组件里已把 GCJ-02 转成 WGS-84，这里直接落表单 */
+function onMapConfirm(lat, lng) {
+  attLocForm.value.lat = Number(lat).toFixed(6);
+  attLocForm.value.lng = Number(lng).toFixed(6);
+  ElMessage.success('已填入地图选点（已自动转换为 WGS-84）');
 }
 
 // ---- 审批 ----

@@ -752,6 +752,30 @@ admin.delete('/locations/:id', (req, res) => {
   res.json({ ok: true, message: '已删除（已自动从相关考勤组解绑）' });
 });
 
+/* ---------------- 地图选点的 key（打卡点位用，龙哥 2026-10-16） ---------------- */
+
+// 为什么不放 /admin/settings：那条路的 settings.all() 会被免鉴权的 bootstrap
+// 原样铺出去（routes/client.js），key 铺出去等于白送。这里单独开一对
+// 管理员鉴权接口，和 assistant 的 config 一个路子。
+//
+// GET 回明文是有意的：加载腾讯地图 SDK 的是管理员本人的浏览器，
+// key 不到浏览器这个功能就没法用。防泄露靠官网配 Referer 白名单
+// （管理台界面里有这句提醒）。
+admin.get('/map-key', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  const key = String(settings.get('tencentMapKey') || '');
+  res.json({ key, hasKey: !!key });
+});
+
+admin.put('/map-key', (req, res) => {
+  const g = adminGuard(req, res); if (!g) return;
+  const c = settings.cleanMapKey((req.body || {}).key);
+  if (c.error) return res.status(400).json({ error: c.error });
+  const r = settings.setRaw('tencentMapKey', c.value, 'admin:' + g.u.id);
+  if (r.error) return res.status(400).json(r);
+  res.json({ ok: true, key: c.value, hasKey: !!c.value });
+});
+
 /* ---------------- 审批 ---------------- */
 
 admin.get('/requests', (req, res) => {
