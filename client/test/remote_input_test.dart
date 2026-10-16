@@ -212,4 +212,26 @@ void main() {
       expect(() => parseRemoteInput('{"v":1,"t":"kd"}'), returnsNormally);
     });
   });
+
+  group('画质档位指令（ql，UU-c 手动锁定）', () {
+    test('带 lv 解析成 QualityAction', () {
+      final a = parseRemoteInput('{"v":1,"t":"ql","lv":2}')! as QualityAction;
+      expect(a.level, 2);
+    });
+
+    test('lv 缺省 = 恢复自动（null）', () {
+      final a = parseRemoteInput('{"v":1,"t":"ql"}')! as QualityAction;
+      expect(a.level, isNull);
+    });
+
+    test('lv 不是数字时回落自动，不抛', () {
+      final a = parseRemoteInput('{"v":1,"t":"ql","lv":"high"}')! as QualityAction;
+      expect(a.level, isNull);
+    });
+
+    test('lv 超出 0~4 也能解析（夹紧在执行侧做）', () {
+      final a = parseRemoteInput('{"v":1,"t":"ql","lv":99}')! as QualityAction;
+      expect(a.level, 99);
+    });
+  });
 }

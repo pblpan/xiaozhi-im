@@ -46,6 +46,29 @@ class RtcVideoDegrader {
   int _prevSent = 0;
   int _prevLost = 0;
 
+  /// 手动锁定的档位。null = 交给自动（默认）。
+  ///
+  /// 为什么要"锁"而不是"调一次"：自动降级每 3 秒跑一轮，不锁的话
+  /// 用户手选的档位下一轮就被网络状况覆盖回去了。
+  int? _locked;
+
+  /// 当前档位（0=原画不限制）。手动锁定后它就是锁定值。
+  int get level => _level;
+
+  bool get locked => _locked != null;
+
+  /// 手动锁定档位；传 null 恢复自动。
+  Future<void> lock(int? level) async {
+    if (level == null) {
+      _locked = null;
+      onChange?.call(_level, '恢复自动');
+      return;
+    }
+    _locked = level.clamp(0, tiers.length - 1);
+    _level = _locked!;
+    await _apply();
+    onChange?.call(_level, '手动');
+  }
   void start({Duration interval = const Duration(seconds: 3)}) {
     _timer?.cancel();
     _timer = Timer.periodic(interval, (_) => _tick());
@@ -57,6 +80,9 @@ class RtcVideoDegrader {
   }
 
   Future<void> _tick() async {
+    // 锁定了就完全不看网络 —— 用户说"就要这个画质"时，
+    // 自动策略再跳出来改是违背指令。
+    if (_locked != null) return;
     try {
       final dynamic stats = await pc.getStats();
       int? sent;

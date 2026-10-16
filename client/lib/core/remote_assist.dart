@@ -25,6 +25,7 @@ import '../api.dart';
 import '../socket.dart';
 import 'input_inject.dart';
 import 'remote_capture.dart';
+import 'remote_history_store.dart';
 import 'remote_models.dart';
 import 'rtc_video_degrader.dart';
 import 'sound_service.dart';
@@ -56,6 +57,16 @@ final class KeyAction extends RemoteInputAction {
   KeyAction(this.key, this.down);
   final RemoteKey key;
   final bool down;
+}
+
+/// 画质档位指令（UU-c 手动锁定）。level=null 表示恢复自动。
+///
+/// 为什么走控制通道而不是 socket：这条指令只在**这一次会话**里有效，
+/// 且方向天然是"控制端 → 被控端（发送端）"，跟键鼠指令同一条路，
+/// 复用它的有序可靠投递，不用再开一路信令。
+final class QualityAction extends RemoteInputAction {
+  QualityAction(this.level);
+  final int? level;
 }
 
 /// 解析一条控制通道报文 → 动作；解析不了返回 null，调用方丢弃即可。
@@ -94,6 +105,9 @@ RemoteInputAction? parseRemoteInput(String text) {
     case 'kd': // key down
     case 'ku': // key up
       return KeyAction(keyOfJson(m), t == 'kd');
+    case 'ql': // 画质档位（UU-c 手动锁定）；lv 缺省 = 恢复自动
+      final lv = m['lv'];
+      return QualityAction(lv is num ? lv.toInt() : null);
     default:
       // 未知类型忽略：老版本遇到新指令不该崩
       return null;
@@ -186,6 +200,12 @@ class RemoteAssistService {
   /// 来自 RtcVideoDegrader 的 onChange，UI 在控制条上显示当前画质。
   final ValueNotifier<int> qualityLevel = ValueNotifier<int>(0);
 
+  /// UU-c：控制端手动选的档位（null=自动）。teardown 时重置。
+  /// 和 qualityLevel 分开存：后者是"实际生效值"（可能被网络自动改），
+  /// 前者是"用户选了什么"（菜单打勾用）。混在一起的话，
+  /// 自动降级一次，用户菜单里的勾就跑到别的档位上去了。
+  final ValueNotifier<int?> qualityPick = ValueNotifier<int?>(null);
+
   /// 当前是否处于**被控**状态。UI 拿它决定要不要显示"正在被协助"警示条。
   ///
   /// 🔴 修复（2026-10-15）：原先直接读 `SoundService().myId`，而那个值
@@ -239,6 +259,11 @@ class RemoteAssistService {
   ///    —— 被控端收得到邀请也不弹框、无人值守也不自动开始，表现就是
   ///    "发起了却永远超时"。
   bool _hostByFrame = false;
+
+  /// 最近一次 redeem 用的访问码。只在本机内存里过渡一下：连接真正建立时
+  /// （remote:active / Connected）连同会话信息一起写进本地历史，之后即弃。
+  /// 无人值守的"一键重连"全靠它 —— 不记的话下次得重新翻那个 9 位码。
+  String _lastRedeemCode = '';
 
   // ICE 缓存：同一次会话里不必反复拉
   List<Map<String, dynamic>>? _ice;
@@ -341,6 +366,7 @@ class RemoteAssistService {
         break;
       case 'remote:active':
         phase.value = RemotePhase.active;
+        unawaited(_recordHistory());
         _log('远程协助已生效');
         break;
       case 'remote:peer-offline':
@@ -429,6 +455,31 @@ class RemoteAssistService {
     }
   }
 
+  // ------------------------------------------------------------ 本地历史
+
+  /// 连接真正建立时记一笔本地历史（龙哥 2026-10-16：「远程协助增加手机端的
+  /// 历史记录和收藏夹，方便下次发起连接」）。
+  ///
+  /// 为什么记在 active 而不是"点了发起/连接"：没连上的尝试记了也是白记，
+  /// 列表里躺一堆连不上的对象反而碍事。而 active 时 session 帧已落地，
+  /// 对方名字、是否无人值守都拿得到。
+  ///
+  /// 只记**我发起的**（isController）：被控来的连接服务端审计里有，
+  /// 且"下次一键发起"对那个方向没有意义。controllerId 拉不到（_me=0）时
+  /// 判不出来就不记 —— 宁可少一条历史，也不能把别人连我的记录塞进我的
+  /// 快捷列表。
+  Future<void> _recordHistory() async {
+    final s = session.value;
+    if (s == null || !isController) return;
+    final isCode = s.unattended;
+    await RemoteHistoryStore.I.record(
+      peerId: s.hostId,
+      peerName: s.hostName,
+      code: isCode ? _lastRedeemCode : '',
+      kind: isCode ? 'code' : 'friend',
+    );
+  }
+
   // ------------------------------------------------------------ 控制端动作
 
   /// 向某人发起远程协助
@@ -455,6 +506,7 @@ class RemoteAssistService {
       return '未连接到服务器，无法连接';
     }
     await _ensureMyId();
+    _lastRedeemCode = code.trim();
     SocketService().send({'type': 'remote:redeem', 'code': code.trim()});
     if (phase.value == RemotePhase.idle || phase.value == RemotePhase.ended) {
       phase.value = RemotePhase.requesting;
@@ -824,6 +876,9 @@ class RemoteAssistService {
               'type': 'remote:active',
               'sessionId': session.value?.id,
             });
+            // 本地历史只在这一处和 remote:active 帧两处落笔 —— 两条路都覆盖，
+            // 且 isController 判定保证被控端不会写进控制端的快捷列表
+            unawaited(_recordHistory());
           }
           _log('连接已恢复${isController ? '，你现在可以操作对方电脑' : '，对方可以看到你的屏幕'}');
           break;
@@ -910,6 +965,10 @@ class RemoteAssistService {
         } else {
           _injector.keyUp(key);
         }
+      case QualityAction(:final level):
+        // 画质锁定（UU-c）。被控端是发送端，档位只有在这边能落地；
+        // qualityLevel notifier 同步一下，被控端自己的状态条也跟着变。
+        unawaited(_degrader?.lock(level));
     }
   }
 
@@ -942,11 +1001,15 @@ class RemoteAssistService {
         if (k.vk != null) 'k': k.vk,
         if (k.extended) 'ext': true,
       });
+  /// 画质锁定（UU-c）。level=null 恢复自动。
+  void sendQuality(int? level) =>
+      _send(<String, dynamic>{'t': 'ql', if (level != null) 'lv': level});
 
   // ------------------------------------------------------------ 收尾
 
   Future<void> _teardown({String reason = ''}) async {
     _hostByFrame = false;
+    _lastRedeemCode = '';
     // 🔴 会话结束必须撤掉屏幕采集的前台服务，否则那条"正在共享屏幕"的常驻通知
     //    会一直挂着 —— 用户会以为被人在背后偷偷录屏。
     //    这一句刻意放在最前面：下面任何一步抛异常都不该把通知留在状态栏上。
@@ -959,6 +1022,9 @@ class RemoteAssistService {
     reconnecting.value = false;
     reconnectAttempt.value = 0;
     qualityLevel.value = 0;
+    // 手动选的档位跟着会话走：不清的话下次进远程页，
+    // 菜单勾号还停在上一次会话的选择上，而实际档位早回了自动。
+    qualityPick.value = null;
     _degrader?.stop();
     _degrader = null;
     try {

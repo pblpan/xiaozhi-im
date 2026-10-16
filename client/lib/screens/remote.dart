@@ -16,12 +16,13 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../api.dart';
 import '../core/input_inject.dart';
 import '../core/remote_assist.dart';
+import '../core/remote_history_store.dart';
 import '../core/remote_models.dart';
 import '../core/theme.dart';
 
 // ============================================================ 入口页
 
-/// 远程协助首页：发起协助 / 用码连接 / 访问码管理 / 会话记录
+/// 远程协助首页：发起协助 / 用码连接 / 访问码管理 / 会话记录 / 本地历史收藏
 class RemoteHubScreen extends StatefulWidget {
   const RemoteHubScreen({super.key});
 
@@ -161,7 +162,7 @@ class _HostAbilityCard extends StatelessWidget {
                             ? '别人协助你时可以直接操作这台手机的屏幕（点击、滑动、打字、按返回键）。'
                             : '手机系统不允许 App 自己制造触摸事件，只能用系统提供的无障碍能力。'
                                 '开一次就好，之后不用再管；不开启则别人只能看画面、操作不了。',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 12.5,
                             color: AppColors.textSub,
                             height: 1.5),
@@ -197,6 +198,9 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
   bool _hostReady = false;
   bool _hostReadyLoading = true;
 
+  /// 远程协助服务单例（历史/收藏要听 phase 变化，会话一结束就刷新列表）。
+  final RemoteAssistService _svc = RemoteAssistService.instance;
+
   /// 通讯录好友（选人来发起协助）。
   ///
   /// 🔴 之前这一页只能手填**数字账号 ID** —— 而 ID 在界面上根本不显示，
@@ -208,20 +212,34 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
   int? _pickedId;
   String? _pickedName;
 
+  /// 本地历史 + 收藏（龙哥 2026-10-16：「历史记录和收藏夹，方便下次发起连接」）。
+  /// 只记我发起的连接；点一下直接按原方式再发起（同事→邀请，码→兑换）。
+  List<RemoteHistoryItem> _hist = const [];
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadFriends();
     _loadHostAbility();
+    _loadHistory();
+    // 会话一结束就刷新历史：刚连过的那次要立刻出现在"最近连接"里，
+    // 否则用户回首页看到的还是旧列表，会以为"根本没记上"。
+    _svc.phase.addListener(_onPhaseChanged);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _svc.phase.removeListener(_onPhaseChanged);
     _code.dispose();
     _target.dispose();
     super.dispose();
+  }
+
+  void _onPhaseChanged() {
+    final p = _svc.phase.value;
+    if (p == RemotePhase.idle || p == RemotePhase.ended) _loadHistory();
   }
 
   /// 从系统设置页切回来时再问一次：用户可能在那里刚把开关拨开，
@@ -337,6 +355,90 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
     );
   }
 
+  // ---- 本地历史 + 收藏 ----
+
+  Future<void> _loadHistory() async {
+    final list = await RemoteHistoryStore.I.list();
+    if (!mounted) return;
+    setState(() => _hist = list);
+  }
+
+  /// 一键重连：同事走邀请、访问码走兑换，和手动操作的链路完全一致
+  /// （不另开一条"快捷连接"的旁路 —— 旁路迟早和主链路漂移）。
+  Future<void> _reconnectHistory(RemoteHistoryItem h) async {
+    if (h.isCode) {
+      _code.text = h.code;
+      await _redeem();
+      return;
+    }
+    if (h.peerId <= 0) {
+      setState(() => _msg = '这条记录没有对方账号，请从通讯录重新选人');
+      return;
+    }
+    setState(() {
+      _pickedId = h.peerId;
+      _pickedName = h.title;
+      _target.clear();
+      _msg = null;
+    });
+    await _invite();
+  }
+
+  Future<void> _toggleFavHistory(RemoteHistoryItem h) async {
+    await RemoteHistoryStore.I.setFav(h.id, !h.fav);
+    await _loadHistory();
+  }
+
+  Future<void> _deleteHistory(RemoteHistoryItem h) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgElevated,
+        title: const Text('删除这条记录？'),
+        content: Text(
+          '只删本机这条历史，不影响服务端的协助记录。'
+          '${h.fav ? '这条是收藏，删了要重新加回来。' : ''}',
+          style: TextStyle(fontSize: 13.5, color: AppColors.textSub, height: 1.5),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('删除', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+    if (yes != true) return;
+    await RemoteHistoryStore.I.remove(h.id);
+    await _loadHistory();
+  }
+
+  Future<void> _clearHistory() async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgElevated,
+        title: const Text('清空历史记录？'),
+        content: Text(
+          '普通记录全部清掉，收藏的会保留。'
+          '只影响本机，服务端的协助记录不受影响。',
+          style: TextStyle(fontSize: 13.5, color: AppColors.textSub, height: 1.5),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('清空', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+    if (yes != true) return;
+    await RemoteHistoryStore.I.clear();
+    await _loadHistory();
+  }
+
   @override
   Widget build(BuildContext context) {
     final svc = RemoteAssistService.instance;
@@ -359,7 +461,7 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
             children: [
               const Text('用访问码连接', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
-              const Text(
+               Text(
                 '对方离线也能连（无人值守）。连上后对方仍有 10 秒可以拒绝，'
                 '不会在你不知道的情况下直接被控。',
                 style: TextStyle(fontSize: 12.5, color: AppColors.textSub, height: 1.5),
@@ -395,7 +497,7 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
             children: [
               const Text('请求对方协助', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
-              const Text(
+               Text(
                 '从通讯录里选一位同事，对方点「同意」就开始。适合临时帮同事处理问题。',
                 style: TextStyle(fontSize: 12.5, color: AppColors.textSub, height: 1.5),
               ),
@@ -435,7 +537,7 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       else
-                        const Icon(Icons.chevron_right_rounded,
+                         Icon(Icons.chevron_right_rounded,
                             size: 20, color: AppColors.textWeak),
                     ],
                   ),
@@ -446,7 +548,7 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
                 Row(children: [
                   Expanded(
                     child: Text('通讯录加载失败：$_friendsErr',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             fontSize: 11.5, color: AppColors.danger)),
                   ),
                   TextButton(onPressed: _loadFriends, child: const Text('重试')),
@@ -467,13 +569,25 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
                 FilledButton(onPressed: _invite, child: const Text('发起')),
               ]),
               const SizedBox(height: 8),
-              const Text(
+               Text(
                 '对方必须在线，并在弹出提示里点「同意」才会开始 —— 不会在你不知道的情况下被控。',
                 style: TextStyle(fontSize: 11.5, color: AppColors.textWeak),
               ),
             ],
           ),
         ),
+        // 本地历史 + 收藏：连过的对象直接点一下再发起。
+        // 空列表时整块不渲染 —— 新用户不该一进来先看一块"你没有历史"。
+        if (_hist.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _HistorySection(
+            items: _hist,
+            onReconnect: _reconnectHistory,
+            onToggleFav: _toggleFavHistory,
+            onDelete: _deleteHistory,
+            onClear: _clearHistory,
+          ),
+        ],
         if (_msg != null) ...[
           const SizedBox(height: 12),
           Container(
@@ -482,7 +596,7 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
               color: AppColors.surface,
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Text(_msg!, style: const TextStyle(fontSize: 12.5, color: AppColors.brand2)),
+            child: Text(_msg!, style: TextStyle(fontSize: 12.5, color: AppColors.brand2)),
           ),
         ],
         const SizedBox(height: 16),
@@ -494,7 +608,7 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
             return ListTile(
               tileColor: AppColors.surface,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              leading: const Icon(Icons.desktop_windows_rounded, color: AppColors.brand),
+              leading: Icon(Icons.desktop_windows_rounded, color: AppColors.brand),
               title: const Text('返回进行中的会话'),
               // UU-a：重连中时副标题直接说"在重连"，别让用户以为断了就走了
               subtitle: ValueListenableBuilder<bool>(
@@ -504,7 +618,7 @@ class _ConnectTabState extends State<_ConnectTab> with WidgetsBindingObserver {
               ),
               trailing: TextButton(
                 onPressed: () => RemoteAssistService.instance.hangUp(),
-                child: const Text('结束', style: TextStyle(color: AppColors.danger)),
+                child: Text('结束', style: TextStyle(color: AppColors.danger)),
               ),
               onTap: _openControl,
             );
@@ -585,13 +699,13 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
             ),
             const SizedBox(height: 6),
             if (all.isEmpty)
-              const Padding(
+               Padding(
                 padding: EdgeInsets.all(28),
                 child: Text('通讯录里还没有好友',
                     style: TextStyle(fontSize: 13, color: AppColors.textSub)),
               )
             else if (shown.isEmpty)
-              const Padding(
+               Padding(
                 padding: EdgeInsets.all(28),
                 child: Text('没找到匹配的人',
                     style: TextStyle(fontSize: 13, color: AppColors.textSub)),
@@ -611,7 +725,7 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
                         backgroundColor: AppColors.brand.withValues(alpha: 0.14),
                         child: Text(
                           name.isEmpty ? '?' : name.characters.first,
-                          style: const TextStyle(
+                          style:  TextStyle(
                               fontSize: 15, color: AppColors.brand),
                         ),
                       ),
@@ -619,7 +733,7 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
                       subtitle: uname.isEmpty || uname == name
                           ? null
                           : Text(uname,
-                              style: const TextStyle(
+                              style:  TextStyle(
                                   fontSize: 12, color: AppColors.textWeak)),
                       onTap: () => Navigator.of(context).pop(f),
                     );
@@ -628,6 +742,117 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 本地历史 + 收藏区块（龙哥 2026-10-16：「历史记录和收藏夹，方便下次发起连接」）。
+///
+/// 交互约定（写在区块里，用户不用教）：
+///   · 点一行 = 用原方式再发起（同事→邀请，访问码→兑换）；
+///   · ★ = 收藏/取消，收藏永远置顶；
+///   · 长按 = 删这条（有确认，防误触）；
+///   · 右上角"清空"只清普通记录，收藏保留。
+class _HistorySection extends StatelessWidget {
+  const _HistorySection({
+    required this.items,
+    required this.onReconnect,
+    required this.onToggleFav,
+    required this.onDelete,
+    required this.onClear,
+  });
+
+  final List<RemoteHistoryItem> items;
+  final ValueChanged<RemoteHistoryItem> onReconnect;
+  final ValueChanged<RemoteHistoryItem> onToggleFav;
+  final ValueChanged<RemoteHistoryItem> onDelete;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          const Text('最近连接',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 8),
+          Text('只存在本机',
+              style: TextStyle(fontSize: 11, color: AppColors.textWeak)),
+          const Spacer(),
+          TextButton(
+            onPressed: onClear,
+            child: Text('清空',
+                style: TextStyle(fontSize: 12, color: AppColors.textSub)),
+          ),
+        ]),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text(
+            '点一下直接再发起 · ★ 收藏置顶 · 长按删除',
+            style: TextStyle(fontSize: 11.5, color: AppColors.textWeak),
+          ),
+        ),
+        for (final h in items) _historyTile(h),
+      ],
+    );
+  }
+
+  Widget _historyTile(RemoteHistoryItem h) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        leading: CircleAvatar(
+          radius: 18,
+          backgroundColor: AppColors.brand.withValues(alpha: 0.14),
+          child: Text(
+            h.title.characters.first,
+            style: TextStyle(fontSize: 15, color: AppColors.brand),
+          ),
+        ),
+        title: Row(children: [
+          Flexible(
+            child: Text(
+              h.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14.5),
+            ),
+          ),
+          if (h.isCode) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: AppColors.warn.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text('无人值守',
+                  style: TextStyle(fontSize: 10.5, color: AppColors.warn)),
+            ),
+          ],
+        ]),
+        subtitle: Text(
+          '${h.isCode ? '访问码 ${h.code}' : '同事'} · 连过 ${h.times} 次'
+          ' · ${remoteWhenText(h.lastAt)}',
+          style: const TextStyle(fontSize: 12),
+        ),
+        trailing: IconButton(
+          icon: Icon(
+            h.fav ? Icons.star_rounded : Icons.star_border_rounded,
+            color: h.fav ? AppColors.warn : AppColors.textWeak,
+          ),
+          tooltip: h.fav ? '取消收藏' : '收藏（置顶）',
+          onPressed: () => onToggleFav(h),
+        ),
+        onTap: () => onReconnect(h),
+        onLongPress: () => onDelete(h),
       ),
     );
   }
@@ -724,7 +949,7 @@ class _CodesTabState extends State<_CodesTab> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgElevated,
         title: const Text('吊销这个访问码？'),
-        content: const Text(
+        content:  Text(
           '吊销后立刻失效，之前拿到这个码的人将无法连接。'
           '如果你怀疑码泄漏了，就吊销它。',
           style: TextStyle(fontSize: 13.5, color: AppColors.textSub, height: 1.5),
@@ -733,7 +958,7 @@ class _CodesTabState extends State<_CodesTab> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('吊销', style: TextStyle(color: AppColors.danger)),
+            child: Text('吊销', style: TextStyle(color: AppColors.danger)),
           ),
         ],
       ),
@@ -749,7 +974,7 @@ class _CodesTabState extends State<_CodesTab> {
     if (_err != null) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(_err!, style: const TextStyle(color: AppColors.danger, fontSize: 13)),
+          Text(_err!, style: TextStyle(color: AppColors.danger, fontSize: 13)),
           const SizedBox(height: 10),
           OutlinedButton(onPressed: _load, child: const Text('重试')),
         ]),
@@ -759,7 +984,7 @@ class _CodesTabState extends State<_CodesTab> {
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
         child: Row(children: [
-          const Expanded(
+           Expanded(
             child: Text(
               '访问码是「别人能在你不在场时连你电脑」的钥匙。'
               '只在你确实需要长期值守时才开。',
@@ -776,7 +1001,7 @@ class _CodesTabState extends State<_CodesTab> {
       ),
       Expanded(
         child: _items.isEmpty
-            ? const Center(
+            ?  Center(
                 child: Text('还没有访问码',
                     style: TextStyle(color: AppColors.textWeak, fontSize: 13)),
               )
@@ -807,7 +1032,7 @@ class _CodesTabState extends State<_CodesTab> {
                           style: const TextStyle(fontSize: 12),
                         ),
                         trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline_rounded, color: AppColors.danger),
+                          icon: Icon(Icons.delete_outline_rounded, color: AppColors.danger),
                           tooltip: '吊销',
                           onPressed: () => _revoke(c),
                         ),
@@ -919,7 +1144,7 @@ class _CodeOnceDialog extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          const Text(
+           Text(
             '⚠️ 关掉这个窗口之后就查不到了（服务端只存哈希，不存明文）。\n'
             '现在没记下的话，只能吊销它重新生成一个。',
             style: TextStyle(fontSize: 12.5, color: AppColors.warn, height: 1.6),
@@ -985,14 +1210,14 @@ class _HistoryTabState extends State<_HistoryTab> {
     if (_err != null) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(_err!, style: const TextStyle(color: AppColors.danger, fontSize: 13)),
+          Text(_err!, style: TextStyle(color: AppColors.danger, fontSize: 13)),
           const SizedBox(height: 10),
           OutlinedButton(onPressed: _load, child: const Text('重试')),
         ]),
       );
     }
     if (_items.isEmpty) {
-      return const Center(child: Text('还没有远程协助记录', style: TextStyle(color: AppColors.textWeak)));
+      return Center(child: Text('还没有远程协助记录', style: TextStyle(color: AppColors.textWeak)));
     }
     return RefreshIndicator(
       onRefresh: _load,
@@ -1025,7 +1250,7 @@ class _HistoryTabState extends State<_HistoryTab> {
             isThreeLine: r.durationSec > 0,
             trailing: Text(
               r.mode == 'unattended' ? '无人值守' : '有人值守',
-              style: const TextStyle(fontSize: 11.5, color: AppColors.textWeak),
+              style: TextStyle(fontSize: 11.5, color: AppColors.textWeak),
             ),
           );
         },
@@ -1323,6 +1548,10 @@ class _RemoteStageState extends State<_RemoteStage> {
 
   final Map<int, _PressRecord> _presses = <int, _PressRecord>{};
 
+  /// 黑屏提示：连上 12s 还没收到帧就置位，见帧即撤。
+  Timer? _blackTimer;
+  bool _black = false;
+
   // 手势判定的两个阈值。
   // 移动超过 10 逻辑像素就不算"点击"了（手指本来就抖，卡太紧会点不出）；
   // 长按 600ms 与 iOS/Android 系统长按一致，用户不用重新学。
@@ -1336,10 +1565,22 @@ class _RemoteStageState extends State<_RemoteStage> {
     super.initState();
     _svc.remoteRenderer.addListener(_onRenderer);
     _tf.addListener(_onTransform);
+    // 🔴 黑屏检测（龙哥 2026-10-16 真机："远程协助界面一片漆黑"）。
+    //    连接建立但 12 秒还没收到任何视频帧 → 大概率不是网速问题，
+    //    而是对端**采集没起来**（Android 14 没给屏幕采集前台服务 /
+    //    手机锁屏 / Windows 没允许屏幕录制）。以前这里是一片纯黑，
+    //    用户完全不知道去哪修。现在给一句能照着做的话。
+    _blackTimer = Timer(const Duration(seconds: 12), () {
+      if (!mounted) return;
+      if (_svc.remoteRenderer.videoWidth > 0) return; // 有帧，不打扰
+      if (widget.phase != RemotePhase.active) return;
+      setState(() => _black = true);
+    });
   }
 
   @override
   void dispose() {
+    _blackTimer?.cancel();
     _svc.remoteRenderer.removeListener(_onRenderer);
     _tf.removeListener(_onTransform);
     _tf.dispose();
@@ -1353,7 +1594,10 @@ class _RemoteStageState extends State<_RemoteStage> {
     final next = Size(w.toDouble(), h.toDouble());
     if (_videoSize == next) return;
     if (!mounted) return;
-    setState(() => _videoSize = next);
+    setState(() {
+      _videoSize = next;
+      _black = false; // 来帧了，黑屏提示撤掉
+    });
   }
 
   void _onTransform() {
@@ -1609,6 +1853,29 @@ class _RemoteStageState extends State<_RemoteStage> {
                   ? const Positioned.fill(child: _ReconnectOverlay())
                   : const SizedBox.shrink(),
             ),
+          // 🔴 黑屏排查提示（龙哥 2026-10-16 真机："一片漆黑"）。
+          //    连上 12s 还没有任何帧 → 不是网速，是对端采集没起来。
+          //    安卓 14 要求被控端放行"屏幕采集前台服务"；Windows 被控端
+          //    要允许屏幕录制；手机锁屏也会停采。
+          if (_black && p == RemotePhase.active)
+            Positioned(
+              left: 12,
+              right: 12,
+              top: 12,
+              child: _BlackScreenTip(
+                onRetry: () {
+                  setState(() => _black = false);
+                  _blackTimer?.cancel();
+                  _blackTimer = Timer(const Duration(seconds: 12), () {
+                    if (!mounted) return;
+                    if (_svc.remoteRenderer.videoWidth <= 0 &&
+                        widget.phase == RemotePhase.active) {
+                      setState(() => _black = true);
+                    }
+                  });
+                },
+              ),
+            ),
           // 缩放控制条：放在画面右下角，不占顶栏（顶栏空间已经很紧）
           Positioned(
             right: 10,
@@ -1739,7 +2006,7 @@ class _ControlBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Row(children: [
         IconButton(
-          icon: const Icon(Icons.close_rounded, color: AppColors.danger),
+          icon: Icon(Icons.close_rounded, color: AppColors.danger),
           tooltip: '断开连接',
           onPressed: () async {
             await svc.hangUp();
@@ -1760,23 +2027,60 @@ class _ControlBar extends StatelessWidget {
           ),
         ),
         // UU-c：画质档位。网络差自动降级时这里变黄字，
-        // 让用户知道"画面变糊"是自适应省带宽、不是坏了
-        ValueListenableBuilder<int>(
-          valueListenable: svc.qualityLevel,
-          builder: (_, lv, __) => Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: lv == 0
-                  ? AppColors.surface
-                  : AppColors.warn.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              remoteQualityText(lv),
-              style: TextStyle(
-                fontSize: 11,
-                color: lv == 0 ? AppColors.textWeak : AppColors.warn,
+        // 让用户知道"画面变糊"是自适应省带宽、不是坏了。
+        // 🔴 2026-10-16 龙哥真机反馈之前这是块**纯展示**，想调画质找不到入口
+        //    （"版本控制界面一片漆黑"）。改成可点选：控制端选档 → 经控制
+        //    通道发给被控端（发送端）落地，勾号记在 svc.qualityPick。
+        PopupMenuButton<int?>(
+          tooltip: '画质档位',
+          onSelected: (lv) => svc.sendQuality(lv),
+          itemBuilder: (c) => [
+            for (final e in const <(int?, String)>[
+              (null, '自动（按网络自适应）'),
+              (0, '原画（不限制）'),
+              (1, '高清（1500kbps）'),
+              (2, '标清（800kbps）'),
+              (3, '流畅（400kbps）'),
+              (4, '极速（200kbps）'),
+            ])
+              PopupMenuItem<int?>(
+                value: e.$1,
+                child: Row(children: [
+                  SizedBox(
+                    width: 18,
+                    child: ValueListenableBuilder<int?>(
+                      valueListenable: svc.qualityPick,
+                      builder: (_, pick, __) => pick == e.$1
+                          ? const Icon(Icons.check, size: 15)
+                          : const SizedBox.shrink(),
+                    ),
+                  ),
+                  Text(e.$2),
+                ]),
               ),
+          ],
+          child: ValueListenableBuilder<int>(
+            valueListenable: svc.qualityLevel,
+            builder: (_, lv, __) => Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: lv == 0
+                    ? AppColors.surface
+                    : AppColors.warn.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Row(children: [
+                Text(
+                  remoteQualityText(lv),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: lv == 0 ? AppColors.textWeak : AppColors.warn,
+                  ),
+                ),
+                Icon(Icons.arrow_drop_down,
+                    size: 14,
+                    color: lv == 0 ? AppColors.textWeak : AppColors.warn),
+              ]),
             ),
           ),
         ),
@@ -1829,7 +2133,7 @@ class _LinkStatusDot extends StatelessWidget {
                 decoration: BoxDecoration(color: c, shape: BoxShape.circle),
               ),
               const SizedBox(width: 5),
-              Text(t, style: const TextStyle(fontSize: 12, color: AppColors.textSub)),
+              Text(t, style: TextStyle(fontSize: 12, color: AppColors.textSub)),
             ]);
           },
         );
@@ -1860,7 +2164,7 @@ class _ReconnectOverlay extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(
+             SizedBox(
               width: 30,
               height: 30,
               child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.warn),
@@ -1875,7 +2179,7 @@ class _ReconnectOverlay extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
+             Text(
               '恢复后会自动接回，请勿关闭窗口',
               style: TextStyle(color: AppColors.textSub, fontSize: 12),
             ),
@@ -1885,7 +2189,7 @@ class _ReconnectOverlay extends StatelessWidget {
                 await svc.hangUp();
                 if (context.mounted) Navigator.of(context).maybePop();
               },
-              child: const Text('手动断开',
+              child:  Text('手动断开',
                   style: TextStyle(color: AppColors.danger, fontSize: 12.5)),
             ),
           ],
@@ -1907,9 +2211,68 @@ class _DiagBar extends StatelessWidget {
         color: AppColors.bgElevated,
         child: Text(
           d.isEmpty ? '准备就绪' : d,
-          style: const TextStyle(fontSize: 11.5, color: AppColors.textWeak),
+          style: TextStyle(fontSize: 11.5, color: AppColors.textWeak),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+}
+
+/// 黑屏提示条：连上了但 12 秒收不到画面时显示。
+///
+/// 三种真因按现场出现频率排：① 安卓 14 被控端没放行"屏幕采集前台服务"
+/// （现象就是权限都给了画面全黑）；② 被控手机锁屏/黑屏待机（MediaProjection
+/// 在部分 ROM 上锁屏即停采）；③ Windows 被控端没允许屏幕录制。
+/// 提示必须给"能照着做"的话 —— 只说"对方未共享画面"等于没说。
+class _BlackScreenTip extends StatelessWidget {
+  const _BlackScreenTip({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+        decoration: BoxDecoration(
+          color: AppColors.warn.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(AppRadii.md),
+          border: Border.all(color: AppColors.warn.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.warning_amber_rounded,
+                size: 18, color: AppColors.warn),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('还没收到对方画面',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.warn)),
+                  const SizedBox(height: 3),
+                  Text(
+                    '让对方检查：① 手机是否锁屏了（亮屏再来）；'
+                    '② 安卓 14 要在通知里放行「屏幕采集」前台服务；'
+                    '③ Windows 端要在系统设置里允许屏幕录制。',
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        color: AppColors.text,
+                        height: 1.45),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(onPressed: onRetry, child: const Text('再等等')),
+          ],
         ),
       ),
     );
@@ -1980,7 +2343,7 @@ class RemoteHostBanner extends StatelessWidget {
         ),
         TextButton(
           onPressed: onHangUp,
-          child: const Text('立即断开', style: TextStyle(color: AppColors.danger, fontSize: 12.5)),
+          child: Text('立即断开', style: TextStyle(color: AppColors.danger, fontSize: 12.5)),
         ),
       ]),
     );
@@ -2122,12 +2485,12 @@ class _RemoteRequestSheetState extends State<_RemoteRequestSheet>
           Text(
             '同意后对方将看到你的屏幕'
             '${_canControl ? '，并且可以操作你的${widget.injector.controlObject}' : '（此设备暂不支持被远程控制，对方只能看画面）'}。',
-            style: const TextStyle(fontSize: 13, color: AppColors.textSub, height: 1.6),
+            style: TextStyle(fontSize: 13, color: AppColors.textSub, height: 1.6),
           ),
           if (!_canControl) ...[
             const SizedBox(height: 8),
             Text(widget.injectHint,
-                style: const TextStyle(fontSize: 12, color: AppColors.warn, height: 1.5)),
+                style: TextStyle(fontSize: 12, color: AppColors.warn, height: 1.5)),
             const SizedBox(height: 10),
             // 给一条能直接走出去的路。只解释"为什么不行"而不给按钮，
             // 用户得自己猜去哪儿开 —— 那是把系统规则转嫁给用户。
@@ -2141,7 +2504,7 @@ class _RemoteRequestSheetState extends State<_RemoteRequestSheet>
             const SizedBox(height: 12),
             Text(
               '$_left 秒后自动同意（无人值守）。不想被连就点拒绝。',
-              style: const TextStyle(fontSize: 12.5, color: AppColors.warn),
+              style: TextStyle(fontSize: 12.5, color: AppColors.warn),
             ),
           ],
         ],
@@ -2152,7 +2515,7 @@ class _RemoteRequestSheetState extends State<_RemoteRequestSheet>
             svc.rejectAsHost();
             Navigator.of(context).pop();
           },
-          child: const Text('拒绝', style: TextStyle(color: AppColors.danger)),
+          child: Text('拒绝', style: TextStyle(color: AppColors.danger)),
         ),
         FilledButton(
           onPressed: () {

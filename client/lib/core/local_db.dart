@@ -40,7 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_common_ffi.dart';
 /// getApplicationSupportDirectory() 下，并先 createSync(recursive:true) 保证目录在；
 /// 移动端用 getDatabasesPath() 再拼文件名。
 class LocalDb {
-  static const int schemaVersion = 8;
+  static const int schemaVersion = 9;
 
   LocalDb._();
   static final LocalDb I = LocalDb._();
@@ -292,6 +292,36 @@ class LocalDb {
           v TEXT
         )
       ''');
+    },
+    // v9：远程协助本地历史 + 收藏（龙哥 2026-10-16：「远程协助增加手机端的
+    //     历史记录和收藏夹，方便下次发起连接」）。
+    //
+    // 🔴 与服务端「协助记录」的分工：那张表是**审计**（谁在什么时候连了谁，
+    //    字段全、删不得），这张表是**再连一次**的快捷方式 —— 只记"我发起的"
+    //    连接（同事 / 访问码），收藏置顶、可删可清。别把两件事混成一件事：
+    //    审计要永久留存，本地历史用户有权删干净。
+    //
+    // 🔴 code 列存明文访问码：无人值守的重连只能靠码，而码本来就是发给
+    //    这台手机的。只落本机 SQLite，不上传、不打日志。
+    //
+    // 🔴 upsert 用手动「先 SELECT 再 UPDATE/INSERT」，**不用**
+    //    ConflictAlgorithm.replace —— replace 的语义是删旧行插新行，
+    //    会把用户手动加的收藏一起删掉。"同对象再连一次"必须保住 fav。
+    (Database db) async {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS remote_history (
+          id        INTEGER PRIMARY KEY AUTOINCREMENT,
+          peer_id   INTEGER NOT NULL DEFAULT 0,
+          peer_name TEXT NOT NULL DEFAULT '',
+          code      TEXT NOT NULL DEFAULT '',
+          kind      TEXT NOT NULL DEFAULT 'friend',
+          times     INTEGER NOT NULL DEFAULT 1,
+          fav       INTEGER NOT NULL DEFAULT 0,
+          last_at   INTEGER
+        )
+      ''');
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_remote_history_key ON remote_history(kind, peer_id, code)');
     },
   ];
 
