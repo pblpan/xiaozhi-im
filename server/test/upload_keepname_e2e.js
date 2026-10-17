@@ -162,8 +162,12 @@ async function main() {
   if (failed) {
     console.log('失败项：');
     for (const f of failures) console.log('  - ' + f);
-    process.exitCode = 1;
   }
+  // 🔴 必须显式 exit：本测试 spawn 了常驻服务端子进程（stdio=pipe），
+  //    pipe 句柄让父进程事件循环不空，不强制 exit 会被 run_all.sh 的 180s
+  //    超时杀掉（exit=124），CI 误判失败。process.exit 会触发已注册的
+  //    'exit' 句柄，杀掉子进程并清理临时 DATA_DIR。
+  process.exit(failed ? 1 : 0);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
