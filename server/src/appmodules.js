@@ -213,13 +213,35 @@ function validateComponent(raw, depth, stats) {
       };
       if (f.placeholder !== undefined) item.placeholder = str(f.placeholder, 80);
       if (f.type === 'select') {
-        if (!Array.isArray(f.options) || !f.options.length) return { error: `字段 ${key} 是 select，必须有 options` };
-        if (f.options.length > MAX_OPTIONS) return { error: `字段 ${key} 的 options 最多 ${MAX_OPTIONS} 个` };
-        item.options = f.options.slice(0, MAX_OPTIONS).map((o) => ({
-          label: str(o?.label ?? o?.value, 60),
-          value: String(o?.value ?? ''),
-        })).filter((o) => o.value !== '');
-        if (!item.options.length) return { error: `字段 ${key} 的 options 没有合法项` };
+        // 动态下拉（2026-10-18）：options 还能从一个数据源现取 —— 班次、员工、
+        // 商品分类这种"会变的清单"不可能写死在模板里（写死的结果是模板建好
+        // 三天后就少一项，而没人知道去哪补）。
+        //   optionsFrom  取数的接口路径（与 action 同一套白名单：只允许 /api/hooks/）
+        //   optionsPath  响应里选项数组的位置（默认 data.rows，与表格组件同口径）
+        //   optionLabel / optionValue  每项里哪个字段当显示文本 / 当值（默认 label/value）
+        // 声明了 optionsFrom 就不再要求静态 options（二选一），否则维持老规矩。
+        if (f.optionsFrom !== undefined) {
+          const from = String(f.optionsFrom || '').trim();
+          if (!from.startsWith('/api/hooks/')) {
+            return { error: `字段 ${key} 的 optionsFrom 必须以 /api/hooks/ 开头（当前：${from || '空'}）` };
+          }
+          if (!/^[A-Za-z0-9_\-/?=&.]{1,160}$/.test(from)) return { error: `字段 ${key} 的 optionsFrom 含非法字符` };
+          item.optionsFrom = from;
+          item.optionsPath = DATAPATH_RE.test(String(f.optionsPath || '')) ? f.optionsPath : 'data.rows';
+          item.optionLabel = str(f.optionLabel, 40) || 'label';
+          item.optionValue = str(f.optionValue, 40) || 'value';
+        }
+        if (item.optionsFrom && !(Array.isArray(f.options) && f.options.length)) {
+          // 动态源自己供选项，静态 options 可省略
+        } else {
+          if (!Array.isArray(f.options) || !f.options.length) return { error: `字段 ${key} 是 select，必须有 options（或声明 optionsFrom 走动态下拉）` };
+          if (f.options.length > MAX_OPTIONS) return { error: `字段 ${key} 的 options 最多 ${MAX_OPTIONS} 个` };
+          item.options = f.options.slice(0, MAX_OPTIONS).map((o) => ({
+            label: str(o?.label ?? o?.value, 60),
+            value: String(o?.value ?? ''),
+          })).filter((o) => o.value !== '');
+          if (!item.options.length) return { error: `字段 ${key} 的 options 没有合法项` };
+        }
       }
       fields.push(item);
     }
@@ -302,6 +324,43 @@ function validate(input, { partial = false } = {}) {
     out.sort = 0;
   }
 
+  // ── 分组（v0.28.8：自定义模块与内置应用共用同一套工作台分组）──────────────
+  // 2026-10-17 之前这里没有 group：客户端把模块一律塞进 custom 组、拼在
+  // 内置应用后面，于是"管理台把模块拖到第一行"在手机上一动不动 ——
+  // 序号统一了，落脚点却没统一，顺序仍然形同虚设。
+  // 现在 group 与内置应用的 app_overrides.group 是同一个字段、同一批 key。
+  if (input.group !== undefined) {
+    if (input.group === null || input.group === '') {
+      out.group = 'custom'; // 清空 = 回默认组，不给 null（列有默认值，NULL 会让客户端兜底猜）
+    } else {
+      const k = String(input.group).trim();
+      // 懒 require：appgroups.js 顶层 require 本文件，顶层互相 require 会拿到
+      // 半成品 exports（Node 循环依赖的经典坑），放函数里就只剩"调用时已加载完"。
+      const appgroups = require('./appgroups');
+      if (!appgroups.exists(k)) {
+        return { error: `分组不存在：${k}（先去「工作台版式 → 分组管理」新建，或选一个已有分组）` };
+      }
+      out.group = k;
+    }
+  } else if (!partial) {
+    out.group = 'custom';
+  }
+
+  // ── 图标底色（v0.28.8）──────────────────────────────────────────────
+  // 与内置应用的 app_overrides.color 对齐：管理台能显式指定，不指定就走
+  // moduleColorOf 的稳定散列兜底（见 apps.js 的说明）。
+  if (input.color !== undefined) {
+    if (input.color === null || input.color === '') {
+      out.color = null; // 显式清空 = 回到按 moduleId 散列的兜底色
+    } else {
+      const c = String(input.color).trim();
+      if (!/^#[0-9A-Fa-f]{6}$/.test(c) && !COLORS.includes(c)) {
+        return { error: `color 只能是 #RRGGBB 或语义色（${COLORS.join('、')}）` };
+      }
+      out.color = c;
+    }
+  }
+
   if (input.enabled !== undefined) out.enabled = !!input.enabled;
   else if (!partial) out.enabled = true;
 
@@ -354,10 +413,32 @@ function rowToModule(r) {
     minClientVersion: r.min_client_version || null,
     enabled: !!r.enabled,
     sort: r.sort || 0,
+    // v0.28.8：分组与配色。老库没有这两列，迁移见下面的 ensureColumn。
+    group: r.group || 'custom',
+    color: r.color || null,
     visibleTo: { roles, userIds },
     updatedAt: r.updated_at,
   };
 }
+
+/* ---------------- 表结构迁移（只往后追加列） ---------------- */
+
+/**
+ * `group` / `color` 是 v0.28.8 才有的两列（自定义模块与内置应用统一分组、统一配色）。
+ * `CREATE TABLE IF NOT EXISTS` 对已存在的表是空操作，老库不会自己补列，
+ * 而 `SELECT *` 读出来就少字段 —— 表现是"管理台明明能选分组，工作台一动不动"。
+ * 做法照 appoverrides.js 的 ensureColumn：先查 pragma 再 ALTER，幂等。
+ * ⚠️ `group` 是 SQLite 关键字，DDL 里必须加双引号。
+ */
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare('SELECT name FROM pragma_table_info(?)').all(table);
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    console.log(`[小智IM] 迁移：${table}.${column} 已添加`);
+  }
+}
+ensureColumn('app_modules', 'group', '"group" TEXT');   // 工作台分组 key（默认 custom）
+ensureColumn('app_modules', 'color', 'color TEXT');     // 图标底色 #RRGGBB / 语义色；NULL = 散列兜底
 
 /** 全部模块（管理台用，含未启用） */
 function list() {
@@ -389,28 +470,86 @@ function listVisible({ userId, role, clientVersion } = {}) {
 }
 
 function upsert(input, by) {
-  const v = validate(input);
+  const src = isObj(input) ? input : {};
+  const v = validate(src);
   if (v.error) return { error: v.error };
   const m = v.module;
   const { moduleId, visibleTo, ...schemaRest } = m;
   const schema = { body: m.body, onLoad: m.onLoad };
   const now = Date.now();
+  // 🔴 group / color 是 v0.28.8 才有的两列，而 validate 对"没给"的字段会补默认值
+  //    （custom / null）—— 直接用它写库，等于"用旧编辑器保存一次，分组和配色
+  //    就被悄悄打回默认"。所以这里按"没给就不动"的口径先读回原值，
+  //    与 appoverrides.set 的 PATCH 语义保持一致。
+  const cur = db.prepare('SELECT "group", color FROM app_modules WHERE module_id=?').get(moduleId);
+  const group = src.group === undefined ? (cur ? cur.group || 'custom' : 'custom') : m.group;
+  const color = src.color === undefined ? (cur ? (cur.color == null ? null : cur.color) : null) : (m.color == null ? null : m.color);
   db.prepare(`
     INSERT INTO app_modules (module_id, title, icon, schema, min_client_version,
-      enabled, sort, visible_roles, visible_user_ids, updated_at, updated_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      enabled, sort, "group", color, visible_roles, visible_user_ids, updated_at, updated_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(module_id) DO UPDATE SET
       title=excluded.title, icon=excluded.icon, schema=excluded.schema,
       min_client_version=excluded.min_client_version, enabled=excluded.enabled,
-      sort=excluded.sort, visible_roles=excluded.visible_roles,
+      sort=excluded.sort, "group"=excluded."group", color=excluded.color,
+      visible_roles=excluded.visible_roles,
       visible_user_ids=excluded.visible_user_ids,
       updated_at=excluded.updated_at, updated_by=excluded.updated_by
   `).run(
     moduleId, m.title, m.icon, JSON.stringify(schema), m.minClientVersion,
-    m.enabled ? 1 : 0, m.sort, JSON.stringify(visibleTo.roles), JSON.stringify(visibleTo.userIds),
+    m.enabled ? 1 : 0, m.sort, group, color,
+    JSON.stringify(visibleTo.roles), JSON.stringify(visibleTo.userIds),
     now, String(by || 'admin').slice(0, 60),
   );
   return { module: get(moduleId) };
+}
+
+/**
+ * 局部更新（PATCH 语义：没给的字段不动；给 null = 清回默认）。
+ *
+ * 🔴 为什么不复用 upsert：upsert 走的是 validate(input) 全量校验，会把没给的
+ *    字段补成默认值再整行重写 —— 于是"只改个分组"会把 body / onLoad 悄悄抹掉。
+ *    这正是 2026-10-17 之前总览表里模块一旦被保存就丢数据的那类事故，
+ *    所以这里单独一条路：只 SET 真正给过的列。
+ *
+ * body / onLoad 在 schema JSON 里，走"读出→合并→写回"，与列字段分开处理。
+ */
+function update(moduleId, patch, by) {
+  const id = String(moduleId || '');
+  const cur = db.prepare('SELECT * FROM app_modules WHERE module_id=?').get(id);
+  if (!cur) return { error: '模块不存在' };
+  const v = validate({ moduleId: id, ...(patch || {}) }, { partial: true });
+  if (v.error) return { error: v.error };
+  const m = v.module;
+  const now = Date.now();
+  const sets = [];
+  const args = [];
+  const put = (col, val) => { sets.push(`${col}=?`); args.push(val); };
+
+  if (m.title !== undefined) put('title', m.title);
+  if (m.icon !== undefined) put('icon', m.icon);
+  if (m.minClientVersion !== undefined) put('min_client_version', m.minClientVersion);
+  if (m.sort !== undefined) put('sort', m.sort);
+  if (m.enabled !== undefined) put('enabled', m.enabled ? 1 : 0);
+  if (m.group !== undefined) put('"group"', m.group);
+  if (m.color !== undefined) put('color', m.color);
+  if (m.visibleTo !== undefined) {
+    put('visible_roles', JSON.stringify(m.visibleTo.roles));
+    put('visible_user_ids', JSON.stringify(m.visibleTo.userIds));
+  }
+  // schema 里的 body / onLoad：读出来合并，避免"改分组把页面内容改没了"
+  if (m.body !== undefined || m.onLoad !== undefined) {
+    let schema = {};
+    try { schema = JSON.parse(cur.schema || '{}'); } catch { schema = {}; }
+    if (m.body !== undefined) schema.body = m.body;
+    if (m.onLoad !== undefined) schema.onLoad = m.onLoad;
+    put('schema', JSON.stringify(schema));
+  }
+  if (!sets.length) return { module: get(id), message: '没有要改的字段' };
+  args.push(now, String(by || 'admin').slice(0, 60), id);
+  db.prepare(`UPDATE app_modules SET ${sets.join(', ')}, updated_at=?, updated_by=? WHERE module_id=?`)
+    .run(...args);
+  return { module: get(id) };
 }
 
 function remove(moduleId) {
@@ -685,6 +824,65 @@ const TEMPLATES = [
       onLoad: { action: 'api', path: '/api/hooks/local/attendance/records', method: 'GET' },
     },
   },
+  {
+    id: 'duty_schedule',
+    name: '排班表',
+    desc: '周表格 + 排班表单：看谁哪天什么班，直接往里加。班次复用考勤班次，创建即有数据',
+    module: {
+      moduleId: 'duty_schedule',
+      title: '排班表',
+      icon: 'schedule',
+      sort: 10,
+      enabled: true,
+      minClientVersion: null,
+      visibleTo: { roles: [], userIds: [] },
+      body: [
+        {
+          component: 'text', text: '排班（今天起 7 天）。提交即写入，重复提交同一天同一人 = 更新',
+          size: 12, color: 'muted', align: 'left',
+        },
+        {
+          component: 'table', dataPath: 'data.rows',
+          columns: [
+            { key: 'day', label: '日期', width: 100 },
+            { key: 'who', label: '员工', width: 100 },
+            { key: 'shift', label: '班次', width: 175 },
+            { key: 'position', label: '岗位', width: 90 },
+            { key: 'note', label: '备注', width: 110 },
+          ],
+        },
+        {
+          component: 'form',
+          fields: [
+            { key: 'day', label: '日期', type: 'date', required: true },
+            {
+              // 员工下拉走动态源：组织成员会变，写死就等于模板过期
+              key: 'userId', label: '员工', type: 'select', required: true,
+              optionsFrom: '/api/hooks/local/work_org/members',
+              optionsPath: 'data.rows', optionLabel: 'who', optionValue: 'id',
+            },
+            {
+              // 班次下拉同样动态（源的第一行是"休息"哨兵，见 appdata duty/shifts）
+              key: 'shiftId', label: '班次', type: 'select', required: true,
+              optionsFrom: '/api/hooks/local/duty/shifts',
+              optionsPath: 'data.rows', optionLabel: 'label', optionValue: 'value',
+            },
+            { key: 'position', label: '当班岗位', type: 'text', required: false, placeholder: '如 收银 / 理货' },
+            { key: 'note', label: '备注', type: 'text', required: false, placeholder: '如 顶班' },
+          ],
+          // 🔴 submit 指到排班数据源的 POST（表单即录入）。不配 submit 时
+          //    表单仍会走老的 module_submissions（只留痕不落业务表）——
+          //    对排班来说那就是"提交成功但班表不变"，是最坏的一种假成功。
+          submit: { action: 'api', path: '/api/hooks/local/duty/schedules', method: 'POST' },
+        },
+        {
+          component: 'action', label: '刷新排班', color: 'primary',
+          onTap: { action: 'api', path: '/api/hooks/local/duty/schedules', method: 'GET' },
+        },
+      ],
+      onLoad: { action: 'api', path: '/api/hooks/local/duty/schedules', method: 'GET' },
+    },
+  },
 ];
 
 module.exports = {
@@ -692,6 +890,6 @@ module.exports = {
   MAX_DEPTH, MAX_COMPONENTS, TEMPLATES,
   versionGte,
   validate, validateComponent, validateAction, sanitizeSubmission, collectFormFields,
-  list, get, listVisible, upsert, remove, setSort,
+  list, get, listVisible, upsert, update, remove, setSort,
   recordSubmission, listSubmissions, countSubmissions,
 };

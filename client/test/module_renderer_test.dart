@@ -209,4 +209,76 @@ void main() {
     ]);
     expect(find.text('最里层'), findsOneWidget);
   });
+
+  testWidgets('动态下拉：页面传入的选项被渲染（班次/员工清单）', (tester) async {
+    await tester.pumpWidget(wrap(ModuleRenderer(
+      body: [
+        comp({
+          'component': 'form',
+          'fields': [
+            {
+              'key': 'shiftId', 'label': '班次', 'type': 'select', 'required': true,
+              'optionsFrom': '/api/hooks/local/duty/shifts',
+            },
+          ],
+        }),
+      ],
+      data: const {},
+      onAction: (_, __) {},
+      dynamicOptions: const {
+        'shiftId': [
+          ModuleOption(label: '休息（不排班）', value: 'rest'),
+          ModuleOption(label: '早班 08:00-16:00', value: '1'),
+        ],
+      },
+    )));
+    await tester.pump();
+    // 点开下拉应能看到动态选项文本
+    await tester.tap(find.text('请选择'));
+    await tester.pumpAndSettle();
+    expect(find.text('休息（不排班）'), findsOneWidget);
+    expect(find.text('早班 08:00-16:00'), findsOneWidget);
+  });
+
+  testWidgets('动态下拉：选项还没取到时显示"加载中"且不可选', (tester) async {
+    await tester.pumpWidget(wrap(ModuleRenderer(
+      body: [
+        comp({
+          'component': 'form',
+          'fields': [
+            {
+              'key': 'userId', 'label': '员工', 'type': 'select', 'required': true,
+              'optionsFrom': '/api/hooks/local/work_org/members',
+            },
+          ],
+        }),
+      ],
+      data: const {},
+      onAction: (_, __) {},
+      // 页面还没取回选项（或取失败）→ 不能给个空下拉让人以为"组织里没人"
+    )));
+    await tester.pump();
+    expect(find.text('选项加载中…'), findsOneWidget);
+  });
+
+  testWidgets('静态下拉不受动态机制影响（老模块行为不变）', (tester) async {
+    await pumpBody(tester, [
+      comp({
+        'component': 'form',
+        'fields': [
+          {
+            'key': 'level', 'label': '紧急程度', 'type': 'select',
+            'options': [
+              {'label': '一般', 'value': 'low'},
+              {'label': '紧急', 'value': 'high'},
+            ],
+          },
+        ],
+      }),
+    ]);
+    await tester.tap(find.text('请选择'));
+    await tester.pumpAndSettle();
+    expect(find.text('紧急'), findsOneWidget);
+    expect(find.text('选项加载中…'), findsNothing);
+  });
 }

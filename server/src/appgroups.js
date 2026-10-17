@@ -116,6 +116,10 @@ function forClient(usedKeys) {
 /**
  * 每个组里现在挂了几个应用（管理台显示"这组有几个"，收起前让他知道影响面）。
  * `groupOverrides` 里的应用级 group 覆盖也算进来 —— 管理员可能刚把某应用挪走。
+ *
+ * v0.28.8 起动态模块**按各自的 group 计数**，不再一律算进 custom：
+ * 模块能和内置应用进同一个组之后，"这组有几个"必须是真的，
+ * 否则管理员想把一个只剩模块的组收起来时，看到的数字是 0。
  */
 function usageOf(appOverrides, groupOverrides) {
   const counts = {};
@@ -124,13 +128,12 @@ function usageOf(appOverrides, groupOverrides) {
     const k = (appOverrides && appOverrides[a.id]?.group) || a.group;
     counts[k] = (counts[k] || 0) + 1;
   }
-  // 动态模块的 group 固定是 custom
-  counts.custom = (counts.custom || 0) + appmodulesCount();
+  for (const m of appmodules.list()) {
+    if (m.enabled === false) continue; // 停用的模块不在工作台里，别算进影响面
+    const k = m.group || 'custom';
+    counts[k] = (counts[k] || 0) + 1;
+  }
   return counts;
-}
-
-function appmodulesCount() {
-  return appmodules.list().filter((m) => m.enabled !== false).length;
 }
 
 /* ---------------- 写 ---------------- */

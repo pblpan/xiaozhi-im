@@ -225,6 +225,45 @@ function stopServer() {
   r = await api('GET', '/api/client/bootstrap');
   ok('bootstrap 下发 work 模式', r.body?.friendMode === 'work', JSON.stringify(r.body));
 
+  // ---------------- 八：重命名组织（2026-10-17 龙哥报的 bug） ----------------
+  console.log('\n【八】重命名组织');
+  // 症状：一个服务器只能建一个组织，创建时名字打错后就再没有任何入口能改，
+  // 只能改数据库。本段即回归护栏：接口存在 + 权限 + 长度口径 + 落库持久化。
+  r = await api('PUT', `/api/orgs/${orgId}`, { token: admin, body: { name: '盛' } });
+  ok('组织名 1 字被拒', r.status === 400, JSON.stringify(r.body));
+
+  r = await api('PUT', `/api/orgs/${orgId}`, { token: admin, body: { name: 'x'.repeat(31) } });
+  ok('组织名 31 字被拒', r.status === 400, JSON.stringify(r.body));
+
+  r = await api('PUT', `/api/orgs/${orgId}`, { token: emp1, body: { name: '员工乱改' } });
+  ok('员工改名 → 403', r.status === 403, JSON.stringify(r.body));
+
+  r = await api('PUT', '/api/orgs/99999', { token: admin, body: { name: '改错组织' } });
+  ok('改不存在的组织 → 404', r.status === 404, JSON.stringify(r.body));
+
+  r = await api('PUT', `/api/orgs/${orgId}`, { body: { name: '匿名改' } });
+  ok('未登录改名 → 401', r.status === 401, JSON.stringify(r.body));
+
+  r = await api('PUT', `/api/orgs/${orgId}`, { token: admin, body: { name: '盛京优特商贸' } });
+  ok('admin 改名成功', r.status === 200 && r.body?.name === '盛京优特商贸', JSON.stringify(r.body));
+
+  r = await api('GET', '/api/orgs/my', { token: emp1 });
+  ok('改名后员工侧同步生效', r.body?.org?.name === '盛京优特商贸', JSON.stringify(r.body?.org));
+
+  // 改名只改名字，不该动编制与好友关系
+  r = await api('GET', '/api/friends', { token: emp1 });
+  const f1c = (r.body?.friends || []).map((x) => x.username).sort();
+  ok('改名不影响成员与好友',
+    JSON.stringify(f1c) === JSON.stringify(['admin', 'emp003']), JSON.stringify(f1c));
+
+  // 改名必须落库：重启后仍是新名字（内存态的话重启就打回原形）
+  killServer();
+  await sleep(300);
+  await startServer();
+  r = await api('POST', '/api/auth/login', { body: { username: 'emp001', password: 'emp001' } });
+  r = await api('GET', '/api/orgs/my', { token: r.body?.token });
+  ok('重启后改名仍生效', r.body?.org?.name === '盛京优特商贸', JSON.stringify(r.body?.org));
+
   // ---------------- 汇总 ----------------
   console.log('\n' + '='.repeat(52));
   console.log(`通过 ${passed} / ${passed + failed}`);

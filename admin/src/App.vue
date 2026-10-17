@@ -67,6 +67,8 @@
             <template #title><el-icon><Goods /></el-icon><span>门店业务</span></template>
             <!-- 考勤从"日常办公"移入：打卡/排班/审批/薪酬是门店生意的一部分 -->
             <el-menu-item index="attendance">考勤管理</el-menu-item>
+            <!-- 排班：与考勤同源（班次表共用），但是"往后排"而不是"往回记" -->
+            <el-menu-item index="duty">排班管理</el-menu-item>
             <!-- 盘点分组：库房减货是盘点的子功能，收在"盘点"下，不再是并列入口 -->
             <el-sub-menu index="g-inv">
               <template #title><span>盘点</span></template>
@@ -1995,7 +1997,13 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <template #header>
               <div class="card-hdr">
                 <span>客户端工作台里的应用（内置 {{ (appCatalog.builtin || []).length }} 个 + 自定义 {{ (appCatalog.dynamic || []).length }} 个）</span>
-                <el-button size="small" @click="loadAppCatalog">刷新</el-button>
+                <div>
+                  <!-- 一键重排：历史上两套序号各排各的（10/10、20/20…），撞号时
+                       客户端的实际顺序取决于"谁在前面拼接"，管理员根本控不了。
+                       点一次就把当前顺序整串交给服务端重发 10/20/30。 -->
+                  <el-button size="small" :loading="wb.reorderBusy" @click="saveWbOrder()">统一重排序号</el-button>
+                  <el-button size="small" @click="loadAppCatalog">刷新</el-button>
+                </div>
               </div>
             </template>
             <!-- 🔴 这张表原来是「只有内置应用」，自定义模块的排序在下面另一张表里
@@ -2012,13 +2020,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 </template>
               </el-table-column>
               <el-table-column prop="desc" label="说明" min-width="220" show-overflow-tooltip />
-              <!-- 分组：改完这个应用就换一组显示（组名可在本页下方「工作台版式」里改） -->
+              <!-- 分组：两类应用**同一套下拉、同一批 key**（v0.28.8 起模块也能挪组）。
+                   改完这个应用就换一组显示（组名可在本页下方「工作台版式」里改） -->
               <el-table-column label="分组" width="190">
                 <template #default="{ row }">
-                  <!-- 分组只管内置应用（app_groups 按内置 id 统计），
-                       自定义模块一律不分组 —— 这里说明白，免得看着像漏配 -->
-                  <span v-if="row.kind === 'module'" class="hint">— 不分组</span>
-                  <el-select v-else :model-value="row.effective.group" size="small" style="width:100%"
+                  <el-select :model-value="row.group" size="small" style="width:100%"
                     @change="(v) => appMoveGroup(row, v)">
                     <el-option v-for="g in (appCatalog.groups || [])" :key="g.key" :label="g.label"
                       :value="g.key">
@@ -2065,7 +2071,13 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <el-table-column label="原因 / 说明" min-width="300">
                 <template #default="{ row }">
                   <span v-if="row.kind === 'module'" class="hint">
-                    {{ row.raw.onLoad ? '数据来源：' + row.raw.onLoad.path : '⚠ 没接数据来源，打开会是空的 —— 到下面编辑' }}
+                    <template v-if="row.raw.onLoad">数据来源：{{ row.raw.onLoad.path }}</template>
+                    <template v-else>
+                      ⚠ 没接数据来源，打开会是空的 ——
+                      <el-button size="small" link type="primary" style="vertical-align:baseline"
+                                 @click="quickAttachDuty(row)">一键接上排班</el-button>
+                      或点「管理」自己配
+                    </template>
                   </span>
                   <span v-else-if="appWhy[row.id] && appWhy[row.id].reasons.length" class="hint">
                     {{ appWhy[row.id].reasons.join('；') }}
@@ -2073,11 +2085,14 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <span v-else class="hint">正常可见</span>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="130" fixed="right">
+              <!-- 操作：两类应用现在都走「管理」—— 同一个抽屉、同一套字段口径，
+                   只是 tab 不一样（内置多「参数/明细/清理」，自定义多「页面内容/提交记录」） -->
+              <el-table-column label="操作" width="110" fixed="right">
                 <template #default="{ row }">
-                  <el-button v-if="row.kind === 'module'" size="small" type="primary" plain
-                    @click="editModuleById(row.id)">编辑</el-button>
-                  <el-button v-else size="small" type="primary" plain @click="openAppAdmin(row.id, row.title)">管理</el-button>
+                  <el-button size="small" type="primary" plain
+                    @click="row.kind === 'module' ? openModuleAdmin(row.id, row.title) : openAppAdmin(row.id, row.title)">
+                    管理
+                  </el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -2086,21 +2101,89 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               混在同一张表里，用 ↑↓ 直接把模块拖到打卡下面 —— 序号由服务端统一发 10/20/30，
               不会再出现"两边各排各的、落到手机上交错"。
               <br />
+              两边的<b>分组也是同一套</b>：下拉里选哪个组，这个应用（不管是内置还是自定义）
+              就落在手机上哪个组里，组内再按上面的顺序排。
+              <br />
               内置应用随客户端安装包发布；它们的入口可见性由<b>业务状态</b>决定
               （是否工作模式 / 是否建了组织 / 考勤是否启用），不是开关 —— 所以不会出现"入口在、点进去报错"。
               其中<b>考勤打卡 / 我的申请</b>是员工专属（自己打卡、自己提申请），<b>考勤记录</b>是管理员专属
               （看今日全员出勤与缺卡、代员工补卡）—— 两类人看到的工作台本来就该不一样。
               <br />
-              点每行的<b>「管理」</b>可以给内置应用改名 / 换图标 / <b>换分组 / 换配色</b> / 调参数 / <b>整应用停用</b>
-              （停用会同时隐藏入口<b>并拦掉它的后端接口</b>，不是只藏图标）。自定义模块点<b>「编辑」</b>
-              直接进下面的编辑区 —— 顺序在这一张表里统一管，内容在下面那一块里改，两件事分开才不会打架。
+              点每行的<b>「管理」</b>打开同一个抽屉：内置应用可以改名 / 换图标 / <b>换分组 / 换配色</b> /
+              调参数 / <b>整应用停用</b>（停用会同时隐藏入口<b>并拦掉它的后端接口</b>，不是只藏图标）；
+              自定义模块则在抽屉里<b>插入内容块、改数据来源、改可见范围</b>，能力与内置一一对应。
               <br />
               ⚠ 「原因 / 说明」列里写着<b>「没接数据来源」</b>的模块，在手机上打开就是一片空白：
-              点「编辑」，在<b>数据来源</b>那一块选一份数据就好了。
+              排班类的空模块点<b>「一键接上排班」</b>（用排班表模板覆盖页面内容，标题和入口位置不变），
+              别的数据点「管理」，在<b>页面内容</b>那一栏的「数据来源」选一份就好了。
               <br />
               <b>分组</b>与<b>顶部公告</b>在下方「工作台版式」里统一改 —— 那两样是"整块工作台长什么样"，
               不属于某一个应用。
             </div>
+          </el-card>
+
+          <!-- 自定义模块清单：点「管理」进抽屉（和内置应用同一个抽屉、同一套字段口径）。
+               编辑器不再摊在页面上 —— 页面上只留"有什么"，"怎么改"全在抽屉里，
+               这样"顺序 / 分组 / 内容"三件事有一个统一入口，不会两处改同一份数据。 -->
+          <el-card style="margin-bottom:16px">
+            <template #header>
+              <div class="card-hdr">
+                <span>自定义模块（{{ mm.modules.length }}）—— 与内置应用同一套排序、同一套分组、同一个「管理」抽屉</span>
+                <div>
+                  <el-button size="small" @click="loadMm">刷新</el-button>
+                  <el-button size="small" type="primary" @click="newModule">新建模块</el-button>
+                </div>
+              </div>
+            </template>
+
+            <el-alert v-if="!mm.modules.length" type="info" :closable="false"
+              title="还没有自定义模块。点右上角「新建模块」，或从下面的「模板库」一键起一个。" />
+
+            <el-table v-else :data="mm.modules" border size="small">
+              <el-table-column label="名称" min-width="140">
+                <template #default="{ row }">
+                  <b>{{ row.title }}</b>
+                  <el-tag v-if="!row.enabled" size="small" type="info" style="margin-left:6px">已停用</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="模块 ID" width="150">
+                <template #default="{ row }"><code class="mono">{{ row.moduleId }}</code></template>
+              </el-table-column>
+              <el-table-column label="分组" width="120">
+                <template #default="{ row }">{{ groupLabelOf(row.group || 'custom') }}</template>
+              </el-table-column>
+              <el-table-column label="排序" width="80" align="center">
+                <template #default="{ row }"><span class="mono">{{ row.sort }}</span></template>
+              </el-table-column>
+              <el-table-column label="内容块" width="90" align="center">
+                <template #default="{ row }">{{ (row.body || []).length }}</template>
+              </el-table-column>
+              <el-table-column label="可见范围" min-width="160">
+                <template #default="{ row }">{{ visibleLabel(row) }}</template>
+              </el-table-column>
+              <el-table-column label="数据来源" min-width="220">
+                <template #default="{ row }">
+                  <span v-if="row.onLoad" class="mono hint">{{ row.onLoad.path }}</span>
+                  <el-tag v-else-if="hasDataComp(row.body)" size="small" type="danger" effect="plain">没接数据源 · 打开是空的</el-tag>
+                  <span v-else class="hint">不需要取数</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="90" align="center">
+                <template #default="{ row }">
+                  <el-button size="small" type="primary" plain
+                    @click="openModuleAdmin(row.moduleId, row.title)">管理</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-divider content-position="left">模板库</el-divider>
+            <div class="hint" style="margin-bottom:8px">
+              一键载入一份可用的起始内容（模板定义在服务端，与校验规则同源，不会出现
+              "模板本身不合法"的情况）。载入后确认无误再点保存。
+            </div>
+            <el-button v-for="t in mm.capability.templates" :key="t.id" size="small"
+              style="margin:0 6px 6px 0" :title="t.desc"
+              @click="applyTemplate(t)">{{ t.name }}</el-button>
           </el-card>
 
           <!-- ==================== 工作台版式：分组 + 公告（v0.22.0） ====================
@@ -2519,71 +2602,39 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             </div>
           </el-drawer>
 
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-card>
-                <template #header>
-                  <div class="card-hdr">
-                    <span>模块清单（{{ mm.modules.length }}）</span>
-                    <div>
-                      <el-button size="small" @click="loadMm">刷新</el-button>
-                      <el-button size="small" type="primary" @click="newModule">新建</el-button>
-                    </div>
-                  </div>
-                </template>
-
-                <el-alert v-if="!mm.modules.length" type="info" :closable="false"
-                  title="还没有模块。可以从下面的「模板库」一键建一个开始。" />
-
-                <div v-for="m in mm.modules" :key="m.moduleId" class="mm-item"
-                  :class="{ 'mm-item-on': m.moduleId === mmSel }" @click="selectModule(m)">
-                  <div style="display:flex;align-items:center;gap:8px">
-                    <b>{{ m.title }}</b>
-                    <el-tag v-if="!m.enabled" size="small" type="info">已停用</el-tag>
-                    <el-tag v-if="m.minClientVersion" size="small" type="warning">需 {{ m.minClientVersion }}</el-tag>
-                  </div>
-                  <div class="hint">
-                    <code class="mono">{{ m.moduleId }}</code>
-                    · {{ (m.body || []).length }} 个内容块
-                    · {{ visibleLabel(m) }}
-                  </div>
-                  <!-- 没接数据源的模块一眼看出来：这是"光有界面没有内容"的现场证据 -->
-                  <div v-if="hasDataComp(m.body) && !m.onLoad" style="margin-top:4px">
-                    <el-tag size="small" type="danger" effect="plain">没接数据源 · 客户端打开是空的</el-tag>
-                  </div>
+          <!-- ==================== 自定义模块「管理」抽屉（v0.28.8） ====================
+               与内置应用的「应用管理」抽屉同一套壳、同一套字段口径，只是 tab 不同：
+               内置多「参数 / 数据明细 / 清理」，自定义多「页面内容 / 提交记录」。
+               编辑器从页面主体搬进来，为的是"一个模块只有一个编辑入口"——
+               以前页面摊一份编辑器、总览再给个「编辑」按钮，改完常常不知道以哪份为准。 -->
+          <el-drawer v-model="mmAdm.open" size="780px">
+            <template #header>
+              <div style="display:flex;align-items:center;gap:10px;width:100%">
+                <b style="font-size:15px">{{ mmAdm.title }}</b>
+                <el-tag v-if="mmAdm.id && !mmForm.enabled" size="small" type="info">已停用</el-tag>
+                <div style="margin-left:auto;display:flex;gap:8px">
+                  <el-button size="small" :disabled="!mmForm.moduleId" @click="mmJsonDlg = true">预览 JSON</el-button>
+                  <el-button size="small" :disabled="!mmSel" @click="mmAdm.tab = 'subs'; openSubs(mmSel)">提交记录</el-button>
+                  <el-button size="small" :disabled="!mmSel" type="danger" plain @click="deleteModule(mmSel)">删除</el-button>
+                  <el-button size="small" type="primary" :loading="mmBusy" @click="saveModule">保存</el-button>
                 </div>
+              </div>
+            </template>
 
-                <el-divider content-position="left">模板库</el-divider>
-                <div class="hint" style="margin-bottom:8px">
-                  一键载入一份可用的起始内容（模板定义在服务端，与校验规则同源，不会出现
-                  "模板本身不合法"的情况）。载入后确认无误再点保存。
-                </div>
-                <el-button v-for="t in mm.capability.templates" :key="t.id" size="small"
-                  style="margin:0 6px 6px 0" :title="t.desc"
-                  @click="applyTemplate(t)">{{ t.name }}</el-button>
-              </el-card>
-            </el-col>
+            <el-alert v-if="mmAdm.id && !mmForm.enabled" type="error" :closable="false" show-icon
+              style="margin-bottom:12px"
+              title="这个模块当前已停用：客户端不再显示入口（内容与提交记录都保留，随时可以打开开关恢复）。" />
 
-            <el-col :span="16">
-              <el-card>
-                <template #header>
-                  <div class="card-hdr">
-                    <span>{{ mmSel ? '编辑模块' : '新建模块' }}</span>
-                    <div>
-                      <el-button size="small" @click="mmJsonDlg = true" :disabled="!mmForm.moduleId">预览 JSON</el-button>
-                      <el-button size="small" :disabled="!mmSel" @click="openSubs(mmSel)">提交记录</el-button>
-                      <el-button size="small" :disabled="!mmSel" type="danger" plain @click="deleteModule(mmSel)">删除</el-button>
-                      <el-button size="small" type="primary" :loading="mmBusy" @click="saveModule">保存</el-button>
-                    </div>
-                  </div>
-                </template>
+            <el-tabs v-model="mmAdm.tab">
+              <!-- ============ 基本信息：字段与内置应用抽屉一一对应 ============ -->
+              <el-tab-pane label="基本信息" name="basic">
+                <el-form label-width="130px" label-position="left" style="max-width:660px">
 
-                <el-form label-width="120px" label-position="left">
                   <el-row :gutter="12">
                     <el-col :span="12">
                       <el-form-item label="模块 ID">
-                        <el-input v-model="mmForm.moduleId" :disabled="!!mmSel"
-                          placeholder="小写字母/数字/下划线，如 device_repair" />
+                        <el-input :model-value="mmForm.moduleId" disabled
+                          :placeholder="mmSel ? '' : '小写字母/数字/下划线，如 device_repair'" />
                       </el-form-item>
                     </el-col>
                     <el-col :span="12">
@@ -2602,8 +2653,8 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     </el-col>
                     <el-col :span="12">
                       <el-form-item label="排序">
-                        <el-input-number v-model="mmForm.sort" :min="0" :max="9999" />
-                        <span class="hint" style="margin-left:8px">数字小的排前面</span>
+                        <el-input-number v-model="mmForm.sort" :min="0" :max="9999" style="width:100%" />
+                        <span class="hint" style="margin-left:8px">小号在前</span>
                       </el-form-item>
                     </el-col>
                   </el-row>
@@ -2616,6 +2667,28 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                     <el-col :span="12">
                       <el-form-item label="启用">
                         <el-switch v-model="mmForm.enabled" active-text="下发" inactive-text="停用" />
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+                  <el-row :gutter="12">
+                    <el-col :span="12">
+                      <el-form-item label="分组">
+                        <el-select v-model="mmForm.group" filterable style="width:100%">
+                          <el-option v-for="g in (appCatalog.groups || [])" :key="g.key" :label="g.label" :value="g.key">
+                            <span>{{ g.label }}</span>
+                            <span style="float:right;color:#909399;font-size:12px">{{ g.usedBy }} 个</span>
+                          </el-option>
+                        </el-select>
+                        <span class="hint" style="margin-left:8px">与内置应用同一套分组</span>
+                      </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-form-item label="图标底色">
+                        <div style="display:flex;gap:8px;align-items:center">
+                          <el-color-picker v-model="mmForm.color" :predefine="WB_COLORS" />
+                          <el-button v-if="mmForm.color" size="small" link @click="mmForm.color = ''">自动配色</el-button>
+                          <span class="hint">不填则按模块 ID 稳定取色</span>
+                        </div>
                       </el-form-item>
                     </el-col>
                   </el-row>
@@ -2634,12 +2707,17 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                       </div>
                     </div>
                   </el-form-item>
+                </el-form>
+              </el-tab-pane>
 
+              <!-- ============ 页面内容：数据来源 + 内容块（插入 / 编辑 / 移动 / 删除） ============ -->
+              <el-tab-pane label="页面内容" name="body">
+                <el-form label-width="130px" label-position="left" style="max-width:760px">
                   <!-- ===== 数据来源：这一块决定客户端打开时拿什么数据 ===== -->
                   <el-divider content-position="left">数据来源（页面内容里的列表 / 表格 / 图表靠它才有内容）</el-divider>
 
                   <el-alert v-if="mmHasDataComp && mmDataKind === 'none'" type="warning" :closable="false" show-icon
-                    title="这个模块里有列表 / 表格 / 图表，但还没接数据来源 —— 保存后客户端打开只能看到空边框。下面选一条就好。" />
+                    title="这个模块里有列表 / 表格 / 图表，但还没接数据来源 —— 保存后客户端打开只能看到空边框。在这里选一条就好。" />
 
                   <el-form-item label="取数方式">
                     <el-radio-group v-model="mmDataKind">
@@ -2915,26 +2993,30 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                       @click="addComp(k)">{{ compLabel(k) }}</el-button>
                   </div>
                 </el-form>
-              </el-card>
-            </el-col>
-          </el-row>
+              </el-tab-pane>
+
+              <!-- ============ 提交记录：表单类模块收上来的数据 ============ -->
+              <el-tab-pane label="提交记录" name="subs">
+                <el-alert v-if="!hasFormComp(mmForm.body)" type="info" :closable="false" show-icon
+                  style="margin-bottom:12px"
+                  title="这个模块里没有表单组件 —— 有表单才会有提交记录。" />
+                <el-table :data="mmSubs" size="small" max-height="460">
+                  <el-table-column prop="nickname" label="提交人" width="120" />
+                  <el-table-column label="提交内容" min-width="300">
+                    <template #default="{ row }"><code class="mono">{{ JSON.stringify(row.data) }}</code></template>
+                  </el-table-column>
+                  <el-table-column label="时间" width="160">
+                    <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+                  </el-table-column>
+                </el-table>
+                <el-alert v-if="!mmSubs.length" type="info" :closable="false"
+                  title="还没有提交记录。客户端提交后这里会出现（字段已由服务端按 schema 白名单清洗）。" />
+              </el-tab-pane>
+            </el-tabs>
+          </el-drawer>
 
           <el-dialog v-model="mmJsonDlg" title="模块定义 JSON（这就是客户端会收到的内容）" width="720px">
             <pre class="mm-json">{{ mmJson }}</pre>
-          </el-dialog>
-
-          <el-dialog v-model="mmSubsDlg" title="提交记录" width="760px">
-            <el-table :data="mmSubs" size="small" max-height="420">
-              <el-table-column prop="nickname" label="提交人" width="120" />
-              <el-table-column label="提交内容" min-width="300">
-                <template #default="{ row }"><code class="mono">{{ JSON.stringify(row.data) }}</code></template>
-              </el-table-column>
-              <el-table-column label="时间" width="160">
-                <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
-              </el-table-column>
-            </el-table>
-            <el-alert v-if="!mmSubs.length" type="info" :closable="false"
-              title="还没有提交记录。客户端提交后这里会出现（字段已由服务端按 schema 白名单清洗）。" />
           </el-dialog>
         </div>
 
@@ -2963,7 +3045,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <template #header>
               <div class="card-hdr">
                 <span>组织机构：{{ orgData.org.name }}（{{ orgData.members.length }} 人）</span>
-                <el-button size="small" @click="loadOrgs">刷新</el-button>
+                <span>
+                  <!-- 2026-10-17 龙哥报的 bug：创建时名字打错后就再也改不了
+                       （一个服务器只一个组织，名字等于焊死）。补改名入口。 -->
+                  <el-button size="small" @click="renameOrg">重命名</el-button>
+                  <el-button size="small" @click="loadOrgs">刷新</el-button>
+                </span>
               </div>
             </template>
 
@@ -4041,6 +4128,169 @@ docker compose up -d --force-recreate xiaozhi-im</div>
             <div class="hint" style="margin-top:8px">
               同一天同一类型可以有多条流水（员工"更新打卡"会保留历史），统计只取上班最早、下班最晚。
             </div>
+          </el-dialog>
+        </div>
+
+        <!-- ======== 排班管理（周视图）=======
+             与考勤页的分工：班次表共用（att_shifts，在「考勤管理」里维护），
+             这一页只管"谁哪天哪个班"。手机端另有一条录入路
+             （应用中心「排班表」模板 → POST /api/hooks/local/duty/schedules），
+             两边共用 duty.js 引擎，校验和 upsert 语义只有一份。 -->
+        <div v-else-if="tab === 'duty'">
+          <el-alert v-if="!orgData.org" type="warning" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              还没有组织机构：排班的对象是组织员工。请先到「组织机构」创建组织并录入员工。
+            </template>
+          </el-alert>
+
+          <el-card>
+            <template #header>
+              <div class="card-hdr">
+                <span>排班管理{{ orgData.org ? ' · ' + orgData.org.name : '' }}</span>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <el-button size="small" @click="openDutyBatchDlg()">整列批量排班</el-button>
+                  <el-button size="small" @click="openDutyClearRangeDlg()">清空区间</el-button>
+                  <el-button size="small" @click="loadDuty">刷新</el-button>
+                </div>
+              </div>
+            </template>
+
+            <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <el-button size="small" @click="dutyShiftWeek(-7)">‹ 上周</el-button>
+              <el-date-picker v-model="dutyFrom" type="date" value-format="YYYY-MM-DD" :clearable="false"
+                              style="width:150px" @change="loadDuty" />
+              <el-button size="small" @click="dutyShiftWeek(7)">下周 ›</el-button>
+              <el-button size="small" @click="dutyThisWeek">回到本周</el-button>
+              <span class="hint">表格一次显示 7 天：点格子改某一个人，点日期列头的「批量」整列排。</span>
+            </div>
+
+            <el-table :data="dutyRows" border size="small" max-height="620" v-loading="dutyBusy">
+              <el-table-column label="工号" width="88">
+                <template #default="{ row }">{{ row.employeeNo || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="姓名" width="104">
+                <template #default="{ row }">
+                  {{ row.who }}
+                  <el-tag v-if="row.isAdmin" size="small" type="warning" effect="plain" style="margin-left:2px">管理</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="部门" min-width="96">
+                <template #default="{ row }">{{ row.dept || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="岗位" min-width="96">
+                <template #default="{ row }">{{ row.position || '—' }}</template>
+              </el-table-column>
+              <el-table-column v-for="d in dutyWeek.days" :key="d" :label="d" min-width="120">
+                <template #header>
+                  <div style="line-height:1.25">
+                    <div>{{ d.slice(5).replace('-', '/') }} <span class="hint">{{ dutyWeekName(d) }}</span></div>
+                    <div style="margin-top:1px">
+                      <el-button size="small" link type="primary" @click.stop="openDutyBatchDlg(d)">批量</el-button>
+                      <el-button size="small" link type="danger" @click.stop="dutyClearDay(d)">清空</el-button>
+                    </div>
+                  </div>
+                </template>
+                <template #default="{ row }">
+                  <div class="duty-cell" :class="{ 'duty-rest': dutyCellOf(row, d)?.rest }" @click="openDutyCellDlg(row, d)">
+                    <template v-if="dutyCellOf(row, d)">
+                      <span v-if="dutyCellOf(row, d).rest" class="hint">休息</span>
+                      <template v-else>
+                        <b>{{ dutyCellOf(row, d).shift }}</b>
+                        <div v-if="dutyCellOf(row, d).position" class="hint">{{ dutyCellOf(row, d).position }}</div>
+                        <el-tag v-if="dutyCellOf(row, d).shiftDeleted || dutyCellOf(row, d).shiftDisabled"
+                                size="small" type="danger" effect="plain" style="margin-top:2px">班次已删/停用</el-tag>
+                      </template>
+                    </template>
+                    <span v-else class="hint">未排</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="本周排班" width="90" align="center">
+                <template #default="{ row }">{{ (dutyWeek.workedDays || {})[row.id] || 0 }} 天</template>
+              </el-table-column>
+            </el-table>
+            <div class="hint" style="margin-top:8px">
+              点格子 = 给这个人改这一天；「休息」= 明确排了休息（与"没排"区分开：没排是还没安排，休息是安排了不上班）。
+              班次来自「考勤管理 · 班次」，排班不另建一套班次表；删掉班次的历史排班会标红提醒，但表格照样打得开。
+            </div>
+          </el-card>
+
+          <!-- 单格编辑器 -->
+          <el-dialog v-model="dutyCellDlg" :title="dutyCellTitle" width="430px">
+            <el-form label-width="76px">
+              <el-form-item label="班次">
+                <el-select v-model="dutyCellForm.shiftId" style="width:100%" placeholder="选择班次">
+                  <el-option v-for="s in dutyWeek.shifts" :key="s.id" :value="s.id"
+                             :disabled="!s.enabled && dutyCellForm.shiftId !== s.id"
+                             :label="s.text + (!s.enabled ? '（已停用）' : '')" />
+                  <el-option label="休息（不排班）" value="rest" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="当班岗位">
+                <el-input v-model="dutyCellForm.position" placeholder="如 收银 / 理货（可空）" />
+              </el-form-item>
+              <el-form-item label="备注">
+                <el-input v-model="dutyCellForm.note" placeholder="如 顶班（可空）" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button size="small" type="danger" plain @click="dutyDeleteCell">删除此格</el-button>
+              <span style="flex:1"></span>
+              <el-button size="small" @click="dutyCellDlg = false">取消</el-button>
+              <el-button size="small" type="primary" :loading="dutyBusy" @click="dutySaveCell">保存</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 整列批量 -->
+          <el-dialog v-model="dutyBatchDlg" title="整列批量排班" width="470px">
+            <el-form label-width="80px">
+              <el-form-item label="日期">
+                <el-select v-model="dutyBatchForm.day" style="width:100%">
+                  <el-option v-for="d in dutyWeek.days" :key="d" :value="d"
+                             :label="`${d}（${dutyWeekName(d)}）`" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="班次">
+                <el-select v-model="dutyBatchForm.shiftId" style="width:100%" placeholder="选择班次">
+                  <el-option v-for="s in dutyWeek.shifts" :key="s.id" :value="s.id" :disabled="!s.enabled" :label="s.text" />
+                  <el-option label="休息（不排班）" value="rest" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="排给谁">
+                <el-select v-model="dutyBatchForm.userIds" multiple collapse-tags collapse-tags-tooltip
+                           style="width:100%" placeholder="不选 = 全员">
+                  <el-option v-for="u in dutyWeek.users" :key="u.id" :value="u.id"
+                             :label="`${u.who}${u.employeeNo ? '（' + u.employeeNo + '）' : ''}`" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="当班岗位">
+                <el-input v-model="dutyBatchForm.position" placeholder="可空" />
+              </el-form-item>
+              <el-form-item label="备注">
+                <el-input v-model="dutyBatchForm.note" placeholder="可空" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button size="small" @click="dutyBatchDlg = false">取消</el-button>
+              <el-button size="small" type="primary" :loading="dutyBusy" @click="dutySubmitBatch">提交</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- 清空区间 -->
+          <el-dialog v-model="dutyClearDlg" title="清空一段排班" width="430px">
+            <el-form label-width="72px">
+              <el-form-item label="从">
+                <el-date-picker v-model="dutyClearForm.from" type="date" value-format="YYYY-MM-DD" style="width:100%" />
+              </el-form-item>
+              <el-form-item label="到">
+                <el-date-picker v-model="dutyClearForm.to" type="date" value-format="YYYY-MM-DD" style="width:100%" />
+              </el-form-item>
+            </el-form>
+            <div class="hint">整段所有人的排班记录都会被删除（一次最多 93 天）。删的是排班，不是考勤记录。</div>
+            <template #footer>
+              <el-button size="small" @click="dutyClearDlg = false">取消</el-button>
+              <el-button size="small" type="danger" :loading="dutyBusy" @click="dutySubmitClear">清空</el-button>
+            </template>
           </el-dialog>
         </div>
 
@@ -6723,6 +6973,7 @@ async function loadTab() {
   else if (tab.value === 'friends') await loadFriends();
   else if (tab.value === 'orgs') await loadOrgs();
   else if (tab.value === 'attendance') await loadAttendance();
+  else if (tab.value === 'duty') await loadDuty();
   else if (tab.value === 'files') await loadFiles();
   else if (tab.value === 'messages') await loadMessages();
   else if (tab.value === 'integrations') await loadIntegrations();
@@ -7677,9 +7928,39 @@ const mm = ref({
 const mmSel = ref('');        // 当前编辑中的 moduleId（'' = 新建）
 const mmBusy = ref(false);
 const mmJsonDlg = ref(false);
-const mmSubsDlg = ref(false);
 const mmSubs = ref([]);
 const mmForm = ref(newModuleForm());
+
+/**
+ * 自定义模块的「管理」抽屉（v0.28.8）。
+ * 与内置应用的 `appAdm` 抽屉同一套壳：打开时先用行上当前显示名设好标题
+ * （加载失败时也不至于顶着上一个模块的名字），tab 默认落在基本信息。
+ */
+const mmAdm = reactive({ open: false, id: '', title: '', tab: 'basic' });
+
+/** body 里有没有表单组件（决定「提交记录」tab 有没有意义） */
+function hasFormComp(body) {
+  return (body || []).some((c) => c && c.component === 'form');
+}
+
+/**
+ * 打开某个自定义模块的「管理」抽屉。
+ * 清单可能还没拉到（刚进页面时），这时退化成只拉一次清单再打开，别静默什么都不做。
+ */
+async function openModuleAdmin(id, label) {
+  Object.assign(mmAdm, { open: true, id, tab: 'basic', title: `${label || id} · 模块管理` });
+  let m = mm.value.modules.find((x) => x.moduleId === id);
+  if (!m) {
+    try { await loadMm(); } catch { /* loadMm 自己会报错 */ }
+    m = mm.value.modules.find((x) => x.moduleId === id);
+  }
+  if (!m) {
+    ElMessage.warning(`模块「${id}」不在清单里，先点「刷新」`);
+    return;
+  }
+  selectModule(m);
+  if (mmAdm.title !== `${m.title} · 模块管理`) mmAdm.title = `${m.title} · 模块管理`;
+}
 
 // ====== 数据来源（第四期：让 list / table / chart 真有内容） ======
 //
@@ -7820,6 +8101,10 @@ function newModuleForm() {
     moduleId: '',
     title: '',
     icon: 'dashboard',
+    // v0.28.8：分组与配色和内置应用同一套字段。新建默认 custom 组、
+    // 不填色（服务端按 moduleId 稳定散列一个，见 apps.js moduleColorOf）。
+    group: 'custom',
+    color: '',
     sort: 0,
     minClientVersion: '',
     enabled: true,
@@ -7877,6 +8162,10 @@ function selectModule(m) {
     moduleId: m.moduleId,
     title: m.title,
     icon: m.icon || 'dashboard',
+    // v0.28.8：分组/配色也回灌。不回灌就等于"打开再保存一次，
+    // 分组被打回 custom、配色被打回自动" —— 管理员根本没碰过这两项。
+    group: m.group || 'custom',
+    color: m.color || '',
     sort: m.sort || 0,
     minClientVersion: m.minClientVersion || '',
     enabled: !!m.enabled,
@@ -7895,22 +8184,17 @@ function newModule() {
   mmSel.value = '';
   mmForm.value = newModuleForm();
   loadModuleSources();
+  // 新建也走抽屉：编辑器只在抽屉里有一份（页面主体不再摊一份），
+  // 否则"新建"和"管理"会是两个不同的界面，改完不知道以哪个为准。
+  Object.assign(mmAdm, { open: true, id: '', tab: 'basic', title: '新建自定义模块 · 模块管理' });
 }
 
 /**
- * 总览表点「编辑」直接进编辑区。
- * 以前管理员在总览里看到某个模块，得先记住 id、再滚下去在清单里找到它点开 ——
- * 中间那一步是最容易忘记自己在改什么的。
+ * 总览表 / 清单表点「管理」统一走 openModuleAdmin。
+ * 这个函数留着只是给老调用点兜底，行为与抽屉打开一致。
  */
 function editModuleById(id) {
-  const m = mm.value.modules.find((x) => x.moduleId === id);
-  if (!m) {
-    // 清单还没拉到（比如刚进页面）时退化成只提示，别静默什么都不做
-    ElMessage.warning(`模块「${id}」不在清单里，先点右边的「刷新」`);
-    return;
-  }
-  selectModule(m);
-  ElMessage.info(`已打开「${m.title}」${m.onLoad ? '' : '（这个模块还没接数据来源）'}`);
+  openModuleAdmin(id);
 }
 
 function addComp(type) {
@@ -7948,6 +8232,10 @@ function mmPayload() {
     moduleId: f.moduleId.trim(),
     title: f.title.trim(),
     icon: f.icon,
+    // v0.28.8：分组与配色一起提交。服务端对"没给"的字段按保留处理，
+    // 但这里显式带上，编辑器才是真正的 round-trip（打开→保存不丢）。
+    group: f.group || 'custom',
+    color: f.color || null,
     sort: Number(f.sort) || 0,
     enabled: !!f.enabled,
     minClientVersion: f.minClientVersion.trim() || null,
@@ -7969,12 +8257,61 @@ async function saveModule() {
     const { data } = await api.post('/admin/modules', mmPayload());
     ElMessage.success(`已保存「${data.module.title}」，客户端下拉刷新即可看到`);
     mmSel.value = data.module.moduleId;
-    await loadMm();
+    // 保存后要同时刷两处：模块清单 + 上方总览表（顺序/分组/配色都显示在那儿）
+    await Promise.all([loadMm(), loadAppCatalog()]);
     const fresh = mm.value.modules.find((x) => x.moduleId === data.module.moduleId);
     if (fresh) selectModule(fresh);
+    if (mmAdm.open) mmAdm.title = `${fresh ? fresh.title : data.module.title} · 模块管理`;
   } catch (e) {
     // 服务端校验失败会把原因写清楚（哪个组件、哪个字段），直接展示给管理员
     ElMessage.error({ message: '保存失败：' + (e.response?.data?.error || e.message), duration: 6000 });
+  } finally {
+    mmBusy.value = false;
+  }
+}
+
+/**
+ * 空模块「一键接上排班」：把服务端「排班表」模板的 body + onLoad 盖到这个模块上。
+ *
+ * 为什么不是让管理员手工配：排班模板带动态下拉（员工/班次两个 optionsFrom）和
+ * submit 分流，手搓一遍容易漏一个字段，漏了就是"看着像排班、提交不落库"。
+ *
+ * 🔴 只覆盖「页面内容」和「数据来源」：moduleId / 标题 / 图标 / 分组 / 排序 /
+ *    可见范围全部保留原值 —— 管理员看到的还是他自己那个入口、那个名字，
+ *    只是打开不再是白的。要改名换图标，照旧去「管理」抽屉。
+ */
+async function quickAttachDuty(row) {
+  const tpl = (mm.value.capability?.templates || []).find((t) => t.id === 'duty_schedule');
+  if (!tpl || !tpl.module) {
+    // 老服务端没有该模板时不能静默什么都不做（那会是"点了没反应"）
+    return ElMessage.error('服务端还没有「排班表」模板（需 0.28.9+ 服务端），请点「管理」手工配数据来源');
+  }
+  try {
+    await ElMessageBox.confirm(
+      `把「${row.title}」接上排班数据？\n会用排班表模板覆盖这个模块的页面内容（标题、图标、入口位置都不变）。`,
+      '一键接上排班', { type: 'info', dangerouslyUseHTMLString: false });
+  } catch { return; }
+  mmBusy.value = true;
+  try {
+    const m = row.raw || {};
+    const { data } = await api.post('/admin/modules', {
+      moduleId: m.moduleId || row.id,
+      title: m.title || row.title,
+      icon: m.icon || tpl.module.icon,
+      group: m.group || 'custom',
+      color: m.color || null,
+      sort: Number(m.sort) || 0,
+      enabled: m.enabled !== false,
+      minClientVersion: m.minClientVersion || null,
+      visibleTo: m.visibleTo || { roles: [], userIds: [] },
+      body: JSON.parse(JSON.stringify(tpl.module.body)),
+      onLoad: JSON.parse(JSON.stringify(tpl.module.onLoad)),
+    });
+    ElMessage.success(`「${data.module.title}」已接上排班数据，客户端下拉刷新即可看到`);
+    await Promise.all([loadMm(), loadAppCatalog()]);
+  } catch (e) {
+    // 服务端校验失败会把原因写清楚（哪个组件、哪个字段），直接展示给管理员
+    ElMessage.error({ message: '接入失败：' + (e.response?.data?.error || e.message), duration: 6000 });
   } finally {
     mmBusy.value = false;
   }
@@ -7990,7 +8327,10 @@ async function deleteModule(id) {
     await api.delete(`/admin/modules/${id}`);
     ElMessage.success('已删除');
     if (mmSel.value === id) newModule();
-    await loadMm();
+    // 删完把抽屉一起收掉：留着一个是"已经不在数据库里"的编辑器，
+    // 管理员 next 一步点了保存，服务端会当成新建一个同名模块 —— 鬼才能想到。
+    if (mmAdm.id === id) mmAdm.open = false;
+    await Promise.all([loadMm(), loadAppCatalog()]);
   } catch (e) {
     ElMessage.error('删除失败：' + (e.response?.data?.error || e.message));
   }
@@ -8000,7 +8340,6 @@ async function openSubs(id) {
   try {
     const { data } = await api.get(`/admin/modules/${id}/submissions`);
     mmSubs.value = data.items || [];
-    mmSubsDlg.value = true;
   } catch (e) {
     ElMessage.error('读取提交记录失败：' + (e.response?.data?.error || e.message));
   }
@@ -8013,6 +8352,8 @@ function applyTemplate(t) {
     moduleId: m.moduleId,
     title: m.title,
     icon: m.icon || 'dashboard',
+    group: m.group || 'custom',
+    color: m.color || '',
     sort: m.sort || 0,
     minClientVersion: m.minClientVersion || '',
     enabled: m.enabled !== false,
@@ -8024,6 +8365,8 @@ function applyTemplate(t) {
     onLoad: m.onLoad ? JSON.parse(JSON.stringify(m.onLoad)) : null,
   };
   loadModuleSources();
+  // 模板也是"新建"，同样落进抽屉
+  Object.assign(mmAdm, { open: true, id: '', tab: 'body', title: `从模板新建：${t.name} · 模块管理` });
   ElMessage.info(
     mmForm.value.onLoad
       ? `已载入模板「${t.name}」，数据已接在 ${mmForm.value.onLoad.path}`
@@ -9839,6 +10182,36 @@ async function createOrg() {
     orgBusy.value = false;
   }
 }
+
+/**
+ * 重命名组织（2026-10-17 龙哥报的 bug：创建时名字打错，之后没有任何入口能改）。
+ * 用 prompt 而不是新开弹窗：只有一个输入框，弹窗反而多两步点击。
+ * 单组织语义下服务端只认"本服务器那个组织"的 id，路径上传 org.id 即可。
+ */
+async function renameOrg() {
+  const cur = orgData.value.org;
+  if (!cur) return;
+  let name = '';
+  try {
+    const r = await ElMessageBox.prompt('组织名（2-30 个字）', '重命名组织', {
+      inputValue: cur.name || '',
+      inputPlaceholder: '如：盛京食品厂',
+      inputValidator: (v) => ([...(String(v || '').trim())].length >= 2 ? true : '组织名至少 2 个字'),
+    });
+    name = String(r.value || '').trim();
+  } catch { return; } // 用户取消
+  if (!name) return;
+  orgBusy.value = true;
+  try {
+    await api.put(`/orgs/${cur.id}`, { name });
+    ElMessage.success('组织名已更新');
+    await loadOrgs();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '重命名失败');
+  } finally {
+    orgBusy.value = false;
+  }
+}
 async function addMember() {
   const no = orgEmp.value.no.trim();
   if (!/^[A-Za-z0-9_]{3,20}$/.test(no)) return ElMessage.warning('工号 3-20 位，仅限字母、数字、下划线');
@@ -10211,6 +10584,10 @@ const appWhy = ref({});
  *    管理员想"把模块挪到打卡下面"，只能去改数字然后猜。
  *    现在这里就是最终顺序，↑↓ 直接换，服务端统一发号。
  *
+ * v0.28.8：`group` / `color` 也统一成一套字段。之前模块没有 group
+ * （客户端写死 custom），所以"序号排好了，落脚点还是另一个组"——
+ * 顺序仍然只在管理台里成立，手机上不动。现在两类行共用同一列下拉。
+ *
  * uid 里 `module:` 前缀是给服务端区分两类用的（见 POST /admin/order）。
  */
 const wbOrder = computed(() => {
@@ -10222,6 +10599,8 @@ const wbOrder = computed(() => {
     rawTitle: a.title,
     desc: a.desc,
     sort: Number(a.effective.sort) || 0,
+    group: a.effective.group,
+    color: a.effective.color,
     disabled: !!a.disabled,
     changed: !!a.changed,
     changedFields: a.changedFields || [],
@@ -10235,6 +10614,8 @@ const wbOrder = computed(() => {
     rawTitle: m.title,
     desc: `自定义模块 · ${(m.body || []).length} 个内容块`,
     sort: Number(m.sort) || 0,
+    group: m.group || 'custom',
+    color: m.color || '',
     disabled: !m.enabled,
     changed: false,
     changedFields: [],
@@ -10248,16 +10629,21 @@ const wbOrder = computed(() => {
 async function saveWbOrder(list) {
   const order = (list || wbOrder.value).map((x) => x.uid);
   if (!order.length) return ElMessage.warning('清单是空的');
+  // 「统一重排序号」与 ↑↓ 走同一条路：一个不传 list（按当前显示顺序重发号），
+  // 一个传交换后的 list。两种情况下服务端都按最终顺序发 10/20/30。
+  if (!list) wb.reorderBusy = true;
   try {
     const { data } = await api.post('/admin/order', { order });
     if (data.skipped && data.skipped.length) {
       ElMessage.warning(`已保存 ${data.moved} 条，${data.skipped.length} 条不认识被跳过：${data.skipped.join('、')}`);
     } else {
-      ElMessage.success('顺序已保存，客户端下次进工作台生效');
+      ElMessage.success(list ? '顺序已保存，客户端下次进工作台生效' : `已重排 ${data.moved} 条，序号统一为 10/20/30…`);
     }
     await loadAppCatalog();
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '保存顺序失败');
+  } finally {
+    wb.reorderBusy = false;
   }
 }
 
@@ -10296,6 +10682,8 @@ const wb = reactive({
   newNotice: '', newNoticeSort: 100, newNoticeContent: '',
   newNoticeBg: null, newNoticeBgUrl: '',
   busy: false,
+  // 总览表「统一重排序号」的 loading（保存的是整串顺序，走的是 saveWbOrder）
+  reorderBusy: false,
 });
 
 // 公告背景图：上传后回填到草稿；wbBgTarget 区分"新建草稿"还是"改某条已有公告"
@@ -10388,13 +10776,21 @@ async function wbDelGroup(row) {
   }
 }
 
-/** 总览表里直接把某个应用挪到别的组（下拉选一次就生效） */
+/**
+ * 总览表里直接把某个应用挪到别的组（下拉选一次就生效）。
+ * v0.28.8 起两类行走同一个下拉：内置应用 PATCH /admin/apps/:id，
+ * 自定义模块 PATCH /admin/modules/:id —— 服务端各写各的表，但对管理员是同一件事。
+ */
 async function appMoveGroup(row, key) {
   if (!key) return;
   try {
-    await api.patch('/admin/apps/' + row.id, { group: key });
+    if (row.kind === 'module') {
+      await api.patch('/admin/modules/' + row.id, { group: key });
+    } else {
+      await api.patch('/admin/apps/' + row.id, { group: key });
+    }
     ElMessage.success(`已把「${row.title}」挪到「${groupLabelOf(key)}」，客户端下次进工作台生效`);
-    await Promise.all([loadWorkbenchView(), loadAppCatalog()]);
+    await Promise.all([loadWorkbenchView(), loadAppCatalog(), loadMm()]);
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '挪分组失败');
     loadAppCatalog();
@@ -11048,6 +11444,176 @@ async function loadAttendance() {
   await loadAttConfig();     // 服务器时间、开关、默认班次
   await loadAttLocations();  // 打卡点位（考勤组弹窗勾选用）
   await loadAttTab();
+}
+
+// ====== 排班管理（周视图）=====
+//
+// 数据底座：GET /api/admin/duty/week 一次给全（员工行 + 7 天格子 + 班次清单），
+// 写操作走 /api/admin/duty/{cell,batch,clear-day,clear-range}。
+// 与手机端表单（POST /api/hooks/local/duty/schedules）共用 duty.js 引擎 ——
+// 校验规则、班次口径、upsert 语义只有一份，两边不会对不上。
+const dutyWeek = ref({ days: [], users: [], cells: {}, workedDays: {}, shifts: [] });
+const dutyFrom = ref('');
+const dutyBusy = ref(false);
+const dutyCellDlg = ref(false);
+const dutyCellForm = ref({ day: '', userId: 0, who: '', shiftId: '', position: '', note: '' });
+const dutyBatchDlg = ref(false);
+const dutyBatchForm = ref({ day: '', shiftId: '', userIds: [], position: '', note: '' });
+const dutyClearDlg = ref(false);
+const dutyClearForm = ref({ from: '', to: '' });
+
+// 周视图的行 = 员工（含还没排班的）；格子是 "userId:day" 的扁平 map，
+// 模板里经 dutyCellOf 取，省得手写两层 v-for 找格子
+const dutyRows = computed(() => dutyWeek.value.users || []);
+function dutyCellOf(row, day) {
+  return (dutyWeek.value.cells || {})[`${row.id}:${day}`] || null;
+}
+// 日期 → 星期几（attWeekName 收的是 0=周日）
+function dutyWeekName(d) {
+  return d ? attWeekName(new Date(`${d}T00:00:00`).getDay()) : '';
+}
+
+async function loadDuty() {
+  dutyBusy.value = true;
+  try {
+    // 组织还没建时服务端回 404 —— 页面顶部已有警示，这里只安静收尾
+    if (!orgData.value.org) await loadOrgs();
+    if (!dutyFrom.value) dutyFrom.value = attToday();
+    const { data } = await api.get('/admin/duty/week?day=' + dutyFrom.value);
+    dutyWeek.value = data;
+    // 服务端可能把非法/缺省日期归一成今天，回灌保持选择器与实际一致
+    if (data.days && data.days[0]) dutyFrom.value = data.days[0];
+  } catch (e) {
+    if (e.response?.status !== 404) ElMessage.error(e.response?.data?.error || '加载排班失败');
+  } finally {
+    dutyBusy.value = false;
+  }
+}
+function dutyShiftWeek(n) {
+  const d = new Date(`${dutyFrom.value || attToday()}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  dutyFrom.value = attDayStr(d);
+  loadDuty();
+}
+function dutyThisWeek() {
+  dutyFrom.value = attToday();
+  loadDuty();
+}
+
+const dutyCellTitle = computed(() =>
+  `排班 · ${dutyCellForm.value.who || ''} · ${dutyCellForm.value.day || ''}`);
+function openDutyCellDlg(row, day) {
+  const c = dutyCellOf(row, day);
+  dutyCellForm.value = {
+    day,
+    userId: row.id,
+    who: row.who,
+    // 已排的格子回显：休息 = 'rest' 哨兵；班次被删过的历史格子 shiftId 仍在，
+    // 下拉里能选中它（停用项对当前值放行），管理员可以改成别的班
+    shiftId: c ? (c.rest ? 'rest' : (c.shiftId || 'rest')) : '',
+    position: c?.position || '',
+    note: c?.note || '',
+  };
+  dutyCellDlg.value = true;
+}
+async function dutySaveCell() {
+  const f = dutyCellForm.value;
+  dutyBusy.value = true;
+  try {
+    const { data } = await api.post('/admin/duty/cell', {
+      day: f.day, userId: f.userId, shiftId: f.shiftId || null,
+      position: f.position, note: f.note,
+    });
+    // 服务端校验失败也走 200 之外的码，但 duty.save 的 error 形状是 {error, code}
+    if (data && data.error) { ElMessage.error(data.error); return; }
+    ElMessage.success('已保存');
+    dutyCellDlg.value = false;
+    await loadDuty();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败');
+  } finally {
+    dutyBusy.value = false;
+  }
+}
+async function dutyDeleteCell() {
+  const f = dutyCellForm.value;
+  dutyBusy.value = true;
+  try {
+    await api.delete('/admin/duty/cell?day=' + encodeURIComponent(f.day) + '&userId=' + encodeURIComponent(f.userId));
+    ElMessage.success('已删除此格');
+    dutyCellDlg.value = false;
+    await loadDuty();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败');
+  } finally {
+    dutyBusy.value = false;
+  }
+}
+
+function openDutyBatchDlg(day) {
+  dutyBatchForm.value = {
+    day: day || (dutyWeek.value.days || [])[0] || attToday(),
+    shiftId: '', userIds: [], position: '', note: '',
+  };
+  dutyBatchDlg.value = true;
+}
+async function dutySubmitBatch() {
+  const f = dutyBatchForm.value;
+  if (!f.day) return ElMessage.warning('先选日期');
+  dutyBusy.value = true;
+  try {
+    const { data } = await api.post('/admin/duty/batch', {
+      day: f.day,
+      shiftId: f.shiftId || null,
+      // 空数组 = 全员（服务端口径：不传/空数组都按全员）
+      userIds: (f.userIds || []).length ? f.userIds : undefined,
+      position: f.position, note: f.note,
+    });
+    if (data && data.error) { ElMessage.error(data.error); return; }
+    ElMessage.success(`已排 ${data.filled ?? '—'} 人`);
+    dutyBatchDlg.value = false;
+    await loadDuty();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '批量排班失败');
+  } finally {
+    dutyBusy.value = false;
+  }
+}
+
+async function dutyClearDay(day) {
+  try {
+    await ElMessageBox.confirm(`清空 ${day} 所有人的排班？`, '清空确认', { type: 'warning' });
+  } catch { return; }
+  dutyBusy.value = true;
+  try {
+    await api.post('/admin/duty/clear-day', { day });
+    ElMessage.success('已清空');
+    await loadDuty();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '清空失败');
+  } finally {
+    dutyBusy.value = false;
+  }
+}
+
+function openDutyClearRangeDlg() {
+  const days = dutyWeek.value.days || [];
+  dutyClearForm.value = { from: days[0] || attToday(), to: days[6] || attToday() };
+  dutyClearDlg.value = true;
+}
+async function dutySubmitClear() {
+  const f = dutyClearForm.value;
+  dutyBusy.value = true;
+  try {
+    await api.post('/admin/duty/clear-range', { from: f.from, to: f.to });
+    ElMessage.success('已清空');
+    dutyClearDlg.value = false;
+    await loadDuty();
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '清空失败');
+  } finally {
+    dutyBusy.value = false;
+  }
 }
 async function saveAttConfig() {
   attBusy.value = true;
@@ -11819,6 +12385,10 @@ body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
 .purge-num { color: var(--el-color-danger); font-size: 16px; }
 /* 考勤：迟到/早退/缺卡的数字用红字标出来，一眼能扫到异常 */
 .att-bad { color: #f56c6c; font-weight: 600; }
+/* 排班周视图的格子：可点的整格（光标+悬浮反馈），休息格淡化 */
+.duty-cell { min-height: 34px; padding: 4px 6px; border-radius: 4px; cursor: pointer; line-height: 1.25; }
+.duty-cell:hover { background: var(--el-color-primary-light-9); }
+.duty-cell.duty-rest { opacity: .55; }
 
 /* ====== 动态模块编辑器（v0.9.0 第二期） ====== */
 .mm-item { padding: 9px 10px; border: 1px solid var(--el-border-color); border-radius: 6px; margin-bottom: 8px; cursor: pointer; }

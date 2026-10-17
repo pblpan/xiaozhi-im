@@ -160,21 +160,25 @@ router.get('/apps', (req, res) => {
     }
   }
 
-  // 动态模块固定在 custom 组：它有自己的编辑器，不跟着分组管理走
-  // （否则"改一个模块属于哪个组"会同时有两个入口，改完不知道以哪个为准）。
+  // 动态模块的落脚点与内置应用**同一套分组**（v0.28.8 之前写死 custom，
+  // 于是管理台里序号排得再准，客户端也把所有模块另外归一组、拼在内置应用后面
+  // —— "统一排序"只统一了号，没统一落脚点，顺序形同虚设）。
   const dynamic = appmodules.listVisible({ userId: uid, role: me.role, clientVersion: cv })
-    .map((m) => ({
-      id: m.moduleId, title: m.title, icon: m.icon, group: 'custom',
-      groupLabel: groupOverrides['custom']?.label || '自定义应用',
-      // 🔴 动态模块**必须带 color**：客户端没有 color 就退回品牌色，于是
-      //    "所有没配色的模块长一个样"。管理台不强制填色，这里兜底（见 apps.js）。
-      color: moduleColorOf(m.color, m.moduleId),
-      desc: '', kind: 'dynamic', sort: m.sort,
-      // 把最低版本要求一起下发：服务端已经按 cv 过滤过，客户端仍会**再卡一次**
-      // （老客户端连 `?clientVersion=` 都可能没带，那时 cv 为空、这里全部被过滤掉，
-      //  这是服务端侧的兜底；客户端侧的兜底见 workbench.dart）。
-      minVersion: m.minClientVersion || '',
-    }));
+    .map((m) => {
+      const gKey = m.group || 'custom';
+      return {
+        id: m.moduleId, title: m.title, icon: m.icon, group: gKey,
+        groupLabel: (groupOverrides[gKey] && groupOverrides[gKey].label) || appregistry.groupOf(gKey).label,
+        // 🔴 动态模块**必须带 color**：客户端没有 color 就退回品牌色，于是
+        //    "所有没配色的模块长一个样"。管理台不强制填色，这里兜底（见 apps.js）。
+        color: moduleColorOf(m.color, m.moduleId),
+        desc: '', kind: 'dynamic', sort: m.sort,
+        // 把最低版本要求一起下发：服务端已经按 cv 过滤过，客户端仍会**再卡一次**
+        // （老客户端连 `?clientVersion=` 都可能没带，那时 cv 为空、这里全部被过滤掉，
+        //  这是服务端侧的兜底；客户端侧的兜底见 workbench.dart）。
+        minVersion: m.minClientVersion || '',
+      };
+    });
 
   // 分组清单：应用里真的用到的 key 一律补齐（管理员新建的组也在里面），
   // 免得客户端查不到组名、把组头显示成英文 key。
@@ -186,8 +190,16 @@ router.get('/apps', (req, res) => {
   ]);
   const groups = appgroups.forClient(usedKeys).filter((g) => !g.hidden);
 
+  // 🔴 合并后**按 sort 统一排**，不是 [...builtin, ...dynamic] 直接拼接。
+  //    客户端 workbenchSections 按 group 分区、区内保持下发顺序，
+  //    所以这里排成什么样，手机上就是什么样。拼接写法的后果是：
+  //    同组里内置应用永远在模块前面，管理台把模块拖到第一行也纹丝不动。
+  //    V8 的 sort 是稳定的，sort 撞车时内置在前、模块在后，顺序可复现。
+  const apps = [...builtin, ...dynamic]
+    .sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0));
+
   res.json({
-    apps: [...builtin, ...dynamic],
+    apps,
     groups,
     // 工作台顶部公告（最多 3 条，见 appnotice.js 的说明）
     notices: appnotice.listEnabled(),

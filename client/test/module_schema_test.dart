@@ -348,6 +348,41 @@ void main() {
       expect(c.fields.length, 1);
       expect(c.fields.first.key, 'ok');
     });
+
+    test('动态下拉：optionsFrom/optionsPath/label/value 全解析', () {
+      final f = ModuleField.fromJson({
+        'key': 'shiftId', 'label': '班次', 'type': 'select', 'required': true,
+        'optionsFrom': '/api/hooks/local/duty/shifts',
+        'optionsPath': 'data.rows',
+        'optionLabel': 'label',
+        'optionValue': 'value',
+      });
+      expect(f.hasDynamicOptions, isTrue);
+      expect(f.optionsFrom, '/api/hooks/local/duty/shifts');
+      expect(f.optionsPath, 'data.rows');
+      expect(f.optionLabel, 'label');
+      expect(f.optionValue, 'value');
+      // 配了动态源就不强制静态 options（服务端同款规则）
+      expect(f.options, isEmpty);
+    });
+
+    test('动态下拉：默认值（optionsPath=data.rows、label/value）', () {
+      final f = ModuleField.fromJson({
+        'key': 'x', 'type': 'select', 'optionsFrom': '/api/hooks/local/a/b',
+      });
+      expect(f.optionsPath, 'data.rows');
+      expect(f.optionLabel, 'label');
+      expect(f.optionValue, 'value');
+    });
+
+    test('动态下拉：optionsFrom 不是 /api/hooks/ 前缀 → 丢弃（SSRF 纵深防御）', () {
+      final f = ModuleField.fromJson({
+        'key': 'x', 'type': 'select',
+        'optionsFrom': 'https://evil.example.com/list',
+      });
+      expect(f.hasDynamicOptions, isFalse);
+      expect(f.optionsFrom, isNull);
+    });
   });
 
   group('完整模块解析', () {

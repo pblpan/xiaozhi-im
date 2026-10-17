@@ -100,6 +100,27 @@ router.post('/', (req, res) => {
 });
 
 // ============================================================
+// 重命名组织（2026-10-17 龙哥报的 bug：创建时名字打错了，之后没有任何入口能改）
+// ============================================================
+// 为什么必须有这个口子：一个服务器只能建一个组织，创建后名字就焊死了。
+// 龙哥第一次把"盛京"打错，之后只能改数据库 —— 这是产品级缺陷，不是使用问题。
+// 语义与部门/岗位的 PUT 一致：只改名字，不碰编制、不动成员。
+router.put('/:id', (req, res) => {
+  const owner = orgOwnerOf(req, res); if (!owner) return;
+  // 单组织语义：路径上的 id 必须就是本服务器那个组织，避免改名改到别的行
+  if (Number(req.params.id) !== owner.org.id) {
+    return res.status(404).json({ error: '组织不存在' });
+  }
+  const name = String(req.body?.name || '').trim();
+  // 与 POST / 的口径保持一致（2-30 字），别一处宽一处严
+  if ([...name].length < 2 || [...name].length > 30) {
+    return res.status(400).json({ error: '组织名 2-30 个字' });
+  }
+  db.prepare('UPDATE orgs SET name=? WHERE id=?').run(name, owner.org.id);
+  res.json({ id: owner.org.id, name, message: '组织名已更新' });
+});
+
+// ============================================================
 // 我的组织（admin=我创建的；员工=我所属的）。没组织返回 null
 // ============================================================
 router.get('/my', (req, res) => {

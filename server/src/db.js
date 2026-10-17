@@ -1212,6 +1212,45 @@ CREATE TABLE IF NOT EXISTS salary_base (
 );
 `);
 
+// ---------------------------------------------------------------------------
+// 排班表（自定义模块「排班表」的数据底座，2026-10-18）
+//
+// 一行 = 某组织的某员工在某一天的一个班次。为什么按"天 + 人"一人一行
+// （UNIQUE(org_id, day, user_id)）而不是按"周"存一张 JSON：
+//   · 周视图要按天改（"把他周三换成夜班"）—— 存 JSON 的话每一次改动都是
+//     读-改-写整块，两个人同时改同一周必然互相覆盖，且没有任何冲突提示；
+//   · 手机端表单一次只提交"我这一天"，按天落库天然幂等（重复提交 = 更新）；
+//   · 统计（"这周谁上了几天班"）是 GROUP BY，摊平的行才走得动索引。
+//
+// shift_id 指向 att_shifts（直接复用考勤的班次：几点上下班、休息时段、
+// 跨天班都是现成的，不另起一套"排班班次"），NULL = 这天休息（不排班）。
+//
+// 🔴 刻意**不给 shift_id 加外键**（org_id / user_id 加，见下方 FK_RELATIONS）：
+//    班次在管理台可删可改名，排班表只是"引用"它。加外键会让"删一个没人用的
+//    班次"变成一次 500，管理员完全不知道撞的是什么。班次被删后 week() 的
+//    LEFT JOIN 给出 shift_deleted 标记，界面显示"班次已删除"并让管理员重指
+//    —— 数据不丢，也不假装什么都没发生。
+//
+// position / note 与打卡流水无关：排班是"计划"，打卡是"事实"，两张表各管
+// 一件，事后对不上（排了班没来 / 没排班却来打卡）恰恰是管理要看的。
+// ---------------------------------------------------------------------------
+db.exec(`
+CREATE TABLE IF NOT EXISTS duty_schedules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id INTEGER NOT NULL,
+  day TEXT NOT NULL,                 -- 'YYYY-MM-DD'，与考勤同口径（服务器时区日）
+  user_id INTEGER NOT NULL,
+  shift_id INTEGER,                  -- att_shifts.id；NULL = 休息
+  position TEXT,                     -- 当班岗位（如"收银""防损"），可空
+  note TEXT,                         -- 备注（如"顶班""试用期"），可空
+  created_by INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(org_id, day, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_duty_schedules_range ON duty_schedules (org_id, day);
+`);
+
 // 覆盖的关联（表.列 → 表.列）：
 //   会话成员、群成员、好友关系 —— 孤儿行会让好友树/群成员列表出现空壳条目
 const FK_RELATIONS = [
@@ -1227,6 +1266,8 @@ const FK_RELATIONS = [
   ['salary_config', 'org_id', 'orgs', 'id'],
   ['salary_base', 'org_id', 'orgs', 'id'],
   ['salary_base', 'user_id', 'users', 'id'],
+  ['duty_schedules', 'org_id', 'orgs', 'id'],
+  ['duty_schedules', 'user_id', 'users', 'id'],
 ];
 
 for (const [child, childCol, parent, parentCol] of FK_RELATIONS) {

@@ -52,6 +52,9 @@ const LOCAL_ROWS_MAX = 200;
 /** 应用 id → 中文标题（管理台下拉里要显示"盘点"而不是 inventory） */
 const APP_TITLES = Object.create(null);
 for (const a of apps.BUILTIN_APPS) APP_TITLES[a.id] = a.title;
+// 「排班」不是内置应用（没有工作台入口），但它的数据源要给自定义模块用，
+// 下拉里必须显示"排班"而不是裸 id —— 否则管理员不知道 duty 是个啥
+APP_TITLES.duty = '排班';
 
 function findSource(appId, key) {
   const def = appdata.APPS[appId];
@@ -64,6 +67,20 @@ function canUse(src, role) {
   if (!src || !src.module) return false;
   if (src.module === 'admin') return role === 'admin';
   return true;
+}
+
+/**
+ * 这个数据源**可写**吗？谁能写？
+ *
+ * 与读权限分开两道门，因为"能看"和"能改"从来不是一回事：
+ * 排班表全员可看（公示），但只有管理员能改（否则全公司互相改班表）。
+ * 数据源不声明 write = 只读 —— 和读一样默认最严。
+ */
+function canWrite(src, role) {
+  if (!src || !src.write) return false;
+  if (src.write === 'admin') return role === 'admin';
+  if (src.write === 'all') return true;
+  return false;
 }
 
 /** 当前角色能选的数据源清单（管理台下拉用） */
@@ -124,10 +141,47 @@ function rows(appId, key, role, query) {
   // 上限由这里钉死，不指望调用方自觉
   if (list.pageSize > LOCAL_ROWS_MAX) list.pageSize = LOCAL_ROWS_MAX;
 
-  const r = appdata.detail(appId, key, list, q.q);
+  // query 原样带给 detail：排班这种按文本日期开窗的源要读 ?day=
+  const r = appdata.detail(appId, key, list, q.q, q);
   if (r.error) return { error: r.error, code: 400 };
 
   return { rows: r.items || [], total: Number(r.total) || 0, truncated: r.total > (r.items || []).length };
 }
 
-module.exports = { sourcesFor, rows, LOCAL_ROWS_MAX, canUse, findSource };
+/**
+ * 写一个数据源（表单即录入的那一半）。
+ *
+ * 流程与读完全对称：先找源 → 再查读权限 → 再查写权限 → 最后才调
+ * 数据源自己的 writeHandler。**校验不在这一层**：各引擎（duty.save 等）
+ * 自己校验输入，这里只判"这个人能不能碰这个源"。
+ *
+ * 返回 { ok, ... } 或 { error, code }。
+ */
+function write(appId, key, role, uid, body) {
+  const src = findSource(appId, key);
+  if (!src) {
+    return { error: `没有这个数据源：${appId}/${key}`, code: 404 };
+  }
+  if (!canUse(src, role)) {
+    return {
+      error: `数据源「${src.name}」没有对动态模块开放（它含经营数据，只有管理员可见）`,
+      code: 403,
+    };
+  }
+  if (!src.writeHandler) {
+    return { error: `数据源「${src.name}」是只读的，不能往里写`, code: 405 };
+  }
+  if (!canWrite(src, role)) {
+    // 403 而不是 405：这个人就是不该改排班，不是"这个功能没做"
+    return { error: `数据源「${src.name}」只有管理员能修改`, code: 403 };
+  }
+  try {
+    const r = src.writeHandler({ orgId: appdata.orgIdOf(), uid, role }, body || {});
+    if (r && r.error) return { error: r.error, code: r.code || 400 };
+    return r || { ok: true };
+  } catch (e) {
+    return { error: '写入失败：' + e.message, code: 500 };
+  }
+}
+
+module.exports = { sourcesFor, rows, write, LOCAL_ROWS_MAX, canUse, canWrite, findSource };

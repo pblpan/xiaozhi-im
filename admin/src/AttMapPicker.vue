@@ -245,11 +245,30 @@ watch(() => props.modelValue, async (open) => {
 </script>
 
 <style scoped>
+/* 🔴🔴 2026-10-17 线上事故修复：地图弹窗点不动、只能刷新页面才退得出去。
+ *
+ * 根因（Playwright + 真腾讯地图 SDK 复现，铁证）：
+ *   TMap GL JS 在地图容器里造的内层容器是
+ *     <div style="position:absolute;left:0;top:0;z-index:1000;width:100%;height:100%">
+ *   它要找一个"定位祖先"当包含块。.map-box 当时是 position:static，
+ *   于是它一路向上找到 .el-dialog（Element Plus 的 .el-dialog 恰好是 position:relative），
+ *   结果这层按"整个弹窗"展开 —— 实测 720x569（地图框只有 690x420），
+ *   把标题栏的 X、取消、使用该位置 全盖住，pointer-events 全被它吃掉。
+ *   现象：地图能点、能选点，但所有按钮点了没反应，只能刷新页面退出。
+ *
+ * 修法：给 .map-box 补 position:relative（+ overflow:hidden 防圆角溢出），
+ *   把 TMap 的内层容器按在地图框内。实测修复后内层容器 = 688x420，
+ *   按钮 elementFromPoint 命中自身，点「使用该位置」正常回填并关闭弹窗。
+ *
+ * ⚠️ 以后任何把第三方地图/图表 SDK 塞进 Element Plus 弹窗的容器，
+ *    都必须显式写 position:relative —— 这类 SDK 一律用 absolute 内层。 */
 .map-box {
+  position: relative; /* 🔴 TMap 内层 absolute 容器的定位父级，删了就会重现上面的事故 */
   height: 420px;
   width: 100%;
   border: 1px solid var(--el-border-color);
   border-radius: 6px;
+  overflow: hidden;
 }
 .map-err {
   margin-top: 8px;

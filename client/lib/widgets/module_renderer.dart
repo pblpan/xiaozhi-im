@@ -70,6 +70,12 @@ class ModuleRenderer extends StatelessWidget {
   final Map<String, dynamic> data;
   final ModuleActionHandler onAction;
 
+  /// 表单动态下拉的选项（字段 key → 选项列表），由页面取好传进来。
+  ///
+  /// 渲染器刻意不自己发请求：它要能拿一份假数据在 widget 测试里跑起来。
+  /// 页面不传（老模块没有动态字段）时表单全部走静态 options，行为不变。
+  final Map<String, List<ModuleOption>> dynamicOptions;
+
   /// 列表 / 表格 / 图表没数据时的说明文字。
   ///
   /// 🔴 2026-10-16 之前空态一律是「暂无数据」四个字。它把两种完全不同的情况
@@ -85,6 +91,7 @@ class ModuleRenderer extends StatelessWidget {
     required this.data,
     required this.onAction,
     this.emptyHint,
+    this.dynamicOptions = const {},
   });
 
   @override
@@ -127,6 +134,7 @@ class ModuleRenderer extends StatelessWidget {
         return ModuleFormBlock(
           key: ValueKey('form-${c.fields.length}-${c.fields.first.key}'),
           c: c,
+          dynamicOptions: dynamicOptions,
           onSubmit: (d) {
             final a = c.submit;
             onAction(
@@ -661,7 +669,15 @@ class ModuleFormBlock extends StatefulWidget {
   final ModuleComponent c;
   final void Function(Map<String, dynamic> data) onSubmit;
 
-  const ModuleFormBlock({super.key, required this.c, required this.onSubmit});
+  /// 动态下拉选项（字段 key → 选项）。来自页面取好的数据，见 [ModuleRenderer.dynamicOptions]。
+  final Map<String, List<ModuleOption>> dynamicOptions;
+
+  const ModuleFormBlock({
+    super.key,
+    required this.c,
+    required this.onSubmit,
+    this.dynamicOptions = const {},
+  });
 
   @override
   State<ModuleFormBlock> createState() => _ModuleFormBlockState();
@@ -805,16 +821,24 @@ class _ModuleFormBlockState extends State<ModuleFormBlock> {
         onChanged: (v) => setState(() => _bool[f.key] = v),
       );
     } else if (f.isSelect) {
+      // 动态下拉（排班表的班次/员工）：页面取好的选项优先，取不到才回落到
+      // 模板里的静态 options。一个都没有且配了动态源 → 明说"加载中/失败"，
+      // 不要给一个空下拉让人以为"这个组织没有班次"
+      final dyn = widget.dynamicOptions[f.key];
+      final opts = (dyn != null && dyn.isNotEmpty) ? dyn : f.options;
+      final dynPending = f.hasDynamicOptions && opts.isEmpty;
       input = DropdownButtonFormField<String>(
         initialValue: _ctrl[f.key]!.text.isEmpty ? null : _ctrl[f.key]!.text,
         isExpanded: true,
-        hint: Text(f.placeholder ?? '请选择',
-            style: TextStyle(fontSize: 14.5, color: sem.muted)),
+        hint: Text(
+          dynPending ? '选项加载中…' : (f.placeholder ?? '请选择'),
+          style: TextStyle(fontSize: 14.5, color: sem.muted),
+        ),
         items: [
-          for (final o in f.options)
+          for (final o in opts)
             DropdownMenuItem(value: o.value, child: Text(o.label)),
         ],
-        onChanged: (v) => setState(() => _ctrl[f.key]!.text = v ?? ''),
+        onChanged: dynPending ? null : (v) => setState(() => _ctrl[f.key]!.text = v ?? ''),
       );
     } else if (f.isDate) {
       final d = _date[f.key];

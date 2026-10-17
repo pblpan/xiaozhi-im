@@ -192,6 +192,15 @@ FILES = [
     #    hooks 还是旧的，线上 /api/hooks/local/* 一律 404 "not found"
     #    （而 module-sources 是 200 —— 只看管理台那半边根本发现不了）。
     'src/routes/hooks.js',
+    # 🔴 2026-10-17 补：排班三件套（P0）。两个**新文件**：
+    #    duty.js 是排班引擎（save/week/batchFill/remove/removeDay/removeRange/myRange），
+    #    routes/duty.js 是管理台「排班管理」周视图的六个端点。
+    #    index.js require 了 routes/duty.js —— 漏推 = 容器起不来。
+    #    appdata.js 的两个排班数据源、appmodules.js 的 duty_schedule 模板与
+    #    optionsFrom 校验、localdata.js 的 write、hooks.js 的 POST 分支
+    #    都已在清单里（分别是 appdata/appmodules/localdata/hooks 四行）。
+    'src/duty.js',
+    'src/routes/duty.js',
 ]
 
 

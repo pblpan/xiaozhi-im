@@ -100,7 +100,9 @@ app.use(express.json({
 
 // 静态资源：管理后台 + 上传文件
 app.use('/admin', express.static(path.join(__dirname, '..', 'public')));
-app.use('/files', express.static(config.FILES_DIR));
+// 🔴 index:false —— 上传文件保留原文件名后，有人传个 index.html，
+//    GET /files/ 就会把它当目录首页吐出来（默认行为）。文件只能按名访问。
+app.use('/files', express.static(config.FILES_DIR, { index: false }));
 
 // 授权门禁：必须排在所有业务接口之前。
 // 授权不可用时一律 403，只放行登录、看状态、激活、健康检查与客户端冷启动握手
@@ -140,6 +142,7 @@ app.use('/api/client', require('./routes/client'));
 app.use('/api/admin/integrations', require('./routes/integrations'));
 // 考勤管理端同理：路径前缀更长，必须排在 /api/admin 前面
 app.use('/api/admin/attendance', require('./routes/attendance').admin);
+app.use('/api/admin/duty', require('./routes/duty'));
 // 推送管理端同理（配置 Apple 密钥 / 发测试推送 / 看投递日志）
 app.use('/api/admin/push', require('./routes/push').admin);
 // 数据体检（孤儿巡检）：全库 0 外键，靠触发器只挡住了"新的脏数据"，

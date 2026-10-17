@@ -46,6 +46,7 @@
 const db = require('./db');
 const paging = require('./paging');
 const att = require('./attendance');
+const duty = require('./duty');
 
 /* ---------------- 展示用的小工具 ---------------- */
 
@@ -306,6 +307,120 @@ const APPS = {
     ],
     sources: [SRC_ATT_RECORDS, SRC_ATT_REQUESTS],
     readOnlyReason: '这两个数据源与「考勤打卡」「我的申请」共用同一批表，清理入口统一放在那两个应用里，避免两处都能删。',
+  },
+
+  /* ---------------- 排班（自定义模块「排班表」的数据底座） ----------------
+   *
+   * 🔴 刻意**不注册成内置应用**（apps.js 里没有它）：排班不是工作台上一个
+   *    独立图标，它是"自定义模块"的数据源 —— 管理员在应用中心点一下模板，
+   *    模块就接上这里。注册成内置应用反而多出一个谁也点不明白的入口。
+   *
+   * 两个数据源：
+   *   schedules —— 排班表本体。module:'all'（排班是公示信息，"这周谁上什么班"
+   *                 员工本来就有权知道），write:'admin'（改排班是管理的活，
+   *                 员工自己改全公司的班表等于没有班表）。
+   *   shifts    —— 可选班次（就是考勤的 att_shifts）。给模块表单的下拉用：
+   *                 行里直接给出 label/value，客户端 optionsPath 零加工。
+   * ---------------------------------------------------------------------- */
+  duty: {
+    overviewNote: '排班表按"天 + 人"落库（一天一人一行），班次直接复用考勤的班次 —— '
+      + '排的是考勤的班，对得上"排了班没来"这类核对。',
+    metrics: [
+      { key: 'cells', label: '排班条数', sql: 'SELECT COUNT(*) n FROM duty_schedules' },
+      // 🔴 今天用 att.today() 算（服务器业务时区），不用 SQLite 的 date('now')：
+      //    后者是 UTC，下午三四点之后"本周"会少算一天，两处口径对不上
+      { key: 'thisWeek', label: '本周排班', sql: 'SELECT COUNT(*) n FROM duty_schedules WHERE day BETWEEN ? AND ?', args: () => [att.today(), att.addDays(att.today(), 6)] },
+      { key: 'rest', label: '其中休息', sql: 'SELECT COUNT(*) n FROM duty_schedules WHERE shift_id IS NULL' },
+    ],
+    sources: [
+      {
+        key: 'schedules',
+        name: '排班表',
+        desc: '默认展示从今天起 7 天；?day=YYYY-MM-DD 可看任意一周。整表管理（翻周、批量填充）在管理台「排班管理」。',
+        // 🔴 timeCol 必须是 null：day 是 TEXT('YYYY-MM-DD')，paging 的时间窗
+        //    只认整数时间戳。窗口由 where() 按 day 自己开（见下）。
+        timeCol: null,
+        select: `s.id, s.day, s.user_id, s.shift_id, s.position, s.note, s.created_at,
+          u.nickname, u.username, u.employee_no,
+          sh.name AS shift_name, sh.work_start, sh.work_end, sh.cross_day, sh.enabled AS shift_enabled`,
+        from: `FROM duty_schedules s
+          LEFT JOIN users u ON u.id = s.user_id
+          LEFT JOIN att_shifts sh ON sh.id = s.shift_id`,
+        // 一周窗：手机上一屏看完的量。超过 200 行（约 28 人 × 7 天）会被
+        // LOCAL_ROWS_MAX 截断并带 truncated 标志 —— 那种规模请用管理台，
+        // 那里有分页和周切换。默认锚定"今天"而不是"周一"：模板是即建即用的，
+        // 周一周三建出来都该看到"眼前这一周"，而不是空屏等下周。
+        where: (query) => {
+          const anchor = duty.validDay(query && query.day) || att.today();
+          return {
+            sql: ['s.org_id = ?', 's.day >= ?', 's.day <= ?'],
+            args: [orgIdOf(), anchor, att.addDays(anchor, 6)],
+          };
+        },
+        order: 's.day ASC, s.user_id ASC',
+        search: ['u.nickname', 'u.username', 's.day'],
+        columns: [
+          { key: 'day', label: '日期', width: 110 },
+          { key: 'who', label: '员工', width: 120 },
+          { key: 'shift', label: '班次', width: 190 },
+          { key: 'position', label: '岗位', width: 110 },
+          { key: 'note', label: '备注', width: 140 },
+        ],
+        map: (r) => ({
+          id: r.id,
+          day: r.day,
+          userId: r.user_id,
+          who: r.nickname || r.username || `用户${r.user_id}`,
+          employeeNo: r.employee_no || r.username || '',
+          // 班次文本与"班次已删/已停用"标记都由引擎出 —— 两处各拼一遍字符串，
+          // 迟早出现"表格里叫早班、表单里叫 08:00-17:00"
+          shift: r.shift_id == null ? '休息'
+            : duty.shiftText({ name: r.shift_name || '班次', workStart: r.work_start, workEnd: r.work_end, crossDay: !!r.cross_day }),
+          shiftDeleted: r.shift_id != null && r.shift_name == null,
+          shiftDisabled: r.shift_id != null && r.shift_enabled === 0,
+          position: r.position || '',
+          note: r.note || '',
+          createdText: r.created_at ? `${att.dayOf(r.created_at)} ${att.hhmmOf(r.created_at)}` : '',
+        }),
+        // 排班是公示信息：员工看得见"这周谁上什么班"是正常的
+        module: 'all',
+        // 写入口只有管理员：表单提交 POST 到这个源时按这个字段放行
+        write: 'admin',
+        // 写入直接进引擎（save 自带全部校验：日期/人/班次/停用/组织归属）。
+        // 🔴 校验放引擎不放路由：管理台周视图和手机表单是两个入口，
+        //    放路由层总有一个入口会漏。
+        writeHandler: (ctx, body) => duty.save(ctx.orgId, ctx.uid, body),
+      },
+      {
+        key: 'shifts',
+        name: '可选班次',
+        desc: '考勤里维护的班次（几点上下班、跨天班都是现成的）。排班表单的班次下拉用它填，不用手抄。',
+        timeCol: null,
+        select: 'id, name, work_start, work_end, cross_day, enabled, sort',
+        from: 'FROM att_shifts',
+        where: (query) => ({ sql: ['org_id = ?'], args: [orgIdOf()] }),
+        order: 'sort ASC, id ASC',
+        search: ['name'],
+        columns: [
+          { key: 'value', label: '班次 id', width: 80 },
+          { key: 'label', label: '班次', width: 200 },
+        ],
+        map: (r) => ({
+          // label/value 直接给出：客户端表单的 optionsPath 零加工就能用
+          value: r.id,
+          label: duty.shiftText({ name: r.name, workStart: r.work_start, workEnd: r.work_end, crossDay: !!r.cross_day })
+            + (r.enabled === 0 ? '（已停用）' : ''),
+          name: r.name,
+        }),
+        // 🔴 "休息"必须是这个源的第一行：表单里"不排班"和"选某个班"一样是
+        //    个正常选项，不能逼管理员去别处找。value 用 'rest' 哨兵而不是
+        //    空串 —— 空串会被客户端的必填校验当成"没填"（见 duty.shiftOf）。
+        rowsFirst: [{ value: 'rest', label: '休息（不排班）', name: '休息' }],
+        // 停用的班次也列出来（标"已停用"）：排班表里可能还挂着它，
+        // 表单里看不见反而让人以为数据坏了
+        module: 'all',
+      },
+    ],
   },
 
   /* ---------------- 扫码枪（纯离线） ---------------- */
@@ -736,13 +851,19 @@ function windowFor(src, list) {
   return { ...list, from: null, to: null, allTime: true };
 }
 
-/** 拼 WHERE（时间窗 + 固定条件 + 关键词），params 按拼接顺序 push —— 顺序必须一致 */
-function buildWhere(src, list, keyword) {
+/** 拼 WHERE（时间窗 + 固定条件 + 关键词），params 按拼接顺序 push —— 顺序必须一致
+ *
+ * query 原样透传给 src.where：排班这种按"文本日期"开窗的数据源要读
+ * `?day=` 自己算窗口（paging 的时间窗只认整数时间戳，管不了 TEXT 的
+ * 'YYYY-MM-DD' 列）。不收 query 的话，排班表永远只能展示"全部历史"，
+ * 而手机上要的是"这一周"。
+ */
+function buildWhere(src, list, keyword, query) {
   const params = [];
   const where = [];
   if (src.timeCol) where.push(...paging.timeWhere(list, params, src.timeCol));
   if (src.where) {
-    const fx = src.where();
+    const fx = src.where(query);
     where.push(...fx.sql);
     params.push(...fx.args);
   }
@@ -754,12 +875,17 @@ function buildWhere(src, list, keyword) {
   return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
 }
 
-/** 明细（分页）。返回 envelope + timeFiltered，或 { error } */
-function detail(appId, key, rawList, keyword) {
+/** 明细（分页）。返回 envelope + timeFiltered，或 { error }
+ *
+ * query 是原始请求参数：只有按文本日期开窗的数据源（排班）用得到，
+ * 其它数据源的 where() 根本不收这个参数 —— 加一个可选参数比让每个
+ * 调用方猜"这个源要不要窗口"便宜。
+ */
+function detail(appId, key, rawList, keyword, query) {
   const src = sourceOf(appId, key);
   if (!src) return { error: `应用 ${appId} 没有数据源 ${key}` };
   const list = windowFor(src, rawList);
-  const w = buildWhere(src, list, keyword);
+  const w = buildWhere(src, list, keyword, query);
   const total = db.prepare(`SELECT COUNT(*) n ${src.from} ${w.sql}`).get(...w.params).n;
   const rows = db.prepare(`SELECT ${src.select} ${src.from} ${w.sql} ORDER BY ${src.order} LIMIT ? OFFSET ?`)
     .all(...w.params, list.pageSize, list.offset);
@@ -772,6 +898,12 @@ function detail(appId, key, rawList, keyword) {
     if (mapped.id === undefined || mapped.id === null) mapped.id = list.offset + i;
     return mapped;
   });
+  // 数据源自带的"合成行"（如排班的"休息"选项）：它不是库里的行，
+  // 但取数的人需要它出现在列表里。放这里而不是让每个调用方自己拼 ——
+  // 拼的结果一定是"模块下拉里有休息、CSV 导出里没有"。
+  if (Array.isArray(src.rowsFirst) && src.rowsFirst.length) {
+    items.unshift(...src.rowsFirst);
+  }
   return { ...paging.envelope(list, items, total), timeFiltered: !!src.timeCol };
 }
 
@@ -915,5 +1047,5 @@ function purge(appId, key, rawList, keyword, expectCount) {
 module.exports = {
   APPS,
   metricsOf, sourcesOf, sourceOf, detail, csv, rowsForBackup,
-  purgeablesOf, purgePreview, purge, csvCell, dtText, windowFor,
+  purgeablesOf, purgePreview, purge, csvCell, dtText, windowFor, orgIdOf,
 };

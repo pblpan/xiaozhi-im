@@ -28,6 +28,11 @@ class _ModulePageState extends State<ModulePage> {
   bool _loading = true;
   String? _dataError;
 
+  /// 表单动态下拉的选项（字段 key → 选项）。2026-10-18 排班三件套：
+  /// 班次/员工这种"会变的清单"不能写死在模块定义里，由页面按字段的
+  /// optionsFrom 现取，渲染器只负责画（它不该碰网络）。
+  Map<String, List<ModuleOption>> _dynOptions = const {};
+
   @override
   void initState() {
     super.initState();
@@ -54,6 +59,8 @@ class _ModulePageState extends State<ModulePage> {
 
     // ② 取数
     await _loadData();
+    // ③ 取表单动态下拉的选项（没有动态字段就是空转，不会发请求）
+    await _loadOptions();
     if (mounted) setState(() => _loading = false);
   }
 
@@ -76,6 +83,57 @@ class _ModulePageState extends State<ModulePage> {
       if (!mounted) return;
       setState(() => _dataError = _friendlyDataError(e));
     }
+  }
+
+  /// 拉表单动态下拉的选项。
+  ///
+  /// 同一个 optionsFrom 路径只取一次（多个字段可能共用一份班次/成员清单），
+  /// 各字段再按自己的 optionsPath / optionLabel / optionValue 从同一份
+  /// 响应里取 —— 取 N 次的结果不只是浪费，是 N 次可能拿到不一致的清单。
+  Future<void> _loadOptions() async {
+    final fields = <ModuleField>[];
+    void scan(List<ModuleComponent> comps) {
+      for (final c in comps) {
+        if (c.type == ModuleComponentType.form) fields.addAll(c.fields);
+        // 表单可能嵌在 card 里（卡片分组是常见排法），不递归就会漏
+        scan(c.children);
+      }
+    }
+
+    scan(_def.body);
+    final dyn = fields.where((f) => f.hasDynamicOptions).toList();
+    if (dyn.isEmpty) {
+      if (_dynOptions.isNotEmpty && mounted) setState(() => _dynOptions = const {});
+      return;
+    }
+
+    // 按路径去重取数
+    final byPath = <String, dynamic>{};
+    for (final f in dyn) {
+      final p = f.optionsFrom!;
+      if (byPath.containsKey(p)) continue;
+      try {
+        byPath[p] = await ImApi().hookCall(p, method: 'GET');
+      } catch (_) {
+        byPath[p] = null; // 失败也记一笔：下面回落到静态选项，且不会重试轰炸
+      }
+    }
+
+    final out = <String, List<ModuleOption>>{};
+    for (final f in dyn) {
+      final resp = byPath[f.optionsFrom!];
+      final list = resp == null ? const <dynamic>[] : ModuleData.listOf(resp, f.optionsPath);
+      final opts = <ModuleOption>[];
+      for (final item in list) {
+        if (item is! Map) continue;
+        final label = item[f.optionLabel]?.toString() ?? '';
+        final value = item[f.optionValue]?.toString() ?? '';
+        if (value.isEmpty) continue; // 空值项选了也提交不上，不如不显示
+        opts.add(ModuleOption(label: label.isEmpty ? value : label, value: value));
+      }
+      if (opts.isNotEmpty) out[f.key] = opts;
+    }
+    if (mounted) setState(() => _dynOptions = out);
   }
 
   /// 列表 / 表格 / 图表空着时该说什么。
@@ -128,8 +186,17 @@ class _ModulePageState extends State<ModulePage> {
   }
 
   Future<void> _onAction(ModuleAction a, Map<String, dynamic>? formData) async {
-    // 表单提交：走模块自己的提交接口（服务端按自己的 schema 白名单清洗字段）
+    // 表单提交两条路（2026-10-18 排班三件套）：
+    //   ① form.submit 配成了 api 动作（指向 /api/hooks/...）→ "表单即录入"：
+    //      数据直接进业务表（排班表），提交完刷新页面数据；
+    //   ② 没配 / 配的不是 api → 老行为：submitModule 只留痕
+    //      （module_submissions），班表那种"要真写进业务表"的场景不能走它，
+    //      否则就是"提示提交成功、班表什么都没变"的假成功。
     if (formData != null) {
+      if (a.type == 'api' && a.canExecute) {
+        await _callHook(a, body: formData);
+        return;
+      }
       await _submit(formData);
       return;
     }
@@ -175,15 +242,24 @@ class _ModulePageState extends State<ModulePage> {
     }
   }
 
-  Future<void> _callHook(ModuleAction a) async {
+  Future<void> _callHook(ModuleAction a, {Map<String, dynamic>? body}) async {
     try {
-      final r = await ImApi().hookCall(a.path!, method: a.method ?? 'GET');
+      final r = await ImApi().hookCall(a.path!, method: a.method ?? 'GET', body: body);
       if (!mounted) return;
-      setState(() {
-        // 合并回去而不是整体替换：页面里其它组件的数据不会被清掉
-        _data = {..._data, ..._asMap(r)};
-      });
-      _toast('完成');
+      // 只有取数型调用才把响应并回页面数据：写入型调用的响应是
+      // { ok, source, ms, result } 这种回执，并进去只会污染 data，
+      // 而它真正的作用是触发下面那次刷新
+      if (body == null) {
+        setState(() {
+          // 合并回去而不是整体替换：页面里其它组件的数据不会被清掉
+          _data = {..._data, ..._asMap(r)};
+        });
+      }
+      // 写入型调用（表单提交）成功后必须刷新取数：不刷新的话表格还是旧的，
+      // 用户会以为"没写进去"再提交一遍 —— 排班是 upsert 所以看不出错，
+      // 但换任何非幂等的业务就是重复数据
+      if (body != null) await _loadData();
+      _toast(body == null ? '完成' : '已提交');
     } catch (e) {
       _toast(_friendlyDataError(e));
     }
@@ -269,6 +345,7 @@ class _ModulePageState extends State<ModulePage> {
                   data: _data,
                   onAction: _onAction,
                   emptyHint: _emptyHint,
+                  dynamicOptions: _dynOptions,
                 ),
               ],
             ),

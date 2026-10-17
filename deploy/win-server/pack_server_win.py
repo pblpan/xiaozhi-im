@@ -62,7 +62,7 @@ APP_SYS = '_sys'
 
 APP_NAME = '小智IM 服务端'
 SHORT_NAME = '小智IM服务端'
-DESKTOP_DIR = os.path.join('D:', os.sep, 'Users', 'pblpa', 'Desktop', '小智 IM')
+DELIVER_DIR = os.path.join('D:', os.sep, '项目文件夹', '小智 IM')  # 2026-10-17 起交付目录迁到 D://项目文件夹//
 
 # 内置 Node 运行时（与 Docker 侧 node:22-slim 同大版本，node:sqlite 才可用）
 NODE_ROOT = os.path.join('C:', os.sep, 'Users', 'pblpa', '.workbuddy', 'binaries',
@@ -529,8 +529,8 @@ def main():
     print('  生成安装包：%s（%.1f MB）'
           % (out_path, os.path.getsize(out_path) / 1024 / 1024))
 
-    if not args.no_deliver and os.path.isdir(DESKTOP_DIR):
-        dst = os.path.join(DESKTOP_DIR, out_name)
+    if not args.no_deliver and os.path.isdir(DELIVER_DIR):
+        dst = os.path.join(DELIVER_DIR, out_name)
         shutil.copy2(out_path, dst)
         print('已复制到桌面：%s' % dst)
     return 0

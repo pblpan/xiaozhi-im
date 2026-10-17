@@ -288,18 +288,20 @@ router.use('/up', upRouter);
 // ─────────────────────────────────────────────────────────────────────
 //  本服务器数据源（动态模块第四期）
 //
-//    GET /api/hooks/local/<应用 id>/<数据源 key>
+//    GET  /api/hooks/local/<应用 id>/<数据源 key>   取数（list/table/chart）
+//    POST /api/hooks/local/<应用 id>/<数据源 key>   写入（表单即录入）
 //
 //  与 /up 并列，是动态模块取数的**第二条路**，但两者取的东西完全不同：
 //    · /up/<name>/...      —— 数据在**外面**（工厂 V2 / 餐饮 POS），服务端转发
-//    · /local/<app>/<key>  —— 数据就**在本库**（商档 / 盘点单 / 课程 / 部门）
+//    · /local/<app>/<key>  —— 数据就**在本库**（商档 / 盘点单 / 课程 / 部门 / 排班）
 //
 //  安全模型与 /up 完全一致：
 //    · 必须已登录（这里是本服务器的真数据，没有"地址即凭证"这回事）
 //    · 路径里只有两个**名字**，真实 SQL 由服务端按名字查注册表得出 ——
 //      客户端既给不出任意 URL，也碰不到 SQL
 //    · 能不能取由**数据源自己声明**过才算（localdata 的 module 字段），
-//      默认最严：没声明 = 404
+//      默认最严：没声明 = 404；能不能写同样看数据源的 write 字段，
+//      没声明 = 只读
 //
 //  回包形状刻意与 /up 一致（{ ok, data }），这样客户端的模块渲染器
 //  完全不需要知道自己连的是哪条路。
@@ -330,6 +332,27 @@ localRouter.use((req, res) => {
   if (!LOCAL_ID_RE.test(appId) || !LOCAL_ID_RE.test(key)) {
     return res.status(400).json({ error: '数据源路径不合法' });
   }
+
+  // 表单即录入：POST 到数据源 = 往这个源写一行。
+  // 与 GET 同一棵树、同一套限流与登录门禁，只多一道"这个源可不可写、
+  // 这个人能不能写"（localdata.write 里判），所以这里只是分流。
+  if (req.method === 'POST') {
+    const t0p = Date.now();
+    const wp = localdata.write(appId, key, req._upRole, req._upUid, req.body);
+    if (wp.error) {
+      return res.status(wp.code || 400).json({ error: wp.error, source: `${appId}/${key}` });
+    }
+    return res.json({
+      ok: true,
+      source: `${appId}/${key}`,
+      status: 200,
+      ms: Date.now() - t0p,
+      // 写入结果原样带回（排班返回 { ok, day, userId, shiftId }），
+      // 客户端可以据此刷新表格，不用再猜"到底写没写进去"
+      result: wp,
+    });
+  }
+
   const t0 = Date.now();
   const r = localdata.rows(appId, key, req._upRole, req.query);
   if (r.error) {

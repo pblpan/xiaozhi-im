@@ -111,6 +111,21 @@ class ModuleField {
   final String? placeholder;
   final List<ModuleOption> options;
 
+  /// 动态下拉（2026-10-18，排班表三件套）：select 的选项从一个数据源现取。
+  ///
+  /// 班次、员工、商品分类这种"会变的清单"不可能写死在模块定义里 ——
+  /// 写死的结果是模板建好三天后就少一项，而没人知道去哪补。
+  /// 服务端只允许 `/api/hooks/` 前缀的路径（与 action 同一套白名单），
+  /// 这里沿用 [ModuleAction.canExecute] 的同款判断做纵深防御。
+  final String? optionsFrom;
+
+  /// 选项数组在响应里的位置（如 `data.rows`）。服务端默认 `data.rows`。
+  final String optionsPath;
+
+  /// 每个选项对象里哪个字段当显示文本 / 当值。默认 label/value。
+  final String optionLabel;
+  final String optionValue;
+
   const ModuleField({
     required this.key,
     required this.label,
@@ -118,6 +133,10 @@ class ModuleField {
     this.required = false,
     this.placeholder,
     this.options = const [],
+    this.optionsFrom,
+    this.optionsPath = 'data.rows',
+    this.optionLabel = 'label',
+    this.optionValue = 'value',
   });
 
   factory ModuleField.fromJson(Object? raw) {
@@ -129,6 +148,7 @@ class ModuleField {
         if (o is Map) opts.add(ModuleOption.fromJson(o));
       }
     }
+    final from = raw['optionsFrom']?.toString();
     return ModuleField(
       key: raw['key']?.toString() ?? '',
       label: raw['label']?.toString() ?? raw['key']?.toString() ?? '',
@@ -136,6 +156,10 @@ class ModuleField {
       required: raw['required'] == true,
       placeholder: raw['placeholder']?.toString(),
       options: opts,
+      optionsFrom: (from != null && from.startsWith('/api/hooks/')) ? from : null,
+      optionsPath: raw['optionsPath']?.toString() ?? 'data.rows',
+      optionLabel: raw['optionLabel']?.toString() ?? 'label',
+      optionValue: raw['optionValue']?.toString() ?? 'value',
     );
   }
 
@@ -144,6 +168,9 @@ class ModuleField {
   bool get isNumber => type == 'number';
   bool get isDate => type == 'date';
   bool get isTextarea => type == 'textarea';
+
+  /// 选项从数据源现取（加载中/失败时回落到静态 options）
+  bool get hasDynamicOptions => optionsFrom != null;
 }
 
 class ModuleOption {

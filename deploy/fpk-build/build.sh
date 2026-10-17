@@ -78,7 +78,13 @@ echo "[2.5/4] 校验 manifest（版本号一致性 / 每行 key=value）..."
 "$PY" "$FN/check_manifest.py" || { echo "ERROR: manifest 校验未通过，已中止打包"; exit 1; }
 
 echo "[3/4] fnpack build ..."
-( cd "$FN" && "$FNPACK" build -d . )
+# 🔴 fnpack 打失败时**也返回 0**（2026-10-17 实测：manifest 缺 source 时它只打印
+#    "Packing failed. Required field source is missing"，退出码照旧是 0，
+#    set -e 拦不住 → 脚本继续走到 [4/4] 把**上一轮的旧 fpk** 当成新包 ls 出来）。
+#    所以这里显式抓它的输出，出现 failed/error 就当失败；产物时间戳也要新于脚本开始。
+FPK_OUT="$( cd "$FN" && "$FNPACK" build -d . 2>&1 )"
+echo "$FPK_OUT" | grep -Ei 'failed|error' && { echo "ERROR: fnpack 打包失败（输出里有 failed/error），已中止"; exit 1; }
+[ -s "$FN/xiaozhi-im.fpk" ] || { echo "ERROR: fpk 产物不存在或为空"; exit 1; }
 
 echo "[4/4] 完成: $FN/xiaozhi-im.fpk"
 ls -la "$FN/xiaozhi-im.fpk"

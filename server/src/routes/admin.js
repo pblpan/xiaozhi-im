@@ -1765,6 +1765,30 @@ router.delete('/modules/:id', (req, res) => {
 });
 
 /**
+ * 局部改一个模块（PATCH 语义：没给的字段不动；给 null = 清回默认）。
+ *
+ * v0.28.8：自定义模块并入与内置应用同一套「管理」后，抽屉里改一个字段
+ * （换分组 / 换配色 / 停用 / 改可见范围）就走这里 —— 不能再整串 POST
+ * `/admin/modules`，那样会把没在场的字段按默认值重写一遍（body 会被抹空）。
+ *
+ * 口径对齐 `PATCH /admin/apps/:id`：可改 title / icon / group / color /
+ * sort / enabled / minClientVersion / visibleTo / body / onLoad。
+ */
+router.patch('/modules/:id', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const u = db.prepare('SELECT username FROM users WHERE id=?').get(uid);
+  const r = appmodules.update(req.params.id, req.body || {}, u?.username || 'admin');
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({
+    ok: true,
+    module: r.module,
+    message: r.module.enabled
+      ? `已保存「${r.module.title}」`
+      : `已保存，「${r.module.title}」已停用（客户端不再显示这个入口）`,
+  });
+});
+
+/**
  * 动态模块能选的**数据来源清单**（第四期：让内容真有内容）。
  *
  * 管理台编辑 list / table / chart 时，数据来源原来是**手填一条路径**

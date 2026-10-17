@@ -30,7 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))          # xiaozhi-im/
 SERVER = os.path.join(ROOT, 'server')
 DOCKER = HERE                                         # deploy/docker/
 BUILD = os.path.join(HERE, 'build')
-DESKTOP_DIR = os.path.join('D:', os.sep, 'Users', 'pblpa', 'Desktop', '小智 IM')
+DELIVER_DIR = os.path.join('D:', os.sep, '项目文件夹', '小智 IM')  # 2026-10-17 起交付目录迁到 D://项目文件夹//
 
 # 进镜像只需要的服务端文件（不含 test/data/tools，瘦身）
 SERVER_RUNTIME = ('src', 'public', 'package.json', 'package-lock.json', 'smoketest.js')
@@ -148,8 +148,8 @@ def main():
     out_path = make_tar(stage_root, top, version)
 
     print('[4/4] 完成')
-    if not args.no_deliver and os.path.isdir(DESKTOP_DIR):
-        dst = os.path.join(DESKTOP_DIR, os.path.basename(out_path))
+    if not args.no_deliver and os.path.isdir(DELIVER_DIR):
+        dst = os.path.join(DELIVER_DIR, os.path.basename(out_path))
         shutil.copy2(out_path, dst)
         print('已复制到桌面：%s' % dst)
 
