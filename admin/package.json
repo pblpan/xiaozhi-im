@@ -5,16 +5,34 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:runtime": "vite --config tmagic/runtime/vite.config.js",
+    "build:runtime": "vite build --config tmagic/runtime/vite.config.js",
     "prebuild": "node scripts/preserve-outdir.cjs",
-    "build": "vite build"
+    "build": "npm run build:runtime && vite build"
   },
   "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "@tmagic/core": "^1.8.3",
+    "@tmagic/data-source": "^1.8.3",
+    "@tmagic/dep": "^1.8.3",
+    "@tmagic/design": "^1.8.3",
+    "@tmagic/editor": "^1.8.3",
+    "@tmagic/element-plus-adapter": "^1.8.3",
+    "@tmagic/form": "^1.8.3",
+    "@tmagic/form-schema": "^1.8.3",
+    "@tmagic/schema": "^1.8.3",
+    "@tmagic/stage": "^1.8.3",
+    "@tmagic/utils": "^1.8.3",
+    "@tmagic/vue-runtime-help": "^2.0.4",
     "axios": "^1.7.0",
     "element-plus": "^2.7.0",
+    "monaco-editor": "^0.55.1",
+    "sortablejs": "^1.15.7",
     "vue": "^3.4.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
+    "typescript": "^6.0.3",
     "vite": "^5.2.0"
   }
 }

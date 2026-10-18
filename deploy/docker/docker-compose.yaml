@@ -3,7 +3,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile.prebuilt
-    image: xiaozhi-im-server:0.28.10
+    image: xiaozhi-im-server:0.28.11
     container_name: xiaozhi-im
     restart: unless-stopped
     ports:

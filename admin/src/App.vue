@@ -2633,7 +2633,11 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <el-row :gutter="12">
                     <el-col :span="12">
                       <el-form-item label="模块 ID">
-                        <el-input :model-value="mmForm.moduleId" disabled
+                        <!-- 🔴 只有编辑已有模块时才禁用 ID（它是主键，改了服务端当成新建）。
+                             无条件 disabled 是 0.28.7~0.28.10 引入的回归：
+                             新建时 ID 永远为空 → 保存被"请填写模块 ID"拦死，
+                             整个「新建模块」功能死锁（2026-10-18 画布验收时发现）。 -->
+                        <el-input v-model="mmForm.moduleId" :disabled="!!mmSel"
                           :placeholder="mmSel ? '' : '小写字母/数字/下划线，如 device_repair'" />
                       </el-form-item>
                     </el-col>
@@ -2713,6 +2717,19 @@ docker compose up -d --force-recreate xiaozhi-im</div>
               <!-- ============ 页面内容：数据来源 + 内容块（插入 / 编辑 / 移动 / 删除） ============ -->
               <el-tab-pane label="页面内容" name="body">
                 <el-form label-width="130px" label-position="left" style="max-width:760px">
+                  <!-- ===== 可视化搭建入口（tmagic 拖拽画布）=====
+                       下面那套「插入内容块」是逐条填字段；这里是拖拽画布，两条路改的是
+                       同一份 body，保存后以画布版本为准。数据来源（onLoad）画布不改，
+                       避免"拖完发现数没了"。 -->
+                  <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+                    <el-button type="primary" size="small" @click="xzBuilder.open = true">
+                      可视化搭建（拖拽画布）
+                    </el-button>
+                    <span class="hint">
+                      拖拽编辑页面内容，保存后覆盖下方内容块；数据来源保持不变
+                    </span>
+                  </div>
+
                   <!-- ===== 数据来源：这一块决定客户端打开时拿什么数据 ===== -->
                   <el-divider content-position="left">数据来源（页面内容里的列表 / 表格 / 图表靠它才有内容）</el-divider>
 
@@ -3018,6 +3035,14 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           <el-dialog v-model="mmJsonDlg" title="模块定义 JSON（这就是客户端会收到的内容）" width="720px">
             <pre class="mm-json">{{ mmJson }}</pre>
           </el-dialog>
+
+          <!-- 可视化搭建器（tmagic 拖拽画布）—— 全屏 dialog，保存只改 body，onLoad 不动 -->
+          <ModuleBuilder
+            v-model="xzBuilder.open"
+            :body="mmForm.body"
+            :module-title="mmForm.title"
+            @save="onBuilderSave"
+          />
         </div>
 
         <!-- 系统设置 -->
@@ -6349,6 +6374,7 @@ import { ElMessage, ElMessageBox, ElPagination } from 'element-plus';
 import { Odometer, User, ChatDotRound, Cellphone, Connection, Goods, Setting } from '@element-plus/icons-vue';
 import api from './api';
 import AttMapPicker from './AttMapPicker.vue';
+import ModuleBuilder from './ModuleBuilder.vue';
 
 const token = ref(localStorage.getItem('xz_token') || '');
 // 品牌名：只依赖 pub（bootstrap 的公开字段，登录前就能拿到）。
@@ -7938,6 +7964,25 @@ const mmForm = ref(newModuleForm());
  */
 const mmAdm = reactive({ open: false, id: '', title: '', tab: 'basic' });
 
+/**
+ * 可视化搭建器（tmagic 拖拽画布）开关。
+ * 画布保存只覆盖 body —— onLoad（数据来源）不在画布里管，
+ * 两条编辑路径（表单 / 画布）共用同一份 mmForm.body，不会漂。
+ */
+const xzBuilder = reactive({ open: false });
+
+/**
+ * 画布保存回调：拿到的 body 已是客户端 module schema 形状
+ * （convert.js 的 dslToBody 转过来的），直接替换表单里的内容块。
+ * 🔴 这里只改内存：真正落库要点抽屉右上角那个「保存」——
+ *    和服务端校验失败信息的展示逻辑保持一致（错误原样弹出）。
+ */
+function onBuilderSave(body) {
+  mmForm.value.body = body;
+  xzBuilder.open = false;
+  ElMessage.success('画布内容已放入编辑器，点右上角「保存」才会生效');
+}
+
 /** body 里有没有表单组件（决定「提交记录」tab 有没有意义） */
 function hasFormComp(body) {
   return (body || []).some((c) => c && c.component === 'form');
@@ -7971,16 +8016,28 @@ async function openModuleAdmin(id, label) {
 //    现在 onLoad 进了表单、也进了提交。
 const mdSources = ref({ local: [], upstreams: [], dataPath: 'data.rows' });
 
-/** 取数方式：一律从 onLoad.path 推，不另存一份状态（另存就一定会漂） */
+/** 取数方式：一律从 onLoad.path 推，不另存一份状态（另存就一定会漂）
+ *
+ * 🔴 2026-10-18 修（画布验收时抓到的"点了没反应"）：以前路径为空时一律返回
+ *    'none'，于是从零开始点「手填路径」/「已登记的上游接口」——setter 刚把
+ *    onLoad 设成 { path: '' }，getter 下一行就把它读回 'none'，单选钮当场
+ *    弹回「不取数」，路径输入框（v-if kind==='raw'）永远出不来。
+ *    修法：路径为空时看用户手选的那个（mmDataKindPick），有路径了才交给
+ *    路径推 —— 派生逻辑不变，只是不再把"还没填路径"当成"不取数"。
+ *    （local→raw 的途中切换仍以路径为准：想改成本路径先点「不取数」清掉，
+ *      再点「手填路径」，两步都干脆。）
+ */
+let mmDataKindPick = '';
 const mmDataKind = computed({
   get() {
     const p = mmForm.value.onLoad?.path || '';
-    if (!p) return 'none';
+    if (!p) return mmDataKindPick || 'none';
     if (p.startsWith('/api/hooks/local/')) return 'local';
     if (p.startsWith('/api/hooks/up/')) return 'up';
     return 'raw';
   },
   set(v) {
+    mmDataKindPick = v === 'none' ? '' : v;
     if (v === 'none') { mmForm.value.onLoad = null; return; }
     const p = mmForm.value.onLoad?.path || '';
     // 从别的切法过来时，若是同族路径就留着（免得手填的长路径被一下清掉）
@@ -8158,6 +8215,9 @@ async function loadMm() {
 
 function selectModule(m) {
   mmSel.value = m.moduleId;
+  // 取数方式的手选态清零：换模块就重新开始，别把上一个模块选到一半的
+  // 「手填路径」带到这个模块上（那会让没配 onLoad 的模块一打开就挂着个空路径框）
+  mmDataKindPick = '';
   mmForm.value = {
     moduleId: m.moduleId,
     title: m.title,
@@ -8182,6 +8242,7 @@ function selectModule(m) {
 
 function newModule() {
   mmSel.value = '';
+  mmDataKindPick = '';
   mmForm.value = newModuleForm();
   loadModuleSources();
   // 新建也走抽屉：编辑器只在抽屉里有一份（页面主体不再摊一份），
