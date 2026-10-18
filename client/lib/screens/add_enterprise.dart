@@ -4,6 +4,7 @@ import 'package:xiaozhi_im_client/core/config.dart';
 import 'package:xiaozhi_im_client/core/discover.dart';
 import 'package:xiaozhi_im_client/core/server_profile.dart';
 import 'package:xiaozhi_im_client/core/session_manager.dart';
+import 'package:xiaozhi_im_client/core/storage.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/gradient_button.dart';
@@ -137,6 +138,8 @@ class _AddEnterpriseScreenState extends State<AddEnterpriseScreen> {
           : await ImApi().loginRaw(_u.text.trim(), _p.text);
       final token = (d['token'] as String?) ?? '';
       if (token.isEmpty) throw const ApiException('服务器未返回登录凭证');
+      // 记住账号（与主登录页一致）：换服务器地址回到登录页时自动回显
+      await Storage.saveLastAccount(_u.text.trim());
       final profile = ServerProfile(
         id: ServerProfile.newId(),
         name: name,

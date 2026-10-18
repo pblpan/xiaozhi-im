@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:xiaozhi_im_client/api.dart';
 import 'package:xiaozhi_im_client/core/config.dart';
+import 'package:xiaozhi_im_client/core/storage.dart';
 import 'package:xiaozhi_im_client/core/workspace.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/screens/register.dart';
@@ -27,6 +28,12 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
+    // 回显上次登录的账号：改服务器地址 / 退出登录后回到这里，账号不用重敲。
+    // 要换账号直接在输入框里改（账号框始终可编辑）。
+    Storage.getLastAccount().then((acc) {
+      if (!mounted || acc == null || acc.isEmpty) return;
+      if (_u.text.isEmpty) setState(() => _u.text = acc);
+    });
     // 公司名 / 好友模式统一交给 Workspace 拉取和拼装（Workspace.brandOf）。
     // 以前这里自己再发一次 fetchPublic、自己拼 '$name小智'，于是主界面标题
     // 各写一份规则 —— 管理台改了公司名就成了"登录页变了、登进去又变回来"。
@@ -68,6 +75,8 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     try {
       await ImApi().login(_u.text.trim(), _p.text);
+      // 登录成功记住账号：换服务器地址后自动回显（token 会被清，账号不清）
+      await Storage.saveLastAccount(_u.text.trim());
       // 登录后进的是导航外壳（HomeShell），不是会话列表本身 ——
       // 外壳按服务器的工作/普通模式决定给哪些一级入口。
       if (mounted) {

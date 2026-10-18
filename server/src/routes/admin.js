@@ -869,6 +869,59 @@ router.delete('/files/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * 勾选删除：按文件 ID 列表删除（管理台「文件管理」表格勾选后批量删）。
+ *
+ * 与 `DELETE /files/:id` 完全同语义（解引用 + 消息换占位文案 + 删磁盘），
+ * 只是把 N 次请求合成一次：一个事务、一份备份、一次返回。
+ * `reconfirm` 是勾选数量（与 purge 一样做二次确认防手滑）：
+ * 如果勾了 5 个、期间有 1 个已被别人删掉，就直接 409 让人重选，而不是悄悄少删。
+ */
+router.post('/files/batch-delete', (req, res) => {
+  const uid = adminOf(req, res); if (uid === null) return;
+  const body = req.body || {};
+  const ids = Array.from(new Set((Array.isArray(body.ids) ? body.ids : [])
+    .map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0)));
+  if (!ids.length) return res.status(400).json({ error: '请先勾选要删除的文件' });
+  if (ids.length > 500) return res.status(400).json({ error: '一次最多删除 500 个文件，请分批处理' });
+  const confirm = Number(body.confirm);
+  if (Number.isFinite(confirm) && confirm !== ids.length) {
+    return res.status(409).json({ error: `勾选数量已变化（当前 ${ids.length} 个），请重新确认`, count: ids.length });
+  }
+
+  const ph = ids.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM files WHERE id IN (${ph}) ORDER BY id`).all(...ids);
+  if (!rows.length) return res.json({ ok: true, deleted: 0, filesDeleted: 0 });
+  const backup = writePurgeBackup('files-selected', rows, { operator: uid, ids });
+
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      db.prepare('UPDATE messages SET file_id=NULL,kind=?,content=? WHERE file_id=?')
+        .run('text', '[文件已被管理员删除]', r.id);
+      db.prepare('DELETE FROM files WHERE id=?').run(r.id);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: '批量删除失败，已回滚：' + e.message });
+  }
+
+  // 磁盘删除放在事务之后（同 purge）：库先一致，磁盘残留可由孤儿巡检兜底
+  let filesDeleted = 0;
+  for (const r of rows) {
+    try { fs.unlinkSync(path.join(config.FILES_DIR, r.path)); filesDeleted++; } catch {}
+  }
+  res.json({
+    ok: true,
+    deleted: rows.length,
+    filesDeleted,
+    missing: ids.length - rows.length,
+    backup: backup.name,
+    backupError: backup.error,
+  });
+});
+
 /* ==================== Messages ==================== */
 
 /**

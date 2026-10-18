@@ -1281,9 +1281,15 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                 <el-input v-model="fileQ" placeholder="原始文件名" clearable style="width:180px" @keyup.enter="filePager.reset()" />
                 <el-button type="primary" @click="filePager.reset()">搜索</el-button>
                 <el-button @click="resetFileFilter">重置</el-button>
-                <el-button type="danger" plain @click="openPurge('files')">批量清理</el-button>
+                <el-button type="danger" :disabled="!fileSelected.length" @click="batchDelSelected">
+                  删除选中{{ fileSelected.length ? `（${fileSelected.length}）` : '' }}
+                </el-button>
+                <el-button type="danger" plain @click="openPurge('files')">按条件清理</el-button>
+                <span class="hint" style="margin-left:4px">勾选表格左侧方框可只删选中的文件；「按条件清理」才是按当前筛选整批删。</span>
               </div>
-              <el-table :data="filePager.p.items" border stripe v-loading="filePager.p.loading">
+              <el-table ref="fileTableRef" :data="filePager.p.items" border stripe v-loading="filePager.p.loading"
+                @selection-change="(v) => (fileSelected = v)">
+                <el-table-column type="selection" width="44" />
                 <el-table-column prop="id" label="ID" width="70" />
                 <el-table-column label="预览" width="80">
                   <template #default="{ row }">
@@ -7472,6 +7478,9 @@ async function loadFriends() {
 /* ====== 文件管理 ====== */
 
 const fileTab = ref('all');
+/** 文件表格勾选态：只删勾中的，勾选为空时按钮禁用（不再"一点就整页删"）。 */
+const fileTableRef = ref(null);
+const fileSelected = ref([]);
 const fileRange = ref('30d');
 const fileCustom = ref(null);
 const fileOwnerId = ref(null);
@@ -9545,6 +9554,33 @@ async function delFile(row) {
     const { data } = await api.get('/admin/stats'); stats.value = data;
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '删除失败');
+  }
+}
+
+/** 删除表格里勾选的文件（只删勾中的，不影响其他文件）。 */
+async function batchDelSelected() {
+  const rows = fileSelected.value.filter((r) => r && r.id);
+  if (!rows.length) return;
+  const names = rows.slice(0, 5).map((r) => r.name).join('、');
+  const more = rows.length > 5 ? ` 等 ${rows.length} 个文件` : '';
+  try {
+    await ElMessageBox.confirm(
+      `删除选中的 ${rows.length} 个文件：${names}${more}？\n相关消息里的文件占位也会被清除，此操作不可恢复。`,
+      '删除选中文件',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
+    );
+  } catch { return; }
+  try {
+    const ids = rows.map((r) => r.id);
+    const { data } = await api.post('/admin/files/batch-delete', { ids, confirm: ids.length });
+    ElMessage.success(`已删除 ${data?.deleted ?? ids.length} 个文件`);
+    fileSelected.value = [];
+    fileTableRef.value?.clearSelection?.();
+    await loadFiles();
+    await loadInfo();
+    const { data: s } = await api.get('/admin/stats'); stats.value = s;
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '批量删除失败');
   }
 }
 

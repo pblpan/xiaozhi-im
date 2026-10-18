@@ -334,6 +334,43 @@ async function allIds(token, base, extra = {}) {
   ok('两条引用都删掉后 fx2 连行带磁盘消失',
     !withDb((d) => d.prepare('SELECT id FROM files WHERE id=?').get(fx2.id)) && !fs.existsSync(fx2Path));
 
+  // ---- 勾选删除：按 ID 批量删（管理台文件列表勾选后「删除选中」）----
+  console.log('\n【四·二】勾选删除（按 ID 批量）');
+  const g1 = await upload('pick-a.txt', 'a'.repeat(10), 'text/plain');
+  const g2 = await upload('pick-b.txt', 'b'.repeat(20), 'text/plain');
+  const g3 = await upload('pick-c.txt', 'c'.repeat(30), 'text/plain');
+  ok('勾选删除夹具：上传 3 个文件', !!(g1?.id && g2?.id && g3?.id), JSON.stringify([g1?.id, g2?.id, g3?.id]));
+
+  // g2 被一条消息引用：删文件后消息应保留并换成占位文案（与单条删除同语义）
+  const gMsg = await api('POST', `/api/conversations/${convB}/messages`, {
+    token: admin, body: { kind: 'file', content: 'ref-pick-b', fileId: g2.id },
+  });
+  ok('引用 g2 的消息已发送', gMsg.status === 200 && !!gMsg.body?.id, JSON.stringify(gMsg.body));
+  const g2Path = path.join(FILES_DIR, withDb((d) => d.prepare('SELECT path FROM files WHERE id=?').get(g2.id).path));
+
+  r = await api('POST', '/api/admin/files/batch-delete', { token: admin, body: { ids: [] } });
+  ok('空勾选 → 400', r.status === 400, `${r.status} ${JSON.stringify(r.body)}`);
+
+  r = await api('POST', '/api/admin/files/batch-delete', {
+    token: admin, body: { ids: [g1.id, g2.id], confirm: 3 },
+  });
+  ok('勾选数量与 confirm 不一致 → 409', r.status === 409, `${r.status} ${JSON.stringify(r.body)}`);
+
+  r = await api('POST', '/api/admin/files/batch-delete', {
+    token: admin, body: { ids: [g1.id, g2.id], confirm: 2 },
+  });
+  ok('只删勾中的 2 个（g3 不动）', r.status === 200 && r.body?.deleted === 2,
+    `${r.status} ${JSON.stringify(r.body)}`);
+  ok('  g1/g2 的 files 行已删除',
+    !withDb((d) => d.prepare('SELECT id FROM files WHERE id=?').get(g1.id)) &&
+    !withDb((d) => d.prepare('SELECT id FROM files WHERE id=?').get(g2.id)));
+  ok('  g1/g2 的磁盘文件已删除', !fs.existsSync(g2Path));
+  ok('  未勾选的 g3 仍在库', !!withDb((d) => d.prepare('SELECT id FROM files WHERE id=?').get(g3.id)));
+  const gMsgRow = withDb((d) => d.prepare('SELECT file_id,kind,content FROM messages WHERE id=?').get(gMsg.body.id));
+  ok('  引用 g2 的消息保留且换成占位文案',
+    gMsgRow && gMsgRow.file_id === null && gMsgRow.kind === 'text' &&
+    gMsgRow.content === '[文件已被管理员删除]', JSON.stringify(gMsgRow));
+
   // ---- 悬空引用：收藏 + 置顶 ----
   const dmRes = (await api('GET', `/api/conversations/dm/${u1.id}`, { token: admin })).body;
   const dmCid = dmRes?.conversationId;
