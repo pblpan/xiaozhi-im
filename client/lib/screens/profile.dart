@@ -8,6 +8,8 @@ import 'package:xiaozhi_im_client/core/media.dart';
 import 'package:xiaozhi_im_client/core/session_manager.dart';
 import 'package:xiaozhi_im_client/core/theme.dart';
 import 'package:xiaozhi_im_client/models.dart';
+import 'package:xiaozhi_im_client/screens/export_records_page.dart';
+import 'package:xiaozhi_im_client/screens/export_settings_page.dart';
 import 'package:xiaozhi_im_client/widgets/avatar.dart';
 import 'package:xiaozhi_im_client/widgets/skin_picker.dart';
 
@@ -250,6 +252,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  void _openExportRecords() => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const ExportRecordsPage()),
+      );
+
+  void _openExportSettings() => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const ExportSettingsPage()),
+      );
+
   Future<void> _changePassword() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -368,6 +378,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (_isMe) ...[
           _group('偏好', [
             _row('皮肤', AppSkin.palette.label, onTap: _pickSkin),
+          ]),
+          const SizedBox(height: 10),
+        ],
+        // 导出（需求④，龙哥 2026-10-22）：格式设定 + 导出台账。
+        // 只给自己看 —— 别人资料卡上是只读的，摆两个入口点进去也是空的。
+        if (_isMe) ...[
+          _group('导出', [
+            _row('导出记录', '谁导出了什么，留痕可查', onTap: _openExportRecords),
+            _row('格式设定', '托利多电子秤 / 默认格式', onTap: _openExportSettings),
           ]),
           const SizedBox(height: 10),
         ],

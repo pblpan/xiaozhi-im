@@ -1,4 +1,5 @@
 import 'csv_fmt.dart';
+import 'toledo_plu.dart';
 
 /// 扫码枪出数：把一张扫码单算成"老板要看的那几个数"，并导出成**通用文件**。
 ///
@@ -15,6 +16,16 @@ import 'csv_fmt.dart';
 /// 中文整片变乱码。这不是小事：老板打开一张全是"锟斤拷"的表，
 /// 第一反应是"系统坏了"，而不是"编码问题"。所以导出的字节流开头
 /// 必须带 `\uFEFF`。这条由测试钉着。
+///
+/// ── 2026-10-22 需求④之后 ────────────────────────────────────
+/// 龙哥要"按照托利多的格式导出"。上面的设计哲学没变（通用 CSV 仍是默认
+/// 格式），但承认了一点：**托利多是真实存在且不会马上消失的一家**，它的
+/// 格式稳定、有公开规格（RL00）。所以除通用 CSV 外，注册表里多了托利多
+/// PLU/TXT 两个入口（见 export_format.dart 的 ExportFormats），行映射在
+/// 本文件的 [toToledoRows]，排版在 toledo_plu.dart。换别家照样是
+/// "加一个格式"，不为托利多一个人改架构。
+/// ⚠️ 托利多格式是编码例外：它要 GBK 无 BOM（SPCT 按 ANSI 读），
+///    见 toledo_plu.dart 的说明。
 class StocktakeExport {
   /// 表头顺序。改这里要同步改 toCsv 与测试。
   static const List<String> headers = <String>[
@@ -255,6 +266,25 @@ class StocktakeExport {
       '扫码明细_${_label(sheetNo, name)}.csv';
   static String scanDocName(String sheetNo, [String? name]) =>
       '扫码明细_${_label(sheetNo, name)}.txt';
+
+  /// 托利多 PLU 行（需求④）。把盈亏行映射成秤要的四样：
+  /// 条码（→货号）/ 名称 / 单价 / 单位（判计价方式用）。
+  ///
+  /// 单价按商档原价搬，**斤→千克的换算在 toledo_plu.dart 里做** ——
+  /// 那一层才知道 RL00 的单价单位是元/千克，这里只管如实搬。
+  /// 没有单价的行（商档没同步到）给 0 价：秤上这个键按 0 卖、
+  /// 收银时手工改价，比"这个商品在秤上压根不存在"好；
+  /// 想要更干净就在导出前先把商档同步一次。
+  static List<ToledoRow> toToledoRows(List<Map<String, dynamic>> rows) {
+    return rows
+        .map((r) => ToledoRow(
+              barcode: (r['barcode'] ?? '').toString(),
+              name: (r['name'] ?? '').toString(),
+              price: r['unit_price'] == null ? 0 : _d(r['unit_price']),
+              unit: (r['unit'] ?? '').toString(),
+            ))
+        .toList();
+  }
 
   /// 文件名里的"单据标识"：有名字用名字，没名字用单号。
   static String _label(String sheetNo, String? name) {

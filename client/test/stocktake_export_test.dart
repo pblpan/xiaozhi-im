@@ -415,4 +415,29 @@ void main() {
       expect(csv, isNot(contains(',6921817824327,')));
     });
   });
+
+  group('toToledoRows（需求④：托利多 PLU 的行映射）', () {
+    test('四样原料：条码/名称/单价/单位原样搬（斤→千克换算在排版层做）', () {
+      final rows = StocktakeExport.toToledoRows([
+        row(barcode: '6921817824327', name: '金龙鱼调和油', unit: '瓶', price: 89.9),
+      ]);
+      expect(rows.length, 1);
+      expect(rows.first.barcode, '6921817824327');
+      expect(rows.first.name, '金龙鱼调和油');
+      expect(rows.first.price, 89.9);
+      expect(rows.first.unit, '瓶');
+    });
+
+    test('缺单价给 0 价（秤上手工改价，好过商品在秤上不存在）', () {
+      final rows = StocktakeExport.toToledoRows([
+        row(price: null),
+      ]);
+      expect(rows.first.price, 0);
+    });
+
+    test('字符串价格（泰格那套 "83.00"）也要能搬', () {
+      final rows = StocktakeExport.toToledoRows([row(price: '83.00')]);
+      expect(rows.first.price, 83.0);
+    });
+  });
 }

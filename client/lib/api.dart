@@ -851,6 +851,60 @@ class ImApi {
   Future<Map<String, dynamic>> withdrawApproval(int id) async =>
       await _post('/approval/$id/withdraw', const {});
 
+  // ---- 导出记录 + 格式设定（需求④：托利多格式 / 表格导出）----
+
+  /// 读导出格式设定。**旧服务端没有这个接口**（404 抛 ApiException），
+  /// 调用方按默认值继续跑 —— 导出是本地行为，不该被服务器版本卡住。
+  Future<Map<String, dynamic>> exportSettings() async {
+    final d = await _get('/export/settings');
+    return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+  }
+
+  /// 存导出格式设定（局部更新，没传的键服务端保持原值）。
+  Future<Map<String, dynamic>> saveExportSettings(Map<String, dynamic> patch) async {
+    final d = await _put('/export/settings', patch);
+    return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+  }
+
+  /// 导出一份文件后记一笔账。**失败不影响导出本身**（文件已经落盘了），
+  /// 调用方 fire-and-forget；这条只是台账，不是业务前提。
+  Future<void> reportExport({
+    required String module,
+    required String moduleName,
+    String? docNo,
+    required String formatId,
+    required String formatName,
+    required String fileName,
+    required int rows,
+    String? ext,
+  }) async {
+    await _post('/export/records', <String, dynamic>{
+      'module': module,
+      'moduleName': moduleName,
+      if (docNo != null && docNo.isNotEmpty) 'docNo': docNo,
+      'formatId': formatId,
+      'formatName': formatName,
+      'fileName': fileName,
+      'rows': rows,
+      if (ext != null && ext.isNotEmpty) 'ext': ext,
+    });
+  }
+
+  /// 我的导出记录（谁/何时/哪个模块/什么格式/多少行/文件名）。
+  Future<Map<String, dynamic>> exportRecords(
+      {String? module, int limit = 50, int offset = 0}) async {
+    final q = <String>[];
+    if (module != null && module.isNotEmpty) {
+      q.add('module=${Uri.encodeComponent(module)}');
+    }
+    q.add('limit=$limit');
+    q.add('offset=$offset');
+    final d = await _get('/export/records?${q.join('&')}');
+    return d is Map
+        ? Map<String, dynamic>.from(d)
+        : <String, dynamic>{'items': const <dynamic>[], 'total': 0};
+  }
+
   // ---- 培训中心 ----
   //
   // 命名一律 `/training/...`，与服务端 routes/training.js 对齐。

@@ -32,7 +32,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, 'build', 'windows', 'x64', 'runner', 'Release')
-DESKTOP_DIR = os.path.join('D:', os.sep, 'Users', 'pblpa', 'Desktop', '小智 IM')
+DESKTOP_DIR = os.path.join('D:', os.sep, '项目文件夹', '小智 IM')
 APP_NAME = '小智 IM'
 EXE_NAME = 'xiaozhi_im_client.exe'
 

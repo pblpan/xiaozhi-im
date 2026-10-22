@@ -12,6 +12,7 @@
       <div class="xz-builder__bar">
         <span class="xz-builder__hint">
           左侧拖物料到中间画布；点画布中的元素，在右侧改字段。保存时自动转成客户端 module 格式（服务端还会校验一遍）。
+          不会用？看「系统帮助 → 八、可视化搭建（拖拽画布）怎么用」，有详细步骤和插入案例。
         </span>
         <span class="xz-builder__ops">
           <el-button size="small" @click="previewOpen = true">预览</el-button>

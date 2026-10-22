@@ -1302,6 +1302,39 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens (user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_exp ON refresh_tokens (expires_at);
 `);
 
+// ---------------------------------------------------------------------------
+// 导出记录（需求④，龙哥 2026-10-22：导出记录 + 格式设定 + 托利多格式）
+//
+// 为什么单独一张表：这是**流水数据**（谁、何时、导出了什么、什么格式、多少行），
+// 一行一次导出、只增不改。放 settings 会变成"每次导出都改一行 JSON"，
+// 并发下互相覆盖（和 refresh_tokens 单独建表同一个道理）。
+//
+// 为什么中文名/格式名要**快照**进来：应用名与格式名会随管理台覆盖层
+// （appoverrides 改名）变化，历史记录要留住"导出那一刻"的名字，
+// 否则半年前导出的记录显示的是今天的名字，对不上账。
+//
+// 不加外键：users 删掉时这些历史记录仍有审计价值（"谁导过数据"），
+// 应用层在删用户时把行留下、username 快照已足够追溯。
+db.exec(`
+CREATE TABLE IF NOT EXISTS export_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  module TEXT NOT NULL,
+  module_name TEXT,
+  doc_no TEXT,
+  format_id TEXT NOT NULL,
+  format_name TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  rows INTEGER NOT NULL DEFAULT 0,
+  ext TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_export_records_user ON export_records (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_export_records_module ON export_records (module, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_export_records_created ON export_records (created_at);
+`);
+
 // 首次启动播种管理员账号，保证 /admin 开箱可用
 const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.ADMIN_USERNAME);
 if (!existing) {

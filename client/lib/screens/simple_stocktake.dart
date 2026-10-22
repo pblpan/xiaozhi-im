@@ -17,6 +17,13 @@
 // 复盘 / 差异复盘 / 差异集是 S2 —— 所以本页的底部栏**不摆**那些按钮：
 // 摆一个点了没用的"下一趟"，比没有更糟。
 //
+// ── 导出（2026-10-22 需求④）────────────────────────────────
+// 选格式 / 生成 / 落盘 / 记服务端台账 / 后续动作面板全在
+// `widgets/export_runner.dart`，本页只填一张 `ExportRequest`。
+// 简易盘点**没有价格**，托利多那种"电子秤价签"格式给它只会得到
+// 一片 0 价记录，所以格式注册表对它只开通用 CSV（见 ExportFormats.forModule），
+// 点导出不弹选择器、直接按设定里的默认格式走。
+//
 // 方案：`docs/简易盘点通道方案-v1.md`
 // 口径（龙哥定的，别自己改）：
 //   · 一趟内同码多次扫 = **累加**；
@@ -39,6 +46,7 @@ import '../core/simple_scan_sink.dart';
 import '../core/stock_master_repo.dart';
 import '../core/theme.dart';
 import '../widgets/export_flow.dart';
+import '../widgets/export_runner.dart';
 import 'camera_scan.dart';
 import 'master_lookup.dart';
 
@@ -777,15 +785,23 @@ class _SimpleStocktakePageState extends State<SimpleStocktakePage> {
         return;
       }
 
-      final name = FileIo.safeName(
-          SimpleExport.csvName(SimpleScene.label(_scene), _taskNo));
-      final dir = await FileIo.dir();
-      final f = File('${dir.path}${Platform.pathSeparator}$name');
-      // UTF-8；BOM 由导出层负责（见 SimpleExport.toCsv）
-      await f.writeAsString(SimpleExport.toCsv(segs));
-      if (!mounted) return;
-      await ExportFlow.show(context, f,
-          rows: segs.totalRows, suggestName: name, onMessage: _snack);
+      // 选格式 → 生成 → 落盘 → 记账 → 后续动作面板，全在 ExportRunner
+      // （2026-10-22 需求④：导出记录 + 格式设定）。本页只交数据。
+      // 简易盘点没有价格数据 → 不给 toledoRows；格式注册表对它只开
+      // 通用 CSV（ExportFormats.forModule），这里也不会弹选择器。
+      await ExportRunner.run(
+        context,
+        ExportRequest(
+          module: 'simple_stocktake',
+          moduleName: '简易盘点',
+          docNo: _taskNo,
+          sceneLabel: SimpleScene.label(_scene),
+          rowCount: segs.totalRows,
+          csvText: SimpleExport.toCsv(segs),
+          csvFileName:
+              SimpleExport.csvName(SimpleScene.label(_scene), _taskNo),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       _snack('导出失败：$e');

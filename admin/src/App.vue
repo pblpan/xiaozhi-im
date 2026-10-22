@@ -74,6 +74,9 @@
               <template #title><span>盘点</span></template>
               <el-menu-item index="master">商品档案</el-menu-item>
               <el-menu-item index="deduct">库房减货</el-menu-item>
+              <!-- 导出管理：记录台账（谁何时导了什么）+ 格式设定（默认格式/托利多参数），
+                   服务端 /api/admin/export，见本文件 tab === 'export' 块 -->
+              <el-menu-item index="export">导出管理</el-menu-item>
             </el-sub-menu>
             <el-menu-item index="training">培训中心</el-menu-item>
           </el-sub-menu>
@@ -495,6 +498,11 @@
             <div class="dash-alert-desc">
               业务接口现在一律返回 403：员工登录不进来、消息发不出去、考勤打不了卡。登录与查看本页不受影响。
               把下面的机器码发给管理员换取授权码，粘贴到本页下方点「激活」即可立即恢复，<b>不需要重启服务</b>。
+              <br />
+              <span class="hint">
+                提示：如果这枚码是<b>这台机器以前用过的</b>（比如换了网卡、连/断 Wi-Fi 之后），
+                它仍然应该能激活；若提示不匹配，请把下面「本机机器码」重新发给管理员换发。
+              </span>
             </div>
           </el-alert>
 
@@ -539,17 +547,33 @@
               </el-descriptions-item>
             </el-descriptions>
 
-            <!-- 指纹来源必须可见：忘了挂载宿主机标识时，机器码会随容器重建而变，
-                 那是最坏体验（升级一次授权就没了），必须提前警示而不是等出事。 -->
+            <!-- 指纹来源必须可见：因子不稳时机器码会漂，授权会自己作废。
+                 忘了看这一行，客户只会觉得「昨天还好好的，今天就提示码不对了」。 -->
             <el-alert v-if="licenseState && licenseState.fingerprint && !licenseState.fingerprint.reliable"
                       type="warning" show-icon :closable="false" style="margin-top:12px">
-              <template #title>机器码可能不稳定，重建容器后有失效风险</template>
+              <template #title>机器码可能不稳定，存在失效风险</template>
               <div class="dash-alert-desc">{{ licenseState.fingerprint.hint }}</div>
             </el-alert>
             <p v-else-if="licenseState" class="hint" style="margin:12px 0 0">
               机器码来源：{{ licenseState.fingerprint.hint }}
               <span v-if="licenseState.locationMismatch">（数据目录变更过，仅作提示，不影响授权）</span>
             </p>
+
+            <!-- 备用机器码：出码时主码没赶上（客户发错了、或者你手上有旧码），
+                 下面这些本机也认，发任意一个都能出码。 -->
+            <div v-if="licenseState && (licenseState.machineCodes || []).length > 1"
+                 style="margin-top:12px">
+              <div class="hint" style="margin-bottom:6px">
+                备用机器码（<b>本机同样认可</b>，出码时发任意一个都行；客户手里已有的旧码也仍然有效）：
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">
+                <el-tag v-for="c in licenseState.machineCodes" :key="c" size="small"
+                        type="info" effect="plain"
+                        style="font-family:ui-monospace,Consolas,monospace;letter-spacing:0.5px">
+                  {{ c }}
+                </el-tag>
+              </div>
+            </div>
           </el-card>
 
           <el-card shadow="never" style="margin-top:16px">
@@ -1088,6 +1112,108 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <tr><td>中继自检脚本</td><td><code class="mono">deploy/turn_status.py</code>（只读，一条命令查完中继状态）</td></tr>
                 </tbody>
               </table>
+            </section>
+
+            <section class="help-sec">
+              <h3>八、可视化搭建（拖拽画布）怎么用</h3>
+              <p>「可视化搭建」是<b>应用中心 → 模块管理</b>里的一个拖拽式页面编辑器，用来给客户端工作台搭一个模块页面（公告页、看板、录入页、数据展示页等），<b>不用写代码</b>。</p>
+              <p class="help-tip">它和「页面内容」里的「逐条插入内容块」是<b>两条路改同一份内容</b>：从画布保存会覆盖表单里填的内容；而<b>数据来源（onLoad）画布不碰</b>，避免「拖完发现数据没了」。配数据仍走「数据来源」标签页。</p>
+
+              <h4>1. 怎么打开</h4>
+              <ol>
+                <li>进「应用中心 → 模块管理」，<b>新建模块</b>或点已有模块<b>编辑</b>，进到模块抽屉。</li>
+                <li>切到「<b>页面内容</b>」标签页，点右上角的「<b>可视化搭建（拖拽画布）</b>」按钮。</li>
+                <li>画布以全屏对话框打开，按手机工作台口径（宽 375）渲染，所见即客户端里的大小。</li>
+              </ol>
+
+              <h4>2. 画布长什么样</h4>
+              <table class="help-table">
+                <thead><tr><th style="width:120px">区域</th><th>干什么</th></tr></thead>
+                <tbody>
+                  <tr><td>左侧·物料</td><td>可拖的组件，分三组：布局（卡片 / 分割线）、内容（文本 / 列表 / 表格 / 图表）、交互（按钮 / 表单）。</td></tr>
+                  <tr><td>中间·画布</td><td>页面预览区。从左侧把组件<b>拖进来</b>；<b>点一下</b>画布里的元素即选中它（点空白处取消）。</td></tr>
+                  <tr><td>右侧·属性</td><td>选中元素后，在这里改它的字段（文字、颜色、数据路径、点击动作等）。</td></tr>
+                  <tr><td>左下方·图层</td><td>组件树：拖动改顺序、选中后删除；容器（卡片）可展开看里面的子组件。</td></tr>
+                  <tr><td>顶部·操作条</td><td>「预览」先看效果；「保存到模块」把画布内容交回编辑抽屉（<b>还没落库</b>）。</td></tr>
+                </tbody>
+              </table>
+
+              <h4>3. 一套标准操作（插入 → 选中 → 改字段 → 保存）</h4>
+              <ol>
+                <li><b>插入组件</b>：在左侧物料区，按住一个组件（如「文本」「卡片」）<b>拖到中间画布</b>松手。卡片是容器，可以再把别的组件拖进卡片里。</li>
+                <li><b>选中组件</b>：在画布上<b>点一下</b>要改的元素，右侧属性面板会切到它的字段。</li>
+                <li><b>改字段</b>：在右侧逐项填，例如文本填「文本内容 / 字号 / 颜色 / 对齐」。</li>
+                <li><b>调顺序 / 删组件</b>：用左侧「图层（组件树）」面板，拖动改层级、选中后删；也可在画布上直接操作。</li>
+                <li><b>保存</b>：点顶部「保存到模块」→ 画布内容进到编辑抽屉的「页面内容」里，再点抽屉右上角「<b>保存</b>」才真正写进服务端（服务端还会校验一遍组件集与动作白名单）。</li>
+                <li><b>预览</b>：保存前想先看效果，点「预览」用运行时渲染一遍当前画布。</li>
+              </ol>
+
+              <h4>4. 组件字段速查（右侧属性面板里能填的）</h4>
+              <table class="help-table">
+                <thead><tr><th style="width:80px">组件</th><th style="width:80px">分组</th><th>主要字段</th></tr></thead>
+                <tbody>
+                  <tr><td>文本</td><td>内容</td><td>文本内容、字号(12/14/15/16/18/20/24)、颜色、对齐(左/中/右)</td></tr>
+                  <tr><td>列表</td><td>内容</td><td>数据路径(dataPath)、标题字段、副标题字段、右侧字段</td></tr>
+                  <tr><td>表格</td><td>内容</td><td>数据路径(dataPath)、列定义(字段key / 列名 / 宽度px)</td></tr>
+                  <tr><td>图表</td><td>内容</td><td>图表类型(柱状图 / 折线图)、数据路径、X轴字段、Y轴字段、颜色</td></tr>
+                  <tr><td>卡片</td><td>布局</td><td>卡片标题、卡片副标题（<b>容器</b>，可放进其它组件）</td></tr>
+                  <tr><td>分割线</td><td>布局</td><td>无字段，纯分隔线</td></tr>
+                  <tr><td>按钮</td><td>交互</td><td>按钮文字、颜色、点击动作(onTap：调接口 / 提交表单 / 跳页面 / 复制 / 打开链接)</td></tr>
+                  <tr><td>表单</td><td>交互</td><td>表单字段(key / 名称 / 类型 / 必填 / 占位 / 动态选项)、提交接口</td></tr>
+                </tbody>
+              </table>
+
+              <h4>5. 插入操作案例</h4>
+              <p class="help-tip">以下每个案例都从「打开可视化搭建、进入空白画布」之后说起。组件名 = 左侧物料里的名字。</p>
+
+              <p><b>案例 A：做一个「门店公告」静态页（文本 + 分割线）</b></p>
+              <ol>
+                <li>拖一个「文本」到画布，右侧填：文本内容=<code class="mono">今日特价</code>、字号=24、对齐=中、颜色=红。</li>
+                <li>再拖一个「分割线」放在它下面。</li>
+                <li>再拖一个「文本」，文本内容=<code class="mono">本店会员日全场 88 折，详见收银台海报</code>、字号=14、对齐=左。</li>
+                <li>点「保存到模块」→ 抽屉「保存」。客户端工作台打开这个模块就是一段静态公告。</li>
+              </ol>
+
+              <p><b>案例 B：做一个「库存概览」卡片（卡片 + 列表，绑定数据）</b></p>
+              <ol>
+                <li>先去「数据来源」标签页，把取数配好（选本地数据源，或填 <code class="mono">/api/hooks/local/...</code> 路径），让模块能取到数据。</li>
+                <li>回到「页面内容」→ 打开可视化搭建。</li>
+                <li>拖一个「卡片」到画布，右侧填卡片标题=<code class="mono">库存预警</code>。</li>
+                <li>把「列表」组件拖<b>进卡片里</b>（拖到卡片区域松手），右侧数据路径=<code class="mono">data.rows</code>，标题字段=<code class="mono">{{name}}</code>、副标题字段=<code class="mono">{{stock}}</code>。</li>
+                <li>保存。客户端打开即展示数据源返回的那批库存行。</li>
+              </ol>
+
+              <p><b>案例 C：做一个「销售看板」（表格 + 图表 + 刷新按钮）</b></p>
+              <ol>
+                <li>「数据来源」标签页配好销售汇总接口。</li>
+                <li>画布里拖「表格」：数据路径=<code class="mono">data.rows</code>，列定义按接口返回字段填（如 商品 / 销量 / 金额）。</li>
+                <li>拖「图表」：图表类型=柱状图、数据路径=<code class="mono">data.rows</code>、X轴字段=<code class="mono">name</code>、Y轴字段=<code class="mono">amount</code>。</li>
+                <li>拖「按钮」：按钮文字=<code class="mono">刷新</code>，点击动作 → 动作类型=<b>调接口</b>、接口路径=<code class="mono">/api/hooks/local/销售汇总</code>、方法=GET。</li>
+                <li>保存。进页面自动取数，点「刷新」重新拉一次。</li>
+              </ol>
+
+              <p><b>案例 D：做一个「值班登记」录入页（表单 + 提交）</b></p>
+              <ol>
+                <li>拖「表单」到画布，右侧「表单字段」点加行，逐行加：
+                  <code class="mono">name / 姓名 / 文本 / 必填 true</code>、
+                  <code class="mono">shift / 班次 / 下拉 / 必填 true</code>、
+                  <code class="mono">note / 备注 / 多行 / false</code>。</li>
+                <li>「提交（表单即录入）」：动作类型=<b>写入数据源</b>、提交接口=<code class="mono">/api/hooks/local/值班登记</code>、方法=POST。</li>
+                <li>保存。客户端打开即可即录入，提交写入对应数据源。</li>
+              </ol>
+
+              <p><b>案例 E：做一个「跳转到排班表」的按钮</b></p>
+              <ol>
+                <li>拖「按钮」，按钮文字=<code class="mono">查看排班</code>，点击动作 → 动作类型=<b>跳页面</b>、目标页面=<code class="mono">schedule</code>（填你要跳的模块 id）。</li>
+                <li>保存。客户端点这个按钮即跳到排班模块。</li>
+              </ol>
+
+              <h4>6. 三个容易踩的坑</h4>
+              <ul>
+                <li><b>画布只改内容、不动数据来源</b>：列表 / 表格 / 图表要出数，必须在「数据来源」标签页配 onLoad；画布里填的 <code class="mono">dataPath</code> 指向它返回的数据（默认 <code class="mono">data.rows</code>）。没接数据源，客户端打开就是空边框。</li>
+                <li><b>保存分两步</b>：画布「保存到模块」只是把内容交回编辑抽屉，还要点抽屉右上角「保存」才落库。关画布前若改了没保存，会弹「未保存修改」提醒。</li>
+                <li><b>服务端还会校验一遍</b>：组件集是封闭的（上面 8 种）；按钮的接口路径必须以 <code class="mono">/api/hooks/</code> 开头、打开链接必须是 https。不合规画布不拦，但点抽屉「保存」时服务端会拒，错误信息会原样弹出来。</li>
+              </ul>
             </section>
           </el-card>
         </div>
@@ -4720,6 +4846,168 @@ docker compose up -d --force-recreate xiaozhi-im</div>
           </el-dialog>
         </div>
 
+        <!-- ===== 导出管理（导出记录 + 格式设定）===== -->
+        <!-- 需求④（龙哥 2026-10-22）：「增加导出记录和格式设定，按照托利多的
+             电子秤的格式导出，表格导出等方式」。
+             服务端 server/src/routes/export.js：管理端 /api/admin/export、
+             员工端 /api/export，两边同一份数据。客户端同源页面在
+             「个人中心 → 导出 → 导出记录 / 格式设定」。
+             🔴 文件不过服务端：客户端本地生成、本地落盘，这里只记
+                "谁在何时导了什么"的账 —— 所以列表里没有下载按钮，
+                 想再拿一份文件请到导出它的那台设备上重新导。 -->
+        <div v-else-if="tab === 'export'">
+          <el-alert type="success" :closable="false" style="margin-bottom:14px">
+            <template #title>
+              员工每导出一份文件，这里就记一笔：谁、什么时候、从哪个模块、按什么格式、导了多少行。
+              <b>文件本身不过服务端</b>——文件在员工设备上生成并本地落盘，想再拿一份请到那台设备上重新导出。
+              <br />
+              <b>格式设定</b>管的是"这台服务器的导出习惯"：每个模块默认用什么格式、托利多电子秤的参数。
+              员工在「个人中心 → 导出 → 格式设定」里看到的就是这一份，<b>改完对客户端下次启动生效</b>。
+            </template>
+          </el-alert>
+
+          <el-tabs v-model="expTab">
+            <el-tab-pane label="导出记录" name="records">
+              <div class="page-bar">
+                <el-select v-model="expUser" filterable clearable placeholder="全部员工" size="small"
+                  style="width:170px" @change="reloadExpRecords">
+                  <el-option v-for="u in userOptions" :key="u.id"
+                    :label="u.nickname || u.username" :value="u.id" />
+                </el-select>
+                <el-select v-model="expModule" placeholder="全部模块" size="small"
+                  style="width:150px;margin-left:8px" @change="reloadExpRecords">
+                  <el-option v-for="m in EXP_MODULES" :key="m.id" :label="m.name" :value="m.id" />
+                </el-select>
+                <el-button size="small" type="primary" style="margin-left:8px" @click="reloadExpRecords">查询</el-button>
+                <el-button size="small" style="margin-left:8px" :disabled="!exp.total" @click="purgeExpRecords">清理旧记录</el-button>
+                <span class="hint">台账保留 180 天，超期行在下次有人导出时自动清</span>
+              </div>
+
+              <el-table :data="exp.records" border stripe v-loading="exp.loading">
+                <el-table-column label="导出时间" width="170">
+                  <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+                </el-table-column>
+                <el-table-column label="操作人" width="110">
+                  <template #default="{ row }">{{ row.username || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="模块" width="120">
+                  <template #default="{ row }">{{ row.module_name || row.module }}</template>
+                </el-table-column>
+                <el-table-column label="单据号" width="190">
+                  <template #default="{ row }">
+                    <code class="mono" v-if="row.doc_no">{{ row.doc_no }}</code>
+                    <span v-else>—</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="格式" width="150">
+                  <template #default="{ row }">
+                    {{ row.format_name || row.format_id }}
+                    <el-tag v-if="row.ext" size="small" type="info" style="margin-left:4px">.{{ row.ext }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="文件名" min-width="230">
+                  <template #default="{ row }"><code class="mono">{{ row.file_name }}</code></template>
+                </el-table-column>
+                <el-table-column label="行数" width="80">
+                  <template #default="{ row }"><b>{{ row.rows }}</b></template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="!exp.records.length && !exp.loading"
+                description="还没有导出记录。员工在客户端导出盘点 / 简易盘点数据后，台账会出现在这里" />
+              <div v-if="exp.records.length" class="page-bar" style="margin-top:10px">
+                <el-button size="small" :disabled="exp.page <= 1" @click="loadExpRecords(exp.page - 1)">上一页</el-button>
+                <span class="hint">第 {{ exp.page }} 页 · 共 {{ exp.total }} 条</span>
+                <el-button size="small" :disabled="exp.records.length < 50"
+                  @click="loadExpRecords(exp.page + 1)">下一页</el-button>
+              </div>
+            </el-tab-pane>
+
+            <el-tab-pane label="格式设定" name="settings">
+              <el-alert type="info" :closable="false" style="margin-bottom:14px">
+                <template #title>
+                  每个模块的默认格式：员工点"导出"时默认用这个（他当场改选也会被记住，等于改这里）。
+                  托利多两个格式要<b>单价</b>（RL00 必有字段），只有带商档价格的扫码枪盘点适用；
+                  简易盘点只有数量，给了也只会导出一片 0 价记录，所以不给选。
+                </template>
+              </el-alert>
+
+              <div class="page-bar">
+                <el-button size="small" type="primary" :loading="expSaving" :disabled="!expDirty" @click="saveExpSettings">保存</el-button>
+                <el-button size="small" :disabled="!expDirty" @click="loadExpSettings">还原</el-button>
+                <span class="hint" v-if="expDirty">有未保存的改动</span>
+                <span class="hint" v-else-if="expSavedAt">上次保存：{{ expSavedAt }}</span>
+              </div>
+
+              <el-descriptions border :column="1" style="margin:14px 0">
+                <el-descriptions-item v-for="m in EXP_MODULES" :key="m.id" :label="m.name">
+                  <el-select v-if="expFormatsOf(m.id).length > 1"
+                    v-model="expForm.moduleFormats[m.id]" size="small" style="width:260px"
+                    @change="expDirty = true">
+                    <el-option v-for="f in expFormatsOf(m.id)" :key="f.id" :label="f.name" :value="f.id" />
+                  </el-select>
+                  <span v-else class="hint">
+                    {{ expFormatsOf(m.id)[0].name }}（该模块只有这一种格式，导出来就是 Excel 能开的明细表）
+                  </span>
+                </el-descriptions-item>
+              </el-descriptions>
+
+              <h4 style="margin:6px 0 10px">托利多电子秤参数</h4>
+              <el-descriptions border :column="1">
+                <el-descriptions-item label="PLU 号来源">
+                  <el-select v-model="expForm.toledo.pluMode" size="small" style="width:260px" @change="expDirty = true">
+                    <el-option label="按行序 1,2,3…" value="seq" />
+                    <el-option label="取条码后 6 位" value="barcode_tail" />
+                  </el-select>
+                  <span class="hint" style="margin-left:8px">同一商品每次导出要一致选后者；后 6 位可能撞号，SPCT 按后写入的覆盖先写入的</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="计价方式">
+                  <el-select v-model="expForm.toledo.priceMode" size="small" style="width:260px" @change="expDirty = true">
+                    <el-option label="按单位自动判" value="auto" />
+                    <el-option label="全部按计重" value="weight" />
+                    <el-option label="全部按计数" value="count" />
+                  </el-select>
+                  <span class="hint" style="margin-left:8px">RL00 必有字段：斤 / 千克 / g 按计重，个 / 袋 / 盒 按计数；判错了顾客会按错价结账</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="组号">
+                  <el-input-number v-model="expForm.toledo.group" :min="0" :max="20"
+                    size="small" controls-position="right" @change="expDirty = true" />
+                  <span class="hint" style="margin-left:8px">0~20，0 = 不分组</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="皮重号">
+                  <el-input-number v-model="expForm.toledo.tare" :min="0" :max="16"
+                    size="small" controls-position="right" @change="expDirty = true" />
+                  <span class="hint" style="margin-left:8px">0~16，0 = 无皮重</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="税号">
+                  <el-input-number v-model="expForm.toledo.tax" :min="0" :max="9"
+                    size="small" controls-position="right" @change="expDirty = true" />
+                  <span class="hint" style="margin-left:8px">0~9</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="保质期">
+                  <el-input-number v-model="expForm.toledo.shelfLife" :min="0" :max="499"
+                    size="small" controls-position="right" @change="expDirty = true" />
+                  <span class="hint" style="margin-left:8px">天，0~499，0 = 不设</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="推荐期">
+                  <el-input-number v-model="expForm.toledo.recommendLife" :min="0" :max="499"
+                    size="small" controls-position="right" @change="expDirty = true" />
+                  <span class="hint" style="margin-left:8px">天，0~499，0 = 不设</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="改价标志">
+                  <el-switch v-model="expForm.toledo.allowReprice" :active-value="1" :inactive-value="0"
+                    @change="expDirty = true" />
+                  <span class="hint" style="margin-left:8px">电子秤上能不能临时改价</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="打折标志">
+                  <el-switch v-model="expForm.toledo.allowDiscount" :active-value="1" :inactive-value="0"
+                    @change="expDirty = true" />
+                  <span class="hint" style="margin-left:8px">电子秤上能不能打折</span>
+                </el-descriptions-item>
+              </el-descriptions>
+            </el-tab-pane>
+          </el-tabs>
+        </div>
+
         <!-- ===== 培训中心 ===== -->
         <!-- 名字就叫「培训中心」：与客户端应用台入口、服务端模块名三处一致 -->
         <div v-else-if="tab === 'training'">
@@ -6417,12 +6705,19 @@ const info = ref({});
       只有"展开"需要手动补。别为了展开给 el-menu 加 :key 重挂，那会丢动画。 */
 const menuRef = ref(null);
 // 每个 tab 归属哪个分类。首页（dashboard）是平铺项，不属于任何分类。
+// ⚠️ 2026-10-12 菜单重排后这里忘了跟着改，attendance/modules/clientconfig/push
+//    还指着旧分组、duty 干脆缺失 —— 表现是"从仪表盘点过去，高亮在一个
+//    收着的分组里，像没反应"。嵌套分组（g-inv 在 g-biz 里）直接写最内层
+//    即可：暴露出来的 open(index) 会顺着 indexPath 把父级一起展开
+//    （element-plus menu.mjs 的 open：indexPath.forEach(openMenu)）。
 const MENU_SUB_OF = {
   users: 'g-org', groups: 'g-org', friends: 'g-org', orgs: 'g-org',
-  attendance: 'g-office', files: 'g-office', messages: 'g-office',
-  integrations: 'g-link', upstreams: 'g-link', clientconfig: 'g-link', push: 'g-link',
-  master: 'g-biz', deduct: 'g-biz', training: 'g-biz',
-  settings: 'g-sys', license: 'g-sys', help: 'g-sys', deploywizard: 'g-sys', modules: 'g-sys',
+  attendance: 'g-biz', duty: 'g-biz',
+  master: 'g-inv', deduct: 'g-inv', export: 'g-inv', training: 'g-biz',
+  files: 'g-office', messages: 'g-office',
+  integrations: 'g-link', upstreams: 'g-link',
+  modules: 'g-client', clientconfig: 'g-client', push: 'g-client',
+  settings: 'g-sys', license: 'g-sys', help: 'g-sys', deploywizard: 'g-sys',
 };
 // 首屏不进任何分组：默认全收起，侧栏一眼看完。要看什么再展开。
 const openedGroups = ref([]);
@@ -7020,6 +7315,10 @@ async function loadTab() {
   // 默认控制码要选账号 → 顺手把用户选项也拉上，避免下拉是空的
   else if (tab.value === 'settings') { await loadInfo(); await loadCompSetting(); await loadRdc(); await loadUserOptions(); }
   else if (tab.value === 'deduct') await reloadDeduct();
+  // 导出管理：台账 + 格式设定一起拉；员工下拉复用 /admin/users/options
+  else if (tab.value === 'export') {
+    await Promise.all([loadExpRecords(1), loadExpSettings(), loadUserOptions()]);
+  }
   else if (tab.value === 'push') await loadPush();
   else if (tab.value === 'deploywizard') await dwEnter();
   // 智能助手配置随帮助页加载（老版本服务端没有该接口时静默，不影响帮助页）
@@ -7372,6 +7671,153 @@ async function openDeductSheet(no) {
   } catch (e) {
     ElMessage.error('读取减货单失败：' + (e.response?.data?.error || e.message));
   }
+}
+
+/* ====== 导出管理：记录台账 + 格式设定（需求④，龙哥 2026-10-22）======
+ * 服务端 server/src/routes/export.js：管理端挂 /api/admin/export，
+ * 员工端挂 /api/export —— 两边是同一份数据（员工在「个人中心 → 导出」
+ * 里看到的是他自己的记录 + 同一份格式设定）。
+ *
+ * 🔴 文件不过服务端：客户端本地生成、本地落盘，服务端只记"谁何时导了
+ *    什么"的账。所以这里没有下载入口，只有台账 —— 想再拿一份文件，
+ *    请到导出它的那台设备上重新导。
+ */
+const expTab = ref('records');
+const exp = ref({ records: [], page: 1, total: 0, loading: false });
+const expUser = ref(null);
+const expModule = ref(null);
+
+// 模块名单与客户端 export_settings_page.dart 的 _modules 保持一致：
+// 只列**真的接了格式体系**的模块（有代码在生成文件、有代码在读格式）。
+// 减货 / 补货 / 盘点采集以后接进来再补行 —— 现在摆上来就是"配了没反应"。
+const EXP_MODULES = Object.freeze([
+  { id: 'stocktake', name: '扫码枪盘点' },
+  { id: 'simple_stocktake', name: '简易盘点' },
+]);
+
+// 格式注册表，与客户端 core/export_format.dart 的 ExportFormats 同构。
+// modules = 该格式对哪些模块开放（null = 所有模块）：
+// 托利多两个格式只有带商档价格的扫码枪能有 —— RL00 必有字段含单价，
+// 没有价格的数据导出去是一片 0 价，导进秤也是废数据（客户端 forModule
+// 同一口径，简易盘点因此不弹格式选择器）。
+const EXP_FORMATS = Object.freeze([
+  { id: 'csv_generic', name: '通用 CSV', ext: 'csv', modules: null },
+  { id: 'scan_doc', name: '扫码文本文档', ext: 'txt', modules: ['stocktake'] },
+  { id: 'toledo_plu', name: '托利多 PLU', ext: 'plu', modules: ['stocktake'] },
+  { id: 'toledo_txt', name: '托利多 TXT', ext: 'txt', modules: ['stocktake'] },
+]);
+
+function expFormatsOf(moduleId) {
+  return EXP_FORMATS.filter((f) => !f.modules || f.modules.includes(moduleId));
+}
+
+// 托利多参数默认值与取值范围：必须与服务端 exportfmt.js 的
+// TOLEDO_DEFAULTS / TOLEDO_RANGES 逐字段一致（两边各一份是刻意的：
+// 服务端要校验、客户端要离线可用，但改了一边必须改另一边）。
+const EXP_TOLEDO_DEFAULTS = Object.freeze({
+  pluMode: 'seq', group: 0, tare: 0, tax: 0,
+  shelfLife: 0, recommendLife: 0,
+  priceMode: 'auto', allowReprice: 0, allowDiscount: 0,
+});
+const EXP_TOLEDO_RANGES = Object.freeze({
+  group: [0, 20], tare: [0, 16], tax: [0, 9],
+  shelfLife: [0, 499], recommendLife: [0, 499],
+});
+// 报错文案用的中文名（与服务端 exportfmt.js 的 TOLEDO_LABELS 同款）
+const EXP_TOLEDO_LABELS = Object.freeze({
+  group: '组号', tare: '皮重号', tax: '税号',
+  shelfLife: '保质期', recommendLife: '推荐期',
+});
+
+const expForm = ref({ moduleFormats: {}, toledo: { ...EXP_TOLEDO_DEFAULTS } });
+const expDirty = ref(false);
+const expSaving = ref(false);
+const expSavedAt = ref('');
+
+// 每个模块的"没配"就等于这个格式（客户端 formatOf 的口径：配了不认得也回落它）。
+// 保存时把等于它的条目剔掉 —— 否则"打开设定页什么都没改、点了保存"也会把
+// {} 改写成两条显式默认值，服务端存一份和默认值一样的东西，
+// 以后看配置时分不清"配过没有"。
+const EXP_DEFAULT_FORMAT = 'csv_generic';
+
+async function loadExpRecords(page = 1) {
+  exp.value.loading = true;
+  try {
+    const { data } = await api.get('/admin/export/records', {
+      params: {
+        user: expUser.value || undefined,
+        module: expModule.value || undefined,
+        limit: 50,
+        offset: (page - 1) * 50,
+      },
+    });
+    exp.value.records = data.items || [];
+    exp.value.total = data.total || 0;
+    exp.value.page = page;
+  } catch (e) {
+    ElMessage.error('导出记录加载失败：' + (e.response?.data?.error || e.message));
+  } finally { exp.value.loading = false; }
+}
+
+function reloadExpRecords() { return loadExpRecords(1); }
+
+async function purgeExpRecords() {
+  try {
+    await ElMessageBox.confirm(
+      '清理 180 天以前的导出记录？这些只是台账（文件在员工设备上，不在这里），删掉不影响任何文件。',
+      '清理旧记录', { type: 'warning' });
+  } catch { return; }
+  try {
+    const { data } = await api.post('/admin/export/records/purge', { days: 180 });
+    ElMessage.success(`已清理 ${data.deleted} 条`);
+    await reloadExpRecords();
+  } catch (e) {
+    ElMessage.error('清理失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+async function loadExpSettings() {
+  try {
+    const { data } = await api.get('/admin/export/settings');
+    const mf = {};
+    // 没配过的模块在下拉里显示成它的默认格式（csv_generic）——
+    // 空着的下拉更像"这功能是坏的"
+    for (const m of EXP_MODULES) mf[m.id] = (data.moduleFormats || {})[m.id] || 'csv_generic';
+    expForm.value = { moduleFormats: mf, toledo: { ...EXP_TOLEDO_DEFAULTS, ...(data.toledo || {}) } };
+    expDirty.value = false;
+  } catch (e) {
+    ElMessage.error('格式设定加载失败：' + (e.response?.data?.error || e.message));
+  }
+}
+
+async function saveExpSettings() {
+  // 先按服务端口径验一遍数值（服务端 ranges 见 exportfmt.js 的 TOLEDO_RANGES）。
+  // 前端拦一道只是少绕一次 400，真正的校验永远在服务端。
+  const t = expForm.value.toledo;
+  for (const k of Object.keys(EXP_TOLEDO_RANGES)) {
+    const n = Number(t[k]);
+    const [lo, hi] = EXP_TOLEDO_RANGES[k];
+    if (!Number.isInteger(n) || n < lo || n > hi) {
+      return ElMessage.warning(`${EXP_TOLEDO_LABELS[k]}需在 ${lo}~${hi} 之间的整数`);
+    }
+  }
+  expSaving.value = true;
+  try {
+    // 剔掉等于默认值的条目再存（见 EXP_DEFAULT_FORMAT 注释）
+    const mf = {};
+    for (const [k, v] of Object.entries(expForm.value.moduleFormats)) {
+      if (v && v !== EXP_DEFAULT_FORMAT) mf[k] = v;
+    }
+    await api.put('/admin/export/settings', {
+      moduleFormats: mf,
+      toledo: expForm.value.toledo,
+    });
+    expDirty.value = false;
+    expSavedAt.value = new Date().toLocaleTimeString('zh-CN');
+    ElMessage.success('已保存。员工客户端下次启动时按新设定导出');
+  } catch (e) {
+    ElMessage.error('保存失败：' + (e.response?.data?.error || e.message));
+  } finally { expSaving.value = false; }
 }
 
 /* ====== 用户管理：服务端分页 + 服务端搜索 ====== */
@@ -8651,7 +9097,17 @@ function readFileText(file) {
     const fr = new FileReader();
     fr.onerror = () => reject(new Error('文件读取失败'));
     fr.onload = () => {
-      const buf = fr.result;
+      const buf = new Uint8Array(fr.result);
+      // 🔴 带 UTF-8 BOM（EF BB BF）＝一定是 UTF-8：直接按 UTF-8 解。
+      //    否则下面 GBK 优先的兜底会把 BOM 三个字节解成「锘�」糊在**第一行**前面——
+      //    小文件（替换符没超过阈值 `max(3, len*0.001)`）还不会回退 UTF-8，
+      //    表现就是「第一行乱码、插个回车把 ï»¿ 挪到空行才正常」。
+      //    扫码枪导出的通用文本/CSV 都带 BOM，最容易踩这个坑。
+      //    TextDecoder('utf-8') 默认吞掉 BOM，所以这里直接解出来就是干净的。
+      if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
+        resolve(new TextDecoder('utf-8').decode(buf));
+        return;
+      }
       let s = '';
       try { s = new TextDecoder('gbk').decode(buf); } catch { s = ''; }
       const bad = (s.match(/\uFFFD/g) || []).length;
@@ -10249,7 +10705,9 @@ function onImportFile(ev) {
   const f = ev.target?.files?.[0];
   if (!f) return;
   const reader = new FileReader();
-  reader.onload = () => { importText.value = String(reader.result || ''); };
+  // 🔴 readAsText 不会吞 UTF-8 BOM：带 BOM 的文件首行首列会挂上 ï»¿，
+  //    所以这里手动剥掉（扫码枪/Excel 导出的 UTF-8 文件都带 BOM）。
+  reader.onload = () => { importText.value = String(reader.result || '').replace(/^\uFEFF/, ''); };
   reader.readAsText(f, 'utf-8');
 }
 
@@ -12114,6 +12572,15 @@ const helpFaq = [
     tags: '下载 息屏 中断 断 更新 商档 同步 常亮 休眠',
     a: `<p><b>客户端 v0.26.70 已修复</b>：下载期间屏幕保持常亮（更新安装包、盘点/拣货/商档查询三处拉商档都覆盖），下载完成/失败/取消自动恢复。</p>
       <p>给门店的说法：升级到 v0.26.70 以后，下载时不用再手动点亮屏幕；下载大包时建议插着电。</p>` },
+  /* ====== 可视化搭建（tmagic 拖拽画布）帮助：# 本轮补充 ====== */
+  { q: '可视化搭建（拖拽画布）怎么用？想给客户端搭个页面 / 看板 / 录入页 / 数据展示页',
+    tags: '可视化 搭建 画布 拖拽 模块 页面 看板 录入 编辑器 组件 列表 表格 图表 按钮 表单 卡片 数据来源',
+    a: `<p>完整图文步骤和 5 个插入案例都在「系统帮助 → 八、可视化搭建（拖拽画布）怎么用」一节：</p>
+      <ul>
+        <li>公告页（文本 + 分割线）、库存卡片（卡片 + 列表绑定数据）、销售看板（表格 + 图表 + 刷新按钮）、值班录入（表单 + 提交）、跳转按钮。</li>
+        <li>一句话流程：应用中心 → 模块管理 → 编辑模块 → 页面内容 → 点「可视化搭建」；从左侧拖组件到画布，点元素在右侧改字段，点「保存到模块」再点抽屉「保存」生效。</li>
+        <li>记住：列表 / 表格 / 图表要出数，还得在「数据来源」标签页配 onLoad（dataPath 默认指向 data.rows）。</li>
+      </ul>` },
   /* ====== 智能助手（#314）：接管帮助问答 ====== */
   // 「问一问」走 /assistant/ask（尊重总开关）；
   // 配置卡的「试问」走 /admin/assistant/test（force：配好了就算没启用也真调一次）。

@@ -1,12 +1,9 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
-import '../core/file_io.dart';
 import '../core/stocktake_export.dart';
 import '../core/stocktake_repo.dart';
 import '../core/theme.dart';
-import '../widgets/export_flow.dart';
+import '../widgets/export_runner.dart';
 
 /// 扫码枪出数：一张扫码单的盈亏表 + 导出。
 ///
@@ -19,6 +16,12 @@ import '../widgets/export_flow.dart';
 /// 各家导入格式不同且会变。把导出焊死在某家模板上，换系统就要改代码。
 /// 这里只出一份干净的 CSV（条码/品名/实盘/账面/差异/差异金额），
 /// 谁都能打开、谁都能另存成自己要的模板。
+///
+/// ── 导出格式（2026-10-22 需求④）─────────────────────────────
+/// 不再只有一个"导出 CSV"按钮：点导出先选格式（通用 CSV / 扫码文本文档 /
+/// 托利多 PLU / 托利多 TXT），选过的格式下次默认。选择、生成、落盘、
+/// 记台账、后续动作面板全在 `widgets/export_runner.dart`，本页只负责
+/// 把数据按 `ExportRequest` 交进去 —— 页面不各自实现一遍导出流程。
 ///
 /// ── 一个容易写错的口径 ────────────────────────────────────────
 /// **账面缺失的行不计入盈亏**。它只表示"商档里没这个码"，
@@ -99,35 +102,29 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
     }
     setState(() => _exporting = true);
     try {
-      final csv = StocktakeExport.toCsv(rows);
-      // 🔴 文件名优先单据名（2026-10-06 继承好又多版），没起名兜底单号。
-      final name =
-          FileIo.safeName(StocktakeExport.fileName(widget.sheetNo, _sheetName));
-      final dir = await FileIo.dir();
-      final f = File('${dir.path}${Platform.pathSeparator}$name');
-      // writeAsString 默认就是 UTF-8，BOM 由 toCsv 负责加在内容里
-      await f.writeAsString(csv);
-      if (!mounted) return;
-      setState(() => _exporting = false);
-      await _afterExport(f, rows.length);
+      // 选格式 → 生成 → 落盘 → 记账 → 后续动作面板，全在 ExportRunner。
+      // 本页只交数据：四种格式的原料一次备齐（托利多要价格，只有这页有）。
+      await ExportRunner.run(
+        context,
+        ExportRequest(
+          module: 'stocktake',
+          moduleName: '扫码枪盘点',
+          docNo: widget.sheetNo,
+          // 文件名优先单据名（没起名兜底单号，与各命名函数同规则）
+          sceneLabel: _sheetName.isEmpty ? widget.sheetNo : _sheetName,
+          rowCount: rows.length,
+          csvText: StocktakeExport.toCsv(rows),
+          csvFileName: StocktakeExport.fileName(widget.sheetNo, _sheetName),
+          docText: StocktakeExport.toScanDoc(rows),
+          docFileName: StocktakeExport.scanDocName(widget.sheetNo, _sheetName),
+          toledoRows: StocktakeExport.toToledoRows(rows),
+        ),
+      );
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _exporting = false);
       _snack('导出失败：$e');
+    } finally {
+      if (mounted) setState(() => _exporting = false);
     }
-  }
-
-  /// 导出后给几条路（打开 / 发给同事 / 另存为）。
-  /// 弹层本体在 `widgets/export_flow.dart`，与采集页、盘点采集页共用一份。
-  Future<void> _afterExport(File f, int rows) async {
-    await ExportFlow.show(
-      context,
-      f,
-      rows: rows,
-      // 转发建议名与实际文件名同规则：单据名优先。
-      suggestName: StocktakeExport.fileName(widget.sheetNo, _sheetName),
-      onMessage: _snack,
-    );
   }
 
   void _snack(String msg) {
@@ -163,8 +160,8 @@ class _StocktakeResultPageState extends State<StocktakeResultPage> {
                       height: 20,
                       child: CircularProgressIndicator(strokeWidth: 2)),
                 )
-              : IconButton(
-                  tooltip: '导出 CSV',
+                : IconButton(
+                  tooltip: '导出',
                   icon: Icon(Icons.ios_share, color: AppColors.brand),
                   onPressed: _export,
                 ),

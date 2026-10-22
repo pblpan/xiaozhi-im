@@ -179,6 +179,10 @@ app.use('/api/training', require('./routes/training'));
 // 与盘点共用 inv_sheets + inv_scans，靠 sheet_type='deduct' 区分
 // （盘点走 /api/stocktake，减货走这里，两边互不干扰）。
 app.use('/api/deduct', require('./routes/deduct'));
+// 导出记录 + 格式设定（需求④）：员工端 /api/export，管理端 /api/admin/export。
+// ⚠️ 管理前缀更长，必须排在下面的 /api/admin 前面，否则会被管理路由先接管。
+app.use('/api/export', require('./routes/export'));
+app.use('/api/admin/export', require('./routes/export').admin);
 
 // 健康检查：进程活着就算活。
 //   /health 给「进程是否在跑」用 —— 容器编排、飞牛的界面探活都看它，
