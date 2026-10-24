@@ -46,6 +46,20 @@
 // 那是**成对**的改动，拆开任何一半都会导致"画面对了但点不准"。
 //
 // ─────────────────────────────────────────────────────────────
+// 【窗口模式：只投射一个窗口】
+// ─────────────────────────────────────────────────────────────
+// setWindow(hwnd) 之后，采集源从"整屏"变成"那个窗口"：每帧重新
+// GetWindowRect 并和采集区求交，再走完全相同的缩放/GetDIBits/JPEG 链路。
+// 窗口被拖动、缩放都自动跟随，不需要额外消息。
+//
+// 三种抓不了的情况（见 windowState）：
+//   'min'  窗口被最小化 —— Windows 把它藏到 (-32000,-32000)，没有像素；
+//   'gone' 窗口被关了   —— IsWindow 为假；
+//   'off'  窗口整体不在采集区 —— 比如搬到了副屏（默认只抓主屏）。
+// 这三种都不算"采集失败"：worker 看到它们时**不计失败次数、不重建采集器**，
+// 只是转报状态，等窗口恢复（或控制端换个窗口）再继续。
+//
+// ─────────────────────────────────────────────────────────────
 // 【性能：这些数字是实测出来的，不是估的】
 // ─────────────────────────────────────────────────────────────
 // 本机实测（同一台被控电脑，960x540 / JPEG q60）：
@@ -62,6 +76,7 @@
 //    改动前先对照官方文档，别凭感觉写。
 import 'dart:ffi' as ffi;
 import 'dart:io' show Platform;
+import 'dart:math' show max, min;
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart' as pkg_ffi;
@@ -96,10 +111,32 @@ const int _BI_RGB = 0;
 /// DIB_RGB_COLORS：GetDIBits 返回本色（不做调色板映射）。
 const int _DIB_RGB_COLORS = 0;
 
+/// 最小化窗口的 GetWindowRect 哨兵坐标。Windows 把最小化窗口"藏"到
+/// (-32000, -32000)（旧版多显示器编程的遗产），所以见到这个值就知道窗口
+/// 被最小化了 —— 而不是真的在屏幕外。
+const int _MINIMIZED_SENTINEL = -32000;
+
 // ------------------------------------------------------ 结构体（ABI 契约）
 // 抄自 wingdi.h / Windows 官方文档。32bpp 的 DIB 用不到调色板，
 // 所以 GetDIBits 只要求 BITMAPINFOHEADER 那一段，这里就不声明 RGBQUAD 数组了
 // （见 _bmi 的分配：header 大小 + 4 字节余量）。
+//
+// _RECT 在 win_window_list.dart 里有一份孪生声明（那边枚举窗口也要用）。
+// 两个文件各自保留一份是有意的：窗口枚举与采集是两个独立关注点，
+// 不让采集器去依赖"枚举器"；这个结构体 ABI 早已冻结，不会漂。
+final class _RECT extends ffi.Struct {
+  @ffi.Int32()
+  external int left;
+
+  @ffi.Int32()
+  external int top;
+
+  @ffi.Int32()
+  external int right;
+
+  @ffi.Int32()
+  external int bottom;
+}
 
 final class _BITMAPINFOHEADER extends ffi.Struct {
   /// 结构体大小（字节），必须是 sizeof(BITMAPINFOHEADER)。
@@ -154,6 +191,17 @@ typedef _ReleaseDCDart = int Function(
 
 typedef _GetSystemMetricsNative = ffi.Int32 Function(ffi.Int32);
 typedef _GetSystemMetricsDart = int Function(int);
+
+typedef _GetWindowRectNative =
+    ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<_RECT>);
+typedef _GetWindowRectDart =
+    int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<_RECT>);
+
+typedef _IsWindowNative = ffi.Int32 Function(ffi.Pointer<ffi.Void>);
+typedef _IsWindowDart = int Function(ffi.Pointer<ffi.Void>);
+
+typedef _IsIconicNative = ffi.Int32 Function(ffi.Pointer<ffi.Void>);
+typedef _IsIconicDart = int Function(ffi.Pointer<ffi.Void>);
 
 typedef _CreateCompatibleDCNative = ffi.Pointer<ffi.Void> Function(
     ffi.Pointer<ffi.Void>);
@@ -272,6 +320,21 @@ class _U32 {
       _getSystemMetrics ??= _dll
           .lookupFunction<_GetSystemMetricsNative, _GetSystemMetricsDart>(
               'GetSystemMetrics');
+
+  static _GetWindowRectDart? _getWindowRect;
+  static _GetWindowRectDart get getWindowRect => _getWindowRect ??=
+      _dll.lookupFunction<_GetWindowRectNative,
+          _GetWindowRectDart>('GetWindowRect');
+
+  static _IsWindowDart? _isWindow;
+  static _IsWindowDart get isWindow =>
+      _isWindow ??= _dll
+          .lookupFunction<_IsWindowNative, _IsWindowDart>('IsWindow');
+
+  static _IsIconicDart? _isIconic;
+  static _IsIconicDart get isIconic =>
+      _isIconic ??= _dll
+          .lookupFunction<_IsIconicNative, _IsIconicDart>('IsIconic');
 }
 
 /// gdi32.dll 绑定。
@@ -363,6 +426,26 @@ class WinGdiCapture {
   int _srcW = 0;
   int _srcH = 0;
 
+  // ── 窗口模式（参考 TwinDesk「Apps 面板」：只投射被控端选中的那一个窗口）
+  // ─────────────────────────────────────────────────────────────
+  // 窗口模式下每帧重新 GetWindowRect：窗口被拖动/缩放时画面自动跟随，
+  // 不需要任何额外消息。与"整屏模式"的差别只是采集源矩形不同，
+  // 后面的缩放/GetDIBits/JPEG 全链路原样复用。
+  //
+  // 句柄以**地址值**（int）保存：采集器跑在独立 isolate 里，消息只能过
+  // SendPort，Pointer 对象本身不可传输；而同进程内地址值是稳定的，
+  // 用的时候 Pointer<Void>.fromAddress(hwnd) 还原即可。
+  bool _windowMode = false;
+  int _windowHwnd = 0;
+
+  /// 窗口模式状态机（每帧刷新，worker 靠它决定怎么给主线程报信）：
+  ///   ''    非窗口模式（整屏）
+  ///   'ok'  正常跟拍中
+  ///   'min' 目标窗口被最小化（GetWindowRect 给了哨兵坐标，没有画面可抓）
+  ///   'gone' 目标窗口已关闭（IsWindow 为假）
+  ///   'off' 目标窗口整体不在当前采集区（比如搬到了副屏，而只抓主屏）
+  String _windowState = '';
+
   // GDI 句柄
   ffi.Pointer<ffi.Void> _hdcScreen = ffi.nullptr;
   ffi.Pointer<ffi.Void> _hdcMem = ffi.nullptr;
@@ -389,9 +472,35 @@ class WinGdiCapture {
   int get sourceWidth => _srcW;
   int get sourceHeight => _srcH;
 
+  /// 是否处于窗口模式。
+  bool get windowMode => _windowMode;
+
+  /// 窗口模式状态（''/'ok'/'min'/'gone'/'off'），含义见字段注释。
+  /// 非窗口模式恒为 ''。
+  String get windowState => _windowState;
+
+  /// 进入窗口模式：之后每帧只抓 [hwndAddress] 这个窗口。
+  ///
+  /// [hwndAddress] 是窗口句柄的地址值（见 win_window_list.dart 的
+  /// WinWindowInfo.hwnd）。同一进程内用 fromAddress 还原是安全的。
+  void setWindow(int hwndAddress) {
+    if (hwndAddress == 0) return;
+    _windowMode = true;
+    _windowHwnd = hwndAddress;
+    _windowState = 'ok'; // 首帧会立刻校正成真实状态
+  }
+
+  /// 退出窗口模式，回到整屏（主屏/全部显示器，取决于 allMonitors）。
+  void clearWindow() {
+    _windowMode = false;
+    _windowHwnd = 0;
+    _windowState = '';
+  }
+
   /// 人话描述，进诊断条。
-  String describe() =>
-      '${allMonitors ? '全部显示器' : '主显示器'} ${_srcW}x$_srcH';
+  String describe() => _windowMode
+      ? '窗口模式（hwnd=0x${_windowHwnd.toRadixString(16)}）'
+      : '${allMonitors ? '全部显示器' : '主显示器'} ${_srcW}x$_srcH';
 
   /// 打开屏幕 DC 与内存 DC，并把函数指针解析出来。
   ///
@@ -409,6 +518,9 @@ class WinGdiCapture {
       _U32.getDC;
       _U32.releaseDC;
       _U32.getSystemMetrics;
+      _U32.getWindowRect;
+      _U32.isWindow;
+      _U32.isIconic;
       _G32.createCompatibleDC;
       _G32.createCompatibleBitmap;
       _G32.selectObject;
@@ -478,20 +590,84 @@ class WinGdiCapture {
     return true;
   }
 
+  /// 窗口模式下算本帧的采集源矩形（屏幕物理坐标）。
+  ///
+  /// 返回 `(x, y, w, h)`；返回 null 表示抓不了，原因已写进
+  /// [windowState] 与 [lastError]：
+  ///   · 'gone' —— IsWindow 为假：窗口被关了（或正在销毁）
+  ///   · 'min'  —— 最小化：Windows 把最小化窗口藏到 (-32000,-32000)，
+  ///               屏幕上没有它的像素可抓
+  ///   · 'off'  —— 与采集区（主屏/虚拟桌面）无交集：窗口整个搬到了
+  ///               采集区外的屏幕上
+  (int, int, int, int)? _windowSourceRect() {
+    final hwnd = ffi.Pointer<ffi.Void>.fromAddress(_windowHwnd);
+    if (_U32.isWindow(hwnd) == 0) {
+      _windowState = 'gone';
+      _lastError = '目标窗口已关闭';
+      return null;
+    }
+    final rect = pkg_ffi.calloc<_RECT>();
+    try {
+      if (_U32.getWindowRect(hwnd, rect) == 0) {
+        // GetWindowRect 失败多半发生在窗口正在销毁的瞬间，按关闭处理。
+        _windowState = 'gone';
+        _lastError = '目标窗口已关闭';
+        return null;
+      }
+      final r = rect.ref;
+      if (_U32.isIconic(hwnd) != 0 || r.left <= _MINIMIZED_SENTINEL) {
+        _windowState = 'min';
+        _lastError = '目标窗口已最小化';
+        return null;
+      }
+      // 与采集区求交：窗口可以一部分在采集区外（跨屏摆放），
+      // 只取可见的那一部分，比整窗放弃更符合直觉。
+      final x0 = max(r.left, _srcX);
+      final y0 = max(r.top, _srcY);
+      final x1 = min(r.right, _srcX + _srcW);
+      final y1 = min(r.bottom, _srcY + _srcH);
+      if (x1 <= x0 || y1 <= y0) {
+        _windowState = 'off';
+        _lastError = '目标窗口不在当前采集区（搬到了别的屏幕？）';
+        return null;
+      }
+      _windowState = 'ok';
+      return (x0, y0, x1 - x0, y1 - y0);
+    } finally {
+      pkg_ffi.calloc.free(rect);
+    }
+  }
+
   /// 抓一帧并编码成 JPEG。
   ///
-  /// [maxWidth] 目标最大宽度（按屏幕宽等比缩，不会放大）；[quality] JPEG 质量。
-  /// 失败返回 null，原因见 [lastError]。
+  /// [maxWidth] 目标最大宽度（按**采集源**宽等比缩，不会放大）；
+  /// [quality] JPEG 质量。失败返回 null，原因见 [lastError]；
+  /// 窗口模式下的四种失败（最小化/关闭/不在采集区）见 [windowState]。
   GdiFrame? captureJpeg({int maxWidth = 1280, int quality = 65}) {
     if (!_open) return null;
 
+    // 采集源矩形：整屏模式是打开时测好的固定值；窗口模式每帧重算
+    // （窗口会移动/缩放/关闭，必须跟着变）。
+    var sx = _srcX;
+    var sy = _srcY;
+    var sw = _srcW;
+    var sh = _srcH;
+    if (_windowMode) {
+      final r = _windowSourceRect();
+      if (r == null) return null; // 状态已写进 _windowState / _lastError
+      sx = r.$1;
+      sy = r.$2;
+      sw = r.$3;
+      sh = r.$4;
+    }
+
     // 目标尺寸：只缩不放；并且取偶数 —— JPEG 的色度下采样按 2x2 走，
     // 奇数宽高会被编码器内部补齐，白多一层开销。
-    var dw = _srcW;
-    var dh = _srcH;
-    if (maxWidth > 0 && _srcW > maxWidth) {
+    var dw = sw;
+    var dh = sh;
+    if (maxWidth > 0 && sw > maxWidth) {
       dw = maxWidth;
-      dh = (_srcH * maxWidth / _srcW).round();
+      dh = (sh * maxWidth / sw).round();
     }
     if (dw < 2) dw = 2;
     if (dh < 2) dh = 2;
@@ -501,13 +677,12 @@ class WinGdiCapture {
     if (!_ensureBitmap(dw, dh)) return null;
 
     final int ok;
-    if (dw == _srcW && dh == _srcH) {
-      ok = _G32.bitBlt(_hdcMem, 0, 0, dw, dh, _hdcScreen, _srcX, _srcY,
-          _SRCCOPY);
+    if (dw == sw && dh == sh) {
+      ok = _G32.bitBlt(_hdcMem, 0, 0, dw, dh, _hdcScreen, sx, sy, _SRCCOPY);
     } else {
       _G32.setStretchBltMode(_hdcMem, _HALFTONE);
-      ok = _G32.stretchBlt(_hdcMem, 0, 0, dw, dh, _hdcScreen, _srcX, _srcY,
-          _srcW, _srcH, _SRCCOPY);
+      ok = _G32.stretchBlt(
+          _hdcMem, 0, 0, dw, dh, _hdcScreen, sx, sy, sw, sh, _SRCCOPY);
     }
     if (ok == 0) {
       _lastError = 'BitBlt/StretchBlt 失败（屏被独占/远程会话断开？）';

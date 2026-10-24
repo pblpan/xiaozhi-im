@@ -96,6 +96,26 @@ abstract class InputInjector {
   ///    只有 Windows 有这个概念，其余平台默认空实现即可。
   void usePrimaryOnlyCapture(bool primaryOnly) {}
 
+  // ── 窗口模式（参考 TwinDesk「Apps 面板」）────────────────────
+  // 控制端选中被控端的某一个窗口后，注入侧要把鼠标坐标从"窗口内归一化"
+  // 换算成"桌面绝对像素"，还要保证键盘输入送到那个窗口（键盘只去前台
+  // 窗口，所以选中时可能需要还原最小化 + 抢一次前台）。
+  // 只有 Windows 有"顶层窗口"这个概念，其余平台默认空实现。
+
+  /// 锁定注入目标到 [hwnd]（句柄地址值，见 WinWindowInfo.hwnd）。
+  /// 传 0 等价于 [clearWindowTarget]。
+  void setWindowTarget(int hwnd) {}
+
+  /// 退出窗口模式，回到整屏注入。
+  void clearWindowTarget() {}
+
+  /// 当前窗口目标的句柄地址值；0 = 不在窗口模式。
+  int get windowTargetHwnd => 0;
+
+  /// 当前窗口目标的实时矩形（被控端屏幕物理坐标）；null = 不在窗口模式
+  /// 或窗口暂时不可用（已关闭/最小化中）。
+  ({int left, int top, int width, int height})? get windowTargetRect => null;
+
   void mouseButton(RemoteMouseButton button, bool down);
 
   /// 滚轮。delta 为正表示向上滚。

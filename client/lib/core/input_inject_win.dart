@@ -60,6 +60,43 @@ const int _KEYEVENTF_EXTENDEDKEY = 0x0001;
 const int _KEYEVENTF_KEYUP = 0x0002;
 const int _KEYEVENTF_UNICODE = 0x0004;
 
+/// SW_RESTORE：ShowWindow 的命令，还原最小化/最大化的窗口并激活。
+const int _SW_RESTORE = 9;
+
+/// GetSystemMetrics 的索引：主显示器宽/高、虚拟桌面总尺寸。
+/// 窗口模式换算坐标要用（窗口矩形是虚拟桌面坐标，归一化基准要看
+/// usePrimaryOnlyCapture 选哪套）。
+///
+/// 注意这里**没有** SM_XVIRTUALSCREEN / SM_YVIRTUALSCREEN（虚拟桌面原点）：
+/// VIRTUALDESK 归一化的 0..65535 就是按"从虚拟桌面左上角起算"摊开的，
+/// 而 GetWindowRect 给的坐标同一坐标系，直接除总宽高即可，不需要再减原点
+/// （曾经在整屏模式下先加原点再除总宽，副屏在左侧时算出负坐标 —— 见
+/// absoluteMousePos 的注释，别再引入同一个 bug）。
+const int _SM_CXSCREEN = 0;
+const int _SM_CYSCREEN = 1;
+const int _SM_CXVIRTUALSCREEN = 78;
+const int _SM_CYVIRTUALSCREEN = 79;
+
+/// 最小化窗口 GetWindowRect 的哨兵坐标（Windows 把最小化窗口藏到屏幕外）。
+const int _MINIMIZED_SENTINEL = -32000;
+
+/// RECT：窗口矩形（虚拟桌面物理坐标）。与 win_window_list.dart /
+/// win_gdi_capture.dart 各有一份孪生声明 —— ABI 早已冻结，不共享是有意的
+/// （三个文件各自独立可用，不互相牵导入）。
+final class _RECT extends ffi.Struct {
+  @ffi.Int32()
+  external int left;
+
+  @ffi.Int32()
+  external int top;
+
+  @ffi.Int32()
+  external int right;
+
+  @ffi.Int32()
+  external int bottom;
+}
+
 // ------------------------------------------------------ 结构体（ABI 契约）
 // ⚠️ 布局见文件头说明，改动前先核对 Windows SDK。
 
@@ -127,7 +164,41 @@ typedef _SendInputNative = ffi.Uint32 Function(
     ffi.Uint32, ffi.Pointer<_INPUT>, ffi.Int32);
 typedef _SendInputDart = int Function(int, ffi.Pointer<_INPUT>, int);
 
-/// 惰性打开的 user32 句柄 + SendInput 函数指针。
+// ------------------------------------------------ 窗口模式绑定（激活+几何）
+typedef _GetSystemMetricsNative = ffi.Int32 Function(ffi.Int32);
+typedef _GetSystemMetricsDart = int Function(int);
+
+typedef _IsWindowNative = ffi.Int32 Function(ffi.Pointer<ffi.Void>);
+typedef _IsWindowDart = int Function(ffi.Pointer<ffi.Void>);
+
+typedef _IsIconicNative = ffi.Int32 Function(ffi.Pointer<ffi.Void>);
+typedef _IsIconicDart = int Function(ffi.Pointer<ffi.Void>);
+
+typedef _GetWindowRectNative =
+    ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<_RECT>);
+typedef _GetWindowRectDart =
+    int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<_RECT>);
+
+typedef _ShowWindowNative =
+    ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Int32);
+typedef _ShowWindowDart = int Function(ffi.Pointer<ffi.Void>, int);
+
+typedef _GetForegroundWindowNative = ffi.Pointer<ffi.Void> Function();
+typedef _GetForegroundWindowDart = ffi.Pointer<ffi.Void> Function();
+
+typedef _GetWindowThreadProcessIdNative = ffi.Uint32 Function(
+    ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint32>);
+typedef _GetWindowThreadProcessIdDart = int Function(
+    ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint32>);
+
+typedef _AttachThreadInputNative = ffi.Int32 Function(
+    ffi.Uint32, ffi.Uint32, ffi.Int32);
+typedef _AttachThreadInputDart = int Function(int, int, int);
+
+typedef _SetForegroundWindowNative = ffi.Int32 Function(ffi.Pointer<ffi.Void>);
+typedef _SetForegroundWindowDart = int Function(ffi.Pointer<ffi.Void>);
+
+/// 惰性打开的 user32 句柄 + 函数指针表。
 ///
 /// ⚠️ **必须惰性**：非 Windows 平台没有 user32.dll，在顶层直接 open 会抛异常。
 /// 只在真正要注入时才解析，而且只在 Windows 上才会走到。
@@ -138,13 +209,63 @@ class _User32 {
   static ffi.DynamicLibrary? _lib;
   static _SendInputDart? _sendInput;
 
+  /// 惰性打开 user32.dll。**所有**函数指针都从这走，保证先开库再查符号
+  /// （直接 `_lib!.lookup` 在 sendInput 没被访问过时会 NPE）。
+  static ffi.DynamicLibrary get _dll => _lib ??= ffi.DynamicLibrary.open('user32.dll');
+
   static _SendInputDart get sendInput {
     if (_sendInput != null) return _sendInput!;
-    _lib ??= ffi.DynamicLibrary.open('user32.dll');
-    _sendInput = _lib!
+    _sendInput = _dll
         .lookupFunction<_SendInputNative, _SendInputDart>('SendInput');
     return _sendInput!;
   }
+
+  static _GetSystemMetricsDart? _getSystemMetrics;
+  static _GetSystemMetricsDart get getSystemMetrics => _getSystemMetrics ??=
+      _dll.lookupFunction<_GetSystemMetricsNative,
+          _GetSystemMetricsDart>('GetSystemMetrics');
+
+  static _IsWindowDart? _isWindow;
+  static _IsWindowDart get isWindow =>
+      _isWindow ??= _dll
+          .lookupFunction<_IsWindowNative, _IsWindowDart>('IsWindow');
+
+  static _IsIconicDart? _isIconic;
+  static _IsIconicDart get isIconic =>
+      _isIconic ??= _dll
+          .lookupFunction<_IsIconicNative, _IsIconicDart>('IsIconic');
+
+  static _GetWindowRectDart? _getWindowRect;
+  static _GetWindowRectDart get getWindowRect => _getWindowRect ??=
+      _dll.lookupFunction<_GetWindowRectNative,
+          _GetWindowRectDart>('GetWindowRect');
+
+  static _ShowWindowDart? _showWindow;
+  static _ShowWindowDart get showWindow =>
+      _showWindow ??= _dll
+          .lookupFunction<_ShowWindowNative, _ShowWindowDart>('ShowWindow');
+
+  static _GetForegroundWindowDart? _getForegroundWindow;
+  static _GetForegroundWindowDart get getForegroundWindow =>
+      _getForegroundWindow ??= _dll.lookupFunction<
+          _GetForegroundWindowNative,
+          _GetForegroundWindowDart>('GetForegroundWindow');
+
+  static _GetWindowThreadProcessIdDart? _getWindowThreadProcessId;
+  static _GetWindowThreadProcessIdDart get getWindowThreadProcessId =>
+      _getWindowThreadProcessId ??= _dll.lookupFunction<
+          _GetWindowThreadProcessIdNative,
+          _GetWindowThreadProcessIdDart>('GetWindowThreadProcessId');
+
+  static _AttachThreadInputDart? _attachThreadInput;
+  static _AttachThreadInputDart get attachThreadInput =>
+      _attachThreadInput ??= _dll.lookupFunction<_AttachThreadInputNative,
+          _AttachThreadInputDart>('AttachThreadInput');
+
+  static _SetForegroundWindowDart? _setForegroundWindow;
+  static _SetForegroundWindowDart get setForegroundWindow =>
+      _setForegroundWindow ??= _dll.lookupFunction<_SetForegroundWindowNative,
+          _SetForegroundWindowDart>('SetForegroundWindow');
 }
 
 /// 归一化坐标 → Win32 绝对鼠标坐标（0..65535）。
@@ -185,8 +306,145 @@ class WindowsInputInjector extends InputInjector {
     _primaryOnly = primaryOnly;
   }
 
+  // ── 窗口模式（参考 TwinDesk「Apps 面板」）──────────────────────
+  //
+  // 控制端选中的是"窗口内归一化坐标"（画面里那个窗口占满视图），
+  // 而被控端要的是"桌面绝对像素"。所以这里做两步换算：
+  //   ① 窗口归一化 → 窗口矩形内的绝对像素（left + nx*width）
+  //   ② 绝对像素   → 归一化基准（主屏 or 虚拟桌面，同 usePrimaryOnlyCapture）
+  // 键盘另外要保证目标窗口在前台（键盘只去前台窗口），见 _key。
+
+  /// 目标窗口句柄地址值；0 = 不在窗口模式。
+  int _winHwnd = 0;
+
+  /// 目标窗口矩形（虚拟桌面物理坐标）。每次用之前现刷 —— 窗口可能被
+  /// 本地用户拖动/缩放，缓存必然过期。
+  int _winLeft = 0;
+  int _winTop = 0;
+  int _winW = 0;
+  int _winH = 0;
+
+  @override
+  void setWindowTarget(int hwnd) {
+    if (!Platform.isWindows || hwnd == 0) return;
+    _winHwnd = hwnd;
+    _winLeft = _winTop = _winW = _winH = 0;
+    // 选中即激活：窗口可能最小化或在后台，不还原的话连画面都没有
+    // （最小化时 GetWindowRect 给的是 (-32000,-32000) 哨兵坐标）。
+    _activateWindow();
+    _refreshWindowRect();
+  }
+
+  @override
+  void clearWindowTarget() {
+    _winHwnd = 0;
+    _winLeft = _winTop = _winW = _winH = 0;
+  }
+
+  @override
+  int get windowTargetHwnd => _winHwnd;
+
+  @override
+  ({int left, int top, int width, int height})? get windowTargetRect =>
+      (_winHwnd != 0 && _winW > 0 && _winH > 0)
+          ? (left: _winLeft, top: _winTop, width: _winW, height: _winH)
+          : null;
+
+  /// 把目标窗口带到前台：最小化先还原，再用 AttachThreadInput 绕过
+  /// SetForegroundWindow 的前台限制（本进程不是前台进程时直接调会失败）。
+  void _activateWindow() {
+    if (_winHwnd == 0) return;
+    final hwnd = ffi.Pointer<ffi.Void>.fromAddress(_winHwnd);
+    if (_User32.isWindow(hwnd) == 0) return;
+    if (_User32.isIconic(hwnd) != 0) {
+      _User32.showWindow(hwnd, _SW_RESTORE);
+    }
+    final fg = _User32.getForegroundWindow();
+    if (fg == hwnd) return; // 已经在前台，不用抢
+    final targetThread = _User32.getWindowThreadProcessId(hwnd, ffi.nullptr);
+    final fgThread =
+        fg == ffi.nullptr ? 0 : _User32.getWindowThreadProcessId(fg, ffi.nullptr);
+    if (targetThread != 0 && fgThread != 0 && targetThread != fgThread) {
+      // 临时把两个线程的输入队列"绑"在一起，本进程就获得了设置前台的资格；
+      // 用完立刻解绑。这是绕过前台锁的标准做法。
+      _User32.attachThreadInput(targetThread, fgThread, 1);
+      _User32.setForegroundWindow(hwnd);
+      _User32.attachThreadInput(targetThread, fgThread, 0);
+    } else {
+      _User32.setForegroundWindow(hwnd);
+    }
+  }
+
+  /// 现算目标窗口矩形。最小化（哨兵坐标）时保留旧值不清零 ——
+  /// 那种情况下本来也没有像素可点，由调用方判 _winW/_winH。
+  void _refreshWindowRect() {
+    if (_winHwnd == 0) return;
+    final rect = ffi_pkg.calloc<_RECT>();
+    try {
+      if (_User32.getWindowRect(
+              ffi.Pointer<ffi.Void>.fromAddress(_winHwnd), rect) !=
+          0) {
+        final r = rect.ref;
+        if (r.left > _MINIMIZED_SENTINEL) {
+          _winLeft = r.left;
+          _winTop = r.top;
+          _winW = r.right - r.left;
+          _winH = r.bottom - r.top;
+          if (_winW < 0) _winW = 0;
+          if (_winH < 0) _winH = 0;
+        }
+      }
+    } finally {
+      ffi_pkg.calloc.free(rect);
+    }
+  }
+
+  /// 窗口模式下、发送坐标类输入前的准备：窗口没了/最小化了就还原，
+  /// 矩形刷新到最新。返回 false 表示这一跳输入只能丢弃（没有可点的窗口）。
+  bool _ensureWindowReady() {
+    if (_winHwnd == 0) return true; // 非窗口模式，无需准备
+    final hwnd = ffi.Pointer<ffi.Void>.fromAddress(_winHwnd);
+    if (_User32.isWindow(hwnd) == 0) return false;
+    if (_User32.isIconic(hwnd) != 0) _activateWindow();
+    _refreshWindowRect();
+    return _winW > 0 && _winH > 0;
+  }
+
   @override
   void moveAbsolute(double nx, double ny) {
+    if (_winHwnd != 0) {
+      // 窗口模式：先保证窗口可用且矩形最新，再把"窗口内归一化"换算成
+      // 桌面绝对像素，最后换算成归一化基准（与整屏模式同一套标志位）。
+      if (!_ensureWindowReady()) return;
+      final cx = nx.clamp(0.0, 1.0);
+      final cy = ny.clamp(0.0, 1.0);
+      final absX = _winLeft + cx * _winW;
+      final absY = _winTop + cy * _winH;
+      double fnx;
+      double fny;
+      if (_primaryOnly) {
+        final cw = _User32.getSystemMetrics(_SM_CXSCREEN);
+        final ch = _User32.getSystemMetrics(_SM_CYSCREEN);
+        if (cw <= 0 || ch <= 0) return;
+        fnx = absX / cw;
+        fny = absY / ch;
+      } else {
+        // VIRTUALDESK 归一化的原点就是虚拟桌面左上角，而 GetWindowRect
+        // 给的也是同一坐标系，直接除总宽高即可（不需要再减原点）。
+        final vw = _User32.getSystemMetrics(_SM_CXVIRTUALSCREEN);
+        final vh = _User32.getSystemMetrics(_SM_CYVIRTUALSCREEN);
+        if (vw <= 0 || vh <= 0) return;
+        fnx = absX / vw;
+        fny = absY / vh;
+      }
+      final p = absoluteMousePos(fnx, fny);
+      final flags = _MOUSEEVENTF_MOVE |
+          _MOUSEEVENTF_ABSOLUTE |
+          (_primaryOnly ? 0 : _MOUSEEVENTF_VIRTUALDESK);
+      _mouse(flags, p.x, p.y, 0);
+      return;
+    }
+
     final p = absoluteMousePos(nx, ny);
     // MOUSEEVENTF_ABSOLUTE 的归一化基准由 VIRTUALDESK 决定：
     //   带 VIRTUALDESK → 0..65535 摊在整个虚拟桌面（多屏拼起来）上；
@@ -250,7 +508,17 @@ class WindowsInputInjector extends InputInjector {
   ///
   /// ⚠️ `vk == null` 且 `char == null` 时**必须直接返回**，不能带着 0 往下走 ——
   ///    那会注入一个"无意义的键"。
+  ///
+  /// 窗口模式下还要先保证目标窗口是前台：**键盘输入只去前台窗口**，
+  /// 本地用户中途点了别的窗口，我们的按键就打到别人身上去了。
   void _key(RemoteKey k, {required bool up}) {
+    if (_winHwnd != 0) {
+      final hwnd = ffi.Pointer<ffi.Void>.fromAddress(_winHwnd);
+      if (_User32.isWindow(hwnd) != 0 &&
+          _User32.getForegroundWindow() != hwnd) {
+        _activateWindow();
+      }
+    }
     final p = ffi_pkg.calloc<_INPUT>();
     try {
       p.ref.type = _INPUT_KEYBOARD;

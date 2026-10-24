@@ -33,6 +33,7 @@ import 'remote_models.dart';
 import 'rtc_video_degrader.dart';
 import 'sound_service.dart';
 import 'win_gdi_frame_worker.dart';
+import 'win_window_list.dart';
 
 /// 自研画面通道的画质档位表：档位 → (目标最大宽度, JPEG 质量)。
 ///
@@ -100,6 +101,156 @@ final class QualityAction extends RemoteInputAction {
   final int? level;
 }
 
+// ── 窗口模式（参考 TwinDesk「Apps 面板」）─────────────────────────
+//
+// 控制端不只看整屏，还能列出被控端"开着的那些窗口"，选中一个就只投射它。
+// 全部走**现有的控制 DataChannel**（服务端零改动）：
+//   controller → host：wl 要列表 / ws 选窗口(hwnd) / we 退出窗口模式
+//   host → controller：wn 列表(JSON) / wsok 已进入(带矩形) / wst 状态变化 /
+//                        wg 窗口被关闭
+// 窗口枚举只发生在被控端本机（win_window_list.dart），句柄以**地址值**
+// 过通道 —— 对端拿到的只是数字，注入/采集时在本进程用
+// Pointer<Void>.fromAddress(hwnd) 还原。
+
+/// 请求窗口列表（controller→host）。
+final class WindowListRequestAction extends RemoteInputAction {}
+
+/// 选择窗口（controller→host）。[hwnd] 是 WinWindowInfo.hwnd 那种地址值。
+final class WindowSelectAction extends RemoteInputAction {
+  WindowSelectAction(this.hwnd);
+  final int hwnd;
+}
+
+/// 退出窗口模式（controller→host），回到整屏投射。
+final class WindowExitAction extends RemoteInputAction {}
+
+/// 控制端手里的一个窗口条目（纯数据，**不含任何 FFI 类型** ——
+/// 它可能跑在 Android 上，而 hwndPtr 只在被控端进程里有意义）。
+class RemoteWindowInfo {
+  const RemoteWindowInfo({
+    required this.hwnd,
+    required this.title,
+    required this.process,
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+    required this.minimized,
+  });
+
+  factory RemoteWindowInfo.fromJson(Map<String, dynamic> m) =>
+      RemoteWindowInfo(
+        hwnd: asInt(m['hwnd']) ?? 0,
+        title: m['title']?.toString() ?? '',
+        process: m['process']?.toString() ?? '',
+        left: asInt(m['left']) ?? 0,
+        top: asInt(m['top']) ?? 0,
+        width: asInt(m['width']) ?? 0,
+        height: asInt(m['height']) ?? 0,
+        minimized: m['min'] == true,
+      );
+
+  /// 句柄地址值（只在被控端进程内可还原成指针）。
+  final int hwnd;
+  final String title;
+  final String process;
+
+  /// 窗口矩形（被控端屏幕物理坐标）。
+  final int left;
+  final int top;
+  final int width;
+  final int height;
+
+  /// 是否最小化（选了之后第一次输入会先还原）。
+  final bool minimized;
+
+  /// 列表副标题：进程名 + 尺寸；最小化时明说。
+  String get subtitle => minimized
+      ? '${process.isEmpty ? '未知进程' : process} · 已最小化'
+      : '${process.isEmpty ? '未知进程' : process} · ${width}x$height';
+}
+
+/// 被控端 → 控制端的窗口协议报文（host→controller 方向）。
+///
+/// 与 [RemoteInputAction] 分开两个家族：方向不同、字段不同，
+/// 混在一起解析会让"谁在执行谁"变糊。
+sealed class WindowHostMessage {}
+
+/// wn：窗口列表。[ok]=false 时 [why] 说明原因（非 Windows 被控端 /
+/// 自研画面通道不可用），[windows] 为空。
+final class WindowListMessage extends WindowHostMessage {
+  WindowListMessage(this.ok, this.why, this.windows);
+  final bool ok;
+  final String why;
+  final List<RemoteWindowInfo> windows;
+}
+
+/// wsok：已进入窗口模式，附当前窗口的实时矩形。
+final class WindowSelectedMessage extends WindowHostMessage {
+  WindowSelectedMessage(this.info);
+  final RemoteWindowInfo info;
+}
+
+/// wg：目标窗口已被关闭（看门狗/采集线程发现）。
+final class WindowGoneMessage extends WindowHostMessage {
+  WindowGoneMessage(this.hwnd);
+  final int hwnd;
+}
+
+/// wst：窗口状态变化。state ∈ 'ok' | 'min' | 'off'（含义见
+/// WinGdiCapture.windowState 注释）。
+final class WindowStateMessage extends WindowHostMessage {
+  WindowStateMessage(this.state);
+  final String state;
+}
+
+/// 解析 host→controller 的窗口协议报文；不是这类报文返回 null。
+WindowHostMessage? parseWindowHostMessage(String text) {
+  if (text.isEmpty || text.length > 64 * 1024) return null;
+  Map<String, dynamic> m;
+  try {
+    final d = jsonDecode(text);
+    if (d is! Map) return null;
+    m = Map<String, dynamic>.from(d);
+  } catch (_) {
+    return null;
+  }
+  if (m['v'] != 1) return null;
+  switch (m['t']?.toString()) {
+    case 'wn':
+      if (m['ok'] != true) {
+        return WindowListMessage(false, m['why']?.toString() ?? '被控端不支持窗口模式', const []);
+      }
+      final raw = m['win'];
+      if (raw is! List) {
+        return WindowListMessage(false, '窗口列表格式不对', const []);
+      }
+      return WindowListMessage(
+        true,
+        '',
+        raw
+            .whereType<Map>()
+            .map((e) => RemoteWindowInfo.fromJson(Map<String, dynamic>.from(e)))
+            .toList(growable: false),
+      );
+    case 'wsok':
+      final info = m['w'];
+      if (info is! Map) return null;
+      return WindowSelectedMessage(
+          RemoteWindowInfo.fromJson(Map<String, dynamic>.from(info)));
+    case 'wg':
+      final h = asInt(m['hwnd']);
+      if (h == null) return null;
+      return WindowGoneMessage(h);
+    case 'wst':
+      final s = m['state']?.toString();
+      if (s == null) return null;
+      return WindowStateMessage(s);
+    default:
+      return null;
+  }
+}
+
 /// 解析一条控制通道报文 → 动作；解析不了返回 null，调用方丢弃即可。
 ///
 /// 【为什么单独抽成纯函数】
@@ -139,6 +290,14 @@ RemoteInputAction? parseRemoteInput(String text) {
     case 'ql': // 画质档位（UU-c 手动锁定）；lv 缺省 = 恢复自动
       final lv = m['lv'];
       return QualityAction(lv is num ? lv.toInt() : null);
+    case 'wl': // 窗口模式：要窗口列表
+      return WindowListRequestAction();
+    case 'ws': // 窗口模式：选窗口（hwnd 必须为正）
+      final h = asInt(m['hwnd']);
+      if (h == null || h <= 0) return null;
+      return WindowSelectAction(h);
+    case 'we': // 窗口模式：退出，回整屏
+      return WindowExitAction();
     default:
       // 未知类型忽略：老版本遇到新指令不该崩
       return null;
@@ -310,6 +469,41 @@ class RemoteAssistService {
   int framesOut = 0;
 
   late final InputInjector _injector = createInputInjector();
+
+  // ── 窗口模式（参考 TwinDesk「Apps 面板」）──────────────────────
+  // 控制端侧状态：列表 / 当前窗口 / 异常提示。被控端侧只有 _winHwnd
+  // （当前窗口目标）和看门狗定时器。
+
+  /// 控制端：被控端返回的窗口列表（null=还没请求过）。
+  final ValueNotifier<List<RemoteWindowInfo>?> windowList =
+      ValueNotifier<List<RemoteWindowInfo>?>(null);
+
+  /// 控制端：拉列表失败的原因（null=无）。非 Windows 被控端会带原因回来，
+  /// UI 要如实显示，不能给个空列表让用户以为"对方没开窗口"。
+  final ValueNotifier<String?> windowListError = ValueNotifier<String?>(null);
+
+  /// 控制端：是否处于窗口模式（选中了某个窗口、正在单窗投射）。
+  final ValueNotifier<bool> windowMode = ValueNotifier<bool>(false);
+
+  /// 控制端：当前投射的窗口（wsok 带回的实时信息）。
+  final ValueNotifier<RemoteWindowInfo?> currentWindow =
+      ValueNotifier<RemoteWindowInfo?>(null);
+
+  /// 控制端：窗口异常状态文案（''=正常）。'min'→已最小化，
+  /// 'off'→窗口不在采集区。gone 不走这里（见 WindowGoneMessage）。
+  final ValueNotifier<String> windowStateText = ValueNotifier<String>('');
+
+  /// 被控端：当前窗口目标句柄（0=整屏模式）。
+  int _winHwnd = 0;
+
+  /// 被控端：最近一次枚举的窗口列表（wsok 回报里补标题/进程名用）。
+  List<WinWindowInfo> _windowCache = const [];
+
+  /// 被控端：窗口看门狗（本地用户把窗口关了，要及时通知控制端）。
+  Timer? _winWatchdog;
+
+  /// 控制端：窗口列表请求的超时兜底定时器（见 requestWindowList）。
+  Timer? _winListTimer;
 
   bool _started = false;
   StreamSubscription<dynamic>? _sub;
@@ -760,6 +954,24 @@ class RemoteAssistService {
       return null;
     }
     hub.onInfo = (s) => _log(s);
+    // 窗口模式状态（最小化/不在采集区/恢复）转发给控制端。
+    // 'gone' 由 worker 侧先发现，这里补一刀：退出窗口模式并通告，
+    // 让控制端别对着一帧永不变化的画面以为网络卡了。
+    hub.onWindowState = (st) {
+      switch (st) {
+        case 'gone':
+          // 看门狗可能已经发现并通告过了（两边都会发现窗口消失），
+          // _winHwnd 已清零就说明处理过了，别再重复通告。
+          if (_winHwnd == 0) return;
+          _send(<String, dynamic>{'t': 'wg', 'hwnd': _winHwnd});
+          _log('采集线程报告目标窗口已关闭，退出窗口模式');
+          _hostExitWindowMode();
+        case 'min':
+        case 'off':
+        case 'ok':
+          if (_winHwnd != 0) _send(<String, dynamic>{'t': 'wst', 'state': st});
+      }
+    };
 
     final first = Completer<bool>();
     hub.onFrame = (w, h, jpeg) {
@@ -1226,16 +1438,54 @@ class RemoteAssistService {
   void _bindControlChannel(RTCDataChannel dc) {
     _dc = dc;
     dc.onMessage = (RTCDataChannelMessage msg) {
+      if (!isHost) {
+        // 控制端：只接收窗口协议回报（wn/wsok/wg/wst），其余忽略。
+        // 键鼠指令的方向是反的，控制端不执行任何输入。
+        _handleHostMessage(msg.text);
+        return;
+      }
       // ⚠️ 红线 1：只有**被控端**且会话已生效时才能执行输入指令。
       // 这是"点了同意之前不能被控"的最后一道保险 —— 服务端已经拦了一层，
       // 但服务端被绕过/实现有 bug 时不该导致用户被悄悄控住。
-      if (!isHost) return;
       if (phase.value != RemotePhase.active) {
         debugPrint('[remote] 忽略未生效会话的控制指令');
         return;
       }
       _execRemoteInput(msg.text);
     };
+  }
+
+  /// 控制端侧：处理被控端回来的窗口协议报文。
+  void _handleHostMessage(String text) {
+    switch (parseWindowHostMessage(text)) {
+      case WindowListMessage(:final ok, :final why, :final windows):
+        _winListTimer?.cancel();
+        _winListTimer = null;
+        windowList.value = ok ? windows : const [];
+        windowListError.value = ok ? null : why;
+      case WindowSelectedMessage(:final info):
+        windowMode.value = true;
+        currentWindow.value = info;
+        windowStateText.value = info.minimized
+            ? '窗口已最小化，发送输入会自动还原'
+            : '';
+      case WindowGoneMessage():
+        // 窗口没了：退出窗口模式，UI 提示后可以重新选
+        windowMode.value = false;
+        currentWindow.value = null;
+        windowStateText.value = '目标窗口已关闭';
+      case WindowStateMessage(:final state):
+        switch (state) {
+          case 'min':
+            windowStateText.value = '目标窗口已最小化，还原后自动恢复画面';
+          case 'off':
+            windowStateText.value = '目标窗口不在被控端采集区（搬到了别的屏幕？）';
+          case 'ok':
+            windowStateText.value = '';
+        }
+      case null:
+        break; // 不是窗口协议报文（比如老版本的画质回报），忽略
+    }
   }
 
   // ------------------------------------------------------------ 控制指令
@@ -1274,7 +1524,142 @@ class RemoteAssistService {
           return;
         }
         unawaited(_degrader?.lock(level));
+      case WindowListRequestAction():
+        _hostSendWindowList();
+      case WindowSelectAction(:final hwnd):
+        _hostSelectWindow(hwnd);
+      case WindowExitAction():
+        _hostExitWindowMode();
     }
+  }
+
+  // ------------------------------------------------------------ 窗口模式（被控端）
+
+  /// 响应窗口列表请求。非 Windows / 没有自研画面通道时带回原因 ——
+  /// 控制端要能显示"为什么不支持"，而不是一个空列表。
+  void _hostSendWindowList() {
+    if (!Platform.isWindows) {
+      _send(<String, dynamic>{
+        't': 'wn',
+        'ok': false,
+        'why': '被控端不是 Windows 电脑，没有"窗口"可列',
+      });
+      return;
+    }
+    final hub = _gdiHub;
+    if (hub == null) {
+      _send(<String, dynamic>{
+        't': 'wn',
+        'ok': false,
+        'why': '被控端未启用自研画面通道，暂不支持窗口模式',
+      });
+      return;
+    }
+    final wins = enumerateWindows();
+    if (wins.isEmpty) {
+      final why = lastWindowEnumError();
+      _send(<String, dynamic>{
+        't': 'wn',
+        'ok': false,
+        'why': why.isEmpty ? '没有找到可投射的窗口' : why,
+      });
+      return;
+    }
+    _send(<String, dynamic>{
+      't': 'wn',
+      'ok': true,
+      'win': wins.map((w) => w.toJson()).toList(growable: false),
+    });
+    _windowCache = wins;
+    _log('窗口列表：${wins.length} 个');
+  }
+
+  /// 进入窗口模式：采集线程只抓这个窗口，注入坐标按窗口内归一化换算。
+  void _hostSelectWindow(int hwnd) {
+    final hub = _gdiHub;
+    if (hub == null) {
+      _send(<String, dynamic>{
+        't': 'wn',
+        'ok': false,
+        'why': '被控端未启用自研画面通道，暂不支持窗口模式',
+      });
+      return;
+    }
+    hub.setWindow(hwnd);
+    // 注入侧：选中即激活（最小化会先还原），坐标换算跟着切到窗口模式
+    _injector.setWindowTarget(hwnd);
+    _winHwnd = hwnd;
+    _startWindowWatchdog();
+
+    // 立即回报当前矩形（wsok）。取不到就报"窗口异常"，让控制端别干等。
+    final rect = _injector.windowTargetRect;
+    if (rect == null) {
+      _send(<String, dynamic>{
+        't': 'wn',
+        'ok': false,
+        'why': '选中的窗口状态异常（已关闭或正在最小化），请重试',
+      });
+      _hostExitWindowMode();
+      return;
+    }
+    _send(<String, dynamic>{
+      't': 'wsok',
+      'w': <String, dynamic>{
+        'hwnd': hwnd,
+        'title': _windowTitleOf(hwnd),
+        'process': _windowProcessOf(hwnd),
+        'left': rect.left,
+        'top': rect.top,
+        'width': rect.width,
+        'height': rect.height,
+        'min': false,
+      },
+    });
+    _log('窗口模式：hwnd=$hwnd ${rect.width}x${rect.height}');
+  }
+
+  /// 退出窗口模式（控制端主动 / 窗口消失 / 异常），回到整屏投射。
+  void _hostExitWindowMode() {
+    _stopWindowWatchdog();
+    _winHwnd = 0;
+    _gdiHub?.clearWindow();
+    _injector.clearWindowTarget();
+  }
+
+  /// 从窗口列表缓存里找标题/进程名（wsok 回报用）。找不到返回空串，
+  /// 控制端显示"未知窗口"即可 —— 标题只是展示，不影响功能。
+  String _windowTitleOf(int hwnd) {
+    for (final w in _windowCache) {
+      if (w.hwnd == hwnd) return w.title;
+    }
+    return '';
+  }
+
+  String _windowProcessOf(int hwnd) {
+    for (final w in _windowCache) {
+      if (w.hwnd == hwnd) return w.process;
+    }
+    return '';
+  }
+
+  /// 窗口看门狗：本地用户把目标窗口关了，控制端要立刻知道
+  /// （否则那边看到一个再也不变的最后一帧，以为卡了）。
+  void _startWindowWatchdog() {
+    _stopWindowWatchdog();
+    _winWatchdog = Timer.periodic(const Duration(seconds: 2), (_) {
+      final h = _winHwnd;
+      if (h == 0) return;
+      if (!isWindowAlive(h)) {
+        _send(<String, dynamic>{'t': 'wg', 'hwnd': h});
+        _log('窗口已关闭（hwnd=$h），退出窗口模式');
+        _hostExitWindowMode();
+      }
+    });
+  }
+
+  void _stopWindowWatchdog() {
+    _winWatchdog?.cancel();
+    _winWatchdog = null;
   }
 
   // ---- 发送侧（控制端 UI 调用）----
@@ -1310,6 +1695,36 @@ class RemoteAssistService {
   void sendQuality(int? level) =>
       _send(<String, dynamic>{'t': 'ql', if (level != null) 'lv': level});
 
+  // ---- 窗口模式（控制端 UI 调用）----
+
+  /// 向被控端要窗口列表。结果进 [windowList] / [windowListError]。
+  ///
+  /// 两个兜底：① 会话还没生效时被控端根本不执行控制指令（红线 1），
+  /// 所以这里先挡一道，别让选择器干转；② 老版本被控端不认识 wl，
+  /// 永远不回话 —— 8 秒没动静就明说"对方没回应"，不让用户对着一个
+  /// 转圈的面板猜是不是自己网络坏了。
+  void requestWindowList() {
+    windowListError.value = null;
+    if (phase.value != RemotePhase.active) {
+      windowList.value = null;
+      windowListError.value = '会话正在建立，稍等几秒再试';
+      return;
+    }
+    _send(<String, dynamic>{'t': 'wl'});
+    _winListTimer?.cancel();
+    _winListTimer = Timer(const Duration(seconds: 8), () {
+      if (windowList.value == null && windowListError.value == null) {
+        windowListError.value = '被控端没有回应（对方可能是旧版本，不支持窗口模式）';
+      }
+    });
+  }
+
+  /// 选中一个窗口开始单窗投射。[hwnd] 来自 [windowList] 里的条目。
+  void selectWindow(int hwnd) => _send(<String, dynamic>{'t': 'ws', 'hwnd': hwnd});
+
+  /// 退出窗口模式，回到整屏投射。
+  void exitWindowMode() => _send(<String, dynamic>{'t': 'we'});
+
   // ------------------------------------------------------------ 收尾
 
   Future<void> _teardown({String reason = ''}) async {
@@ -1344,6 +1759,15 @@ class RemoteAssistService {
     // "画面只含主显示器"是自研通道的前提，随会话一起失效 ——
     // 下次可能是手机当被控端（画面=整块屏），留着会让鼠标点偏。
     _injector.usePrimaryOnlyCapture(false);
+    // 窗口模式收尾：看门狗、注入目标、控制端状态全部复位。
+    // 不清的危害：下次会话控制端 UI 还停在"窗口模式"上，而注入目标
+    // 早就换了个人 —— 点哪儿都偏。
+    _hostExitWindowMode();
+    windowMode.value = false;
+    currentWindow.value = null;
+    windowList.value = null;
+    windowListError.value = null;
+    windowStateText.value = '';
     try {
       _frameDc?.close();
     } catch (_) {}

@@ -43,6 +43,8 @@ import 'win_gdi_capture.dart';
 /// final hub = await GdiFrameHub.start();
 /// hub?.onFrame = (w, h, jpeg) { ... };
 /// hub?.setTarget(maxWidth: 960, quality: 65);
+/// hub?.setWindow(hwnd);   // 可选：窗口模式，只投射一个窗口
+/// hub?.clearWindow();     // 退出窗口模式，回到整屏
 /// ...
 /// await hub?.stop();
 /// ```
@@ -63,6 +65,14 @@ class GdiFrameHub {
   /// 出错/状态文案（进诊断条）。被控端的人看不到控制端的日志，
   /// 所以这里必须有一条能显示出来的路。
   void Function(String text)? onInfo;
+
+  /// 窗口模式状态变化回调（见 WinGdiCapture.windowState）：
+  ///   'ok'   正常跟拍
+  ///   'min'  目标窗口被最小化（没画面，等恢复）
+  ///   'gone' 目标窗口已关闭（worker 暂停轮询，等新指令）
+  ///   'off'  目标窗口不在采集区（如搬到了副屏）
+  /// 只在状态**变化**时回调，不会每帧刷。
+  void Function(String state)? onWindowState;
 
   /// 采集区的人话描述，例如「主显示器 1536x864」。
   String info = '';
@@ -112,6 +122,10 @@ class GdiFrameHub {
           } else {
             hub.onInfo?.call('画面采集出错：$s');
           }
+        case 'wst':
+          // ['wst', state]：窗口模式状态变化（见 onWindowState 注释）
+          if (m.length < 2) return;
+          hub.onWindowState?.call('${m[1]}');
         case 'x':
           // isolate 自身抛出来的（onError 端口），标签 'x' 不会和上面撞
           final s = m.length > 1 ? '${m[1]}' : '未知异常';
@@ -160,6 +174,25 @@ class GdiFrameHub {
     }
   }
 
+  /// 进入窗口模式：之后只投射 [hwnd]（句柄地址值，见
+  /// WinWindowInfo.hwnd）这一个窗口。
+  void setWindow(int hwnd) {
+    final tx = _tx;
+    if (tx == null || _stopped) return;
+    try {
+      tx.send(<Object?>['setwin', hwnd]);
+    } catch (_) {}
+  }
+
+  /// 退出窗口模式，回到整屏。
+  void clearWindow() {
+    final tx = _tx;
+    if (tx == null || _stopped) return;
+    try {
+      tx.send(<Object?>['clrwin']);
+    } catch (_) {}
+  }
+
   Future<void> stop() async {
     if (_stopped) return;
     _stopped = true;
@@ -174,6 +207,7 @@ class GdiFrameHub {
     } catch (_) {}
     _rx = null;
     onFrame = null;
+    onWindowState = null;
   }
 }
 
@@ -193,8 +227,14 @@ Future<void> _gdiWorkerEntry(List<Object?> args) async {
   var maxWidth = 1280;
   var quality = 70;
   var running = true;
+  // 窗口模式：目标窗口句柄地址（0 = 整屏模式）；gone 时暂停轮询，
+  // 等 setwin/clrwin 新指令再醒（窗口已经死了，继续轮询是白烧 CPU）。
+  var winHwnd = 0;
+  var paused = false;
+  // 上一次报给主线程的窗口状态，只在变化时发消息（避免每帧刷）
+  var lastWinState = '';
 
-  // 控制消息端口：主线程通过它下发 set / stop
+  // 控制消息端口：主线程通过它下发 set / stop / setwin / clrwin
   final ctl = ReceivePort();
   ctl.listen((Object? m) {
     if (m == 'stop') {
@@ -206,6 +246,22 @@ Future<void> _gdiWorkerEntry(List<Object?> args) async {
       final q = m[2] as int;
       if (w > 0) maxWidth = w;
       if (q > 0) quality = q;
+      paused = false; // 换画质不该被暂停状态卡住
+      return;
+    }
+    if (m is List && m.length >= 2 && m[0] == 'setwin') {
+      winHwnd = m[1] as int;
+      if (winHwnd > 0) cap.setWindow(winHwnd);
+      paused = false;
+      lastWinState = ''; // 强制把新窗口的状态重发一遍
+      return;
+    }
+    if (m is List && m.length >= 1 && m[0] == 'clrwin') {
+      winHwnd = 0;
+      cap.clearWindow();
+      paused = false;
+      lastWinState = '';
+      return;
     }
   });
 
@@ -213,8 +269,38 @@ Future<void> _gdiWorkerEntry(List<Object?> args) async {
 
   var consecFail = 0;
   while (running) {
+    if (paused) {
+      // 目标窗口已关闭：歇着等指令。100ms 轮询指令，不烧 CPU。
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      continue;
+    }
+
     final f = cap.captureJpeg(maxWidth: maxWidth, quality: quality);
-    if (f == null) {
+
+    // 窗口状态变化才上报（''=整屏模式，主线程不关心就不该收到噪音）
+    final st = cap.windowState;
+    if (st != lastWinState) {
+      lastWinState = st;
+      if (st.isNotEmpty) reply.send(<Object?>['wst', st]);
+      if (st == 'gone') paused = true;
+    }
+
+    if (f != null) {
+      consecFail = 0;
+      // TransferableTypedData：把字节的所有权直接交给对面，不做一次拷贝
+      reply.send(<Object?>[
+        'f',
+        f.width,
+        f.height,
+        TransferableTypedData.fromList(<Uint8List>[f.jpeg]),
+      ]);
+    } else if (st == 'min' || st == 'off') {
+      // 最小化/不在采集区：不是故障，是"暂时没画面"。
+      // 慢速轮询等用户把窗口还原/挪回来，**不计失败、不重建采集器**
+      // （重建对这两种状态毫无帮助，只会把 open() 的开销反复付）。
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      continue;
+    } else {
       consecFail++;
       reply.send(<Object?>['err', cap.lastError]);
       if (consecFail >= 3) {
@@ -226,17 +312,10 @@ Future<void> _gdiWorkerEntry(List<Object?> args) async {
           break;
         }
         consecFail = 0;
+        // 重建会丢掉窗口目标，按当前模式恢复
+        if (winHwnd > 0) cap.setWindow(winHwnd);
         reply.send(<Object?>['ready', ctl.sendPort, cap.describe()]);
       }
-    } else {
-      consecFail = 0;
-      // TransferableTypedData：把字节的所有权直接交给对面，不做一次拷贝
-      reply.send(<Object?>[
-        'f',
-        f.width,
-        f.height,
-        TransferableTypedData.fromList(<Uint8List>[f.jpeg]),
-      ]);
     }
     // 让出事件循环：既给控制消息一条活路，也避免把这颗核跑满
     // （抓屏本身已经耗时几十毫秒，这里只是礼节性的小睡）。

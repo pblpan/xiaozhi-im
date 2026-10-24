@@ -1686,6 +1686,12 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                 ctrlMode: _ctrlMode,
                 onToggle: (v) => setState(() => _ctrlMode = v),
               ),
+              // 窗口模式（TwinDesk Apps 面板）：选中单窗后常驻一条信息栏
+              ValueListenableBuilder<bool>(
+                valueListenable: svc.windowMode,
+                builder: (_, wm, __) =>
+                    wm ? const _WindowModeBar() : const SizedBox.shrink(),
+              ),
               Expanded(
                 child: Focus(
                   focusNode: _focus,
@@ -2375,6 +2381,20 @@ class _ControlBar extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 4),
+        // 窗口模式（参考 TwinDesk「Apps 面板」）：不投射整个桌面，
+        // 只投射被控端选中的那一个窗口。点开列表由被控端枚举后经控制
+        // 通道回传；非 Windows 被控端会带回原因（见 _WindowPickerSheet）。
+        ValueListenableBuilder<bool>(
+          valueListenable: svc.windowMode,
+          builder: (_, wm, __) => IconButton(
+            icon: Icon(
+              wm ? Icons.filter_none_rounded : Icons.grid_view_rounded,
+              color: wm ? AppColors.brand2 : AppColors.textSub,
+            ),
+            tooltip: wm ? '窗口模式（点击切换窗口）' : '窗口模式：只投射一个窗口',
+            onPressed: () => _openWindowPicker(context),
+          ),
+        ),
         Row(children: [
           const Text('允许控制', style: TextStyle(fontSize: 12)),
           Switch(
@@ -2383,6 +2403,262 @@ class _ControlBar extends StatelessWidget {
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
         ]),
+      ]),
+    );
+  }
+}
+
+/// 打开窗口选择面板。先向被控端要列表，面板自己处理
+/// 加载中 / 失败（带原因）/ 列表三态。
+void _openWindowPicker(BuildContext context) {
+  final svc = RemoteAssistService.instance;
+  svc.requestWindowList();
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: AppColors.bgElevated,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadii.lg)),
+    ),
+    builder: (_) => const _WindowPickerSheet(),
+  );
+}
+
+/// 窗口选择面板：列出被控端"开着的窗口"，选一个就开始单窗投射。
+///
+/// 三态：加载中（等被控端枚举）/ 失败（windowListError 带原因，
+/// 比如"被控端不是 Windows 电脑"）/ 列表。选中后等被控端 wsok 回报，
+/// 面板自动收起（见 ValueListenableBuilder<windowMode>）。
+class _WindowPickerSheet extends StatelessWidget {
+  const _WindowPickerSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final svc = RemoteAssistService.instance;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.grid_view_rounded,
+                  size: 18, color: AppColors.textSub),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('选择要投射的窗口',
+                    style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w600)),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close_rounded, size: 20),
+                tooltip: '关闭',
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
+            ]),
+            const SizedBox(height: 6),
+            // 已进入窗口模式就收起面板（下一帧 pop，不在 build 里动导航栈）
+            ValueListenableBuilder<bool>(
+              valueListenable: svc.windowMode,
+              builder: (_, wm, __) {
+                if (wm) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (context.mounted && Navigator.of(context).canPop()) {
+                      Navigator.of(context).pop();
+                    }
+                  });
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+            ValueListenableBuilder<List<RemoteWindowInfo>?>(
+              valueListenable: svc.windowList,
+              builder: (_, list, __) {
+                return ValueListenableBuilder<String?>(
+                  valueListenable: svc.windowListError,
+                  builder: (_, err, __) {
+                    if (err != null) {
+                      return _WindowPickerError(why: err);
+                    }
+                    if (list == null) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 30),
+                        child: Center(
+                          child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2.2),
+                          ),
+                        ),
+                      );
+                    }
+                    if (list.isEmpty) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 26),
+                        child: Center(
+                          child: Text('没有找到可投射的窗口',
+                              style: TextStyle(
+                                  fontSize: 12.5, color: AppColors.textWeak)),
+                        ),
+                      );
+                    }
+                    return ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 380),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: list.length,
+                        separatorBuilder: (_, __) =>
+                            Divider(height: 1, color: AppColors.border),
+                        itemBuilder: (_, i) {
+                          final w = list[i];
+                          return ListTile(
+                            dense: true,
+                            leading: Icon(Icons.web_asset_rounded,
+                                size: 20, color: AppColors.textSub),
+                            title: Text(
+                              w.title.isEmpty ? '（无标题窗口）' : w.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13.5),
+                            ),
+                            subtitle: Text(
+                              w.subtitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 11.5, color: AppColors.textWeak),
+                            ),
+                            trailing: w.minimized
+                                ? Icon(Icons.minimize_rounded,
+                                    size: 16, color: AppColors.warn)
+                                : null,
+                            onTap: () {
+                              Navigator.of(context).maybePop();
+                              svc.selectWindow(w.hwnd);
+                            },
+                          );
+                        },
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+            if (svc.windowMode.value) ...[
+              const Divider(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).maybePop();
+                    svc.exitWindowMode();
+                  },
+                  icon: const Icon(Icons.fullscreen_rounded, size: 16),
+                  label: const Text('退出窗口模式（回整屏）'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 拉列表失败的三态之一：带原因 + 重试。
+class _WindowPickerError extends StatelessWidget {
+  const _WindowPickerError({required this.why});
+
+  final String why;
+
+  @override
+  Widget build(BuildContext context) {
+    final svc = RemoteAssistService.instance;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.error_outline_rounded,
+                size: 18, color: AppColors.warn),
+            const SizedBox(width: 8),
+            Text('拿不到窗口列表',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.warn)),
+          ]),
+          const SizedBox(height: 6),
+          Text(why,
+              style: TextStyle(
+                  fontSize: 12, color: AppColors.textSub, height: 1.4)),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: svc.requestWindowList,
+              child: const Text('重试'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 窗口模式顶栏：当前投射的窗口 + 异常状态（最小化/不在采集区）
+/// + 退出入口。只在 windowMode 为真时显示。
+class _WindowModeBar extends StatelessWidget {
+  const _WindowModeBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final svc = RemoteAssistService.instance;
+    return Container(
+      color: AppColors.bgElevated,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(children: [
+        Icon(Icons.filter_none_rounded, size: 16, color: AppColors.brand2),
+        const SizedBox(width: 8),
+        Expanded(
+          child: ValueListenableBuilder<RemoteWindowInfo?>(
+            valueListenable: svc.currentWindow,
+            builder: (_, w, __) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  w == null || w.title.isEmpty ? '窗口模式' : w.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12.5),
+                ),
+                ValueListenableBuilder<String>(
+                  valueListenable: svc.windowStateText,
+                  builder: (_, s, __) => s.isEmpty
+                      ? const SizedBox.shrink()
+                      : Text(
+                          s,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 11, color: AppColors.warn),
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        TextButton(
+          onPressed: svc.exitWindowMode,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            minimumSize: const Size(0, 30),
+          ),
+          child: const Text('退出', style: TextStyle(fontSize: 12)),
+        ),
       ]),
     );
   }
