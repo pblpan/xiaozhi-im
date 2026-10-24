@@ -2103,7 +2103,10 @@ class _RemoteStageState extends State<_RemoteStage> {
                                 objectFit: RTCVideoViewObjectFit
                                     .RTCVideoViewObjectFitContain,
                               )
-                            : RemoteFrameView(jpeg: _svc.frameJpeg),
+                            : RemoteFrameView(
+                                jpeg: _svc.frameJpeg,
+                                onDecode: _svc.noteDecode,
+                              ),
                       ),
                     ),
                   ]),
@@ -2183,6 +2186,16 @@ class _RemoteStageState extends State<_RemoteStage> {
               onReset: _reset,
             ),
           ),
+          // 收帧诊断（左下角一行小字）。黑屏时这一行就是分界线：
+          //   收 0        → 帧没送到（看被控端"对端已收"是否也 0）
+          //   收>0 解失败 → 字节到了但解不开
+          //   收>0 解 OK  → 帧是好的，问题在别处
+          if (p == RemotePhase.active)
+            Positioned(
+              left: 10,
+              bottom: 10,
+              child: _FrameRecvDiag(svc: _svc),
+            ),
           // 放大了才提示手势用法，1x 时不用教
           if (_scale > 1.01 && p == RemotePhase.active)
             Positioned(
@@ -2759,6 +2772,69 @@ class _ReconnectOverlay extends StatelessWidget {
                   style: TextStyle(color: AppColors.danger, fontSize: 12.5)),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 控制端收帧诊断条（画面左下角一行）。
+///
+/// 【为什么必须有】
+/// "黑屏"这一个现象至少有四种完全不同的成因，现场只看到一片黑：
+///   ① 被控端没抓到 → 上游 framesProduced 不涨（看电脑端那行）
+///   ② 抓到了没发出去 / 没送到 → 这里 `收 0`，电脑端"对端已收 0"
+///   ③ 送到了但分片拼不齐 → `收 0` 但电脑端"对端已收"也是 0（拼不出整帧）
+///   ④ 拼出来了但 Skia 解不开 → `收 N / 解失败`
+/// 没有这一行，"黑屏"只能靠猜；有这一行，手机端截个图就能定位。
+class _FrameRecvDiag extends StatefulWidget {
+  const _FrameRecvDiag({required this.svc});
+
+  final RemoteAssistService svc;
+
+  @override
+  State<_FrameRecvDiag> createState() => _FrameRecvDiagState();
+}
+
+class _FrameRecvDiagState extends State<_FrameRecvDiag> {
+  Timer? _t;
+
+  @override
+  void initState() {
+    super.initState();
+    // 1 秒刷一次就够：这些计数是给人看的，不是给程序读的
+    _t = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.svc;
+    final kbs = s.frameJpeg.value == null
+        ? 0
+        : (s.frameJpeg.value!.lengthInBytes / 1024).round();
+    final text = '收 ${s.framesIn} · 解 ${s.framesDecoded}'
+        '${s.framesDecodeFail > 0 ? '/失败 ${s.framesDecodeFail}' : ''}'
+        ' · ${kbs}KB · 通道 ${s.frameRecvDcState}';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white70,
+          fontSize: 10.5,
+          height: 1.3,
         ),
       ),
     );

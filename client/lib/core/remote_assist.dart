@@ -124,6 +124,22 @@ final class WindowSelectAction extends RemoteInputAction {
 /// 退出窗口模式（controller→host），回到整屏投射。
 final class WindowExitAction extends RemoteInputAction {}
 
+/// 画面回执（controller→host）：控制端已拼出多少完整帧。
+///
+/// 【为什么要这条】
+/// 被控端的「已发 N 帧」只证明**把字节交给了 DataChannel**，不等于对端收到了 ——
+/// 原生 `RTCDataChannel::Send()` 的返回值在 flutter_webrtc 里被丢掉，
+/// 通道未就绪/超限时是**静默失败**。所以黑屏排查必须先分清：
+///   · 已发涨、对端已收为 0  → 没送到（传输/通道问题）
+///   · 已发涨、对端已收也在涨 → 送到了，问题在控制端解码/渲染
+/// 这个回执就是那条分界线。每秒一条，几十字节。
+final class FrameAckAction extends RemoteInputAction {
+  FrameAckAction(this.framesIn);
+
+  /// 控制端累计拼出的完整帧数（不是"收到多少片"）。
+  final int framesIn;
+}
+
 /// 控制端手里的一个窗口条目（纯数据，**不含任何 FFI 类型** ——
 /// 它可能跑在 Android 上，而 hwndPtr 只在被控端进程里有意义）。
 class RemoteWindowInfo {
@@ -298,6 +314,10 @@ RemoteInputAction? parseRemoteInput(String text) {
       return WindowSelectAction(h);
     case 'we': // 窗口模式：退出，回整屏
       return WindowExitAction();
+    case 'fa': // 画面回执：控制端已拼出多少完整帧（0 也照发，用于"确实没收到"）
+      final n = asInt(m['n']);
+      if (n == null || n < 0) return null;
+      return FrameAckAction(n);
     default:
       // 未知类型忽略：老版本遇到新指令不该崩
       return null;
@@ -467,6 +487,43 @@ class RemoteAssistService {
 
   /// 被控端：已发出的帧数（诊断用）。
   int framesOut = 0;
+
+  /// 被控端：采集线程实际产出的帧数。
+  /// 和 [framesOut] 对照就能分辨"没抓到"还是"抓到了没发出去"。
+  int framesProduced = 0;
+
+  /// 被控端：累计发出的字节数（含每片的头部）。用来抓"帧计数涨、字节不涨"
+  /// 这种空帧假象。
+  int framesBytesOut = 0;
+
+  /// 被控端：`dc.send` 抛异常的次数（原生静默失败看不到，只能看这个 + 对端回执）。
+  int framesSendError = 0;
+
+  /// 被控端：对端回执"已拼出多少帧"。null = 还没收到过回执。
+  int? peerFramesIn;
+
+  /// 被控端：画面通道状态（none / open / closed…），给诊断条看。
+  String frameSendDcState = 'none';
+
+  /// 控制端：收到的 frames 通道状态。'none' = 通道压根没来。
+  String frameRecvDcState = 'none';
+
+  /// 控制端：Skia 解码成功 / 失败的帧数。
+  /// 失败在这里通常是收到半张图或编码坏了，和"没收到"是完全不同的问题。
+  int framesDecoded = 0;
+  int framesDecodeFail = 0;
+
+  /// 控制端：给被控端发画面回执的定时器。
+  Timer? _ackTimer;
+
+  /// 控制端：记录一次解码结果（由 RemoteFrameView 回调）。
+  void noteDecode(bool ok) {
+    if (ok) {
+      framesDecoded++;
+    } else {
+      framesDecodeFail++;
+    }
+  }
 
   late final InputInjector _injector = createInputInjector();
 
@@ -975,6 +1032,7 @@ class RemoteAssistService {
 
     final first = Completer<bool>();
     hub.onFrame = (w, h, jpeg) {
+      framesProduced++;
       _pendingFrame = (w: w, h: h, jpeg: jpeg);
       if (!first.isCompleted) first.complete(true);
     };
@@ -1041,7 +1099,9 @@ class RemoteAssistService {
   /// 被控端：绑定画面发送通道，通道一开就按节奏推帧。
   void _bindFrameSender(RTCDataChannel dc) {
     _frameDc = dc;
+    frameSendDcState = dc.state?.toString() ?? 'unknown';
     dc.onDataChannelState = (st) {
+      frameSendDcState = st.toString();
       switch (st) {
         case RTCDataChannelState.RTCDataChannelOpen:
           _startFrameSendLoop();
@@ -1088,11 +1148,15 @@ class RemoteAssistService {
       jpeg: f.jpeg,
     );
     try {
+      var sent = 0;
       for (final p in parts) {
         dc.send(RTCDataChannelMessage.fromBinary(p));
+        sent += p.lengthInBytes;
       }
       framesOut++;
+      framesBytesOut += sent;
     } catch (e) {
+      framesSendError++;
       _log('画面发送失败：$e');
     }
   }
@@ -1111,9 +1175,14 @@ class RemoteAssistService {
       final cfg = kRemoteFrameLevels[lv];
       final buf = <String>[
         '画面：${hub.info} → ${cfg.width}宽',
-        '已发 $framesOut 帧',
+        '采集 $framesProduced · 发送 $framesOut',
+        // 🔴 黑屏排查的核心一行：发出去的字节有没有在对面变成完整帧。
+        //    "已发涨、对端 0" = 传输/通道问题；"对端也在涨" = 控制端解码/渲染问题。
+        peerFramesIn == null ? '对端回执：无' : '对端已收 $peerFramesIn 帧',
+        '${(framesBytesOut / 1024).toStringAsFixed(0)}KB · 通道 $frameSendDcState',
       ];
       if (framesDropped > 0) buf.add('丢弃 $framesDropped');
+      if (framesSendError > 0) buf.add('发送失败 $framesSendError');
       if (hub.lastError.isNotEmpty) buf.add('错误：${hub.lastError}');
       return buf.join(' · ');
     }
@@ -1123,6 +1192,14 @@ class RemoteAssistService {
 
   /// 控制端：绑定画面接收通道。
   void _bindFrameChannel(RTCDataChannel dc) {
+    frameRecvDcState = dc.state?.toString() ?? 'unknown';
+    dc.onDataChannelState = (st) => frameRecvDcState = st.toString();
+    // 每秒给被控端回一条"我拼出多少帧" —— 黑屏时这是唯一能分清
+    // "没送到"和"送到了没解出来"的信号。通道没了就自然停（send 抛异常被吞）。
+    _ackTimer?.cancel();
+    _ackTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _send(<String, dynamic>{'t': 'fa', 'n': framesIn});
+    });
     dc.onMessage = (RTCDataChannelMessage msg) {
       if (!msg.isBinary) return;
       if (phase.value == RemotePhase.ended) return;
@@ -1530,6 +1607,8 @@ class RemoteAssistService {
         _hostSelectWindow(hwnd);
       case WindowExitAction():
         _hostExitWindowMode();
+      case FrameAckAction(:final framesIn):
+        peerFramesIn = framesIn;
     }
   }
 
@@ -1776,6 +1855,16 @@ class RemoteAssistService {
     framesIn = 0;
     framesOut = 0;
     framesDropped = 0;
+    framesProduced = 0;
+    framesBytesOut = 0;
+    framesSendError = 0;
+    peerFramesIn = null;
+    frameSendDcState = 'none';
+    frameRecvDcState = 'none';
+    framesDecoded = 0;
+    framesDecodeFail = 0;
+    _ackTimer?.cancel();
+    _ackTimer = null;
     frameJpeg.value = null;
     frameSize.value = null;
 

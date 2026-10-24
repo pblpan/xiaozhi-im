@@ -49,6 +49,16 @@ void main() {
     test('老报文不受影响：wl/ws/we 之外的未知类型仍返回 null', () {
       expect(parseRemoteInput('{"v":1,"t":"window"}'), isNull);
     });
+
+    test('fa 画面回执：0 也认（"确实一帧没收到"必须能报上来）', () {
+      final a0 = parseRemoteInput('{"v":1,"t":"fa","n":0}')! as FrameAckAction;
+      expect(a0.framesIn, 0);
+      final a = parseRemoteInput('{"v":1,"t":"fa","n":321}')! as FrameAckAction;
+      expect(a.framesIn, 321);
+      // 缺 n / 负数一律丢（回执不能带出负帧数把诊断条格式化坏）
+      expect(parseRemoteInput('{"v":1,"t":"fa"}'), isNull);
+      expect(parseRemoteInput('{"v":1,"t":"fa","n":-1}'), isNull);
+    });
   });
 
   // ---------------------------------------------------------------- 解析：host→controller

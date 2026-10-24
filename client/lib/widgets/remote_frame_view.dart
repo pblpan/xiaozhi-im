@@ -32,10 +32,15 @@ class RemoteFrameView extends StatefulWidget {
     required this.jpeg,
     this.fit = BoxFit.fill,
     this.filterQuality = FilterQuality.low,
+    this.onDecode,
   });
 
   /// 最新一帧 JPEG。null 表示还没收到过（此时本件不画东西）。
   final ValueListenable<Uint8List?> jpeg;
+
+  /// 每帧解码结果回调（true=解出来了 / false=Skia 解不开）。
+  /// 黑屏排查用：**收到帧**和**解得开帧**是两件事，必须在 UI 上分得清。
+  final void Function(bool ok)? onDecode;
 
   final BoxFit fit;
 
@@ -105,9 +110,11 @@ class _RemoteFrameViewState extends State<RemoteFrameView> {
       final old = _img;
       setState(() => _img = frame.image);
       old?.dispose();
+      widget.onDecode?.call(true);
     } catch (_) {
       // 字节仍然是网络上来的，理论上被分片重组挡住了半张图，
       // 但真解不开也不该让 UI 崩 —— 下一帧马上就到。
+      widget.onDecode?.call(false);
     } finally {
       _decoding = false;
       if (_dirty) {
