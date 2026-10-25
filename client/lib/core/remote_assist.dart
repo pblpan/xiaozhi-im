@@ -508,10 +508,20 @@ class RemoteAssistService {
   /// 控制端：收到的 frames 通道状态。'none' = 通道压根没来。
   String frameRecvDcState = 'none';
 
+  /// 控制端：喂进重组器的**分片**数（不是完整帧数）。
+  ///
+  /// 🔴 这是黑屏判读的核心一对数：分片在涨、完整帧 0 → 分片在传输层被丢
+  ///    （PR-SCTP 静默丢弃，2026-10-25 已改成可靠通道）；两个都是 0 →
+  ///    通道压根没建起来。只看"帧"数分不出这两种完全不同的病。
+  int framesFragIn = 0;
+
   /// 控制端：Skia 解码成功 / 失败的帧数。
   /// 失败在这里通常是收到半张图或编码坏了，和"没收到"是完全不同的问题。
   int framesDecoded = 0;
   int framesDecodeFail = 0;
+
+  /// 控制端：重组器因缺片 / 被更新的一帧顶掉而丢掉的帧数（诊断用）。
+  int get framesAsmDropped => _assembler.dropped;
 
   /// 控制端：给被控端发画面回执的定时器。
   Timer? _ackTimer;
@@ -1071,18 +1081,32 @@ class RemoteAssistService {
     );
     _bindControlChannel(ctl);
 
-    // 画面通道：无序 + 只允许重传 1 次。
+    // 画面通道：无序 + 完全可靠。
     //
-    // ⚠️ 这里**不能**写 maxRetransmits = 0：flutter_webrtc 的
-    //    RTCDataChannelInit.toMap() 里是 `if (maxRetransmits > 0)`，
-    //    传 0 会被静默丢掉，通道悄悄变回"完全可靠"—— 那正是我们要避免的
-    //    （丢片会一直重传，画面越拖越旧）。写 1 才真正落到 native。
-    //    配合有序=否：不因为等某一个碎块而卡住后面所有帧。
+    // 🔴🔴 2026-10-25 修正（黑屏根因）：这里原来是 unordered + maxRetransmits:1，
+    //     也就是 SCTP 的"部分可靠"（PR-SCTP）。PR-SCTP 的语义是
+    //     **重传一次还送不到，就由 SCTP 栈静默丢弃** —— 不回调、不报错、
+    //     Dart 侧零感知（flutter_webrtc 连 Send() 的返回值都直接丢掉，
+    //     见 common/cpp/src/flutter_data_channel.cc 的 DataChannelSend）。
+    //     而我们的帧协议是"丢一片 → 整帧作废"：RemoteFrameAssembler 只保一帧
+    //     在飞，缺一片就永远拼不齐，下一帧的第一片到达时又把它整个丢掉。
+    //     两者相乘的结果是：**Wi-Fi 上丢一个碎块 = 永久拼不齐 = 手机一片黑**，
+    //     而被控端"已发 N 帧"照涨 —— 正是龙哥看到的现象。
+    //
+    //     改成"无序 + 可靠"：SCTP 负责重传到送达为止，重组器本来就吃得下任意
+    //     顺序（乱序/重复/迟到/跨帧交错全有单测）；无序投递让后面的帧能越过
+    //     缺口先到，不会队头阻塞。代价只是丢片那一帧晚一两个 RTT，下一帧即恢复。
+    //
+    //     踩过的坑一并记下：maxRetransmits = 0 **不能**写 —— webrtc_interface 的
+    //     RTCDataChannelInit.toMap() 里是 `if (maxRetransmits > 0)`，传 0 会被
+    //     静默丢掉，通道反而悄悄变回完全可靠。想表达"不可靠"必须写正数，
+    //     而我们最终的选择是：这条路**根本就不要不可靠**。
     final frames = await pc.createDataChannel(
       kRemoteFrameChannelLabel,
       RTCDataChannelInit()
         ..ordered = false
-        ..maxRetransmits = 1,
+        ..maxRetransmits = -1
+        ..maxRetransmitTime = -1,
     );
     _bindFrameSender(frames);
 
@@ -1203,6 +1227,7 @@ class RemoteAssistService {
     dc.onMessage = (RTCDataChannelMessage msg) {
       if (!msg.isBinary) return;
       if (phase.value == RemotePhase.ended) return;
+      framesFragIn++;
       RemoteFrame? done;
       try {
         done = _assembler.feed(msg.binary);
@@ -1861,6 +1886,7 @@ class RemoteAssistService {
     peerFramesIn = null;
     frameSendDcState = 'none';
     frameRecvDcState = 'none';
+    framesFragIn = 0;
     framesDecoded = 0;
     framesDecodeFail = 0;
     _ackTimer?.cancel();

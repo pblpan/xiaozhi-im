@@ -2,12 +2,13 @@
 //
 // 【为什么重点测"烂数据不炸"和"乱序丢片"】
 // 这里处理的是**网络上流过来的任意字节**：对面可能跑的是旧版本、可能被截断、
-// 也可能就是丢片了（画面通道是 unordered + 最多重传 1 次的，丢片是常态）。
+// 也可能就是丢片了（画面通道是 unordered 的，片到达顺序没有任何保证）。
 // 这一段写蹦了的表象是控制端 App 直接崩溃；写对了但策略不对的表象是
 // "画面停在某一帧不动"或者"画面来回跳" —— 后者只能靠这些用例守住。
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:webrtc_interface/webrtc_interface.dart';
 import 'package:xiaozhi_im_client/core/remote_assist.dart';
 import 'package:xiaozhi_im_client/core/remote_frame_stream.dart';
 
@@ -204,6 +205,43 @@ void main() {
 
     test('分片负载小于常见的 DataChannel 单条消息上限', () {
       expect(kRemoteFrameChunk, lessThan(64 * 1024));
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // 画面通道的可靠性策略（2026-10-25 黑屏根因的回归防线）
+  //
+  // 曾经是 unordered + maxRetransmits:1（SCTP 部分可靠）。PR-SCTP 的语义是
+  // "重传一次还送不到就**静默丢弃**"，而 RemoteFrameAssembler 只保一帧在飞、
+  // 缺一片永远拼不齐 —— 两者相乘就是"Wi-Fi 丢一个碎块 → 手机永久黑屏"。
+  //
+  // 这里不直接测 RemoteAssistService（要 mock 整个 PeerConnection），
+  // 但把决策本身钉住：谁再把部分可靠加回来，这条用例就红。
+  // ─────────────────────────────────────────────────────────────
+  group('画面通道可靠性策略', () {
+    test('maxRetransmits=0 会被 toMap() 静默丢掉（曾经的坑）', () {
+      final m = (RTCDataChannelInit()..maxRetransmits = 0).toMap();
+      expect(m.containsKey('maxRetransmits'), isFalse,
+          reason: 'toMap() 里是 if(maxRetransmits > 0)，传 0 不落 native');
+    });
+
+    test('maxRetransmits=1 会真的落到 native（即"部分可靠"）', () {
+      final m = (RTCDataChannelInit()..maxRetransmits = 1).toMap();
+      expect(m['maxRetransmits'], 1);
+    });
+
+    test('当前策略 = 无序 + 完全可靠（不得混入部分可靠）', () {
+      // 与 remote_assist.dart _startFrameHost 里 frames 通道的配置保持一致
+      final m = (RTCDataChannelInit()
+            ..ordered = false
+            ..maxRetransmits = -1
+            ..maxRetransmitTime = -1)
+          .toMap();
+      expect(m['ordered'], isFalse, reason: '必须无序，否则队头阻塞');
+      expect(m.containsKey('maxRetransmits'), isFalse,
+          reason: '🔴 不得设部分可靠：丢片会被 SCTP 静默丢弃 → 永久黑屏');
+      expect(m.containsKey('maxPacketLifeTime'), isFalse,
+          reason: '🔴 maxPacketLifeTime 同样是部分可靠，同样不许设');
     });
   });
 }

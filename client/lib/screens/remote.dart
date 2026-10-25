@@ -2820,9 +2820,14 @@ class _FrameRecvDiagState extends State<_FrameRecvDiag> {
     final kbs = s.frameJpeg.value == null
         ? 0
         : (s.frameJpeg.value!.lengthInBytes / 1024).round();
-    final text = '收 ${s.framesIn} · 解 ${s.framesDecoded}'
+    // 三行各管一段，黑屏时一眼定位：
+    //   分片在涨、帧=0  → 传输层在丢片（SCTP）
+    //   帧在涨、解=0    → 到了但 Skia 解不开
+    //   三个都是 0      → frames 通道压根没建起来
+    final text = '分片 ${s.framesFragIn} · 帧 ${s.framesIn} · 解 ${s.framesDecoded}'
         '${s.framesDecodeFail > 0 ? '/失败 ${s.framesDecodeFail}' : ''}'
-        ' · ${kbs}KB · 通道 ${s.frameRecvDcState}';
+        '${s.framesAsmDropped > 0 ? ' · 丢帧 ${s.framesAsmDropped}' : ''}'
+        '\n${kbs}KB · 通道 ${s.frameRecvDcState}';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
