@@ -62,10 +62,21 @@ class RemoteHistoryStore {
   static const String _t = 'remote_history';
 
   /// 全部记录：**收藏在前**，其余按最近连接倒序。
+  ///
+  /// 🔴 `id DESC` 是**必需的**次级排序，不是装饰：`last_at` 取的是
+  ///    `DateTime.now().millisecondsSinceEpoch`，而"连一次记一笔"在自动化
+  ///    测试（或用户疯狂重连）里完全可能落进同一毫秒。SQLite 对平手的行
+  ///    不保证顺序，于是列表会随机跳 —— 2026-10-25 CI 上
+  ///    `remote_history_test.dart` 的"收藏置顶，其余按最近连接倒序"
+  ///    就这么红过一次（期望 甲丙乙、实得 甲乙丙）。加一列 id 兜底，
+  ///    同一毫秒时后插入的排前面，语义也正好对。
   Future<List<RemoteHistoryItem>> list() async {
     try {
       final db = await LocalDb.I.db();
-      final rows = await db.query(_t, orderBy: 'fav DESC, last_at DESC');
+      final rows = await db.query(
+        _t,
+        orderBy: 'fav DESC, last_at DESC, id DESC',
+      );
       return rows.map(_fromRow).toList();
     } catch (_) {
       return const [];

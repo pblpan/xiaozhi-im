@@ -149,6 +149,22 @@ void main() {
       expect(list.map((e) => e.peerName).toList(), ['甲', '丙', '乙']);
     });
 
+    test('🔴 同一毫秒内连多笔：顺序必须稳定（last_at 平手时有 id 兜底）', () async {
+      // record() 的时间戳是毫秒级，循环里连 8 笔极可能全落在同一毫秒。
+      // 没有次级排序时 SQLite 对平手的行不保证顺序，列表会随机跳 ——
+      // 2026-10-25 CI 上就这么红过一次。这里连 8 笔，赌的就是"撞同一毫秒"。
+      const n = 8;
+      for (var i = 1; i <= n; i++) {
+        await RemoteHistoryStore.I.record(
+          peerId: 100 + i, peerName: 'P$i', code: '', kind: 'friend',
+        );
+      }
+      final names =
+          (await RemoteHistoryStore.I.list()).map((e) => e.peerName).toList();
+      // 后连的排前面：P8 … P1
+      expect(names, List.generate(n, (i) => 'P${n - i}'));
+    });
+
     test('setFav 可反复切换', () async {
       await RemoteHistoryStore.I.record(
         peerId: 1, peerName: '甲', code: '', kind: 'friend',
