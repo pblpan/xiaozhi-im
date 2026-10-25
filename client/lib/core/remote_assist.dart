@@ -822,6 +822,8 @@ class RemoteAssistService {
       return '未连接到服务器，无法发起远程协助';
     }
     if (hostId == SoundService().myId) return '不能远程协助自己';
+    // 同 redeem()：上一场没干净收尾就先清掉，别拿死连接去建新会话
+    await _resetForNewSession();
     await _ensureMyId();
     if (hostId == _me) return '不能远程协助自己';
     SocketService().send({'type': 'remote:invite', 'hostId': hostId});
@@ -835,10 +837,17 @@ class RemoteAssistService {
   }
 
   /// 用访问码连接（无人值守）
+  ///
+  /// 🔴 2026-10-25 修：开头先 `_resetForNewSession()`。
+  ///    上一场会话没干净收尾时（重连卡死、被控端放弃、异常退出），
+  ///    `_pc` 还留着一条死连接、phase 还停在 active/connecting。
+  ///    不复用逻辑会拿那条死 pc 去 setRemoteDescription → 必失败 →
+  ///    用户看到的就是"点连接一点反应都没有"（龙哥 2026-10-25 真机）。
   Future<String?> redeem(String code) async {
     if (SocketService().state.value != ConnState.online) {
       return '未连接到服务器，无法连接';
     }
+    await _resetForNewSession();
     await _ensureMyId();
     _lastRedeemCode = code.trim();
     SocketService().send({'type': 'remote:redeem', 'code': code.trim()});
@@ -846,6 +855,59 @@ class RemoteAssistService {
       phase.value = RemotePhase.requesting;
     }
     return null;
+  }
+
+  /// 开新会话前的硬复位：把上一场留下的死连接/定时器/计数全部清掉。
+  ///
+  /// 与 [_teardown] 的差别只有一个：**不给对端发 remote:end**。
+  /// 对端可能早就走了（PC 都关了），再发一条结束帧只会刷一条没用的错误；
+  /// 而本地该清的（pc、DataChannel、采集、计数、相位）一样都不能少。
+  Future<void> _resetForNewSession() async {
+    final live = phase.value == RemotePhase.active ||
+        phase.value == RemotePhase.connecting ||
+        _pc != null;
+    if (!live) return;
+    debugPrint('[remote] 开新会话前清掉上一场残留（phase=${phase.value}）');
+    _reconnecting = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _iceRestarts = 0;
+    reconnecting.value = false;
+    reconnectAttempt.value = 0;
+    _ackTimer?.cancel();
+    _ackTimer = null;
+    _stopFrameSendLoop();
+    _pendingFrame = null;
+    try {
+      _frameDc?.close();
+    } catch (_) {}
+    _frameDc = null;
+    try {
+      _dc?.close();
+    } catch (_) {}
+    _dc = null;
+    final pc = _pc;
+    _pc = null;
+    if (pc != null) {
+      try {
+        await pc.close();
+      } catch (_) {}
+    }
+    final hub = _gdiHub;
+    _gdiHub = null;
+    if (hub != null) unawaited(hub.stop());
+    _assembler.reset();
+    frameJpeg.value = null;
+    frameSize.value = null;
+    framesIn = 0;
+    framesOut = 0;
+    framesFragIn = 0;
+    framesDecoded = 0;
+    framesDecodeFail = 0;
+    frameRecvDcState = 'none';
+    frameSendDcState = 'none';
+    session.value = null;
+    phase.value = RemotePhase.idle;
   }
 
   /// 被控端同意
@@ -1310,7 +1372,45 @@ class RemoteAssistService {
   // ------------------------------------------------------------ 自动重连（UU-a）
 
   /// 启动退避重连（幂等：已在重连中就忽略）。
+  ///
+  /// 🔴🔴 2026-10-25 修（龙哥真机："重连中"卡死、画面通道 Closed、
+  ///     再点连接一点反应都没有）：**只有被控端能发起 ICE 重启。**
+  ///
+  ///     被控端是 offer 方（DataChannel 由它建、采集轨由它出），天然该由它
+  ///     restartIce() + createOffer()。控制端是 answerer，它也去 createOffer
+  ///     就会和被控端的重连 offer **撞车**：双方同时拿着一个 pending local
+  ///     offer 去 setRemoteDescription(offer)，WebRTC 栈两边都报
+  ///     "wrong state" 然后被 catch 吞掉 —— 连接永远恢复不过来。
+  ///
+  ///     现场现象完全对得上：手机（控制端）上显示"已发送重连 offer（第 2 次）"
+  ///     然后卡死，frames 通道一路 RTCDataChannelClosed，画面停在最后一帧；
+  ///     被控端重试满 5 次后 _teardown 把 PC 关了，控制端却因为 _pc 还留着
+  ///     一条死连接，下次点"连接"复用它 → setRemoteDescription 必失败 →
+  ///     用户看到的就是"一点反应都没有"。
+  ///
+  ///     控制端该做的是**等**：被控端的 offer 一到，_onRemoteOffer 自然接上。
+  ///     这里只把 UI 切成"等待对方重连"，绝不发 offer。
   void _scheduleReconnect() {
+    if (!isHost) {
+      if (!_reconnecting) {
+        _reconnecting = true;
+        reconnecting.value = true;
+        reconnectAttempt.value = 0;
+        _log('连接中断，等待对方重连…');
+        // 控制端不能自己修连接，但也不能无限等：被控端最多退避 1+2+4+8=15s，
+        // 加上它放弃前的余量，25s 还没回来就当场收摊，让用户能重新点"连接"。
+        _reconnectTimer?.cancel();
+        _reconnectTimer = Timer(const Duration(seconds: 25), () {
+          if (!_reconnecting) return;
+          _log('对方没有回来，连接已断开');
+          _reconnecting = false;
+          reconnecting.value = false;
+          _reconnectTimer = null;
+          unawaited(_teardown(reason: 'timeout'));
+        });
+      }
+      return;
+    }
     if (_reconnecting) return;
     _reconnecting = true;
     reconnecting.value = true;
@@ -1507,6 +1607,14 @@ class RemoteAssistService {
           }
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
+          // 🔴 2026-10-25 修：对端把连接关了（被控端重试满 5 次放弃、
+          //    或对方主动结束），控制端必须跟着收摊。
+          //    不收的危害：_pc 留着一条死连接，下次 redeem() 复用它去
+          //    setRemoteDescription 必失败 → 用户点"连接"一点反应都没有。
+          if (phase.value != RemotePhase.idle &&
+              phase.value != RemotePhase.ended) {
+            unawaited(_teardown(reason: 'closed'));
+          }
           break;
         default:
           break;

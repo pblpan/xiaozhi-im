@@ -2144,13 +2144,12 @@ class _RemoteStageState extends State<_RemoteStage> {
               ),
             ),
           // UU-a：连接还在，但网络波动正在退避重连。
-          // 画面是静止的最后一帧，不盖一层用户会以为软件卡死。
+          // 画面是静止的最后一帧，**原样留着不盖** —— 盖了就是龙哥说的"漆黑"。
           if (p == RemotePhase.active)
             ValueListenableBuilder<bool>(
               valueListenable: _svc.reconnecting,
-              builder: (_, rc, __) => rc
-                  ? const Positioned.fill(child: _ReconnectOverlay())
-                  : const SizedBox.shrink(),
+              builder: (_, rc, __) =>
+                  rc ? const _ReconnectBanner() : const SizedBox.shrink(),
             ),
           // 🔴 黑屏排查提示（龙哥 2026-10-16 真机："一片漆黑"）。
           //    连上 12s 还没有任何帧 → 不是网速，是对端采集没起来。
@@ -2158,9 +2157,10 @@ class _RemoteStageState extends State<_RemoteStage> {
           //    要允许屏幕录制；手机锁屏也会停采。
           if (_black && p == RemotePhase.active)
             Positioned(
+              // top 留 88：重连横幅也贴在顶部（高约 64），两条不能叠在一起
               left: 12,
               right: 12,
-              top: 12,
+              top: 88,
               child: _BlackScreenTip(
                 onRetry: () {
                   setState(() => _black = false);
@@ -2721,57 +2721,98 @@ class _LinkStatusDot extends StatelessWidget {
   }
 }
 
-/// UU-a 重连中的居中提示卡：网络波动 → 自动退避重连。
+/// UU-a 重连提示：网络波动 → 自动退避重连。
 /// 关键诉求是"别让用户手动退出"——退出反而真断了，等几秒它就自己回来。
-class _ReconnectOverlay extends StatelessWidget {
-  const _ReconnectOverlay();
+///
+/// 🔴🔴 2026-10-25 修（龙哥真机："还是一片漆黑，但断开连接的时候显示画面了"）：
+///     原来这里是 `Positioned.fill(Container(color: Colors.black54))` 加一张
+///     **居中大卡**。两个后果叠在一起就是"漆黑"：
+///       ① black54 把画面整体压暗到 46%；
+///       ② 大白卡正盖在画面中央 —— 而手机上 16:9 的远端画面本来就只占
+///          屏幕中间一条，被这张卡盖掉后剩下的全是黑边。
+///     断开连接时浮层消失，画面"唰"地亮起来 —— 用户于是认定"断开才显示画面"。
+///
+///     现在改成**顶部一条紧凑横幅**：不压暗画面、不盖画面，
+///     最后一帧原样留在屏幕上（这正是本浮层注释里写的初衷，
+///     之前的实现自己违背了它）。
+class _ReconnectBanner extends StatelessWidget {
+  const _ReconnectBanner();
 
   @override
   Widget build(BuildContext context) {
     final svc = RemoteAssistService.instance;
-    return Container(
-      color: Colors.black54,
-      alignment: Alignment.center,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 40),
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
-        decoration: BoxDecoration(
-          color: AppColors.bgElevated,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.warn.withValues(alpha: 0.5)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-             SizedBox(
-              width: 30,
-              height: 30,
-              child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.warn),
-            ),
-            const SizedBox(height: 14),
-            ValueListenableBuilder<int>(
-              valueListenable: svc.reconnectAttempt,
-              builder: (_, n, __) => Text(
-                '网络波动，正在自动重连（第 $n/5 次）',
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 14.5, fontWeight: FontWeight.w600),
+    return Positioned(
+      left: 10,
+      right: 10,
+      top: 10,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppColors.bgElevated,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.warn.withValues(alpha: 0.55)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
               ),
-            ),
-            const SizedBox(height: 8),
-             Text(
-              '恢复后会自动接回，请勿关闭窗口',
-              style: TextStyle(color: AppColors.textSub, fontSize: 12),
-            ),
-            const SizedBox(height: 4),
-            TextButton(
-              onPressed: () async {
-                await svc.hangUp();
-                if (context.mounted) Navigator.of(context).maybePop();
-              },
-              child:  Text('手动断开',
-                  style: TextStyle(color: AppColors.danger, fontSize: 12.5)),
-            ),
-          ],
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.warn),
+                ),
+                const SizedBox(width: 9),
+                // 控制端修不了连接，只能等 —— 文案必须说清楚，否则用户
+                // 会以为手机这边坏了，跑去乱点。
+                Expanded(
+                  child: Text(
+                    svc.isHost
+                        ? '网络波动，正在自动重连…'
+                        : '对方网络波动，正在等它接回来…',
+                    style: TextStyle(
+                        color: AppColors.text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    await svc.hangUp();
+                    if (context.mounted) Navigator.of(context).maybePop();
+                  },
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 32),
+                  ),
+                  child: Text('手动断开',
+                      style:
+                          TextStyle(color: AppColors.danger, fontSize: 12.5)),
+                ),
+              ]),
+              const SizedBox(height: 2),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 25),
+                  child: Text(
+                    '画面停在最后一帧，恢复后会自动接回，请勿关闭窗口',
+                    style:
+                        TextStyle(color: AppColors.textSub, fontSize: 11.5),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
