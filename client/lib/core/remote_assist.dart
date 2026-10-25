@@ -220,6 +220,35 @@ final class WindowStateMessage extends WindowHostMessage {
   final String state;
 }
 
+/// hs：被控端采集/发送统计心跳（每 2s 一条，走控制通道）。
+///
+/// 🔴 2026-10-25 加（龙哥真机连续三轮黑屏）：控制端原来只能看到"自己收到
+///    多少"，看不到"对端产出/发出多少"—— 黑屏时无法回答那个最关键的问题：
+///    **是对端没采/没发，还是采了发了但网络吞了？** 现在对端主动报数，
+///    两端计数一对比，责任环节当场分清：
+///      · 对端产 0            → 采集没起来（权限/锁屏/窗口不可见）
+///      · 对端产>0 发 0       → 发送循环没跑（通道没开？）
+///      · 对端发>0 控制端收 0 → 网络/传输层丢
+///      · 控制端收>0 解 0     → 字节到了解不开
+final class HostStatsMessage extends WindowHostMessage {
+  HostStatsMessage({
+    required this.produced,
+    required this.sent,
+    required this.dropped,
+    required this.width,
+    required this.height,
+    required this.windowMode,
+    required this.windowState,
+  });
+  final int produced;
+  final int sent;
+  final int dropped;
+  final int width;
+  final int height;
+  final bool windowMode;
+  final String windowState;
+}
+
 /// 解析 host→controller 的窗口协议报文；不是这类报文返回 null。
 WindowHostMessage? parseWindowHostMessage(String text) {
   if (text.isEmpty || text.length > 64 * 1024) return null;
@@ -262,9 +291,50 @@ WindowHostMessage? parseWindowHostMessage(String text) {
       final s = m['state']?.toString();
       if (s == null) return null;
       return WindowStateMessage(s);
+    case 'hs':
+      return HostStatsMessage(
+        produced: asInt(m['prod']) ?? 0,
+        sent: asInt(m['sent']) ?? 0,
+        dropped: asInt(m['drop']) ?? 0,
+        width: asInt(m['w']) ?? 0,
+        height: asInt(m['h']) ?? 0,
+        windowMode: m['win'] == true,
+        windowState: m['wst']?.toString() ?? '',
+      );
     default:
       return null;
   }
+}
+
+/// 一次 `hs` 心跳 + 两端计数增量 → 一行"责任在谁"的判读文本。
+///
+/// 🔴 为什么抽成纯函数：这是 2026-10-25 黑屏归因的核心输出，龙哥下一轮
+///    真机测试全靠这一句话定位。判读表一旦写歪（比如把"对端没采"说成
+///    "网络吞了"），现场就会按错误的方向排查 —— 所以它必须能被单测锁死，
+///    不能只靠真机验。
+///
+/// 判读顺序即优先级（从上到下，命中即停）：
+///   1. [produced] == 0        → 对端一帧都没采到（权限/锁屏/安全软件拦 BitBlt）
+///   2. [dProduced] <= 0       → 对端采集停了（窗口最小化/画面静止）
+///   3. [dSent] <= 0           → 采到了没发出（发送循环没跑/画面通道没开）
+///   4. [dFramesIn] <= 0       → 对端在发、网络/传输层吞了
+///   5. [decodeFail] > 0 且 [decoded] == 0 → 字节到了但解不开（重组缺片/编码坏）
+///   6. 其余                  → 链路正常（那黑屏就是渲染侧的事，另查）
+String hostStatsVerdict({
+  required int produced,
+  required int dProduced,
+  required int dSent,
+  required int dFramesIn,
+  required int decoded,
+  required int decodeFail,
+  required String windowState,
+}) {
+  if (produced == 0) return '对端一帧没采到（权限/锁屏/被安全软件拦？）';
+  if (dProduced <= 0) return '对端采集停了（画面静止/窗口$windowState）';
+  if (dSent <= 0) return '对端采到没发出（发送循环/通道没开）';
+  if (dFramesIn <= 0) return '对端在发、网络吞了';
+  if (decodeFail > 0 && decoded == 0) return '字节到了但解不开';
+  return '链路正常';
 }
 
 /// 解析一条控制通道报文 → 动作；解析不了返回 null，调用方丢弃即可。
@@ -523,6 +593,21 @@ class RemoteAssistService {
   /// 控制端：重组器因缺片 / 被更新的一帧顶掉而丢掉的帧数（诊断用）。
   int get framesAsmDropped => _assembler.dropped;
 
+  /// 控制端：对端（被控端）通过 `hs` 心跳报上来的采集/发送统计文本。
+  ///
+  /// 🔴 2026-10-25 加：诊断行原来只显示"我收到多少"，黑屏时永远分不清
+  ///    是对端没采、没发，还是网络吞。现在对端每 2s 主动报数，这一行
+  ///    直接给出判决（对端产 0 / 对端发 0 / 我收 0 / 我解 0）。
+  final ValueNotifier<String> hostStatsText = ValueNotifier<String>('');
+
+  /// 控制端：上一次 `hs` 心跳的 sent/prod 快照，用来算 2s 增量——
+  /// 只有增量才能证明"对端此刻还在持续发"，累计数会骗人（会话早期的存量）。
+  int _hsLastSent = 0;
+  int _hsLastProd = 0;
+
+  /// 控制端：上一次 `hs` 心跳时自己拼出的完整帧数快照（同样算增量用）。
+  int _hsLastFramesIn = 0;
+
   /// 控制端：给被控端发画面回执的定时器。
   Timer? _ackTimer;
 
@@ -568,6 +653,18 @@ class RemoteAssistService {
 
   /// 被控端：窗口看门狗（本地用户把窗口关了，要及时通知控制端）。
   Timer? _winWatchdog;
+
+  /// 被控端：`hs` 统计心跳定时器（每 2s 一条，走控制通道）。
+  /// 见 [HostStatsMessage] 注释——黑屏归因的关键一环。
+  Timer? _hsTimer;
+
+  /// 被控端：最近一帧的宽高。心跳里带上，控制端据此知道
+  /// "对端到底采到了多大的图"（0×0 = 一帧都没产出过）。
+  int _lastFrameW = 0;
+  int _lastFrameH = 0;
+
+  /// 被控端：最近一次窗口状态（'ok' / 'min' / 'off'），心跳里带上。
+  String _lastWinState = '';
 
   /// 控制端：窗口列表请求的超时兜底定时器（见 requestWindowList）。
   Timer? _winListTimer;
@@ -877,6 +974,7 @@ class RemoteAssistService {
     _ackTimer?.cancel();
     _ackTimer = null;
     _stopFrameSendLoop();
+    _stopHostStatsHeartbeat();
     _pendingFrame = null;
     try {
       _frameDc?.close();
@@ -901,11 +999,25 @@ class RemoteAssistService {
     frameSize.value = null;
     framesIn = 0;
     framesOut = 0;
+    framesProduced = 0;
+    framesDropped = 0;
+    framesBytesOut = 0;
+    framesSendError = 0;
+    _frameSeq = 0;
+    peerFramesIn = null;
     framesFragIn = 0;
     framesDecoded = 0;
     framesDecodeFail = 0;
     frameRecvDcState = 'none';
     frameSendDcState = 'none';
+    // hs 心跳相关：新会话从零开始，别把上一场的存量留给下一场误读
+    hostStatsText.value = '';
+    _hsLastSent = 0;
+    _hsLastProd = 0;
+    _hsLastFramesIn = 0;
+    _lastFrameW = 0;
+    _lastFrameH = 0;
+    _lastWinState = '';
     session.value = null;
     phase.value = RemotePhase.idle;
   }
@@ -1098,6 +1210,7 @@ class RemoteAssistService {
         case 'min':
         case 'off':
         case 'ok':
+          _lastWinState = st; // hs 心跳要报给控制端（黑屏归因）
           if (_winHwnd != 0) _send(<String, dynamic>{'t': 'wst', 'state': st});
       }
     };
@@ -1105,6 +1218,8 @@ class RemoteAssistService {
     final first = Completer<bool>();
     hub.onFrame = (w, h, jpeg) {
       framesProduced++;
+      _lastFrameW = w; // hs 心跳要报"采到了多大的图"
+      _lastFrameH = h;
       _pendingFrame = (w: w, h: h, jpeg: jpeg);
       if (!first.isCompleted) first.complete(true);
     };
@@ -1172,6 +1287,11 @@ class RemoteAssistService {
     );
     _bindFrameSender(frames);
 
+    // 🔴 黑屏归因心跳（2026-10-25）：控制端此前只能看到"自己收到多少"，
+    //    对端采没采、发没发全靠猜。现在每 2s 主动报一次数，让下一轮真机
+    //    测试能自证"卡在哪一环"，而不是又一轮全黑、双方都睁眼瞎。
+    _startHostStatsHeartbeat();
+
     final offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     SocketService().send({
@@ -1180,6 +1300,29 @@ class RemoteAssistService {
       'data': offer.toMap(),
     });
     _log('已发送共享offer（自研画面通道），等待对方接入');
+  }
+
+  /// 被控端：`hs` 心跳。走控制通道（[ _send ]），所以控制通道没开时
+  /// _send 自己会静默丢弃 —— 那本身就是"心跳没了"的信号。
+  void _startHostStatsHeartbeat() {
+    _hsTimer?.cancel();
+    _hsTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _send(<String, dynamic>{
+        't': 'hs',
+        'prod': framesProduced,
+        'sent': framesOut,
+        'drop': framesDropped,
+        'w': _lastFrameW,
+        'h': _lastFrameH,
+        'win': _winHwnd != 0,
+        'wst': _lastWinState,
+      });
+    });
+  }
+
+  void _stopHostStatsHeartbeat() {
+    _hsTimer?.cancel();
+    _hsTimer = null;
   }
 
   /// 被控端：绑定画面发送通道，通道一开就按节奏推帧。
@@ -1667,7 +1810,8 @@ class RemoteAssistService {
 
   /// 控制端侧：处理被控端回来的窗口协议报文。
   void _handleHostMessage(String text) {
-    switch (parseWindowHostMessage(text)) {
+    final msg = parseWindowHostMessage(text);
+    switch (msg) {
       case WindowListMessage(:final ok, :final why, :final windows):
         _winListTimer?.cancel();
         _winListTimer = null;
@@ -1693,9 +1837,46 @@ class RemoteAssistService {
           case 'ok':
             windowStateText.value = '';
         }
+      case HostStatsMessage h:
+        // 对端统计心跳：更新诊断行的"对端"半行。见 _noteHostStats。
+        _noteHostStats(h);
       case null:
         break; // 不是窗口协议报文（比如老版本的画质回报），忽略
     }
+  }
+
+  /// 控制端：把对端 `hs` 心跳翻译成一句"责任在谁"的结论，写进
+  /// [hostStatsText]（诊断行第三行）。
+  ///
+  /// 🔴 判读表（从上到下，命中即停）—— 龙哥真机连黑三轮，每轮都只能看到
+  ///    "我这边收到 0"，分不清是对端没采、没发还是网络吞。有了对端报数，
+  ///    这句话就是判决书：
+  ///      1. 对端总产出 0            → 采集没起来（权限/锁屏/安全软件拦 BitBlt）
+  ///      2. 对端 2s 产出增量 0      → 采集停了（窗口最小化/画面静止）
+  ///      3. 对端 2s 发送增量 0      → 采到了没发出（发送循环没跑/通道没开）
+  ///      4. 我 2s 收帧增量 0        → 对端在发、网络/传输层吞了
+  ///      5. 我收到但解码失败 > 0    → 字节到了解不开（重组缺片/编码坏）
+  ///      6. 其余                   → 链路正常（那黑屏就是渲染侧的事，另查）
+  void _noteHostStats(HostStatsMessage h) {
+    final dProd = h.produced - _hsLastProd;
+    final dSent = h.sent - _hsLastSent;
+    final dIn = framesIn - _hsLastFramesIn;
+    _hsLastProd = h.produced;
+    _hsLastSent = h.sent;
+    _hsLastFramesIn = framesIn;
+    final verdict = hostStatsVerdict(
+      produced: h.produced,
+      dProduced: dProd,
+      dSent: dSent,
+      dFramesIn: dIn,
+      decoded: framesDecoded,
+      decodeFail: framesDecodeFail,
+      windowState: h.windowState,
+    );
+    final mode = h.windowMode ? '窗口' : '整屏';
+    final size = h.width > 0 ? '${h.width}×${h.height}' : '无帧';
+    hostStatsText.value =
+        '对端$mode $size 采${h.produced}·发${h.sent}·丢${h.dropped} → $verdict';
   }
 
   // ------------------------------------------------------------ 控制指令
@@ -1997,6 +2178,14 @@ class RemoteAssistService {
     framesFragIn = 0;
     framesDecoded = 0;
     framesDecodeFail = 0;
+    _stopHostStatsHeartbeat();
+    _hsLastSent = 0;
+    _hsLastProd = 0;
+    _hsLastFramesIn = 0;
+    _lastFrameW = 0;
+    _lastFrameH = 0;
+    _lastWinState = '';
+    hostStatsText.value = '';
     _ackTimer?.cancel();
     _ackTimer = null;
     frameJpeg.value = null;

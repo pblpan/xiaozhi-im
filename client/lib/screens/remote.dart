@@ -2186,16 +2186,10 @@ class _RemoteStageState extends State<_RemoteStage> {
               onReset: _reset,
             ),
           ),
-          // 收帧诊断（左下角一行小字）。黑屏时这一行就是分界线：
-          //   收 0        → 帧没送到（看被控端"对端已收"是否也 0）
-          //   收>0 解失败 → 字节到了但解不开
-          //   收>0 解 OK  → 帧是好的，问题在别处
-          if (p == RemotePhase.active)
-            Positioned(
-              left: 10,
-              bottom: 10,
-              child: _FrameRecvDiag(svc: _svc),
-            ),
+          // 收帧诊断已搬到舞台外的 _DiagBar（永远可见）。🔴 原来它在舞台里面，
+          //     而黑屏的会话恰恰是舞台整块不绘制 —— 诊断跟着画面一起消失，
+          //     龙哥三轮反馈都只有一句"还是黑"，没有任何可判读的数字。
+          //     舞台里不再放任何诊断件：诊断必须活在不会被黑掉的地方。
           // 放大了才提示手势用法，1x 时不用教
           if (_scale > 1.01 && p == RemotePhase.active)
             Positioned(
@@ -2819,31 +2813,31 @@ class _ReconnectBanner extends StatelessWidget {
   }
 }
 
-/// 控制端收帧诊断条（画面左下角一行）。
+/// 底部诊断栏（永远可见，舞台外）。
 ///
-/// 【为什么必须有】
-/// "黑屏"这一个现象至少有四种完全不同的成因，现场只看到一片黑：
-///   ① 被控端没抓到 → 上游 framesProduced 不涨（看电脑端那行）
-///   ② 抓到了没发出去 / 没送到 → 这里 `收 0`，电脑端"对端已收 0"
-///   ③ 送到了但分片拼不齐 → `收 0` 但电脑端"对端已收"也是 0（拼不出整帧）
-///   ④ 拼出来了但 Skia 解不开 → `收 N / 解失败`
-/// 没有这一行，"黑屏"只能靠猜；有这一行，手机端截个图就能定位。
-class _FrameRecvDiag extends StatefulWidget {
-  const _FrameRecvDiag({required this.svc});
-
-  final RemoteAssistService svc;
+/// 🔴 2026-10-25 重构（龙哥真机连黑三轮、每轮都瞎）：诊断原来分成两半——
+///    状态行走这里（永远可见），收帧计数走**舞台里面**的 `_FrameRecvDiag`。
+///    而黑屏的会话恰恰是舞台整块不绘制，藏在里面的那半诊断跟着一起消失，
+///    于是每轮反馈都只有一句"还是黑"，没有任何可判读的数字。
+///    现在把收帧链路和"对端报了啥"全部搬到这里：
+///      · 第 1 行：会话状态（原有 diag）
+///      · 第 2 行：我这边的链路 —— 分片/帧/解/失败/丢帧/通道状态
+///      · 第 3 行：对端（被控端）通过 hs 心跳报的采集/发送统计 + 一句结论
+///    三行凑齐，"黑屏"的责任环节当场可判，截图即证据。
+class _DiagBar extends StatefulWidget {
+  const _DiagBar();
 
   @override
-  State<_FrameRecvDiag> createState() => _FrameRecvDiagState();
+  State<_DiagBar> createState() => _DiagBarState();
 }
 
-class _FrameRecvDiagState extends State<_FrameRecvDiag> {
+class _DiagBarState extends State<_DiagBar> {
   Timer? _t;
 
   @override
   void initState() {
     super.initState();
-    // 1 秒刷一次就够：这些计数是给人看的，不是给程序读的
+    // 计数是给人看的，1s 刷新足够；别为它跑 60fps
     _t = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -2857,53 +2851,45 @@ class _FrameRecvDiagState extends State<_FrameRecvDiag> {
 
   @override
   Widget build(BuildContext context) {
-    final s = widget.svc;
-    final kbs = s.frameJpeg.value == null
-        ? 0
-        : (s.frameJpeg.value!.lengthInBytes / 1024).round();
-    // 三行各管一段，黑屏时一眼定位：
-    //   分片在涨、帧=0  → 传输层在丢片（SCTP）
-    //   帧在涨、解=0    → 到了但 Skia 解不开
-    //   三个都是 0      → frames 通道压根没建起来
-    final text = '分片 ${s.framesFragIn} · 帧 ${s.framesIn} · 解 ${s.framesDecoded}'
-        '${s.framesDecodeFail > 0 ? '/失败 ${s.framesDecodeFail}' : ''}'
-        '${s.framesAsmDropped > 0 ? ' · 丢帧 ${s.framesAsmDropped}' : ''}'
-        '\n${kbs}KB · 通道 ${s.frameRecvDcState}';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white70,
-          fontSize: 10.5,
-          height: 1.3,
-        ),
-      ),
-    );
-  }
-}
-
-class _DiagBar extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
     final svc = RemoteAssistService.instance;
     return ValueListenableBuilder<String>(
       valueListenable: svc.diag,
-      builder: (_, d, __) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        color: AppColors.bgElevated,
-        child: Text(
-          d.isEmpty ? '准备就绪' : d,
-          style: TextStyle(fontSize: 11.5, color: AppColors.textWeak),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
+      builder: (_, d, __) {
+        // 会话活着才显示链路行：idle 时满屏 0 只会制造噪音
+        final live = svc.phase.value == RemotePhase.connecting ||
+            svc.phase.value == RemotePhase.active;
+        final host = svc.hostStatsText.value;
+        final lines = <String>[d.isEmpty ? '准备就绪' : d];
+        if (live) {
+          final kbs = svc.frameJpeg.value == null
+              ? 0
+              : (svc.frameJpeg.value!.lengthInBytes / 1024).round();
+          lines.add('分片 ${svc.framesFragIn} · 帧 ${svc.framesIn} · '
+              '解 ${svc.framesDecoded}'
+              '${svc.framesDecodeFail > 0 ? '/失败 ${svc.framesDecodeFail}' : ''}'
+              '${svc.framesAsmDropped > 0 ? ' · 丢帧 ${svc.framesAsmDropped}' : ''}'
+              ' · ${kbs}KB · 通道 ${svc.frameRecvDcState}');
+        }
+        if (host.isNotEmpty) lines.add(host);
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          color: AppColors.bgElevated,
+          child: Text(
+            lines.join('\n'),
+            style: TextStyle(
+              fontSize: 11.5,
+              color: AppColors.textWeak,
+              height: 1.35,
+            ),
+            // 护栏：三行是常态，第四条只可能来自超长状态文案。
+            // 不设上限的话，极端窄屏下一行状态文案能把舞台挤成零高度——
+            // 那正是我们要消灭的"舞台整块不绘制"的另一种成因。
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+          ),
+        );
+      },
     );
   }
 }
