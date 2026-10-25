@@ -285,7 +285,24 @@ function stopServer() {
   ok('  定位被记录', outRec?.lat === 45.5 && outRec?.lng === 126.9, JSON.stringify(outRec));
 
   r = await api('GET', '/api/attendance/today', { token: e1.token });
-  ok('today 显示今日两张卡', !!r.body.cards.in && !!r.body.cards.out, JSON.stringify(r.body.cards));
+  // ⚠️ 这条判据**跟跑的钟点绑定**，不能写死"两张卡都必须在"（2026-10-26 凌晨真踩到）：
+  //    服务端判定时取的是**时间窗**而不是 day 字段（attendance.js judgeDay 的 inWin）：
+  //        [上班时刻 − 6h, 下班时刻 + 6h]
+  //    本用例到这里已复位成 09:00-18:00 → 窗 = 当天 03:00 ~ 次日 00:00。
+  //    于是**北京时间 00:00~03:00 之间跑**，上面那两张卡落在窗的左边界之外 →
+  //    服务端**刻意不认**（凌晨的卡分不清是"今天早到"还是"昨天加班下班"，
+  //    认了就会把昨天加班下班算成今天早到）→ cards 本来就该是空的。
+  //    这是产品行为，不是 bug；写成硬断言的话，这三个小时里跑 CI 必红，
+  //    而且是"看着像回归、实际是假失败"—— 假失败比真失败更危险。
+  //    反过来：**窗内必须两张都在**，这条才真正看得住"today 把卡跑丢"。
+  const cardWinFrom = tsAt(TODAY, '09:00') - 6 * 3600e3;
+  const inCardWindow = Date.now() >= cardWinFrom;
+  if (inCardWindow) {
+    ok('today 显示今日两张卡', !!r.body.cards.in && !!r.body.cards.out, JSON.stringify(r.body.cards));
+  } else {
+    ok('today：凌晨卡窗外（服务端刻意不认卡）→ cards 为空是产品行为而非丢卡',
+      r.body.cards.in == null && r.body.cards.out == null, JSON.stringify(r.body.cards));
+  }
   // 今天还没到下班时间：只报"既成事实"，且**不能**判早退 ——
   // 一个 07:xx 打的下班卡相对 18:00 是"早退 6xx 分钟"，但下班时间根本还没到，
   // 判早退就是错的（这正是"上午打开 App 全公司缺卡"那类 bug 的同源问题）。
