@@ -200,6 +200,10 @@ ensureColumn('groups', 'muted_all', 'muted_all INTEGER NOT NULL DEFAULT 0');
 ensureColumn('group_members', 'nickname', 'nickname TEXT');
 // 加群方式：free=成员拉人直接进（现状），approval=需群主/管理员审批
 ensureColumn('groups', 'join_mode', "join_mode TEXT NOT NULL DEFAULT 'free'");
+// 全员群标记（2026-10-27）：工作模式下由服务端自动建、自动维护成员的那个群。
+// 只允许有一个（orgGroup.ensure() 按它找）。用列而不是记住 id，是因为
+// settings 会被免鉴权的 bootstrap 铺出去，群 id 没必要也不适合放在那儿。
+ensureColumn('groups', 'is_org_group', 'is_org_group INTEGER NOT NULL DEFAULT 0');
 // ⚠️ employee_no / org_id 这两列的迁移在**下方「组织机构」段**里（跟着 orgs 建表一起）。
 //    以前这里也写了一份，两处完全相同 —— ensureColumn 幂等所以不会出错，
 //    但重复代码会让"这列到底在哪加的"变得难查（改了一处忘了另一处也很自然）。

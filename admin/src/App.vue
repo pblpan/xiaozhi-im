@@ -1952,6 +1952,12 @@ docker compose up -d --force-recreate xiaozhi-im</div>
 
                 <el-alert type="info" :closable="false" style="margin-bottom:14px"
                   title="改完点「发布」生成新版本，客户端启动时/每 30 分钟自动拉取热生效，无需重装 App。" />
+                <div class="hint" style="margin:-8px 0 14px">
+                  说明：本页只下发<b>客户端配置</b>（地址候选 / 功能开关 / 公告 / 升级包）。
+                  「工作模式」和随之自动维护的<b>「全员群」</b>在
+                  <el-link type="primary" :underline="false" @click="tab = 'settings'">系统设置 → 好友模式</el-link>
+                  里切换。
+                </div>
 
                 <el-form label-width="130px" label-position="left">
                   <el-form-item>
@@ -5713,7 +5719,9 @@ docker compose up -d --force-recreate xiaozhi-im</div>
                   <template #title>
                     <span v-if="compSetting.mode === 'work'">
                       工作模式：关闭自助注册与好友互加，员工由管理员在「组织机构」按工号录入（工号即账号、初始密码=工号），
-                      录入后同事自动互为好友，搜索只能找到同组织的人。日常使用请配合组织机构功能。
+                      录入后同事自动互为好友，搜索只能找到同组织的人。日常使用请配合组织机构功能。<br />
+                      <b>「全员群」自动维护</b>：建组织时自动创建，之后新入职的员工自动进群、离职的自动退群，
+                      不用手动拉人。群固定在会话列表里，不能删除；成员随组织变动自动同步。
                     </span>
                     <span v-else>
                       普通好友模式：任何人可自助注册，自由搜索、互加好友。适合个人/小团队自用。
@@ -10952,13 +10960,25 @@ async function saveCompSetting() {
   if (/[<>"'\\]/.test(name)) return ElMessage.warning('公司名称不能包含 < > " \' \\ 字符');
   compBusy.value = true;
   try {
-    await api.put('/admin/settings', {
+    const modeBefore = compSetting.value.mode;
+    const r = await api.put('/admin/settings', {
       companyName: name,
-      friendMode: compSetting.value.mode,
+      friendMode: modeBefore,
       masterShowPurchasePrice: !!compSetting.value.showPurchasePrice,
     });
     pub.value = { ...pub.value, companyName: name }; // 侧栏/标签页品牌即时更新
-    ElMessage.success('设置已保存，客户端即时生效（在线推送 / 下次拉取）');
+    // 切到工作模式会自动建「全员群」，把结果说出来 —— 否则管理员不知道
+    // 会话列表里那个群是哪来的，容易当脏数据删掉。
+    const og = r.data?.orgGroup;
+    if (og && og.created) {
+      ElMessage.success('设置已保存。已自动创建「全员群」（当前 1 人，录入员工后自动入群）');
+    } else if (og && og.skipped === 'no-org') {
+      ElMessage.success('设置已保存。还没有组织机构 —— 建好组织时会自动创建「全员群」');
+    } else if (r.data?.orgGroupError) {
+      ElMessage.warning('设置已保存，但「全员群」创建失败：' + r.data.orgGroupError);
+    } else {
+      ElMessage.success('设置已保存，客户端即时生效（在线推送 / 下次拉取）');
+    }
     await loadCompSetting();
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '保存失败');

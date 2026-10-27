@@ -16,6 +16,7 @@ const localdata = require('../localdata');
 const appregistry = require('../apps');
 const settings = require('../settings');
 const remote = require('../remote');
+const orgGroup = require('../orggroup');
 const hub = require('../hub');
 const chat = require('../chat');
 const orgs = require('./orgs');
@@ -281,6 +282,8 @@ router.put('/settings', (req, res) => {
   if (r.error) return res.status(400).json({ error: r.error });
   let friendsBackfilled = null;
   let friendsBackfillError = null;
+  let orgGroupState = null;
+  let orgGroupError = null;
   if (r.settings.friendMode === 'work' && modeBefore !== 'work') {
     try {
       friendsBackfilled = backfillAllFriendships();
@@ -288,6 +291,16 @@ router.put('/settings', (req, res) => {
       // 补齐失败不让设置本身失败（模式已生效），但要把错误亮给管理员 —— 悄悄吞掉
       // 就是下一个"推成功群里看不到"：界面说切好了，好友其实没补。
       friendsBackfillError = e.message;
+    }
+    // 🔴 2026-10-27（龙哥）：工作模式下**自动建全员群**。
+    //    以前这一步要管理员自己建群、再一个个把人拉进来，之后的入职/离职还得
+    //    手工记得拉人踢人 —— 一定会忘，忘了就是"新同事收不到通知、离职的人还在群里"。
+    //    现在它变成组织结构的副产品：切模式建群 + 全员归位，入职/离职在 orgs 路由里挂钩。
+    //    同样不让它拖垮设置本身：模式已经生效了，群建不起来要能看见原因。
+    try {
+      orgGroupState = orgGroup.ensure();
+    } catch (e) {
+      orgGroupError = e.message;
     }
   }
   // 推给所有在线客户端：公司名决定顶部标题、好友模式决定底部导航形态，
@@ -304,6 +317,8 @@ router.put('/settings', (req, res) => {
     ...r.settings,
     ...(friendsBackfilled ? { friendsBackfilled } : {}),
     ...(friendsBackfillError ? { friendsBackfillError } : {}),
+    ...(orgGroupState ? { orgGroup: orgGroupState } : {}),
+    ...(orgGroupError ? { orgGroupError } : {}),
   });
 });
 
@@ -442,6 +457,15 @@ router.post('/users', (req, res) => {
     .run(username, hashPassword(password), nickname || username,
       role === 'admin' ? 'admin' : 'user', orgId, employeeNo, Date.now());
   if (orgId) orgs.autoFriend(r.lastInsertRowid, orgId, uid);
+  // 后台"新建用户 + 指定组织"等同于入职，同样要进全员群（2026-10-27）。
+  // 不挂的话这条路径建的人会漏在群外 —— 而管理台里它和"录入员工"看起来是一回事。
+  if (orgId) {
+    try {
+      orgGroup.addOne(r.lastInsertRowid);
+    } catch (e) {
+      console.warn(`[小智IM] 全员群入群失败 uid=${r.lastInsertRowid}: ${e.message}`);
+    }
+  }
   res.json({ id: r.lastInsertRowid, joinedOrg: !!orgId });
 });
 

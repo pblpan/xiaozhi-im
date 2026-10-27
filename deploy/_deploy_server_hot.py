@@ -201,6 +201,11 @@ FILES = [
     #    都已在清单里（分别是 appdata/appmodules/localdata/hooks 四行）。
     'src/duty.js',
     'src/routes/duty.js',
+    # 🔴 2026-10-27 补：全员群（工作模式下自动建群、入职自动入、离职自动离）。
+    #    orggroup.js 是**新文件**，routes/admin.js 与 routes/orgs.js 都 require 它 ——
+    #    不进清单的后果是容器起不来（MODULE_NOT_FOUND → 无限重启），
+    #    和 filelog.js / salary.js 那两次是同一个坑。db.js 已在上面的清单里。
+    'src/orggroup.js',
 ]
 
 

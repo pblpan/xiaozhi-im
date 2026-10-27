@@ -3,6 +3,7 @@ const db = require('../db');
 const { verifyToken, hashPassword } = require('../auth');
 const settings = require('../settings');
 const appoverrides = require('../appoverrides');
+const orgGroup = require('../orggroup');
 
 function uidOf(req, res) {
   const c = verifyToken(req.headers.authorization?.replace('Bearer ', ''));
@@ -96,7 +97,18 @@ router.post('/', (req, res) => {
   }
   const info = db.prepare('INSERT INTO orgs (name, created_by, created_at) VALUES (?,?,?)')
     .run(name, uid, Date.now());
-  res.json({ id: info.lastInsertRowid, name });
+  // 组织刚建好就把全员群建起来（2026-10-27）。
+  // 为什么不能只指望"切工作模式那一刻建"：建组织这个接口自己就要求**已经是工作模式**
+  // （见上面 requireWorkMode），所以切模式那一秒组织必然还不存在，ensure() 只能返回
+  // skipped:no-org。真正能建群的第一个时机就是这里 —— 不在这儿建，
+  // 管理员切完模式建完机构，群列表仍然是空的，还得等录第一个员工才冒出来。
+  let orgGroupState = null;
+  try {
+    orgGroupState = orgGroup.ensure();
+  } catch (e) {
+    console.warn(`[小智IM] 建组织后创建全员群失败：${e.message}`);
+  }
+  res.json({ id: info.lastInsertRowid, name, ...(orgGroupState ? { orgGroup: orgGroupState } : {}) });
 });
 
 // ============================================================
@@ -228,6 +240,15 @@ router.post('/:id/members', (req, res) => {
   // 收编的账号也要补同事好友关系（autoFriend 用 INSERT OR IGNORE，重复无害）
   autoFriend(newUid, orgId, uid);
 
+  // 新入职自动进全员群（2026-10-27）。放在好友补齐之后、响应之前：
+  // 管理台"录完这个人"和"他在全员群里"应该同时成立，否则新同事第一天
+  // 收不到群通知，还得管理员再手工拉一次 —— 那正是这个功能要消灭的动作。
+  try {
+    orgGroup.addOne(newUid);
+  } catch (e) {
+    console.warn(`[小智IM] 全员群入群失败 uid=${newUid}: ${e.message}`);
+  }
+
   const user = db.prepare(`SELECT ${ORG_COLS} ${MEMBER_JOIN} WHERE u.id=?`).get(newUid);
   res.json({ user, adopted });
 });
@@ -303,6 +324,14 @@ router.delete('/:id/members/:uid', (req, res) => {
   } catch (e) {
     db.exec('ROLLBACK');
     return res.status(500).json({ error: e.message });
+  }
+  // 离职自动退全员群（2026-10-27）。放在 COMMIT 之后：
+  // 事务已经保证"人不在组织里 + 好友关系断干净"，群成员是第三件事，
+  // 就算这里失败也不该把前面的回滚掉（最多是他在群里多待一会儿，下次 sync 会清掉）。
+  try {
+    orgGroup.removeOne(target);
+  } catch (e) {
+    console.warn(`[小智IM] 全员群退群失败 uid=${target}: ${e.message}`);
   }
   res.json({ ok: true });
 });
@@ -550,12 +579,22 @@ router.post('/:id/members/import', (req, res) => {
     }
   }
 
+  // 批量导入最后统一归位一次，而不是每行 addOne：几十上百人逐个广播会把
+  // 在线客户端刷成一片刷新请求。sync 只补差额，一条广播就够（2026-10-27）。
+  let orgGroupSync = null;
+  try {
+    orgGroupSync = orgGroup.sync();
+  } catch (e) {
+    console.warn(`[小智IM] 全员群同步失败（导入后）：${e.message}`);
+  }
+
   res.json({
     created: created.length,
     adopted,
     skipped,
     newDepts,
     newPositions,
+    ...(orgGroupSync ? { orgGroup: orgGroupSync } : {}),
     message: `导入完成：新建 ${created.length} 人`
       + (adopted.length ? `，老账号归队 ${adopted.length} 人（密码不变）` : '')
       + (skipped.length ? `，跳过 ${skipped.length} 行` : ''),
