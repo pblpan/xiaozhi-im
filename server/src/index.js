@@ -204,6 +204,15 @@ app.get('/api/ready', (req, res) => {
   }
 });
 
+// 根路径 → 管理台。
+// 🔴 2026-10-27 加：全新安装后，人在浏览器里通常只会输 `IP:3602`，拿到的是
+// 下面那个 404 JSON（{"error":"not found"}）——**看上去就像装坏了**。
+// 实际上管理台一直好好挂在 /admin 上，只是没人告诉他这一点：
+// 服务端启动日志里那句 "管理后台: http://localhost:3602/admin" 得跑 docker logs 才看得到，
+// 而飞牛应用中心里点"打开"给的也是根路径。
+// 只拦精确的 GET '/'，API、/files、/admin 一律不受影响。
+app.get('/', (req, res) => res.redirect(302, '/admin/'));
+
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
 
 const server = http.createServer(app);

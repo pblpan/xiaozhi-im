@@ -106,7 +106,18 @@ xiaozhi_turn_pass_resolve() {
     pass="$from_dotenv"
   else
     pass=$(xiaozhi_gen_secret)
-    echo "[$APPNAME] 生成新的中继口令（原值为空或仍是公开默认值）"
+    # 🔴 必须打 stderr（2026-10-27 真踩到，全新安装时 TURN 容器无限重启）：
+    #    本函数是**通过 `$(...)` 被调用的**（下方 `TURNPASS=$(xiaozhi_turn_pass_resolve ...)`
+    #    那一行），函数的所有 stdout 都会被一起捕获进返回值。这行原本是普通 echo，
+    #    于是首次安装（走这个 else 分支）拿到的 TURNPASS = 「这行中文 + 换行 + 真口令」，
+    #    写进 docker/.env 变成：
+    #        TURN_PASSWORD=[小智 IM] 生成新的中继口令（...）
+    #        <真正的 64 位 hex 变成孤立的一行>
+    #    compose 解析出的 TURN_PASSWORD 长度为 0 → coturn 的 entrypoint 拒绝空口令
+    #    → 容器 `Restarting (1)` 无限重启；而 turn.env 里写的是干净的 pass 变量（长度 64），
+    #    两边不一致，表现为「中继配着但一通就断」。
+    #    教训：**被 $(...) 调用的函数，日志一律走 stderr**，stdout 只留返回值。
+    echo "[$APPNAME] 生成新的中继口令（原值为空或仍是公开默认值）" >&2
   fi
 
   # 回写 turn.env：只改这两行，别的（尤其 Cloudflare 凭据）一个字都不碰
