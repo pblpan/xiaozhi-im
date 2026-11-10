@@ -119,6 +119,19 @@ class FileIo {
         return '打开失败: $e';
       }
     }
+    // Linux 走 xdg-open：open_filex 没有 Linux 实现，调它只会抛
+    // MissingPluginException，用户看到的是"打开失败: MissingPlugin..."。
+    // xdg-open 是 freedesktop 的标准入口，所有桌面环境都有。
+    if (Platform.isLinux) {
+      try {
+        final r = await Process.run('xdg-open', [f.path]);
+        if (r.exitCode == 0) return '';
+        final msg = (r.stderr as String).trim();
+        return msg.isEmpty ? '打开失败：系统里没有关联该文件类型的程序' : '打开失败: $msg';
+      } catch (e) {
+        return '打开失败: $e';
+      }
+    }
     try {
       final r = await OpenFilex.open(f.path);
       switch (r.type) {

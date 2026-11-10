@@ -1,7 +1,7 @@
 name: xiaozhi_im_client
 description: 小智 IM 客户端 (Windows + Android)
 publish_to: 'none'
-version: 0.28.15+95
+version: 0.28.16+96
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -172,5 +172,9 @@ flutter:
     # 写别的位置（或指望程它能读 Bundle）在 Release 包里图标会变空白，
     # 而且 Debug 跑得好好的 —— 属于「只有真实产物才暴露」的那类坑。
     - assets/tray.ico
+    # Linux 托盘图标：appindicator 只认 PNG/SVG，给 .ico 会静默失败
+    # （tray_manager 把错误吞了，表现是"托盘里有菜单但没图标"）。
+    # 内容与 tray.ico 同一张图，由它转出来。
+    - assets/tray.png
     # 提示音：消息音 / 来电铃声 / 呼出回铃（由 tools/gen_sounds.py 合成）
     - assets/sounds/

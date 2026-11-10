@@ -96,7 +96,10 @@ class TrayService with WindowListener, TrayListener {
     try {
       // 路径是相对 `<exe目录>/data/flutter_assets` 的，见 tray_manager 的 setIcon 实现。
       // 放在 assets/ 下并在 pubspec 里声明，Release 包才找得到这个文件。
-      await trayManager.setIcon('assets/tray.ico');
+      //
+      // 🔴 Linux（appindicator）只认 PNG/SVG，喂 .ico 会在原生侧直接失败，
+      //    而 tray_manager 把异常吞掉了 —— 现象是"托盘里有菜单、没图标"，很难查。
+      await trayManager.setIcon(Platform.isLinux ? 'assets/tray.png' : 'assets/tray.ico');
       await trayManager.setToolTip('小智 IM');
       await _buildMenu();
       trayManager.addListener(this);

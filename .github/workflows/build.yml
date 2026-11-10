@@ -826,3 +826,86 @@ jobs:
           echo "发布文件名: $OUT"
           echo "发布文件 sha256: $(sha256sum "$OUT" | cut -d' ' -f1)"
           gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" "$OUT" --clobber
+
+  # ── Linux 桌面（x64）────────────────────────────────────────────────
+  # 2026-11-10 新增。本机是 Windows，编不了 Linux（需要 GTK/clang/ninja），
+  # 所以走 ubuntu runner —— 这本来就是 Linux 构建最自然的地方。
+  #
+  # 产物为什么是 tar.gz，不是 deb / AppImage：
+  #   · deb 要 root 安装、要进 apt 体系，客户机器上不一定有权限；
+  #   · AppImage 得多装 appimagetool，且部分国产系统上依赖 FUSE 才能跑；
+  #   · tar.gz 解压到任意目录即可启动，和 Windows 绿色版一个体验，
+  #     也方便直接 scp 到目标机器。以后真要走商店再补 deb。
+  build-linux:
+    name: Linux x64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 官方要求的那几个 + 本项目的原生插件依赖：
+      #   libgstreamer*        → audioplayers_linux（提示音/语音播放）
+      #   libayatana-appindicator3 → tray_manager（托盘）
+      #   libasound2          → record_linux（录音）
+      # 少一个的结果是 cmake 阶段直接找不到包，构建红在 plugins 那一层。
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config g++ \
+            libgtk-3-dev liblzma-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libayatana-appindicator3-dev libasound2-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        working-directory: ${{ env.CLIENT_DIR }}
+        run: flutter pub get
+
+      - name: Build Linux (release)
+        working-directory: ${{ env.CLIENT_DIR }}
+        run: >
+          flutter build linux --release
+          --dart-define=BASE_URL=${{ env.BASE_URL }}
+          --dart-define=WAN_URL=${{ env.WAN_URL }}
+
+      - name: Package tar.gz
+        shell: bash
+        working-directory: ${{ env.CLIENT_DIR }}
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -1)
+          VER=${VER%%+*}
+          BUNDLE=build/linux/x64/release/bundle
+
+          # 产物结构变了要在这里响，而不是让一个空包发出去
+          [ -x "$BUNDLE/xiaozhi_im" ] || { echo "构建产物里没有 xiaozhi_im"; ls -R "$BUNDLE" | head -40; exit 1; }
+          [ -f "$BUNDLE/data/flutter_assets/assets/tray.png" ] || { echo "托盘 PNG 没进包"; exit 1; }
+
+          PKG="xiaozhi-im-linux-x64-$VER"
+          rm -rf "dist/$PKG"; mkdir -p "dist/$PKG"
+          cp -a "$BUNDLE"/. "dist/$PKG"/
+
+          # 中文启动脚本：双击的是它，不是裸可执行文件 ——
+          # 裸跑时工作目录取决于调用方，data/ 就找不到了。
+          { echo '#!/usr/bin/env bash'; echo 'cd "$(dirname "$(readlink -f "$0")")" && exec ./xiaozhi_im "$@"'; } > "dist/$PKG/启动小智.sh"
+          chmod +x "dist/$PKG/启动小智.sh"
+
+          tar -C dist -czf "dist/$PKG.tar.gz" "$PKG"
+          echo "包大小: $(du -h "dist/$PKG.tar.gz" | cut -f1)"
+          echo "sha256: $(sha256sum "dist/$PKG.tar.gz" | cut -d' ' -f1)"
+
+      - name: Publish Linux tarball to rolling release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$ROLLING_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1             || gh release create "$ROLLING_TAG" -R "$GITHUB_REPOSITORY"                  --title "CI 最新产物（滚动，勿直接分发）"                  --notes "每次 push 到 main 覆盖同名附件。这里是流水线中间产物；正式安装包另行交付。"                  --prerelease || true
+          gh release upload "$ROLLING_TAG" -R "$GITHUB_REPOSITORY"             "${CLIENT_DIR}"/dist/xiaozhi-im-linux-x64-*.tar.gz --clobber
