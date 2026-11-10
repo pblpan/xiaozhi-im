@@ -847,6 +847,9 @@ jobs:
       #   libgstreamer*        → audioplayers_linux（提示音/语音播放）
       #   libayatana-appindicator3 → tray_manager（托盘）
       #   libasound2          → record_linux（录音）
+      #   libpulse            → flutter_webrtc 的 Linux 系统声音回采（共享屏幕时
+      #                          带声音）。缺了不报错，但 getDisplayMedia({audio:true})
+      #                          静默拿不到音轨 —— 只在构建日志里留一行 CMake Warning。
       # 少一个的结果是 cmake 阶段直接找不到包，构建红在 plugins 那一层。
       - name: Install Linux build deps
         run: |
@@ -855,7 +858,7 @@ jobs:
             clang cmake ninja-build pkg-config g++ \
             libgtk-3-dev liblzma-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            libayatana-appindicator3-dev libasound2-dev
+            libayatana-appindicator3-dev libasound2-dev libpulse-dev
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2

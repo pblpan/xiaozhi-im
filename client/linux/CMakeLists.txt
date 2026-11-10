@@ -74,6 +74,22 @@ set_target_properties(${BINARY_NAME}
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# tray_manager 0.5.x 的 Linux 侧还在调 app_indicator_new —— 这个符号在
+# libayatana-appindicator >= 0.5.93 里已被标记 deprecated。插件自己走
+# APPLY_STANDARD_SETTINGS 带了 -Werror，于是「上游的弃用告警」直接变成编译失败
+# （CI 实测：tray_manager_plugin.cc:118 'app_indicator_new' is deprecated
+# [-Werror,-Wdeprecated-declarations]）。
+#
+# 这是第三方代码的债，不该让它挡住整个客户端发布。这里对「全部插件目标」关掉弃用
+# 告警而不是只修 tray_manager —— 同类问题在 GTK3 系插件里是普遍存在的，
+# 逐个撞错误码再重跑一次 CI 要十几分钟，一次性把这一类堵掉。
+# 只作用于插件；我们自己的 runner 仍然保留 -Wall -Werror。
+foreach(_plugin ${FLUTTER_PLUGIN_LIST})
+  if(TARGET ${_plugin}_plugin)
+    target_compile_options(${_plugin}_plugin PRIVATE -Wno-deprecated-declarations)
+  endif()
+endforeach()
+
 
 # === Installation ===
 # By default, "installing" just makes a relocatable bundle in the build
